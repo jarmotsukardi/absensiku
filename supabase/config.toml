@@ -50,3 +50,9 @@ verify_jwt = false
 
 [functions.batch-attendance]
 verify_jwt = false
+
+[functions.send-billing-mode-otp]
+verify_jwt = true
+
+[functions.verify-billing-mode-otp]
+verify_jwt = true
