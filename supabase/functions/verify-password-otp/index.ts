@@ -13,6 +13,71 @@ interface VerifyOTPRequest {
   newPassword: string;
 }
 
+interface EmployeeCandidate {
+  id: string;
+  email: string | null;
+  user_id: string | null;
+  updated_at?: string | null;
+  created_at?: string | null;
+}
+
+interface ResolvedAccount {
+  userId: string;
+  authEmail: string;
+}
+
+const pickBestEmployeeCandidate = (rows: EmployeeCandidate[]): EmployeeCandidate | null => {
+  if (!rows.length) return null;
+  const sorted = [...rows].sort((a, b) => {
+    const score = (r: EmployeeCandidate) => (r.user_id ? 100 : 0);
+    const byScore = score(b) - score(a);
+    if (byScore !== 0) return byScore;
+    const timeA = new Date(a.updated_at || a.created_at || 0).getTime();
+    const timeB = new Date(b.updated_at || b.created_at || 0).getTime();
+    return timeB - timeA;
+  });
+  return sorted[0];
+};
+
+const findAuthUserByEmail = async (supabase: any, normalizedEmail: string) => {
+  let page = 1;
+  while (true) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
+    if (error) throw new Error(`Gagal membaca auth users: ${error.message}`);
+    const users = data?.users || [];
+    const found = users.find((u: any) => String(u?.email || "").toLowerCase() === normalizedEmail);
+    if (found) return found;
+    if (!users.length) break;
+    page += 1;
+  }
+  return null;
+};
+
+const resolveAccount = async (supabase: any, email: string): Promise<ResolvedAccount | null> => {
+  const normalizedEmail = email.trim().toLowerCase();
+
+  const { data: employees, error: empError } = await supabase
+    .from("employees")
+    .select("id, email, user_id, updated_at, created_at")
+    .ilike("email", normalizedEmail)
+    .limit(25);
+
+  if (empError) throw new Error("Gagal memeriksa email");
+
+  const selected = pickBestEmployeeCandidate((employees || []) as EmployeeCandidate[]);
+  if (selected?.user_id) {
+    const { data: authUserData, error: authUserError } = await supabase.auth.admin.getUserById(selected.user_id);
+    if (authUserError || !authUserData?.user?.email) {
+      throw new Error("Akun tidak ditemukan");
+    }
+    return { userId: selected.user_id, authEmail: authUserData.user.email };
+  }
+
+  const authUser = await findAuthUserByEmail(supabase, normalizedEmail);
+  if (!authUser?.id || !authUser?.email) return null;
+  return { userId: authUser.id, authEmail: authUser.email };
+};
+
 // Hash OTP with SHA-256
 const hashOTP = async (otp: string): Promise<string> => {
   const encoder = new TextEncoder();
@@ -113,39 +178,25 @@ serve(async (req: Request): Promise<Response> => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Get employee by email to find user_id
-    const { data: employee, error: empError } = await supabase
-      .from("employees")
-      .select("id, email, user_id")
-      .ilike("email", email.trim())
-      .maybeSingle();
+    let account: ResolvedAccount | null = null;
+    try {
+      account = await resolveAccount(supabase, email);
+    } catch (resolveError: any) {
+      console.error("Resolve account error:", resolveError?.message);
+      return new Response(
+        JSON.stringify({ error: resolveError?.message || "Gagal memeriksa email", code: "EMAIL_LOOKUP_FAILED" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
-    if (empError || !employee) {
-      console.error("Employee not found:", empError);
+    if (!account) {
       return new Response(
         JSON.stringify({ error: "Email tidak ditemukan", code: "EMAIL_NOT_FOUND" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    if (!employee.user_id) {
-      return new Response(
-        JSON.stringify({ error: "Akun belum diaktivasi", code: "NOT_ACTIVATED" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Get auth email
-    const { data: authUserData, error: authUserError } = await supabase.auth.admin.getUserById(employee.user_id);
-    
-    if (authUserError || !authUserData?.user?.email) {
-      return new Response(
-        JSON.stringify({ error: "Akun tidak ditemukan", code: "AUTH_USER_NOT_FOUND" }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const authEmail = authUserData.user.email;
+    const authEmail = account.authEmail;
 
     // Check rate limit before verification
     const rateLimitCheck = await checkVerifyRateLimit(supabase, authEmail);
@@ -194,7 +245,7 @@ serve(async (req: Request): Promise<Response> => {
 
     // Update user password using admin API
     const { error: updateError } = await supabase.auth.admin.updateUserById(
-      employee.user_id,
+      account.userId,
       { password: newPassword }
     );
 

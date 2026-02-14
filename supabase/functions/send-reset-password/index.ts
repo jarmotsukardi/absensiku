@@ -15,6 +15,26 @@ interface ResetPasswordRequest {
   login_type?: "employee" | "org" | "admin";
 }
 
+interface EmployeeCandidate {
+  id: string;
+  email: string | null;
+  name: string | null;
+  user_id: string | null;
+  phone: string | null;
+  whatsapp: string | null;
+  updated_at?: string | null;
+  created_at?: string | null;
+}
+
+interface ResolvedAccount {
+  name: string | null;
+  userId: string;
+  authEmail: string;
+  phone: string | null;
+  whatsapp: string | null;
+  source: "employee" | "auth_admin";
+}
+
 const ROLE_MAP: Record<string, { expected_role: string | null; label: string; correct_path: string }> = {
   admin: { expected_role: "super_admin", label: "Super Admin", correct_path: "/admin/login" },
   org: { expected_role: "admin_instansi", label: "Admin Organisasi", correct_path: "/org/login" },
@@ -32,6 +52,97 @@ const normalizePhone = (phone: string): string => {
   if (digits.startsWith("0")) return "62" + digits.slice(1);
   if (digits.startsWith("62")) return digits;
   return digits;
+};
+
+const pickBestEmployeeCandidate = (rows: EmployeeCandidate[]): EmployeeCandidate | null => {
+  if (!rows.length) return null;
+  const sorted = [...rows].sort((a, b) => {
+    const score = (r: EmployeeCandidate) =>
+      (r.user_id ? 100 : 0) + (r.phone ? 10 : 0) + (r.whatsapp ? 5 : 0);
+    const byScore = score(b) - score(a);
+    if (byScore !== 0) return byScore;
+    const timeA = new Date(a.updated_at || a.created_at || 0).getTime();
+    const timeB = new Date(b.updated_at || b.created_at || 0).getTime();
+    return timeB - timeA;
+  });
+  return sorted[0];
+};
+
+const findAuthUserByEmail = async (supabase: any, normalizedEmail: string) => {
+  let page = 1;
+  while (true) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
+    if (error) throw new Error(`Gagal membaca auth users: ${error.message}`);
+    const users = data?.users || [];
+    const found = users.find((u: any) => String(u?.email || "").toLowerCase() === normalizedEmail);
+    if (found) return found;
+    if (!users.length) break;
+    page += 1;
+  }
+  return null;
+};
+
+const resolveAccount = async (
+  supabase: any,
+  email: string,
+  loginType?: "employee" | "org" | "admin"
+): Promise<{ account: ResolvedAccount | null; hasEmployeeRow: boolean; hasInactiveEmployee: boolean }> => {
+  const normalizedEmail = email.trim().toLowerCase();
+
+  const { data: employees, error: empError } = await supabase
+    .from("employees")
+    .select("id, email, name, user_id, phone, whatsapp, updated_at, created_at")
+    .ilike("email", normalizedEmail)
+    .limit(25);
+
+  if (empError) throw new Error("Gagal memeriksa email");
+
+  const rows = (employees || []) as EmployeeCandidate[];
+  const hasEmployeeRow = rows.length > 0;
+  const hasInactiveEmployee = rows.some((r) => !r.user_id);
+  const selected = pickBestEmployeeCandidate(rows);
+
+  if (selected?.user_id) {
+    const { data: authUserData, error: authUserError } = await supabase.auth.admin.getUserById(selected.user_id);
+    if (authUserError || !authUserData?.user?.email) {
+      throw new Error("Akun tidak ditemukan dalam sistem otentikasi");
+    }
+
+    return {
+      account: {
+        name: selected.name,
+        userId: selected.user_id,
+        authEmail: authUserData.user.email,
+        phone: selected.phone,
+        whatsapp: selected.whatsapp,
+        source: "employee",
+      },
+      hasEmployeeRow,
+      hasInactiveEmployee,
+    };
+  }
+
+  if (loginType === "admin") {
+    const authUser = await findAuthUserByEmail(supabase, normalizedEmail);
+    if (!authUser?.id || !authUser?.email) {
+      return { account: null, hasEmployeeRow, hasInactiveEmployee };
+    }
+
+    return {
+      account: {
+        name: authUser.user_metadata?.name || "Super Admin",
+        userId: authUser.id,
+        authEmail: authUser.email,
+        phone: selected?.phone || null,
+        whatsapp: selected?.whatsapp || null,
+        source: "auth_admin",
+      },
+      hasEmployeeRow,
+      hasInactiveEmployee,
+    };
+  }
+
+  return { account: null, hasEmployeeRow, hasInactiveEmployee };
 };
 
 // Generate random password
@@ -62,64 +173,45 @@ serve(async (req: Request): Promise<Response> => {
       );
     }
 
-    if (!whatsapp) {
-      return new Response(
-        JSON.stringify({ error: "No. WhatsApp diperlukan" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Check if email exists in employees table
-    const { data: employee, error: empError } = await supabase
-      .from("employees")
-      .select("id, email, name, user_id, phone")
-      .ilike("email", email.trim())
-      .maybeSingle();
-
-    if (empError) {
-      console.error("Error checking employee:", empError);
+    let account: ResolvedAccount | null = null;
+    let hasEmployeeRow = false;
+    let hasInactiveEmployee = false;
+    try {
+      const resolved = await resolveAccount(supabase, email, login_type);
+      account = resolved.account;
+      hasEmployeeRow = resolved.hasEmployeeRow;
+      hasInactiveEmployee = resolved.hasInactiveEmployee;
+    } catch (resolveError: any) {
+      console.error("Error resolving account:", resolveError?.message);
       return new Response(
-        JSON.stringify({ error: "Gagal memeriksa email" }),
+        JSON.stringify({ error: resolveError?.message || "Gagal memeriksa email" }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    if (!employee) {
+    if (!account) {
+      if (hasEmployeeRow || hasInactiveEmployee) {
+        return new Response(
+          JSON.stringify({ error: "Akun belum diaktivasi. Hubungi admin.", code: "NOT_ACTIVATED" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
       return new Response(
         JSON.stringify({ error: "Email tidak terdaftar dalam sistem", code: "EMAIL_NOT_FOUND" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    if (!employee.user_id) {
-      return new Response(
-        JSON.stringify({ error: "Akun belum diaktivasi. Hubungi admin.", code: "NOT_ACTIVATED" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Validate WhatsApp number matches employee's phone
-    if (whatsapp) {
-      const inputPhone = normalizePhone(whatsapp);
-      const storedPhone = employee.phone ? normalizePhone(employee.phone) : "";
-      if (!storedPhone || inputPhone !== storedPhone) {
-        return new Response(
-          JSON.stringify({ error: "Email dan No. WhatsApp tidak cocok dengan data terdaftar", code: "IDENTITY_MISMATCH" }),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-    }
-
     // Validate role matches login context
-    if (login_type && employee.user_id) {
+    if (login_type && account.userId) {
       const { data: userRoles } = await supabase
         .from("user_roles")
         .select("role")
-        .eq("user_id", employee.user_id);
+        .eq("user_id", account.userId);
 
       const roles = (userRoles || []).map((r: any) => r.role);
       const isSuperAdmin = roles.includes("super_admin");
@@ -130,9 +222,9 @@ serve(async (req: Request): Promise<Response> => {
         if (login_type === "admin" && !isSuperAdmin) {
           const actualRole = isAdminInstansi ? "Admin Organisasi" : "Pegawai";
           return new Response(
-            JSON.stringify({ 
+            JSON.stringify({
               error: `Akun Anda terdaftar sebagai ${actualRole}, bukan Super Admin. Silakan gunakan halaman login yang sesuai.`,
-              code: "ROLE_MISMATCH" 
+              code: "ROLE_MISMATCH",
             }),
             { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
@@ -140,9 +232,9 @@ serve(async (req: Request): Promise<Response> => {
         if (login_type === "org" && !isAdminInstansi) {
           const actualRole = isSuperAdmin ? "Super Admin" : "Pegawai";
           return new Response(
-            JSON.stringify({ 
+            JSON.stringify({
               error: `Akun Anda terdaftar sebagai ${actualRole}, bukan Admin Organisasi. Silakan gunakan halaman login yang sesuai.`,
-              code: "ROLE_MISMATCH" 
+              code: "ROLE_MISMATCH",
             }),
             { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
@@ -150,9 +242,9 @@ serve(async (req: Request): Promise<Response> => {
         if (login_type === "employee" && (isSuperAdmin || isAdminInstansi)) {
           const actualRole = isSuperAdmin ? "Super Admin" : "Admin Organisasi";
           return new Response(
-            JSON.stringify({ 
+            JSON.stringify({
               error: `Akun Anda terdaftar sebagai ${actualRole}, bukan Pegawai. Silakan gunakan halaman login yang sesuai.`,
-              code: "ROLE_MISMATCH" 
+              code: "ROLE_MISMATCH",
             }),
             { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
@@ -160,37 +252,42 @@ serve(async (req: Request): Promise<Response> => {
       }
     }
 
+    // Validate WhatsApp number matches registered phone.
+    // For super admin without employee profile, allow fallback to email-only identity check.
+    const inputPhone = whatsapp ? normalizePhone(whatsapp) : "";
+    const storedPhone = account.phone ? normalizePhone(account.phone) : account.whatsapp ? normalizePhone(account.whatsapp) : "";
+    const canSkipPhoneValidation = login_type === "admin" && account.source === "auth_admin" && !storedPhone;
+    if (!canSkipPhoneValidation) {
+      if (!inputPhone) {
+        return new Response(
+          JSON.stringify({ error: "No. WhatsApp diperlukan" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      if (!storedPhone || inputPhone !== storedPhone) {
+        return new Response(
+          JSON.stringify({ error: "Email dan No. WhatsApp tidak cocok dengan data terdaftar", code: "IDENTITY_MISMATCH" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+    const targetPhone = storedPhone || inputPhone;
+
     // If validate_only, return success without generating password
     if (validate_only) {
       return new Response(
-        JSON.stringify({ success: true, valid: true, message: "Data tervalidasi", name: employee.name }),
+        JSON.stringify({ success: true, valid: true, message: "Data tervalidasi", name: account.name }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Get auth user
-    const { data: authUserData, error: authUserError } = await supabase.auth.admin.getUserById(employee.user_id);
-
-    if (authUserError || !authUserData?.user) {
-      return new Response(
-        JSON.stringify({ error: "Akun tidak ditemukan dalam sistem otentikasi", code: "AUTH_USER_NOT_FOUND" }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const authEmail = authUserData.user.email;
-    if (!authEmail) {
-      return new Response(
-        JSON.stringify({ error: "Email autentikasi tidak ditemukan" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+    const authEmail = account.authEmail;
 
     // Generate new password
     const newPassword = generatePassword(10);
 
     // Update password via Admin API
-    const { error: updateError } = await supabase.auth.admin.updateUserById(employee.user_id, {
+    const { error: updateError } = await supabase.auth.admin.updateUserById(account.userId, {
       password: newPassword,
     });
 
@@ -202,7 +299,7 @@ serve(async (req: Request): Promise<Response> => {
       );
     }
 
-    console.log(`Password reset for: ${employee.email}, method: ${method || "email"}`);
+    console.log(`Password reset for: ${authEmail}, method: ${method || "email"}`);
 
     // Send via WhatsApp if method is whatsapp
     if (method === "whatsapp") {
@@ -229,7 +326,7 @@ serve(async (req: Request): Promise<Response> => {
         );
       }
 
-      const waMessage = `🔐 *AbsensiKu - Password Baru*\n\nHalo ${employee.name || "Pengguna"},\n\nPassword baru Anda:\n*${newPassword}*\n\nSilakan login dan segera ubah password Anda.\n\n⚠️ Jangan bagikan password ini kepada siapapun.`;
+      const waMessage = `🔐 *AbsensiKu - Password Baru*\n\nHalo ${account.name || "Pengguna"},\n\nPassword baru Anda:\n*${newPassword}*\n\nSilakan login dan segera ubah password Anda.\n\n⚠️ Jangan bagikan password ini kepada siapapun.`;
 
       // Resolve URL and headers based on provider (matching send-test-whatsapp logic)
       const provider = wa.provider || "fonnte";
@@ -256,7 +353,13 @@ serve(async (req: Request): Promise<Response> => {
         },
       };
 
-      const normalizedPhone = whatsapp.trim().replace(/[^0-9]/g, "").replace(/^0/, "62");
+      const normalizedPhone = targetPhone || "";
+      if (!normalizedPhone) {
+        return new Response(
+          JSON.stringify({ error: "No. WhatsApp tidak tersedia untuk akun ini" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
       let fetchUrl: string;
       let fetchPayload: any;
       let fetchHeaders: Record<string, string>;
@@ -354,7 +457,7 @@ serve(async (req: Request): Promise<Response> => {
     <p style="color: #718096; margin-top: 5px;">Sistem Absensi Digital</p>
   </div>
   <div style="background: #f7fafc; border-radius: 10px; padding: 30px; margin-bottom: 20px;">
-    <h2 style="color: #2d3748; margin-top: 0;">Halo ${employee.name || "Pengguna"},</h2>
+    <h2 style="color: #2d3748; margin-top: 0;">Halo ${account.name || "Pengguna"},</h2>
     <p>Password akun Anda telah direset. Berikut password baru Anda:</p>
     <div style="text-align: center; margin: 30px 0;">
       <div style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 16px 32px; border-radius: 10px; font-size: 24px; font-weight: bold; letter-spacing: 2px;">
