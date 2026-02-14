@@ -9,7 +9,8 @@
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "preview": "vite preview",
-    "backup:restore": "node scripts/restore-backup-from-json.mjs"
+    "backup:restore": "node scripts/restore-backup-from-json.mjs",
+    "users:restore": "node scripts/restore-users-from-export.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
