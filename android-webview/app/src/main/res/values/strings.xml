@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AbsensiKu Secure</string>
+    <string name="block_title">Akses Diblokir</string>
+    <string name="block_default_reason">Perangkat terdeteksi menggunakan lokasi palsu.</string>
+    <string name="retry">Coba Lagi</string>
+</resources>
