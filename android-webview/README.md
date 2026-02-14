@@ -10,6 +10,16 @@ Project ini adalah wrapper Android WebView untuk URL:
 - Blokir jika terdeteksi aplikasi Fake GPS populer.
 - Blokir jika update lokasi Android terdeteksi `isMock` / `isFromMockProvider`.
 
+## Ganti logo APK
+
+Gunakan script ini untuk mengganti icon launcher dari file PNG:
+
+```bash
+scripts/set-android-logo.sh /absolute/path/logo.png
+```
+
+Script akan mengenerate semua resource `mipmap` dan `ic_launcher_foreground`.
+
 ## Build APK (Android Studio)
 
 1. Buka folder `android-webview` di Android Studio.
