@@ -430,3 +430,35 @@ SETTINGS_ENCRYPTION_KEY=base64-32bytes
 - Shift & jadwal kerja (opsional)
 - Izin/cuti/lembur (opsional)
 - Dashboard & laporan (opsional)
+
+---
+
+## 🐞 Error Logging (Aktif)
+
+Sistem sudah menambahkan logging error agar masalah lebih cepat dilacak:
+
+- Frontend menangkap:
+  - Error runtime (`window.error`)
+  - Promise rejection (`window.unhandledrejection`)
+  - Error dari flow reset/ganti password
+- Error frontend disimpan di `localStorage` key: `absensiku:error_logs`
+- Error backend (Edge Function OTP) mengembalikan `trace_id` di respons error.
+- UI akan menampilkan referensi error saat gagal, format:
+  - `Ref: <trace_id>` dari backend
+  - `[Log: <ERR-...>]` dari frontend
+
+### Cara cek log cepat di browser
+
+Buka DevTools Console, lalu jalankan:
+
+```js
+window.absensikuErrorLogs?.()
+```
+
+Hapus log:
+
+```js
+window.clearAbsensikuErrorLogs?.()
+```
+
+Saat melaporkan bug, kirim `Ref` dan `Log` id agar bisa ditrace cepat.

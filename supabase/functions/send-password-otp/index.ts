@@ -90,6 +90,14 @@ const maskPhone = (phone: string): string => {
   return `${normalized.slice(0, 4)}***${normalized.slice(-2)}`;
 };
 
+const createTraceId = (prefix: string): string =>
+  `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+const withTrace = <T extends Record<string, unknown>>(payload: T, traceId: string): T & { trace_id: string } => ({
+  ...payload,
+  trace_id: traceId,
+});
+
 const pickBestEmployeeCandidate = (rows: EmployeeCandidate[]): EmployeeCandidate | null => {
   if (!rows.length) return null;
   const sorted = [...rows].sort((a, b) => {
@@ -249,13 +257,15 @@ serve(async (req: Request): Promise<Response> => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const traceId = createTraceId("send-password-otp");
+
   try {
     const body: SendOTPRequest = await req.json();
     const { email, whatsapp, method, login_type } = body;
 
     if (!email) {
       return new Response(
-        JSON.stringify({ error: "Email diperlukan" }),
+        JSON.stringify(withTrace({ error: "Email diperlukan" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -268,7 +278,7 @@ serve(async (req: Request): Promise<Response> => {
     const rateLimitCheck = await checkRateLimit(supabase, email.toLowerCase().trim());
     if (!rateLimitCheck.allowed) {
       return new Response(
-        JSON.stringify({ error: rateLimitCheck.message, code: "RATE_LIMITED" }),
+        JSON.stringify(withTrace({ error: rateLimitCheck.message, code: "RATE_LIMITED" }, traceId)),
         { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -282,9 +292,9 @@ serve(async (req: Request): Promise<Response> => {
       hasEmployeeRow = resolved.hasEmployeeRow;
       hasInactiveEmployee = resolved.hasInactiveEmployee;
     } catch (resolveError: any) {
-      console.error("Error resolving account:", resolveError?.message);
+      console.error(`[${traceId}] Error resolving account:`, resolveError?.message);
       return new Response(
-        JSON.stringify({ error: resolveError?.message || "Gagal memeriksa email" }),
+        JSON.stringify(withTrace({ error: resolveError?.message || "Gagal memeriksa email" }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -292,15 +302,15 @@ serve(async (req: Request): Promise<Response> => {
     if (!account) {
       if (hasEmployeeRow || hasInactiveEmployee) {
         return new Response(
-          JSON.stringify({
+          JSON.stringify(withTrace({
             error: "Akun belum diaktivasi. Silakan gunakan kode undangan untuk mendaftar terlebih dahulu.",
             code: "NOT_ACTIVATED",
-          }),
+          }, traceId)),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
       return new Response(
-        JSON.stringify({ error: "Email tidak terdaftar dalam sistem", code: "EMAIL_NOT_FOUND" }),
+        JSON.stringify(withTrace({ error: "Email tidak terdaftar dalam sistem", code: "EMAIL_NOT_FOUND" }, traceId)),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -319,30 +329,30 @@ serve(async (req: Request): Promise<Response> => {
       if (login_type === "admin" && !isSuperAdmin) {
         const actualRole = isAdminInstansi ? "Admin Organisasi" : "Pegawai";
         return new Response(
-          JSON.stringify({
+          JSON.stringify(withTrace({
             error: `Akun Anda terdaftar sebagai ${actualRole}, bukan Super Admin. Silakan gunakan halaman login yang sesuai.`,
             code: "ROLE_MISMATCH",
-          }),
+          }, traceId)),
           { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
       if (login_type === "org" && !isAdminInstansi) {
         const actualRole = isSuperAdmin ? "Super Admin" : "Pegawai";
         return new Response(
-          JSON.stringify({
+          JSON.stringify(withTrace({
             error: `Akun Anda terdaftar sebagai ${actualRole}, bukan Admin Organisasi. Silakan gunakan halaman login yang sesuai.`,
             code: "ROLE_MISMATCH",
-          }),
+          }, traceId)),
           { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
       if (login_type === "employee" && (isSuperAdmin || isAdminInstansi)) {
         const actualRole = isSuperAdmin ? "Super Admin" : "Admin Organisasi";
         return new Response(
-          JSON.stringify({
+          JSON.stringify(withTrace({
             error: `Akun Anda terdaftar sebagai ${actualRole}, bukan Pegawai. Silakan gunakan halaman login yang sesuai.`,
             code: "ROLE_MISMATCH",
-          }),
+          }, traceId)),
           { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -356,13 +366,13 @@ serve(async (req: Request): Promise<Response> => {
     if (!canSkipPhoneValidation) {
       if (!inputPhone) {
         return new Response(
-          JSON.stringify({ error: "No. WhatsApp diperlukan" }),
+          JSON.stringify(withTrace({ error: "No. WhatsApp diperlukan" }, traceId)),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
       if (!storedPhone || inputPhone !== storedPhone) {
         return new Response(
-          JSON.stringify({ error: "Email dan No. WhatsApp tidak cocok dengan data terdaftar", code: "IDENTITY_MISMATCH" }),
+          JSON.stringify(withTrace({ error: "Email dan No. WhatsApp tidak cocok dengan data terdaftar", code: "IDENTITY_MISMATCH" }, traceId)),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -393,9 +403,9 @@ serve(async (req: Request): Promise<Response> => {
       });
 
     if (insertError) {
-      console.error("Error saving OTP:", insertError);
+      console.error(`[${traceId}] Error saving OTP:`, insertError);
       return new Response(
-        JSON.stringify({ error: "Gagal membuat kode OTP" }),
+        JSON.stringify(withTrace({ error: "Gagal membuat kode OTP" }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -410,7 +420,7 @@ serve(async (req: Request): Promise<Response> => {
 
       if (!waSettings?.value) {
         return new Response(
-          JSON.stringify({ error: "WhatsApp gateway belum dikonfigurasi" }),
+          JSON.stringify(withTrace({ error: "WhatsApp gateway belum dikonfigurasi" }, traceId)),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -425,7 +435,7 @@ serve(async (req: Request): Promise<Response> => {
 
       if (!wa.isEnabled) {
         return new Response(
-          JSON.stringify({ error: "WhatsApp gateway tidak aktif" }),
+          JSON.stringify(withTrace({ error: "WhatsApp gateway tidak aktif" }, traceId)),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -433,7 +443,7 @@ serve(async (req: Request): Promise<Response> => {
       const normalizedPhone = targetPhone;
       if (!normalizedPhone) {
         return new Response(
-          JSON.stringify({ error: "No. WhatsApp tidak tersedia untuk akun ini" }),
+          JSON.stringify(withTrace({ error: "No. WhatsApp tidak tersedia untuk akun ini" }, traceId)),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -452,7 +462,7 @@ serve(async (req: Request): Promise<Response> => {
         const config = PROVIDER_CONFIGS[provider];
         if (!config) {
           return new Response(
-            JSON.stringify({ error: `Provider WhatsApp '${provider}' tidak didukung` }),
+            JSON.stringify(withTrace({ error: `Provider WhatsApp '${provider}' tidak didukung` }, traceId)),
             { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
         }
@@ -469,9 +479,9 @@ serve(async (req: Request): Promise<Response> => {
 
       if (!waRes.ok) {
         const details = await waRes.text();
-        console.error("WhatsApp send error:", details);
+        console.error(`[${traceId}] WhatsApp send error:`, details);
         return new Response(
-          JSON.stringify({ error: "Gagal mengirim OTP via WhatsApp" }),
+          JSON.stringify(withTrace({ error: "Gagal mengirim OTP via WhatsApp" }, traceId)),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -495,9 +505,9 @@ serve(async (req: Request): Promise<Response> => {
       .maybeSingle();
 
     if (!smtpSettings?.value) {
-      console.error("SMTP settings not configured");
+      console.error(`[${traceId}] SMTP settings not configured`);
       return new Response(
-        JSON.stringify({ error: "Email gateway belum dikonfigurasi" }),
+        JSON.stringify(withTrace({ error: "Email gateway belum dikonfigurasi" }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -515,7 +525,7 @@ serve(async (req: Request): Promise<Response> => {
 
     if (!smtp.isEnabled) {
       return new Response(
-        JSON.stringify({ error: "Email gateway tidak aktif" }),
+        JSON.stringify(withTrace({ error: "Email gateway tidak aktif" }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -636,9 +646,9 @@ serve(async (req: Request): Promise<Response> => {
     );
 
   } catch (error: any) {
-    console.error("Error in send-password-otp:", error);
+    console.error(`[${traceId}] Error in send-password-otp:`, error);
     return new Response(
-      JSON.stringify({ error: error.message || "Terjadi kesalahan internal" }),
+      JSON.stringify(withTrace({ error: error.message || "Terjadi kesalahan internal" }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

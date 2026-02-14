@@ -78,6 +78,14 @@ const resolveAccount = async (supabase: any, email: string): Promise<ResolvedAcc
   return { userId: authUser.id, authEmail: authUser.email };
 };
 
+const createTraceId = (prefix: string): string =>
+  `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+const withTrace = <T extends Record<string, unknown>>(payload: T, traceId: string): T & { trace_id: string } => ({
+  ...payload,
+  trace_id: traceId,
+});
+
 // Hash OTP with SHA-256
 const hashOTP = async (otp: string): Promise<string> => {
   const encoder = new TextEncoder();
@@ -157,19 +165,21 @@ serve(async (req: Request): Promise<Response> => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const traceId = createTraceId("verify-password-otp");
+
   try {
     const { email, otp, newPassword }: VerifyOTPRequest = await req.json();
 
     if (!email || !otp || !newPassword) {
       return new Response(
-        JSON.stringify({ error: "Email, OTP, dan password baru diperlukan" }),
+        JSON.stringify(withTrace({ error: "Email, OTP, dan password baru diperlukan" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     if (newPassword.length < 6) {
       return new Response(
-        JSON.stringify({ error: "Password minimal 6 karakter", code: "WEAK_PASSWORD" }),
+        JSON.stringify(withTrace({ error: "Password minimal 6 karakter", code: "WEAK_PASSWORD" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -182,16 +192,16 @@ serve(async (req: Request): Promise<Response> => {
     try {
       account = await resolveAccount(supabase, email);
     } catch (resolveError: any) {
-      console.error("Resolve account error:", resolveError?.message);
+      console.error(`[${traceId}] Resolve account error:`, resolveError?.message);
       return new Response(
-        JSON.stringify({ error: resolveError?.message || "Gagal memeriksa email", code: "EMAIL_LOOKUP_FAILED" }),
+        JSON.stringify(withTrace({ error: resolveError?.message || "Gagal memeriksa email", code: "EMAIL_LOOKUP_FAILED" }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     if (!account) {
       return new Response(
-        JSON.stringify({ error: "Email tidak ditemukan", code: "EMAIL_NOT_FOUND" }),
+        JSON.stringify(withTrace({ error: "Email tidak ditemukan", code: "EMAIL_NOT_FOUND" }, traceId)),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -202,7 +212,7 @@ serve(async (req: Request): Promise<Response> => {
     const rateLimitCheck = await checkVerifyRateLimit(supabase, authEmail);
     if (!rateLimitCheck.allowed) {
       return new Response(
-        JSON.stringify({ error: rateLimitCheck.message, code: "RATE_LIMITED" }),
+        JSON.stringify(withTrace({ error: rateLimitCheck.message, code: "RATE_LIMITED" }, traceId)),
         { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -227,9 +237,9 @@ serve(async (req: Request): Promise<Response> => {
       .maybeSingle();
 
     if (otpError || !otpRecord) {
-      console.log("Invalid OTP attempt for:", authEmail);
+      console.log(`[${traceId}] Invalid OTP attempt for:`, authEmail);
       return new Response(
-        JSON.stringify({ error: "Kode OTP tidak valid atau sudah kadaluarsa", code: "INVALID_OTP" }),
+        JSON.stringify(withTrace({ error: "Kode OTP tidak valid atau sudah kadaluarsa", code: "INVALID_OTP" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -250,9 +260,9 @@ serve(async (req: Request): Promise<Response> => {
     );
 
     if (updateError) {
-      console.error("Error updating password:", updateError);
+      console.error(`[${traceId}] Error updating password:`, updateError);
       return new Response(
-        JSON.stringify({ error: "Gagal mengubah password", code: "UPDATE_FAILED" }),
+        JSON.stringify(withTrace({ error: "Gagal mengubah password", code: "UPDATE_FAILED" }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -268,9 +278,9 @@ serve(async (req: Request): Promise<Response> => {
     );
 
   } catch (error: any) {
-    console.error("Error in verify-password-otp:", error);
+    console.error(`[${traceId}] Error in verify-password-otp:`, error);
     return new Response(
-      JSON.stringify({ error: error.message || "Terjadi kesalahan internal" }),
+      JSON.stringify(withTrace({ error: error.message || "Terjadi kesalahan internal" }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

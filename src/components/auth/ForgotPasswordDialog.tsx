@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import SingleOTPInput, { SingleOTPInputRef } from "@/components/common/SingleOTPInput";
 import { useToast } from "@/hooks/use-toast";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { Key, Lock, Mail, MessageCircle, Loader2, ArrowLeft, RefreshCw, Eye, EyeOff, Phone, CheckCircle2, ShieldCheck } from "lucide-react";
 
 interface ForgotPasswordDialogProps {
@@ -30,14 +31,31 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
   const [isValidated, setIsValidated] = useState(false);
   const [validatedName, setValidatedName] = useState("");
   const [otpValid, setOtpValid] = useState(false);
+  const [verifiedOtp, setVerifiedOtp] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const otpRef = useRef<SingleOTPInputRef>(null);
+
+  const maskedEmail = (email: string) => {
+    const trimmed = email.trim().toLowerCase();
+    const parts = trimmed.split("@");
+    if (parts.length !== 2) return trimmed;
+    const [local, domain] = parts;
+    if (local.length <= 2) return `${local[0] || ""}***@${domain}`;
+    return `${local.slice(0, 2)}***@${domain}`;
+  };
+
+  const createErrorDescription = (message: string, localLogId: string, backendTraceId?: string) => {
+    const withBackendRef = appendErrorReference(message, backendTraceId);
+    return `${withBackendRef} [Log: ${localLogId}]`;
+  };
+
   const handleOtpChange = useCallback((value: string) => {
     setOtpValid(value.length === 6);
+    setVerifiedOtp(value);
   }, []);
 
   const reset = () => {
@@ -48,6 +66,7 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
     setWhatsappValue("");
     setMaskedTarget("");
     setOtpValid(false);
+    setVerifiedOtp("");
     setNewPassword("");
     setConfirmPassword("");
     setIsValidated(false);
@@ -108,7 +127,7 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
 
       const result = await response.json();
       if (!response.ok) {
-        throw new Error(result.error || "Data tidak valid");
+        throw new Error(appendErrorReference(result.error || "Data tidak valid", result.trace_id));
       }
 
       setIsValidated(true);
@@ -119,7 +138,17 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
       });
     } catch (err: any) {
       setIsValidated(false);
-      toast({ variant: "destructive", title: "Validasi Gagal", description: err.message });
+      const logId = reportError(err, "ForgotPasswordDialog.handleValidate", {
+        loginType,
+        actionType,
+        deliveryMethod,
+        email: maskedEmail(emailValue),
+      });
+      toast({
+        variant: "destructive",
+        title: "Validasi Gagal",
+        description: createErrorDescription(err.message || "Data tidak valid", logId),
+      });
     } finally {
       setIsValidating(false);
     }
@@ -150,7 +179,7 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
 
       const result = await response.json();
       if (!response.ok) {
-        throw new Error(result.error || "Gagal mengirim password baru");
+        throw new Error(appendErrorReference(result.error || "Gagal mengirim password baru", result.trace_id));
       }
 
       setStep("success");
@@ -161,7 +190,17 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
           : "Periksa email Anda untuk password baru",
       });
     } catch (err: any) {
-      toast({ variant: "destructive", title: "Gagal", description: err.message });
+      const logId = reportError(err, "ForgotPasswordDialog.handleSendNewPassword", {
+        loginType,
+        actionType,
+        deliveryMethod,
+        email: maskedEmail(emailValue),
+      });
+      toast({
+        variant: "destructive",
+        title: "Gagal",
+        description: createErrorDescription(err.message || "Gagal mengirim password baru", logId),
+      });
     } finally {
       setIsLoading(false);
     }
@@ -193,10 +232,12 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
 
       const result = await response.json();
       if (!response.ok) {
-        throw new Error(result.error || "Gagal mengirim OTP");
+        throw new Error(appendErrorReference(result.error || "Gagal mengirim OTP", result.trace_id));
       }
 
       setMaskedTarget(deliveryMethod === "email" ? (result.email || emailValue) : (result.whatsapp || whatsappValue));
+      setVerifiedOtp("");
+      setOtpValid(false);
       setStep("otp");
       toast({
         title: "Kode OTP Terkirim",
@@ -205,10 +246,30 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
           : "Periksa email Anda (berlaku 10 menit)",
       });
     } catch (err: any) {
-      toast({ variant: "destructive", title: "Gagal", description: err.message });
+      const logId = reportError(err, "ForgotPasswordDialog.handleSendOTP", {
+        loginType,
+        actionType,
+        deliveryMethod,
+        email: maskedEmail(emailValue),
+      });
+      toast({
+        variant: "destructive",
+        title: "Gagal",
+        description: createErrorDescription(err.message || "Gagal mengirim OTP", logId),
+      });
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleContinueToNewPassword = () => {
+    const otpValue = otpRef.current?.getValue() || verifiedOtp;
+    if (otpValue.length !== 6) {
+      toast({ variant: "destructive", title: "Kode OTP tidak lengkap" });
+      return;
+    }
+    setVerifiedOtp(otpValue);
+    setStep("newPassword");
   };
 
   const handleVerifyAndReset = async () => {
@@ -221,7 +282,7 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
       return;
     }
 
-    const otpValue = otpRef.current?.getValue() || "";
+    const otpValue = verifiedOtp;
     if (otpValue.length !== 6) {
       toast({ variant: "destructive", title: "Kode OTP tidak lengkap" });
       return;
@@ -253,15 +314,26 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
           setStep("otp");
           otpRef.current?.clear();
           setOtpValid(false);
+          setVerifiedOtp("");
           return;
         }
-        throw new Error(result.error || "Gagal reset password");
+        throw new Error(appendErrorReference(result.error || "Gagal reset password", result.trace_id));
       }
 
       setStep("success");
       toast({ title: "Password berhasil diubah!" });
     } catch (err: any) {
-      toast({ variant: "destructive", title: "Gagal", description: err.message });
+      const logId = reportError(err, "ForgotPasswordDialog.handleVerifyAndReset", {
+        loginType,
+        actionType,
+        deliveryMethod,
+        email: maskedEmail(emailValue),
+      });
+      toast({
+        variant: "destructive",
+        title: "Gagal",
+        description: createErrorDescription(err.message || "Gagal reset password", logId),
+      });
     } finally {
       setIsLoading(false);
     }
@@ -443,7 +515,7 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
                 Kode dikirim ke <span className="font-medium text-foreground">{maskedTarget}</span>
               </p>
               <SingleOTPInput ref={otpRef} onChange={handleOtpChange} autoFocus />
-              <Button onClick={() => setStep("newPassword")} disabled={!otpValid} className="w-full">
+              <Button onClick={handleContinueToNewPassword} disabled={!otpValid} className="w-full">
                 Verifikasi
               </Button>
               <div className="flex items-center justify-center">
