@@ -21,6 +21,7 @@ declare global {
 const STORAGE_KEY = "absensiku:error_logs";
 const MAX_ENTRIES = 200;
 let isInstalled = false;
+let isFetchLoggingInstalled = false;
 
 const createLogId = () => {
   const compactIso = new Date()
@@ -111,6 +112,83 @@ export const getStoredErrorLogs = (): AppErrorLogEntry[] => readEntries();
 
 export const clearStoredErrorLogs = () => writeEntries([]);
 
+const resolveFetchUrl = (input: RequestInfo | URL): string => {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.toString();
+  if (typeof Request !== "undefined" && input instanceof Request) return input.url;
+  return String(input);
+};
+
+const resolveFetchMethod = (input: RequestInfo | URL, init?: RequestInit): string => {
+  if (init?.method) return init.method.toUpperCase();
+  if (typeof Request !== "undefined" && input instanceof Request) return input.method.toUpperCase();
+  return "GET";
+};
+
+const isNoisyUrl = (url: string): boolean => {
+  return (
+    url.includes("/@vite/") ||
+    url.includes("__vite_ping") ||
+    url.includes("hot-update") ||
+    url.includes("sockjs-node")
+  );
+};
+
+const parseResponseErrorPayload = async (response: Response): Promise<{ error?: string; traceId?: string }> => {
+  try {
+    const contentType = response.headers.get("content-type") || "";
+    const clone = response.clone();
+    if (contentType.includes("application/json")) {
+      const body = await clone.json();
+      return {
+        error: typeof body?.error === "string" ? body.error : undefined,
+        traceId: typeof body?.trace_id === "string" ? body.trace_id : undefined,
+      };
+    }
+    const text = await clone.text();
+    return { error: text ? text.slice(0, 300) : undefined };
+  } catch {
+    return {};
+  }
+};
+
+export const installFetchErrorLogging = () => {
+  if (typeof window === "undefined" || isFetchLoggingInstalled) return;
+  const originalFetch = window.fetch.bind(window);
+  isFetchLoggingInstalled = true;
+
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const startedAt = Date.now();
+    const url = resolveFetchUrl(input);
+    const method = resolveFetchMethod(input, init);
+
+    try {
+      const response = await originalFetch(input, init);
+      if (response.status >= 400 && !isNoisyUrl(url)) {
+        const payload = await parseResponseErrorPayload(response);
+        reportError(new Error(`HTTP ${response.status} ${response.statusText}`), "fetch.http_error", {
+          url,
+          method,
+          status: response.status,
+          duration_ms: Date.now() - startedAt,
+          response_error: payload.error,
+          trace_id: payload.traceId,
+        });
+      }
+      return response;
+    } catch (error) {
+      if (!isNoisyUrl(url)) {
+        reportError(error, "fetch.network_error", {
+          url,
+          method,
+          duration_ms: Date.now() - startedAt,
+        });
+      }
+      throw error;
+    }
+  };
+};
+
 export const installGlobalErrorLogging = () => {
   if (typeof window === "undefined" || isInstalled) return;
   isInstalled = true;
@@ -129,6 +207,8 @@ export const installGlobalErrorLogging = () => {
   window.addEventListener("unhandledrejection", (event) => {
     reportError(event.reason || "Unhandled promise rejection", "window.unhandledrejection");
   });
+
+  installFetchErrorLogging();
 };
 
 export const appendErrorReference = (message: string, ref?: string | null) => {

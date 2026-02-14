@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
+import { createTraceId, logTraceError, withTrace } from "../_shared/error-utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -23,6 +24,8 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const traceId = createTraceId("send-test-email");
+
   try {
     const { 
       to, 
@@ -39,7 +42,7 @@ serve(async (req) => {
 
     if (!to || !smtpHost || !smtpUser || !smtpPassword) {
       return new Response(
-        JSON.stringify({ error: "Parameter tidak lengkap" }),
+        JSON.stringify(withTrace({ error: "Parameter tidak lengkap" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -49,7 +52,7 @@ serve(async (req) => {
     
     if (!emailRegex.test(to)) {
       return new Response(
-        JSON.stringify({ error: "Email tujuan tidak valid. Pastikan format email benar (contoh: nama@domain.com)" }),
+        JSON.stringify(withTrace({ error: "Email tujuan tidak valid. Pastikan format email benar (contoh: nama@domain.com)" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -129,7 +132,7 @@ serve(async (req) => {
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error: any) {
-    console.error("Error sending email:", error);
+    logTraceError(traceId, "Error sending email", error);
     
     let errorMessage = error.message || "Gagal mengirim email";
     
@@ -141,10 +144,10 @@ serve(async (req) => {
     }
     
     return new Response(
-      JSON.stringify({ 
+      JSON.stringify(withTrace({ 
         error: errorMessage,
         details: error.toString()
-      }),
+      }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

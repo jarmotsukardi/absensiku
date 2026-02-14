@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createTraceId, logTraceError, withTrace } from "../_shared/error-utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -10,11 +11,13 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const traceId = createTraceId("send-billing-mode-otp");
+
   try {
     const { email, whatsapp, tenant_id, new_mode } = await req.json();
 
     if (!email || !tenant_id || !new_mode) {
-      return new Response(JSON.stringify({ error: "Email, tenant_id, dan new_mode wajib diisi" }), {
+      return new Response(JSON.stringify(withTrace({ error: "Email, tenant_id, dan new_mode wajib diisi" }, traceId)), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -36,7 +39,7 @@ Deno.serve(async (req) => {
     if (rateData) {
       const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
       if (new Date(rateData.first_attempt_at) > hourAgo && rateData.attempt_count >= 3) {
-        return new Response(JSON.stringify({ error: "Terlalu banyak permintaan. Coba lagi dalam 1 jam." }), {
+        return new Response(JSON.stringify(withTrace({ error: "Terlalu banyak permintaan. Coba lagi dalam 1 jam." }, traceId)), {
           status: 429,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -122,7 +125,7 @@ Deno.serve(async (req) => {
             body: JSON.stringify(payload),
           });
         } catch (waError) {
-          console.error("WA send error:", waError);
+          logTraceError(traceId, "WA send error", waError);
           demoOtp = otp;
         }
       } else {
@@ -140,8 +143,8 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error: any) {
-    console.error("Error:", error);
-    return new Response(JSON.stringify({ error: error.message }), {
+    logTraceError(traceId, "Unhandled error", error);
+    return new Response(JSON.stringify(withTrace({ error: error.message }, traceId)), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

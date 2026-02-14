@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { crypto } from "https://deno.land/std@0.190.0/crypto/mod.ts";
+import { createTraceId, logTraceError, withTrace } from "../_shared/error-utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -29,6 +30,8 @@ serve(async (req: Request): Promise<Response> => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const traceId = createTraceId("verify-device-otp");
+
   try {
     const { email, otp, newPassword, employeeId, newAndroidId }: VerifyDeviceOTPRequest = await req.json();
 
@@ -37,7 +40,7 @@ serve(async (req: Request): Promise<Response> => {
 
     if (!normalizedEmail || !normalizedOtp) {
       return new Response(
-        JSON.stringify({ error: "Email dan OTP diperlukan" }),
+        JSON.stringify(withTrace({ error: "Email dan OTP diperlukan" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -58,7 +61,7 @@ serve(async (req: Request): Promise<Response> => {
         .maybeSingle();
 
       if (employeeForOtpError) {
-        console.error("Error fetching employee for OTP lookup:", employeeForOtpError);
+        logTraceError(traceId, "Error fetching employee for OTP lookup", employeeForOtpError);
       }
 
       if (employeeForOtp?.user_id) {
@@ -89,9 +92,9 @@ serve(async (req: Request): Promise<Response> => {
       .maybeSingle();
 
     if (otpError || !otpRecord) {
-      console.log("Invalid OTP attempt for:", otpLookupEmail);
+      console.log(`[${traceId}] Invalid OTP attempt for:`, otpLookupEmail);
       return new Response(
-        JSON.stringify({ error: "Kode OTP tidak valid atau sudah kadaluarsa", code: "INVALID_OTP" }),
+        JSON.stringify(withTrace({ error: "Kode OTP tidak valid atau sudah kadaluarsa", code: "INVALID_OTP" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -119,9 +122,9 @@ serve(async (req: Request): Promise<Response> => {
         );
 
         if (pwError) {
-          console.error("Error updating password:", pwError);
+          logTraceError(traceId, "Error updating password", pwError);
           return new Response(
-            JSON.stringify({ error: "Gagal mengubah password", code: "PASSWORD_UPDATE_FAILED" }),
+            JSON.stringify(withTrace({ error: "Gagal mengubah password", code: "PASSWORD_UPDATE_FAILED" }, traceId)),
             { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
           );
         }
@@ -139,9 +142,9 @@ serve(async (req: Request): Promise<Response> => {
         .eq("id", employeeId);
 
       if (deviceError) {
-        console.error("Error updating device:", deviceError);
+        logTraceError(traceId, "Error updating device", deviceError);
         return new Response(
-          JSON.stringify({ error: "Gagal update device", code: "DEVICE_UPDATE_FAILED" }),
+          JSON.stringify(withTrace({ error: "Gagal update device", code: "DEVICE_UPDATE_FAILED" }, traceId)),
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -156,9 +159,9 @@ serve(async (req: Request): Promise<Response> => {
     );
 
   } catch (error: any) {
-    console.error("Error in verify-device-otp:", error);
+    logTraceError(traceId, "Error in verify-device-otp", error);
     return new Response(
-      JSON.stringify({ error: error.message || "Terjadi kesalahan internal" }),
+      JSON.stringify(withTrace({ error: error.message || "Terjadi kesalahan internal" }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

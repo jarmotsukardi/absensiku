@@ -440,9 +440,11 @@ Sistem sudah menambahkan logging error agar masalah lebih cepat dilacak:
 - Frontend menangkap:
   - Error runtime (`window.error`)
   - Promise rejection (`window.unhandledrejection`)
-  - Error dari flow reset/ganti password
+  - Error render React via `ErrorBoundary`
+  - Error HTTP/API global via interceptor `fetch` (status `>= 400` dan network error)
+  - Error dari flow reset/ganti password dengan metadata konteks
 - Error frontend disimpan di `localStorage` key: `absensiku:error_logs`
-- Error backend (Edge Function OTP) mengembalikan `trace_id` di respons error.
+- Error backend Edge Function mengembalikan `trace_id` di respons error (module OTP, billing, registrasi, webhook, dll).
 - UI akan menampilkan referensi error saat gagal, format:
   - `Ref: <trace_id>` dari backend
   - `[Log: <ERR-...>]` dari frontend

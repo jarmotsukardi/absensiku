@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createTraceId, logTraceError, withTrace } from "../_shared/error-utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -15,11 +16,13 @@ serve(async (req: Request): Promise<Response> => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const traceId = createTraceId("join-organization");
+
   try {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       return new Response(
-        JSON.stringify({ error: "Unauthorized" }),
+        JSON.stringify(withTrace({ error: "Unauthorized" }, traceId)),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -28,7 +31,7 @@ serve(async (req: Request): Promise<Response> => {
 
     if (!invitation_code) {
       return new Response(
-        JSON.stringify({ error: "Kode undangan diperlukan" }),
+        JSON.stringify(withTrace({ error: "Kode undangan diperlukan" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -43,7 +46,7 @@ serve(async (req: Request): Promise<Response> => {
 
     if (userError || !user) {
       return new Response(
-        JSON.stringify({ error: "Token tidak valid" }),
+        JSON.stringify(withTrace({ error: "Token tidak valid" }, traceId)),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -67,7 +70,7 @@ serve(async (req: Request): Promise<Response> => {
           .eq("attempt_type", "join_org");
       } else if (rateCheck.attempt_count >= 5) {
         return new Response(
-          JSON.stringify({ error: "Terlalu banyak percobaan. Coba lagi nanti.", code: "RATE_LIMITED" }),
+          JSON.stringify(withTrace({ error: "Terlalu banyak percobaan. Coba lagi nanti.", code: "RATE_LIMITED" }, traceId)),
           { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       } else {
@@ -92,7 +95,7 @@ serve(async (req: Request): Promise<Response> => {
 
     if (invError || !invitation) {
       return new Response(
-        JSON.stringify({ error: "Kode undangan tidak valid atau sudah kadaluarsa", code: "INVALID_CODE" }),
+        JSON.stringify(withTrace({ error: "Kode undangan tidak valid atau sudah kadaluarsa", code: "INVALID_CODE" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -107,7 +110,7 @@ serve(async (req: Request): Promise<Response> => {
 
     if (existingEmployee) {
       return new Response(
-        JSON.stringify({ error: "Anda sudah terdaftar di organisasi ini", code: "ALREADY_MEMBER" }),
+        JSON.stringify(withTrace({ error: "Anda sudah terdaftar di organisasi ini", code: "ALREADY_MEMBER" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -143,9 +146,9 @@ serve(async (req: Request): Promise<Response> => {
       .single();
 
     if (empError) {
-      console.error("Error creating employee:", empError);
+      logTraceError(traceId, "Error creating employee", empError);
       return new Response(
-        JSON.stringify({ error: "Gagal membuat data pegawai", details: empError.message }),
+        JSON.stringify(withTrace({ error: "Gagal membuat data pegawai", details: empError.message }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -186,9 +189,9 @@ serve(async (req: Request): Promise<Response> => {
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error: any) {
-    console.error("Error in join-organization:", error);
+    logTraceError(traceId, "Error in join-organization", error);
     return new Response(
-      JSON.stringify({ error: error.message || "Terjadi kesalahan internal" }),
+      JSON.stringify(withTrace({ error: error.message || "Terjadi kesalahan internal" }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

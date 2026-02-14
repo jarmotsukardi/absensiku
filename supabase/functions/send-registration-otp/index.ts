@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { crypto } from "https://deno.land/std@0.190.0/crypto/mod.ts";
+import { createTraceId, logTraceError, withTrace } from "../_shared/error-utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -100,12 +101,14 @@ serve(async (req: Request): Promise<Response> => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const traceId = createTraceId("send-registration-otp");
+
   try {
     const { email }: SendRegistrationOTPRequest = await req.json();
 
     if (!email) {
       return new Response(
-        JSON.stringify({ error: "Email diperlukan" }),
+        JSON.stringify(withTrace({ error: "Email diperlukan" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -122,10 +125,10 @@ serve(async (req: Request): Promise<Response> => {
     
     if (userExists) {
       return new Response(
-        JSON.stringify({ 
+        JSON.stringify(withTrace({ 
           error: "Email sudah terdaftar. Silakan login atau gunakan lupa password.", 
           code: "EMAIL_EXISTS" 
-        }),
+        }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -141,10 +144,10 @@ serve(async (req: Request): Promise<Response> => {
 
     if ((recentCount || 0) >= 3) {
       return new Response(
-        JSON.stringify({ 
+        JSON.stringify(withTrace({ 
           error: "Terlalu banyak permintaan OTP. Coba lagi dalam 1 jam.", 
           code: "RATE_LIMIT" 
-        }),
+        }, traceId)),
         { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -165,7 +168,7 @@ serve(async (req: Request): Promise<Response> => {
       });
 
     if (saveError) {
-      console.error("Error saving OTP:", saveError);
+      logTraceError(traceId, "Error saving OTP", saveError);
       throw new Error("Gagal menyimpan OTP");
     }
 
@@ -224,7 +227,7 @@ serve(async (req: Request): Promise<Response> => {
           console.log("OTP email sent successfully via Resend");
         }
       } catch (e) {
-        console.error("Resend error:", e);
+        logTraceError(traceId, "Resend error", e);
       }
     }
 
@@ -247,10 +250,10 @@ serve(async (req: Request): Promise<Response> => {
         .eq("otp_hash", otpHash);
         
       return new Response(
-        JSON.stringify({ 
+        JSON.stringify(withTrace({ 
           error: "Gagal mengirim email OTP. Pastikan konfigurasi email gateway sudah benar.",
           code: "EMAIL_FAILED"
-        }),
+        }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -264,9 +267,9 @@ serve(async (req: Request): Promise<Response> => {
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error: any) {
-    console.error("Error in send-registration-otp:", error);
+    logTraceError(traceId, "Error in send-registration-otp", error);
     return new Response(
-      JSON.stringify({ error: error.message || "Terjadi kesalahan internal" }),
+      JSON.stringify(withTrace({ error: error.message || "Terjadi kesalahan internal" }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

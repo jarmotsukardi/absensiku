@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { crypto } from "https://deno.land/std@0.190.0/crypto/mod.ts";
+import { createTraceId, logTraceError, withTrace } from "../_shared/error-utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -26,12 +27,14 @@ serve(async (req: Request): Promise<Response> => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const traceId = createTraceId("verify-org-type-otp");
+
   try {
     const { email, otp }: VerifyOrgTypeOTPRequest = await req.json();
 
     if (!email || !otp) {
       return new Response(
-        JSON.stringify({ error: "Email dan OTP diperlukan" }),
+        JSON.stringify(withTrace({ error: "Email dan OTP diperlukan" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -56,9 +59,9 @@ serve(async (req: Request): Promise<Response> => {
       .maybeSingle();
 
     if (otpError || !otpRecord) {
-      console.log("Invalid OTP attempt for:", email);
+      console.log(`[${traceId}] Invalid OTP attempt for:`, email);
       return new Response(
-        JSON.stringify({ error: "Kode OTP tidak valid atau sudah kadaluarsa", code: "INVALID_OTP" }),
+        JSON.stringify(withTrace({ error: "Kode OTP tidak valid atau sudah kadaluarsa", code: "INVALID_OTP" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -78,9 +81,9 @@ serve(async (req: Request): Promise<Response> => {
     );
 
   } catch (error: any) {
-    console.error("Error in verify-org-type-otp:", error);
+    logTraceError(traceId, "Error in verify-org-type-otp", error);
     return new Response(
-      JSON.stringify({ error: error.message || "Terjadi kesalahan internal" }),
+      JSON.stringify(withTrace({ error: error.message || "Terjadi kesalahan internal" }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createTraceId, logTraceError, withTrace } from '../_shared/error-utils.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -19,6 +20,8 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders })
   }
+
+  const traceId = createTraceId('cleanup-location-data')
 
   try {
     // Initialize Supabase client with service role
@@ -51,7 +54,7 @@ Deno.serve(async (req) => {
       .select('id')
 
     if (error) {
-      console.error('Error cleaning up location data:', error)
+      logTraceError(traceId, 'Error cleaning up location data', error)
       throw error
     }
 
@@ -84,13 +87,13 @@ Deno.serve(async (req) => {
     )
 
   } catch (error) {
-    console.error('Cleanup error:', error)
+    logTraceError(traceId, 'Cleanup error', error)
     
     return new Response(
-      JSON.stringify({
+      JSON.stringify(withTrace({
         success: false,
         error: 'Internal server error',
-      }),
+      }, traceId)),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 500,

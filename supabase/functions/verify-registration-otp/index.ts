@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { crypto } from "https://deno.land/std@0.190.0/crypto/mod.ts";
+import { createTraceId, logTraceError, withTrace } from "../_shared/error-utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -30,19 +31,21 @@ serve(async (req: Request): Promise<Response> => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const traceId = createTraceId("verify-registration-otp");
+
   try {
     const { email, otp, name, whatsapp, address, password }: VerifyRegistrationOTPRequest = await req.json();
 
     if (!email || !otp || !name || !password) {
       return new Response(
-        JSON.stringify({ error: "Data tidak lengkap" }),
+        JSON.stringify(withTrace({ error: "Data tidak lengkap" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     if (password.length < 6) {
       return new Response(
-        JSON.stringify({ error: "Password minimal 6 karakter" }),
+        JSON.stringify(withTrace({ error: "Password minimal 6 karakter" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -72,9 +75,9 @@ serve(async (req: Request): Promise<Response> => {
       .maybeSingle();
 
     if (otpError || !otpRecord) {
-      console.log("Invalid OTP attempt for:", normalizedEmail);
+      console.log(`[${traceId}] Invalid OTP attempt for:`, normalizedEmail);
       return new Response(
-        JSON.stringify({ error: "Kode OTP tidak valid atau sudah kadaluarsa", code: "INVALID_OTP" }),
+        JSON.stringify(withTrace({ error: "Kode OTP tidak valid atau sudah kadaluarsa", code: "INVALID_OTP" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -97,16 +100,16 @@ serve(async (req: Request): Promise<Response> => {
     });
 
     if (authError) {
-      console.error("Error creating user:", authError);
+      logTraceError(traceId, "Error creating user", authError);
       return new Response(
-        JSON.stringify({ error: authError.message || "Gagal membuat akun" }),
+        JSON.stringify(withTrace({ error: authError.message || "Gagal membuat akun" }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     if (!authData.user) {
       return new Response(
-        JSON.stringify({ error: "Gagal membuat akun" }),
+        JSON.stringify(withTrace({ error: "Gagal membuat akun" }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -125,7 +128,7 @@ serve(async (req: Request): Promise<Response> => {
       });
 
     if (regError) {
-      console.error("Error saving registration:", regError);
+      logTraceError(traceId, "Error saving registration", regError);
       // Don't fail, user is still created
     }
 
@@ -138,9 +141,9 @@ serve(async (req: Request): Promise<Response> => {
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error: any) {
-    console.error("Error in verify-registration-otp:", error);
+    logTraceError(traceId, "Error in verify-registration-otp", error);
     return new Response(
-      JSON.stringify({ error: error.message || "Terjadi kesalahan internal" }),
+      JSON.stringify(withTrace({ error: error.message || "Terjadi kesalahan internal" }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

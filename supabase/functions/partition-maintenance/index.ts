@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createTraceId, logTraceError, withTrace } from '../_shared/error-utils.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -33,6 +34,8 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders })
   }
 
+  const traceId = createTraceId('partition-maintenance')
+
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
@@ -62,9 +65,9 @@ Deno.serve(async (req) => {
           p_error_message: errorMessage,
           p_details: details || {}
         })
-        console.error(`[CRITICAL] ${errorAction}: ${errorMessage}`, details)
+        logTraceError(traceId, `[CRITICAL] ${errorAction}: ${errorMessage}`, details)
       } catch (logError) {
-        console.error('Failed to log critical error:', logError)
+        logTraceError(traceId, 'Failed to log critical error', logError)
       }
     }
 
@@ -76,7 +79,7 @@ Deno.serve(async (req) => {
         .rpc('cleanup_gps_data_partitioned')
 
       if (cleanupError) {
-        console.error('GPS cleanup error:', cleanupError)
+        logTraceError(traceId, 'GPS cleanup error', cleanupError)
         await logCriticalError('GPS_CLEANUP', 'attendance_records_partitioned', cleanupError.message, {
           step: 'cleanup_gps_data_partitioned',
           error_code: cleanupError.code
@@ -96,7 +99,7 @@ Deno.serve(async (req) => {
         .rpc('create_next_month_partition')
 
       if (partitionError) {
-        console.error('Partition creation error:', partitionError)
+        logTraceError(traceId, 'Partition creation error', partitionError)
         await logCriticalError('PARTITION_CREATE', 'attendance_records_partitioned', partitionError.message, {
           step: 'create_next_month_partition',
           error_code: partitionError.code
@@ -115,7 +118,7 @@ Deno.serve(async (req) => {
         .rpc('analyze_attendance_partitions')
 
       if (analyzeError) {
-        console.error('ANALYZE error:', analyzeError)
+        logTraceError(traceId, 'ANALYZE error', analyzeError)
         await logCriticalError('ANALYZE', 'attendance_records_partitioned', analyzeError.message, {
           step: 'analyze_attendance_partitions',
           error_code: analyzeError.code
@@ -135,7 +138,7 @@ Deno.serve(async (req) => {
         .rpc('cleanup_old_audit_logs')
 
       if (auditCleanupError) {
-        console.error('Audit cleanup error:', auditCleanupError)
+        logTraceError(traceId, 'Audit cleanup error', auditCleanupError)
         await logCriticalError('AUDIT_CLEANUP', 'audit_logs', auditCleanupError.message, {
           step: 'cleanup_old_audit_logs',
           error_code: auditCleanupError.code
@@ -168,9 +171,9 @@ Deno.serve(async (req) => {
     )
 
     if (hasErrors) {
-      console.warn('Maintenance completed with some errors:', results)
+      console.warn(`[${traceId}] Maintenance completed with some errors:`, results)
     } else {
-      console.log('Maintenance completed successfully:', results)
+      console.log(`[${traceId}] Maintenance completed successfully:`, results)
     }
 
     return new Response(
@@ -185,7 +188,7 @@ Deno.serve(async (req) => {
     )
 
   } catch (error: unknown) {
-    console.error('Partition maintenance critical error:', error)
+    logTraceError(traceId, 'Partition maintenance critical error', error)
     
     const errorMessage = error instanceof Error ? error.message : 'Internal server error'
     
@@ -202,14 +205,14 @@ Deno.serve(async (req) => {
         p_details: { stack: error instanceof Error ? error.stack : undefined }
       })
     } catch {
-      console.error('Failed to log fatal error to database')
+      logTraceError(traceId, 'Failed to log fatal error to database')
     }
     
     return new Response(
-      JSON.stringify({
+      JSON.stringify(withTrace({
         success: false,
         error: errorMessage,
-      }),
+      }, traceId)),
       { 
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         status: 500,

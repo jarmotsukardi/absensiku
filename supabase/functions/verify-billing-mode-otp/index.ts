@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createTraceId, logTraceError, withTrace } from "../_shared/error-utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -10,11 +11,13 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const traceId = createTraceId("verify-billing-mode-otp");
+
   try {
     const { email, otp, tenant_id, new_mode } = await req.json();
 
     if (!email || !otp || !tenant_id || !new_mode) {
-      return new Response(JSON.stringify({ error: "Semua field wajib diisi" }), {
+      return new Response(JSON.stringify(withTrace({ error: "Semua field wajib diisi" }, traceId)), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -36,7 +39,7 @@ Deno.serve(async (req) => {
     if (rateData) {
       const hourAgo = new Date(Date.now() - 60 * 60 * 1000);
       if (new Date(rateData.first_attempt_at) > hourAgo && rateData.attempt_count >= 5) {
-        return new Response(JSON.stringify({ error: "Terlalu banyak percobaan. Coba lagi dalam 1 jam." }), {
+        return new Response(JSON.stringify(withTrace({ error: "Terlalu banyak percobaan. Coba lagi dalam 1 jam." }, traceId)), {
           status: 429,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -81,7 +84,7 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (!otpRecord) {
-      return new Response(JSON.stringify({ error: "Kode OTP tidak valid atau sudah kedaluwarsa", success: false }), {
+      return new Response(JSON.stringify(withTrace({ error: "Kode OTP tidak valid atau sudah kedaluwarsa", success: false }, traceId)), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -100,7 +103,7 @@ Deno.serve(async (req) => {
       .eq("id", tenant_id);
 
     if (updateError) {
-      return new Response(JSON.stringify({ error: "Gagal mengubah mode billing: " + updateError.message, success: false }), {
+      return new Response(JSON.stringify(withTrace({ error: "Gagal mengubah mode billing: " + updateError.message, success: false }, traceId)), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -110,8 +113,8 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error: any) {
-    console.error("Error:", error);
-    return new Response(JSON.stringify({ error: error.message, success: false }), {
+    logTraceError(traceId, "Unhandled error", error);
+    return new Response(JSON.stringify(withTrace({ error: error.message, success: false }, traceId)), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

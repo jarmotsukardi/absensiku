@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createTraceId, logTraceError, withTrace } from "../_shared/error-utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -11,6 +12,8 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const traceId = createTraceId("xendit-webhook");
+
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -18,9 +21,9 @@ serve(async (req) => {
 
     // SECURITY: Reject if callback token is not configured
     if (!xenditCallbackToken) {
-      console.error("XENDIT_CALLBACK_TOKEN not configured - webhook disabled");
+      logTraceError(traceId, "XENDIT_CALLBACK_TOKEN not configured - webhook disabled");
       return new Response(
-        JSON.stringify({ error: "Webhook not configured" }),
+        JSON.stringify(withTrace({ error: "Webhook not configured" }, traceId)),
         { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -28,9 +31,9 @@ serve(async (req) => {
     // Validate callback token from Xendit
     const callbackToken = req.headers.get("x-callback-token");
     if (!callbackToken || callbackToken !== xenditCallbackToken) {
-      console.error("Invalid or missing callback token");
+      logTraceError(traceId, "Invalid or missing callback token");
       return new Response(
-        JSON.stringify({ error: "Unauthorized" }),
+        JSON.stringify(withTrace({ error: "Unauthorized" }, traceId)),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -44,7 +47,7 @@ serve(async (req) => {
     const { external_id, status, paid_at, payment_method, payment_channel, id: xendit_id } = payload;
 
     if (!external_id) {
-      return new Response(JSON.stringify({ error: "Missing external_id" }), {
+      return new Response(JSON.stringify(withTrace({ error: "Missing external_id" }, traceId)), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -58,13 +61,13 @@ serve(async (req) => {
       .single();
 
     if (invoiceError || !invoice) {
-      console.error("Invoice not found:", external_id);
+      logTraceError(traceId, `Invoice not found: ${external_id}`);
       // Log anyway for debugging
       await supabase.from("payment_logs").insert({
         event_type: "WEBHOOK_INVOICE_NOT_FOUND",
         payload: { external_id, xendit_payload: payload },
       });
-      return new Response(JSON.stringify({ error: "Invoice not found" }), {
+      return new Response(JSON.stringify(withTrace({ error: "Invoice not found" }, traceId)), {
         status: 404,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -113,8 +116,8 @@ serve(async (req) => {
       .eq("id", invoice.id);
 
     if (updateError) {
-      console.error("Failed to update invoice:", updateError);
-      return new Response(JSON.stringify({ error: "Failed to update invoice" }), {
+      logTraceError(traceId, "Failed to update invoice", updateError);
+      return new Response(JSON.stringify(withTrace({ error: "Failed to update invoice" }, traceId)), {
         status: 500,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -153,7 +156,7 @@ serve(async (req) => {
       });
 
       if (subError) {
-        console.error("Failed to update subscription:", subError);
+        logTraceError(traceId, "Failed to update subscription", subError);
       }
 
       // Record in financial ledger
@@ -187,11 +190,11 @@ serve(async (req) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error: unknown) {
-    console.error("Webhook error:", error);
+    logTraceError(traceId, "Webhook error", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    console.error("Details:", errorMessage);
+    logTraceError(traceId, `Details: ${errorMessage}`);
     return new Response(
-      JSON.stringify({ error: "Internal server error" }),
+      JSON.stringify(withTrace({ error: "Internal server error" }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

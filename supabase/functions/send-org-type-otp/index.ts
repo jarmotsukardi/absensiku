@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { crypto } from "https://deno.land/std@0.190.0/crypto/mod.ts";
+import { createTraceId, logTraceError, withTrace } from "../_shared/error-utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -31,12 +32,14 @@ serve(async (req: Request): Promise<Response> => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const traceId = createTraceId("send-org-type-otp");
+
   try {
     const { email, whatsapp }: SendOrgTypeOTPRequest = await req.json();
 
     if (!email || !whatsapp) {
       return new Response(
-        JSON.stringify({ error: "Email dan WhatsApp diperlukan" }),
+        JSON.stringify(withTrace({ error: "Email dan WhatsApp diperlukan" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -67,9 +70,9 @@ serve(async (req: Request): Promise<Response> => {
       });
 
     if (insertError) {
-      console.error("Error saving OTP:", insertError);
+      logTraceError(traceId, "Error saving OTP", insertError);
       return new Response(
-        JSON.stringify({ error: "Gagal membuat kode OTP" }),
+        JSON.stringify(withTrace({ error: "Gagal membuat kode OTP" }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -111,7 +114,7 @@ serve(async (req: Request): Promise<Response> => {
             console.log("OTP sent via WhatsApp to:", whatsapp);
           }
         } catch (waError) {
-          console.error("WhatsApp send error:", waError);
+          logTraceError(traceId, "WhatsApp send error", waError);
         }
       }
     }
@@ -129,9 +132,9 @@ serve(async (req: Request): Promise<Response> => {
     );
 
   } catch (error: any) {
-    console.error("Error in send-org-type-otp:", error);
+    logTraceError(traceId, "Error in send-org-type-otp", error);
     return new Response(
-      JSON.stringify({ error: error.message || "Terjadi kesalahan internal" }),
+      JSON.stringify(withTrace({ error: error.message || "Terjadi kesalahan internal" }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

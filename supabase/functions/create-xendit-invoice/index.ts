@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createTraceId, logTraceError, withTrace } from "../_shared/error-utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -20,10 +21,12 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const traceId = createTraceId("create-xendit-invoice");
+
   try {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+      return new Response(JSON.stringify(withTrace({ error: "Unauthorized" }, traceId)), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -35,7 +38,7 @@ serve(async (req) => {
 
     if (!xenditSecretKey) {
       return new Response(
-        JSON.stringify({ error: "Xendit API key not configured" }),
+        JSON.stringify(withTrace({ error: "Xendit API key not configured" }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -46,7 +49,7 @@ serve(async (req) => {
     const token = authHeader.replace("Bearer ", "");
     const { data: authData, error: authError } = await supabase.auth.getUser(token);
     if (authError || !authData.user) {
-      return new Response(JSON.stringify({ error: "Invalid token" }), {
+      return new Response(JSON.stringify(withTrace({ error: "Invalid token" }, traceId)), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -66,7 +69,7 @@ serve(async (req) => {
 
       if (count !== null && count >= 10) {
         return new Response(
-          JSON.stringify({ error: "Terlalu banyak invoice dibuat. Coba lagi nanti." }),
+          JSON.stringify(withTrace({ error: "Terlalu banyak invoice dibuat. Coba lagi nanti." }, traceId)),
           { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -75,7 +78,7 @@ serve(async (req) => {
 
     if (!tenant_id || !employee_count || !duration_months) {
       return new Response(
-        JSON.stringify({ error: "Missing required fields" }),
+        JSON.stringify(withTrace({ error: "Missing required fields" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -89,7 +92,7 @@ serve(async (req) => {
 
     if (tenantError || !tenant) {
       return new Response(
-        JSON.stringify({ error: "Tenant not found" }),
+        JSON.stringify(withTrace({ error: "Tenant not found" }, traceId)),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -183,9 +186,9 @@ serve(async (req) => {
 
     if (!xenditResponse.ok) {
       const xenditError = await xenditResponse.text();
-      console.error("Xendit error:", xenditError);
+      logTraceError(traceId, "Xendit error", xenditError);
       return new Response(
-        JSON.stringify({ error: "Failed to create Xendit invoice", details: xenditError }),
+        JSON.stringify(withTrace({ error: "Failed to create Xendit invoice", details: xenditError }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -224,9 +227,9 @@ serve(async (req) => {
       .single();
 
     if (invoiceError) {
-      console.error("Database error:", invoiceError);
+      logTraceError(traceId, "Database error", invoiceError);
       return new Response(
-        JSON.stringify({ error: "Failed to save invoice", details: invoiceError.message }),
+        JSON.stringify(withTrace({ error: "Failed to save invoice", details: invoiceError.message }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -257,10 +260,10 @@ serve(async (req) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error: unknown) {
-    console.error("Error:", error);
+    logTraceError(traceId, "Unhandled error", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     return new Response(
-      JSON.stringify({ error: "Internal server error", details: errorMessage }),
+      JSON.stringify(withTrace({ error: "Internal server error", details: errorMessage }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

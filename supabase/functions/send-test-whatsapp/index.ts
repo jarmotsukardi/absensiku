@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
+import { createTraceId, logTraceError, withTrace } from "../_shared/error-utils.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -68,6 +69,8 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const traceId = createTraceId("send-test-whatsapp");
+
   try {
     const { 
       to, 
@@ -80,7 +83,7 @@ serve(async (req) => {
 
     if (!to || !apiKey || !provider) {
       return new Response(
-        JSON.stringify({ error: "Parameter tidak lengkap (to, apiKey, provider diperlukan)" }),
+        JSON.stringify(withTrace({ error: "Parameter tidak lengkap (to, apiKey, provider diperlukan)" }, traceId)),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -110,7 +113,7 @@ serve(async (req) => {
       const config = PROVIDER_CONFIGS[provider];
       if (!config) {
         return new Response(
-          JSON.stringify({ error: `Provider '${provider}' tidak didukung` }),
+          JSON.stringify(withTrace({ error: `Provider '${provider}' tidak didukung` }, traceId)),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
@@ -138,12 +141,12 @@ serve(async (req) => {
     }
 
     if (!response.ok) {
-      console.error("WhatsApp API error:", responseData);
+      logTraceError(traceId, "WhatsApp API error", responseData);
       return new Response(
-        JSON.stringify({ 
+        JSON.stringify(withTrace({ 
           error: "Gagal mengirim pesan WhatsApp",
           details: responseData 
-        }),
+        }, traceId)),
         { status: response.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -157,12 +160,12 @@ serve(async (req) => {
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error: any) {
-    console.error("Error sending WhatsApp:", error);
+    logTraceError(traceId, "Error sending WhatsApp", error);
     return new Response(
-      JSON.stringify({ 
+      JSON.stringify(withTrace({ 
         error: error.message || "Gagal mengirim pesan WhatsApp",
         details: error.toString()
-      }),
+      }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

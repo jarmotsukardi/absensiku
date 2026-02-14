@@ -10,6 +10,7 @@
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createTraceId, logTraceError, withTrace } from '../_shared/error-utils.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -21,11 +22,13 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders })
   }
 
+  const traceId = createTraceId('batch-attendance')
+
   try {
     const authHeader = req.headers.get('Authorization')
     if (!authHeader) {
       return new Response(
-        JSON.stringify({ success: false, message: 'Unauthorized' }),
+        JSON.stringify(withTrace({ success: false, message: 'Unauthorized' }, traceId)),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -41,7 +44,7 @@ Deno.serve(async (req) => {
     const { data: { user }, error: authError } = await userClient.auth.getUser()
     if (authError || !user) {
       return new Response(
-        JSON.stringify({ success: false, message: 'Invalid token' }),
+        JSON.stringify(withTrace({ success: false, message: 'Invalid token' }, traceId)),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -60,7 +63,7 @@ Deno.serve(async (req) => {
 
     if (!entries || !Array.isArray(entries) || entries.length === 0) {
       return new Response(
-        JSON.stringify({ success: false, message: 'No entries provided' }),
+        JSON.stringify(withTrace({ success: false, message: 'No entries provided' }, traceId)),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -68,7 +71,7 @@ Deno.serve(async (req) => {
     // Limit batch size to prevent abuse
     if (entries.length > 10) {
       return new Response(
-        JSON.stringify({ success: false, message: 'Max 10 entries per batch' }),
+        JSON.stringify(withTrace({ success: false, message: 'Max 10 entries per batch' }, traceId)),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -81,9 +84,9 @@ Deno.serve(async (req) => {
     })
 
     if (error) {
-      console.error('Batch processing error:', error)
+      logTraceError(traceId, 'Batch processing error', error)
       return new Response(
-        JSON.stringify({ success: false, message: error.message }),
+        JSON.stringify(withTrace({ success: false, message: error.message }, traceId)),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -94,9 +97,9 @@ Deno.serve(async (req) => {
     )
 
   } catch (error) {
-    console.error('Unexpected error:', error)
+    logTraceError(traceId, 'Unexpected error', error)
     return new Response(
-      JSON.stringify({ success: false, message: 'Internal server error' }),
+      JSON.stringify(withTrace({ success: false, message: 'Internal server error' }, traceId)),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   }
