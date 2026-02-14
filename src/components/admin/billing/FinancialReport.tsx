@@ -1,0 +1,250 @@
+import { useState } from "react";
+import { useFinancialLedger } from "@/hooks/useBilling";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { 
+  Loader2, 
+  Download, 
+  TrendingUp, 
+  DollarSign, 
+  Receipt, 
+  Percent,
+  Calendar
+} from "lucide-react";
+import { format, startOfMonth, endOfMonth, subMonths } from "date-fns";
+import { id } from "date-fns/locale";
+
+const formatCurrency = (amount: number) => {
+  return new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    minimumFractionDigits: 0,
+  }).format(amount);
+};
+
+export function FinancialReport() {
+  const [dateRange, setDateRange] = useState({
+    start: format(startOfMonth(new Date()), "yyyy-MM-dd"),
+    end: format(endOfMonth(new Date()), "yyyy-MM-dd"),
+  });
+
+  const { summary, transactions, isLoading, refetch } = useFinancialLedger(dateRange);
+
+  const handleQuickFilter = (months: number) => {
+    const targetDate = months === 0 ? new Date() : subMonths(new Date(), months);
+    setDateRange({
+      start: format(startOfMonth(targetDate), "yyyy-MM-dd"),
+      end: format(endOfMonth(targetDate), "yyyy-MM-dd"),
+    });
+  };
+
+  const handleExport = () => {
+    // Simple CSV export
+    const headers = ["Tanggal", "Tipe", "Gross", "Fee", "PPN", "Net", "Sumber", "Referensi"];
+    const rows = transactions.map((tx) => [
+      tx.transaction_date,
+      tx.transaction_type,
+      tx.gross_amount,
+      tx.xendit_fee,
+      tx.vat_amount,
+      tx.net_amount,
+      tx.payment_source,
+      tx.reference_number || "",
+    ]);
+
+    const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `laporan-keuangan-${dateRange.start}-${dateRange.end}.csv`;
+    a.click();
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-32">
+        <Loader2 className="h-6 w-6 animate-spin" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Date Range Filter */}
+      <Card>
+        <CardContent className="p-4">
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="space-y-1">
+              <Label>Dari Tanggal</Label>
+              <Input
+                type="date"
+                value={dateRange.start}
+                onChange={(e) => setDateRange({ ...dateRange, start: e.target.value })}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Sampai Tanggal</Label>
+              <Input
+                type="date"
+                value={dateRange.end}
+                onChange={(e) => setDateRange({ ...dateRange, end: e.target.value })}
+              />
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => handleQuickFilter(0)}>
+                Bulan Ini
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => handleQuickFilter(1)}>
+                Bulan Lalu
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => handleQuickFilter(2)}>
+                2 Bulan Lalu
+              </Button>
+            </div>
+            <Button variant="outline" onClick={handleExport}>
+              <Download className="mr-2 h-4 w-4" />
+              Export CSV
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Summary Cards */}
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Gross Revenue</CardTitle>
+            <DollarSign className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{formatCurrency(summary.total_gross)}</div>
+            <p className="text-xs text-muted-foreground">
+              {summary.transaction_count} transaksi
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Biaya Payment Gateway</CardTitle>
+            <Receipt className="h-4 w-4 text-orange-600" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-orange-600">
+              {formatCurrency(summary.total_xendit_fee)}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Xendit fee
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">PPN</CardTitle>
+            <Percent className="h-4 w-4 text-blue-600" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-blue-600">
+              {formatCurrency(summary.total_vat)}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Pajak terkumpul
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Net Revenue</CardTitle>
+            <TrendingUp className="h-4 w-4 text-green-600" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-green-600">
+              {formatCurrency(summary.total_net)}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Pendapatan bersih
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Transactions Table */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Calendar className="h-5 w-5" />
+            Riwayat Transaksi
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Tanggal</TableHead>
+                <TableHead>Tipe</TableHead>
+                <TableHead>Sumber</TableHead>
+                <TableHead className="text-right">Gross</TableHead>
+                <TableHead className="text-right">Fee</TableHead>
+                <TableHead className="text-right">PPN</TableHead>
+                <TableHead className="text-right">Net</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {transactions.length === 0 ? (
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
+                    Tidak ada transaksi pada periode ini
+                  </TableCell>
+                </TableRow>
+              ) : (
+                transactions.map((tx) => (
+                  <TableRow key={tx.id}>
+                    <TableCell>
+                      {format(new Date(tx.transaction_date), "dd MMM yyyy", { locale: id })}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={tx.transaction_type === "REFUND" ? "destructive" : "default"}>
+                        {tx.transaction_type}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline">
+                        {tx.payment_source === "XENDIT" ? "Online" : "Manual"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right font-medium">
+                      {formatCurrency(tx.gross_amount)}
+                    </TableCell>
+                    <TableCell className="text-right text-orange-600">
+                      {tx.xendit_fee > 0 ? `-${formatCurrency(tx.xendit_fee)}` : "-"}
+                    </TableCell>
+                    <TableCell className="text-right text-blue-600">
+                      {formatCurrency(tx.vat_amount)}
+                    </TableCell>
+                    <TableCell className="text-right font-bold text-green-600">
+                      {formatCurrency(tx.net_amount)}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

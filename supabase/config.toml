@@ -1,0 +1,52 @@
+project_id = "zrhgqpjbeyzwpgywelcr"
+
+[functions.cleanup-location-data]
+verify_jwt = true
+
+[functions.send-test-whatsapp]
+verify_jwt = true
+
+[functions.send-test-email]
+verify_jwt = true
+
+[functions.send-reset-password]
+verify_jwt = false
+
+[functions.send-password-otp]
+verify_jwt = false
+
+[functions.verify-password-otp]
+verify_jwt = false
+
+[functions.send-org-type-otp]
+verify_jwt = true
+
+[functions.verify-org-type-otp]
+verify_jwt = true
+
+[functions.verify-device-otp]
+verify_jwt = true
+
+[functions.partition-maintenance]
+verify_jwt = true
+
+[functions.send-registration-otp]
+verify_jwt = false
+
+[functions.verify-registration-otp]
+verify_jwt = false
+
+[functions.join-organization]
+verify_jwt = true
+
+[functions.create-xendit-invoice]
+verify_jwt = false
+
+[functions.xendit-webhook]
+verify_jwt = false
+
+[functions.check-payment-status]
+verify_jwt = false
+
+[functions.batch-attendance]
+verify_jwt = false

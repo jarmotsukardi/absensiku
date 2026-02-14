@@ -1,0 +1,99 @@
+import { Link } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { ArrowRight, Star } from "lucide-react";
+import type { HeroSettings, StatisticsSettings } from "@/hooks/useHomepageData";
+
+interface HeroSectionProps {
+  heroSettings: HeroSettings;
+  statisticsSettings: StatisticsSettings;
+  showStats: boolean;
+}
+
+export function HeroSection({ heroSettings, statisticsSettings, showStats }: HeroSectionProps) {
+  const formatNumber = (num: number) => {
+    if (num >= 1000) {
+      return (num / 1000).toFixed(num % 1000 === 0 ? 0 : 1) + "K+";
+    }
+    return num.toString() + "+";
+  };
+
+  return (
+    <section className="hero-gradient pt-32 pb-20 px-4 relative overflow-hidden">
+      {/* Background Pattern */}
+      <div className="absolute inset-0 opacity-10">
+        <div className="absolute top-20 left-10 w-72 h-72 bg-accent rounded-full blur-3xl" />
+        <div className="absolute bottom-20 right-10 w-96 h-96 bg-primary-foreground rounded-full blur-3xl" />
+      </div>
+
+      <div className="container mx-auto relative">
+        <div className="max-w-4xl mx-auto text-center">
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary-foreground/10 border border-primary-foreground/20 mb-6 animate-fade-in">
+            <Star className="w-4 h-4 text-accent" />
+            <span className="text-primary-foreground/80 text-sm">Platform Absensi #1 untuk Pemerintah & Swasta</span>
+          </div>
+
+          <h1 className="text-4xl md:text-6xl font-bold text-primary-foreground mb-6 leading-tight animate-slide-in-up">
+            {heroSettings.title}
+            <span className="text-gradient block">{heroSettings.subtitle}</span>
+          </h1>
+
+          <p className="text-xl text-primary-foreground/70 mb-10 max-w-2xl mx-auto animate-slide-in-up stagger-1">
+            {heroSettings.description}
+          </p>
+
+          <div className="flex flex-col sm:flex-row gap-4 justify-center animate-slide-in-up stagger-2">
+            <Link to={heroSettings.cta_link}>
+              <Button variant="gold" size="xl" className="group">
+                {heroSettings.cta_text}
+                <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+              </Button>
+            </Link>
+            <Link to={heroSettings.secondary_cta_link}>
+              <Button variant="hero-outline" size="xl">
+                {heroSettings.secondary_cta_text}
+              </Button>
+            </Link>
+          </div>
+
+          {/* Stats */}
+          {showStats && heroSettings.show_statistics && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mt-16 pt-8 border-t border-primary-foreground/10 animate-slide-in-up stagger-3">
+              {statisticsSettings.show_active_institutions && (
+                <div>
+                  <div className="text-2xl md:text-3xl font-bold text-gradient">
+                    {formatNumber(statisticsSettings.institutions_count)}
+                  </div>
+                  <div className="text-primary-foreground/60 text-sm">Instansi Aktif</div>
+                </div>
+              )}
+              {statisticsSettings.show_employees && (
+                <div>
+                  <div className="text-2xl md:text-3xl font-bold text-gradient">
+                    {formatNumber(statisticsSettings.employees_count)}
+                  </div>
+                  <div className="text-primary-foreground/60 text-sm">Pegawai</div>
+                </div>
+              )}
+              {statisticsSettings.show_provinces && (
+                <div>
+                  <div className="text-2xl md:text-3xl font-bold text-gradient">
+                    {statisticsSettings.provinces_count}
+                  </div>
+                  <div className="text-primary-foreground/60 text-sm">Provinsi</div>
+                </div>
+              )}
+              {statisticsSettings.show_uptime && (
+                <div>
+                  <div className="text-2xl md:text-3xl font-bold text-gradient">
+                    {statisticsSettings.uptime_percent}%
+                  </div>
+                  <div className="text-primary-foreground/60 text-sm">Uptime</div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}

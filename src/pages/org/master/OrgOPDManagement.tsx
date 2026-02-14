@@ -1,0 +1,310 @@
+import { useEffect, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Plus, Search, Pencil, Trash2, FolderTree, ChevronLeft, ChevronRight } from "lucide-react";
+import { toast } from "sonner";
+import type { Tables } from "@/integrations/supabase/types";
+
+type OPD = Tables<"opd">;
+
+const ITEMS_PER_PAGE = 10;
+
+export default function OrgOPDManagement() {
+  const [opds, setOpds] = useState<OPD[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [formData, setFormData] = useState({ id: "", code: "", name: "", is_active: true });
+  const [currentPage, setCurrentPage] = useState(1);
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("opd")
+        .select("*")
+        .order("name");
+
+      if (error) throw error;
+      setOpds(data || []);
+    } catch (error) {
+      console.error("Error fetching OPD:", error);
+      toast.error("Gagal memuat data OPD");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleSubmit = async () => {
+    if (!formData.code || !formData.name) {
+      toast.error("Semua field harus diisi");
+      return;
+    }
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: roleData } = await supabase
+        .from("user_roles")
+        .select("tenant_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (!roleData?.tenant_id) {
+        toast.error("Tenant tidak ditemukan");
+        return;
+      }
+
+      if (isEditing) {
+        const { error } = await supabase
+          .from("opd")
+          .update({ code: formData.code, name: formData.name, is_active: formData.is_active })
+          .eq("id", formData.id);
+        if (error) throw error;
+        toast.success("OPD berhasil diperbarui");
+      } else {
+        const { error } = await supabase
+          .from("opd")
+          .insert({ code: formData.code, name: formData.name, tenant_id: roleData.tenant_id, is_active: formData.is_active });
+        if (error) throw error;
+        toast.success("OPD berhasil ditambahkan");
+      }
+
+      setIsDialogOpen(false);
+      setFormData({ id: "", code: "", name: "", is_active: true });
+      setIsEditing(false);
+      fetchData();
+    } catch (error) {
+      console.error("Error saving OPD:", error);
+      toast.error("Gagal menyimpan OPD");
+    }
+  };
+
+  const handleEdit = (opd: OPD) => {
+    setFormData({ id: opd.id, code: opd.code, name: opd.name, is_active: opd.is_active ?? true });
+    setIsEditing(true);
+    setIsDialogOpen(true);
+  };
+
+  const handleToggleStatus = async (opd: OPD) => {
+    try {
+      const { error } = await supabase
+        .from("opd")
+        .update({ is_active: !opd.is_active })
+        .eq("id", opd.id);
+      if (error) throw error;
+      toast.success(`OPD berhasil ${opd.is_active ? "dinonaktifkan" : "diaktifkan"}`);
+      fetchData();
+    } catch (error) {
+      console.error("Error toggling status:", error);
+      toast.error("Gagal mengubah status OPD");
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("Yakin ingin menghapus OPD ini?")) return;
+
+    try {
+      const { error } = await supabase.from("opd").delete().eq("id", id);
+      if (error) throw error;
+      toast.success("OPD berhasil dihapus");
+      fetchData();
+    } catch (error) {
+      console.error("Error deleting OPD:", error);
+      toast.error("Gagal menghapus OPD");
+    }
+  };
+
+  const filteredOpds = opds.filter(opd =>
+    opd.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    opd.code.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
+  // Pagination
+  const totalPages = Math.ceil(filteredOpds.length / ITEMS_PER_PAGE);
+  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+  const paginatedOpds = filteredOpds.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+
+  // Reset to page 1 when search changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
+
+  return (
+    <OrganizationLayout>
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold flex items-center gap-2">
+              <FolderTree className="h-6 w-6" />
+              Data OPD
+            </h1>
+            <p className="text-muted-foreground">Kelola Organisasi Perangkat Daerah</p>
+          </div>
+          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+            <DialogTrigger asChild>
+              <Button onClick={() => { setIsEditing(false); setFormData({ id: "", code: "", name: "", is_active: true }); }}>
+                <Plus className="mr-2 h-4 w-4" /> Tambah OPD
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{isEditing ? "Edit OPD" : "Tambah OPD"}</DialogTitle>
+                <DialogDescription>
+                  {isEditing ? "Perbarui data OPD" : "Tambahkan OPD baru"}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-4 py-4">
+                <div className="grid gap-2">
+                  <Label>Kode/Singkatan OPD</Label>
+                  <Input
+                    value={formData.code}
+                    onChange={(e) => setFormData({ ...formData, code: e.target.value })}
+                    placeholder="Contoh: BPKAD"
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label>Nama OPD</Label>
+                  <Input
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    placeholder="Contoh: Badan Pengelolaan Keuangan dan Aset Daerah"
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <Label>Status Aktif</Label>
+                  <Switch
+                    checked={formData.is_active}
+                    onCheckedChange={(checked) => setFormData({ ...formData, is_active: checked })}
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
+                <Button onClick={handleSubmit}>{isEditing ? "Simpan" : "Tambah"}</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Daftar OPD</CardTitle>
+            <CardDescription>
+              Menampilkan {paginatedOpds.length} dari {filteredOpds.length} OPD
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center gap-4 mb-4">
+              <div className="relative flex-1 max-w-sm">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Cari OPD..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-10"
+                />
+              </div>
+            </div>
+
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-12">No</TableHead>
+                  <TableHead>Kode</TableHead>
+                  <TableHead>Nama OPD</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Aksi</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {isLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center py-8">
+                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto"></div>
+                    </TableCell>
+                  </TableRow>
+                ) : paginatedOpds.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                      Belum ada data OPD
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  paginatedOpds.map((opd, index) => (
+                    <TableRow key={opd.id}>
+                      <TableCell>{startIndex + index + 1}</TableCell>
+                      <TableCell className="font-mono font-medium">{opd.code}</TableCell>
+                      <TableCell>{opd.name}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Switch
+                            checked={opd.is_active ?? true}
+                            onCheckedChange={() => handleToggleStatus(opd)}
+                          />
+                          <Badge variant={opd.is_active ? "default" : "secondary"}>
+                            {opd.is_active ? "Aktif" : "Non-Aktif"}
+                          </Badge>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button variant="ghost" size="icon" onClick={() => handleEdit(opd)}>
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={() => handleDelete(opd.id)}>
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-between mt-4">
+                <p className="text-sm text-muted-foreground">
+                  Halaman {currentPage} dari {totalPages}
+                </p>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+                    disabled={currentPage === 1}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Sebelumnya
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+                    disabled={currentPage === totalPages}
+                  >
+                    Selanjutnya
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </OrganizationLayout>
+  );
+}
