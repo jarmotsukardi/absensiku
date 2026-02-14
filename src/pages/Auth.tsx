@@ -96,7 +96,7 @@ const Auth = () => {
     setErrors({});
 
     // Check lockout
-    if (rateLimit.isLocked) {
+    if (rateLimit.isEnabled && rateLimit.isLocked) {
       toast({
         variant: "destructive",
         title: "Akses Diblokir",
@@ -107,14 +107,22 @@ const Auth = () => {
 
     // Validate captcha
     if (!loginCaptchaValid) {
-      const wasLocked = rateLimit.recordFailedAttempt();
-      toast({
-        variant: "destructive",
-        title: "Captcha Diperlukan",
-        description: wasLocked
-          ? "Akses diblokir selama 15 menit karena terlalu banyak percobaan gagal"
-          : `Silakan masukkan kode captcha dengan benar. Sisa percobaan: ${rateLimit.remainingAttempts - 1}`,
-      });
+      if (rateLimit.isEnabled) {
+        const wasLocked = rateLimit.recordFailedAttempt();
+        toast({
+          variant: "destructive",
+          title: "Captcha Diperlukan",
+          description: wasLocked
+            ? `Akses diblokir selama ${rateLimit.lockoutDurationMinutes} menit karena terlalu banyak percobaan gagal`
+            : `Silakan masukkan kode captcha dengan benar. Sisa percobaan: ${rateLimit.remainingAttempts - 1}`,
+        });
+      } else {
+        toast({
+          variant: "destructive",
+          title: "Captcha Diperlukan",
+          description: "Silakan masukkan kode captcha dengan benar.",
+        });
+      }
       return;
     }
 
@@ -142,14 +150,16 @@ const Auth = () => {
       });
 
       if (error) {
-        const wasLocked = rateLimit.recordFailedAttempt();
+        const wasLocked = rateLimit.isEnabled ? rateLimit.recordFailedAttempt() : false;
         if (error.message.includes("Invalid login credentials")) {
           toast({
             variant: "destructive",
             title: "Login Gagal",
-            description: wasLocked
-              ? "Akses diblokir selama 15 menit karena terlalu banyak percobaan gagal"
-              : `Email atau password salah. Sisa percobaan: ${rateLimit.remainingAttempts - 1}`,
+            description: !rateLimit.isEnabled
+              ? "Email atau password salah."
+              : wasLocked
+                ? `Akses diblokir selama ${rateLimit.lockoutDurationMinutes} menit karena terlalu banyak percobaan gagal`
+                : `Email atau password salah. Sisa percobaan: ${rateLimit.remainingAttempts - 1}`,
           });
         } else {
           toast({
@@ -204,7 +214,7 @@ const Auth = () => {
 
           <CardContent>
             {/* Lockout Warning */}
-            {rateLimit.isLocked && (
+            {rateLimit.isEnabled && rateLimit.isLocked && (
               <div className="mb-4 p-4 bg-destructive/10 border border-destructive/30 rounded-lg">
                 <div className="flex items-start gap-3">
                   <AlertTriangle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
@@ -231,7 +241,7 @@ const Auth = () => {
                     value={loginEmail}
                     onChange={(e) => setLoginEmail(e.target.value)}
                     className="pl-10"
-                    disabled={isLoading || rateLimit.isLocked}
+                    disabled={isLoading || (rateLimit.isEnabled && rateLimit.isLocked)}
                   />
                 </div>
                 {errors?.email && <p className="text-sm text-destructive">{errors.email}</p>}
@@ -248,7 +258,7 @@ const Auth = () => {
                     value={loginPassword}
                     onChange={(e) => setLoginPassword(e.target.value)}
                     className="pl-10 pr-10"
-                    disabled={isLoading || rateLimit.isLocked}
+                    disabled={isLoading || (rateLimit.isEnabled && rateLimit.isLocked)}
                   />
                   <button
                     type="button"
@@ -280,7 +290,7 @@ const Auth = () => {
                 type="submit"
                 className="w-full"
                 size="lg"
-                disabled={isLoading || !loginCaptchaValid || rateLimit.isLocked}
+                disabled={isLoading || !loginCaptchaValid || (rateLimit.isEnabled && rateLimit.isLocked)}
               >
                 {isLoading ? (
                   <>

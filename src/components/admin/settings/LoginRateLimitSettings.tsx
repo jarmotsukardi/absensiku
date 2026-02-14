@@ -50,26 +50,24 @@ export function LoginRateLimitSettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "login_rate_limit_config")
-        .maybeSingle();
-
       const jsonValue = JSON.parse(JSON.stringify(config));
+      const { error } = await supabase
+        .from("system_settings")
+        .upsert(
+          {
+            key: "login_rate_limit_config",
+            value: jsonValue,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "key" }
+        );
 
-      if (existing) {
-        await supabase.from("system_settings")
-          .update({ value: jsonValue, updated_at: new Date().toISOString() })
-          .eq("key", "login_rate_limit_config");
-      } else {
-        await supabase.from("system_settings")
-          .insert({ key: "login_rate_limit_config", value: jsonValue });
-      }
+      if (error) throw error;
 
       toast.success("Pengaturan rate limit berhasil disimpan");
-    } catch {
-      toast.error("Gagal menyimpan");
+    } catch (error: any) {
+      console.error("Error saving login rate limit config:", error);
+      toast.error(error?.message || "Gagal menyimpan");
     } finally {
       setIsSaving(false);
     }

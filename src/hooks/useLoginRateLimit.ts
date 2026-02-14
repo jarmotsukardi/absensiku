@@ -1,7 +1,17 @@
 import { useState, useEffect, useCallback } from "react";
+import { supabase } from "@/integrations/supabase/client";
 
-const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 menit
-const MAX_ATTEMPTS = 3;
+interface RateLimitConfig {
+  enabled: boolean;
+  max_attempts: number;
+  lockout_duration_minutes: number;
+}
+
+const DEFAULT_CONFIG: RateLimitConfig = {
+  enabled: true,
+  max_attempts: 3,
+  lockout_duration_minutes: 15,
+};
 
 interface RateLimitState {
   attempts: number;
@@ -9,9 +19,18 @@ interface RateLimitState {
 }
 
 export function useLoginRateLimit(storageKey: string = "login_rate_limit") {
+  const [config, setConfig] = useState<RateLimitConfig>(DEFAULT_CONFIG);
+  const [configLoaded, setConfigLoaded] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
   const [lockoutRemaining, setLockoutRemaining] = useState(0);
   const [attempts, setAttempts] = useState(0);
+
+  const isEnabled = configLoaded && config.enabled;
+  const maxAttempts = Math.max(1, config.max_attempts || DEFAULT_CONFIG.max_attempts);
+  const lockoutDurationMs = Math.max(
+    1,
+    config.lockout_duration_minutes || DEFAULT_CONFIG.lockout_duration_minutes
+  ) * 60 * 1000;
 
   // Load state dari localStorage
   const loadState = useCallback((): RateLimitState => {
@@ -35,8 +54,47 @@ export function useLoginRateLimit(storageKey: string = "login_rate_limit") {
     }
   }, [storageKey]);
 
+  const fetchConfig = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from("system_settings")
+        .select("value")
+        .eq("key", "login_rate_limit_config")
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (data?.value && typeof data.value === "object" && !Array.isArray(data.value)) {
+        const value = data.value as Partial<RateLimitConfig>;
+        setConfig({
+          enabled: typeof value.enabled === "boolean" ? value.enabled : DEFAULT_CONFIG.enabled,
+          max_attempts: Number(value.max_attempts) || DEFAULT_CONFIG.max_attempts,
+          lockout_duration_minutes:
+            Number(value.lockout_duration_minutes) || DEFAULT_CONFIG.lockout_duration_minutes,
+        });
+      } else {
+        setConfig(DEFAULT_CONFIG);
+      }
+    } catch (e) {
+      console.error("Error fetching login rate limit config:", e);
+      // Fail-safe: tetap aktifkan proteksi default jika config gagal dimuat.
+      setConfig(DEFAULT_CONFIG);
+    } finally {
+      setConfigLoaded(true);
+    }
+  }, []);
+
   // Check dan update lockout status
   const checkLockout = useCallback(() => {
+    if (!isEnabled) {
+      const resetState = { attempts: 0, lockoutUntil: null };
+      saveState(resetState);
+      setAttempts(0);
+      setIsLocked(false);
+      setLockoutRemaining(0);
+      return false;
+    }
+
     const state = loadState();
     const now = Date.now();
 
@@ -59,22 +117,26 @@ export function useLoginRateLimit(storageKey: string = "login_rate_limit") {
     setIsLocked(false);
     setLockoutRemaining(0);
     return false;
-  }, [loadState, saveState]);
+  }, [isEnabled, loadState, saveState]);
 
   // Record failed login
   const recordFailedAttempt = useCallback(() => {
+    if (!isEnabled) {
+      return false;
+    }
+
     const state = loadState();
     const newAttempts = state.attempts + 1;
     
-    if (newAttempts >= MAX_ATTEMPTS) {
+    if (newAttempts >= maxAttempts) {
       // Lock the user
       const newState: RateLimitState = {
         attempts: newAttempts,
-        lockoutUntil: Date.now() + LOCKOUT_DURATION_MS,
+        lockoutUntil: Date.now() + lockoutDurationMs,
       };
       saveState(newState);
       setIsLocked(true);
-      setLockoutRemaining(LOCKOUT_DURATION_MS / 1000);
+      setLockoutRemaining(lockoutDurationMs / 1000);
       setAttempts(newAttempts);
       return true; // User is now locked
     } else {
@@ -86,7 +148,7 @@ export function useLoginRateLimit(storageKey: string = "login_rate_limit") {
       setAttempts(newAttempts);
       return false;
     }
-  }, [loadState, saveState]);
+  }, [isEnabled, loadState, lockoutDurationMs, maxAttempts, saveState]);
 
   // Reset attempts after successful login
   const resetAttempts = useCallback(() => {
@@ -106,9 +168,15 @@ export function useLoginRateLimit(storageKey: string = "login_rate_limit") {
 
   // Initial check dan interval untuk update countdown
   useEffect(() => {
+    fetchConfig();
+  }, [fetchConfig]);
+
+  useEffect(() => {
+    if (!configLoaded) return;
     checkLockout();
 
     const interval = setInterval(() => {
+      if (!isEnabled) return;
       const state = loadState();
       if (state.lockoutUntil) {
         const now = Date.now();
@@ -122,13 +190,20 @@ export function useLoginRateLimit(storageKey: string = "login_rate_limit") {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [checkLockout, loadState, resetAttempts]);
+  }, [checkLockout, configLoaded, isEnabled, loadState, resetAttempts]);
 
   return {
+    isEnabled,
+    configLoaded,
     isLocked,
     lockoutRemaining,
     attempts,
-    remainingAttempts: MAX_ATTEMPTS - attempts,
+    remainingAttempts: Math.max(0, maxAttempts - attempts),
+    maxAttempts,
+    lockoutDurationMinutes: Math.max(
+      1,
+      config.lockout_duration_minutes || DEFAULT_CONFIG.lockout_duration_minutes
+    ),
     recordFailedAttempt,
     resetAttempts,
     formatRemainingTime,

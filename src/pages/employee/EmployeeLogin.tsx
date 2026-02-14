@@ -69,7 +69,9 @@ export default function EmployeeLogin() {
   
   // Rate limiting untuk mencegah brute force
   const { 
+    isEnabled,
     isLocked, 
+    lockoutDurationMinutes,
     remainingAttempts, 
     recordFailedAttempt, 
     resetAttempts, 
@@ -278,7 +280,7 @@ export default function EmployeeLogin() {
 
     if (isSubmittingRef.current) return;
 
-    if (isLocked) {
+    if (isEnabled && isLocked) {
       toast({
         variant: "destructive",
         title: "Akses Dikunci",
@@ -317,20 +319,30 @@ export default function EmployeeLogin() {
       });
 
       if (error) {
-        const nowLocked = recordFailedAttempt();
-        
-        if (nowLocked) {
-          toast({
-            variant: "destructive",
-            title: "Akses Dikunci",
-            description: "Terlalu banyak percobaan gagal. Akses dikunci selama 15 menit.",
-          });
+        if (isEnabled) {
+          const nowLocked = recordFailedAttempt();
+          
+          if (nowLocked) {
+            toast({
+              variant: "destructive",
+              title: "Akses Dikunci",
+              description: `Terlalu banyak percobaan gagal. Akses dikunci selama ${lockoutDurationMinutes} menit.`,
+            });
+          } else {
+            toast({
+              variant: "destructive",
+              title: "Login Gagal",
+              description: error.message.includes("Invalid login credentials")
+                ? `Email atau password salah. Sisa percobaan: ${remainingAttempts - 1}`
+                : error.message,
+            });
+          }
         } else {
           toast({
             variant: "destructive",
             title: "Login Gagal",
             description: error.message.includes("Invalid login credentials")
-              ? `Email atau password salah. Sisa percobaan: ${remainingAttempts - 1}`
+              ? "Email atau password salah."
               : error.message,
           });
         }
@@ -939,14 +951,14 @@ export default function EmployeeLogin() {
               {/* Login Tab */}
               <TabsContent value="login">
                 <form onSubmit={handleLogin} className="space-y-4" autoComplete="on">
-                  {isLocked && (
+                  {isEnabled && isLocked && (
                     <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 flex items-center gap-2 text-sm text-destructive">
                       <AlertTriangle className="w-4 h-4 flex-shrink-0" />
                       <span>Akses dikunci. Coba lagi dalam <strong>{formatRemainingTime()}</strong></span>
                     </div>
                   )}
 
-                  {!isLocked && remainingAttempts <= 2 && remainingAttempts > 0 && (
+                  {isEnabled && !isLocked && remainingAttempts <= 2 && remainingAttempts > 0 && (
                     <div className="p-3 rounded-lg bg-warning/10 border border-warning/20 flex items-center gap-2 text-sm text-warning">
                       <AlertTriangle className="w-4 h-4 flex-shrink-0" />
                       <span>Sisa percobaan: {remainingAttempts}</span>
@@ -965,7 +977,7 @@ export default function EmployeeLogin() {
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
                         className="pl-10"
-                        disabled={isLoading || isLocked}
+                        disabled={isLoading || (isEnabled && isLocked)}
                         autoComplete="email"
                       />
                     </div>
@@ -983,7 +995,7 @@ export default function EmployeeLogin() {
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         className="pl-10 pr-10"
-                        disabled={isLoading || isLocked}
+                        disabled={isLoading || (isEnabled && isLocked)}
                         autoComplete="current-password"
                       />
                       <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
@@ -992,10 +1004,10 @@ export default function EmployeeLogin() {
                     </div>
                   </div>
 
-                  <Button type="submit" className="w-full" size="lg" disabled={isLoading || isLocked}>
+                  <Button type="submit" className="w-full" size="lg" disabled={isLoading || (isEnabled && isLocked)}>
                     {isLoading ? (
                       <><Loader2 className="w-4 h-4 animate-spin" /> Memproses...</>
-                    ) : isLocked ? (
+                    ) : (isEnabled && isLocked) ? (
                       <><Lock className="w-4 h-4" /> Dikunci ({formatRemainingTime()})</>
                     ) : (
                       "Masuk"
