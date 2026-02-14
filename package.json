@@ -8,6 +8,8 @@
     "build": "vite build",
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "autofix": "node scripts/auto-fix.mjs",
     "preview": "vite preview",
     "backup:restore": "node scripts/restore-backup-from-json.mjs",
     "users:restore": "node scripts/restore-users-from-export.mjs"

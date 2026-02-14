@@ -152,7 +152,7 @@ export async function updateEntryStatus(
  * Ambil semua entries pending/failed untuk sync
  */
 export async function getPendingEntries(employeeId?: string): Promise<AttendanceEntry[]> {
-  let query = db.attendanceEntries
+  const query = db.attendanceEntries
     .where('syncStatus')
     .anyOf('pending', 'failed');
 

@@ -464,3 +464,16 @@ window.clearAbsensikuErrorLogs?.()
 ```
 
 Saat melaporkan bug, kirim `Ref` dan `Log` id agar bisa ditrace cepat.
+
+### Auto-fix cepat
+
+Untuk mencoba perbaikan otomatis saat ada error:
+
+```bash
+npm run autofix
+```
+
+Perintah ini menjalankan:
+- `eslint --fix` (auto-fix lint yang memungkinkan)
+- validasi ulang `lint`
+- validasi `build`

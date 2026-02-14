@@ -65,7 +65,7 @@ export function ConnectionTester() {
 
       if (response.ok) {
         // Try to get more info about the project
-        let details: ConnectionTestResult["details"] = {};
+        const details: ConnectionTestResult["details"] = {};
 
         // Test if we can access tables (this will fail without proper RLS but connection works)
         try {

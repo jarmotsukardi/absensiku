@@ -168,7 +168,7 @@ export default function OrgAttendanceReport() {
       });
 
       // Join data di client
-      let data = (attendanceResult.data || []).map((att: any) => ({
+      const data = (attendanceResult.data || []).map((att: any) => ({
         ...att,
         employees: employeeMap.get(att.employee_id),
         offices: officeMap.get(att.office_id),

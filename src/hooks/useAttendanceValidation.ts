@@ -103,7 +103,7 @@ export function useAttendanceValidation(
     const day = now.getDate().toString().padStart(2, "0");
 
     // Default result
-    let result: ValidationResult = {
+    const result: ValidationResult = {
       canAttend: false,
       reason: null,
       isHoliday: false,

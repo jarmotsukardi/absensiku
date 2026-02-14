@@ -34,6 +34,7 @@ Instruksi tetap untuk agent coding di repo ini.
 ## Protokol Eksekusi
 - Mulai dengan scan cepat konteks secara paralel.
 - Lanjut implementasi bertahap, lalu validasi paralel.
+- Jika ditemukan error yang fixable otomatis, jalankan `npm run autofix` terlebih dahulu sebelum perbaikan manual.
 - Tutup dengan ringkasan:
   - apa yang diubah
   - hasil validasi
