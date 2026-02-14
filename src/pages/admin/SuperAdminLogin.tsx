@@ -267,13 +267,20 @@ export default function SuperAdminLogin() {
         }
 
         // Check if 2FA is enabled in system settings
-        const { data: settings } = await supabase
+        // Prioritas key baru: super_admin_2fa_enabled, fallback legacy: admin_2fa_enabled
+        const { data: settingsRows } = await supabase
           .from("system_settings")
-          .select("value")
-          .eq("key", "admin_2fa_enabled")
-          .maybeSingle();
+          .select("key, value")
+          .in("key", ["super_admin_2fa_enabled", "admin_2fa_enabled"]);
 
-        const is2FAEnabled = settings?.value === true || settings?.value === "true";
+        const raw2FAValue =
+          settingsRows?.find((row) => row.key === "super_admin_2fa_enabled")?.value ??
+          settingsRows?.find((row) => row.key === "admin_2fa_enabled")?.value;
+        const is2FAEnabled =
+          raw2FAValue === true ||
+          raw2FAValue === "true" ||
+          raw2FAValue === 1 ||
+          raw2FAValue === "1";
 
         if (is2FAEnabled) {
           // Sign out temporarily while waiting for 2FA

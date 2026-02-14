@@ -4303,11 +4303,20 @@ export type Database = {
         Returns: undefined
       }
       process_attendance_batch: { Args: { p_entries: Json }; Returns: Json }
+      process_attendance_queue: {
+        Args: {
+          p_limit?: number
+          p_queue_ids?: string[]
+          p_trace_id?: string
+        }
+        Returns: Json
+      }
       process_check_in: {
         Args: {
           p_date?: string
           p_distance_meters: number
           p_employee_id: string
+          p_idempotency_key?: string
           p_latitude: number
           p_longitude: number
           p_office_id: string
@@ -4319,11 +4328,27 @@ export type Database = {
           p_date?: string
           p_distance_meters: number
           p_employee_id: string
+          p_idempotency_key?: string
           p_latitude: number
           p_longitude: number
           p_office_id: string
         }
         Returns: Json
+      }
+      get_attendance_ingest_health: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          avg_lag_seconds: number
+          dead_count: number
+          failed_count: number
+          last_processed_at: string
+          max_pending_age_seconds: number
+          p95_lag_seconds: number
+          processed_last_5m: number
+          processed_last_60m: number
+          processing_count: number
+          queue_depth: number
+        }[]
       }
       refresh_monthly_attendance_stats: { Args: never; Returns: undefined }
       update_expired_leave_requests: { Args: never; Returns: undefined }

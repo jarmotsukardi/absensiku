@@ -23,7 +23,9 @@ import {
   isPeakHours,
   getQueueMessageInfo,
 } from "@/lib/attendanceResilience";
+import { loadScalabilityConfig } from "@/lib/scalabilityConfig";
 import { useAttendanceSync } from "./useAttendanceSync";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type AttendanceRecord = Tables<"attendance_records">;
 type Office = Tables<"offices">;
@@ -73,6 +75,7 @@ async function syncCheckInToServer(entry: AttendanceEntry, retryCount: number = 
     p_longitude: entry.longitude,
     p_distance_meters: entry.distanceMeters,
     p_date: entry.date,
+    p_idempotency_key: entry.idempotencyKey,
   });
 
   const { data, error } = await withTimeout(
@@ -94,6 +97,7 @@ async function syncCheckOutToServer(entry: AttendanceEntry, retryCount: number =
     p_longitude: entry.longitude,
     p_distance_meters: entry.distanceMeters,
     p_date: entry.date,
+    p_idempotency_key: entry.idempotencyKey,
   });
 
   const { data, error } = await withTimeout(
@@ -155,7 +159,7 @@ export function useAttendance(employeeId: string | null, officeId: string | null
   const today = new Date().toISOString().split("T")[0];
 
   // Background sync hook (re-hydration, online detection, auto-sync)
-  const { syncStats, isOnline, wasOffline } = useAttendanceSync(employeeId);
+  const { syncStats, isOnline, wasOffline, triggerSync } = useAttendanceSync(employeeId);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -250,7 +254,8 @@ export function useAttendance(employeeId: string | null, officeId: string | null
 
       if (!recentError && recentData) setRecentAttendance(recentData);
     } catch (error) {
-      console.error("Error fetching attendance:", error);
+      const errorRef = reportError(error, "attendance.fetch", { employeeId, today });
+      console.error(`[Attendance ${errorRef}] Error fetching attendance:`, error);
     } finally {
       setIsLoading(false);
     }
@@ -361,6 +366,32 @@ export function useAttendance(employeeId: string | null, officeId: string | null
     await cacheTodayRecord(employeeId, optimisticRecord);
 
     setPendingState({ status: 'buffered', type: 'check_in', message: 'Data absensi tersimpan di perangkat', syncStatus: 'pending' });
+
+    // Deferred mode: store-first, sync in background to reduce burst load.
+    const scalabilityProfile = loadScalabilityConfig();
+    if (scalabilityProfile.syncMode === 'deferred') {
+      const deferredMs = scalabilityProfile.deferredSyncDelayMs + generateAdaptiveJitter(0);
+      window.setTimeout(() => {
+        triggerSync();
+      }, deferredMs);
+
+      setPendingState({
+        status: 'buffered',
+        type: 'check_in',
+        message: `Absensi disimpan lokal. Sinkronisasi dijadwalkan ~${Math.ceil(deferredMs / 1000)} detik.`,
+        syncStatus: 'pending',
+      });
+      window.setTimeout(() => {
+        setPendingState({ status: 'idle', type: null, message: '' });
+      }, 4000);
+
+      return {
+        success: true,
+        message: "Absen masuk tersimpan di perangkat dan akan disinkronkan otomatis.",
+        distance,
+      };
+    }
+
     setIsSubmitting(true);
 
     abortRef.current?.abort();
@@ -427,7 +458,12 @@ export function useAttendance(employeeId: string | null, officeId: string | null
       return { success: true, message: result.message, distance };
 
     } catch (error: any) {
-      console.error("[IndexedDB] Check-in sync failed:", error);
+      const errorRef = reportError(error, "attendance.check_in.sync", {
+        employeeId,
+        officeId,
+        date: today,
+      });
+      console.error(`[IndexedDB ${errorRef}] Check-in sync failed:`, error);
 
       await updateEntryStatus(entry.bufferId, {
         syncStatus: 'failed', syncAttempts: 1,
@@ -440,11 +476,12 @@ export function useAttendance(employeeId: string | null, officeId: string | null
       const msg = isTimeout
         ? 'Timeout, absensi tersimpan di perangkat dan akan disinkronkan otomatis.'
         : 'Gagal sinkronisasi, data aman di perangkat. Akan dicoba ulang otomatis.';
+      const userMsg = appendErrorReference(msg, errorRef);
 
-      setPendingState({ status: 'error', type: 'check_in', message: msg, syncStatus: 'failed' });
+      setPendingState({ status: 'error', type: 'check_in', message: userMsg, syncStatus: 'failed' });
       setTimeout(() => setPendingState({ status: 'idle', type: null, message: '' }), 5000);
 
-      return { success: true, message: msg, distance };
+      return { success: true, message: userMsg, distance };
     } finally {
       setIsSubmitting(false);
     }
@@ -517,6 +554,32 @@ export function useAttendance(employeeId: string | null, officeId: string | null
     await cacheTodayRecord(employeeId, optimisticRecord);
 
     setPendingState({ status: 'buffered', type: 'check_out', message: 'Data tersimpan di perangkat', syncStatus: 'pending' });
+
+    // Deferred mode: store-first, sync in background to reduce burst load.
+    const scalabilityProfile = loadScalabilityConfig();
+    if (scalabilityProfile.syncMode === 'deferred') {
+      const deferredMs = scalabilityProfile.deferredSyncDelayMs + generateAdaptiveJitter(0);
+      window.setTimeout(() => {
+        triggerSync();
+      }, deferredMs);
+
+      setPendingState({
+        status: 'buffered',
+        type: 'check_out',
+        message: `Absen pulang disimpan lokal. Sinkronisasi dijadwalkan ~${Math.ceil(deferredMs / 1000)} detik.`,
+        syncStatus: 'pending',
+      });
+      window.setTimeout(() => {
+        setPendingState({ status: 'idle', type: null, message: '' });
+      }, 4000);
+
+      return {
+        success: true,
+        message: "Absen pulang tersimpan di perangkat dan akan disinkronkan otomatis.",
+        distance,
+      };
+    }
+
     setIsSubmitting(true);
 
     abortRef.current?.abort();
@@ -582,7 +645,12 @@ export function useAttendance(employeeId: string | null, officeId: string | null
       return { success: true, message: result.message, distance };
 
     } catch (error: any) {
-      console.error("[IndexedDB] Check-out sync failed:", error);
+      const errorRef = reportError(error, "attendance.check_out.sync", {
+        employeeId,
+        officeId,
+        date: today,
+      });
+      console.error(`[IndexedDB ${errorRef}] Check-out sync failed:`, error);
 
       await updateEntryStatus(entry.bufferId, {
         syncStatus: 'failed', syncAttempts: 1,
@@ -595,11 +663,12 @@ export function useAttendance(employeeId: string | null, officeId: string | null
       const msg = isTimeout
         ? 'Timeout, absensi pulang tersimpan di perangkat dan akan disinkronkan otomatis.'
         : 'Gagal sinkronisasi, data aman di perangkat. Akan dicoba ulang otomatis.';
+      const userMsg = appendErrorReference(msg, errorRef);
 
-      setPendingState({ status: 'error', type: 'check_out', message: msg, syncStatus: 'failed' });
+      setPendingState({ status: 'error', type: 'check_out', message: userMsg, syncStatus: 'failed' });
       setTimeout(() => setPendingState({ status: 'idle', type: null, message: '' }), 5000);
 
-      return { success: true, message: msg, distance };
+      return { success: true, message: userMsg, distance };
     } finally {
       setIsSubmitting(false);
     }

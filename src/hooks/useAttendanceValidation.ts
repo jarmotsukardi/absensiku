@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { setDynamicPeakWindowsFromWorkHours } from "@/lib/attendanceResilience";
 
 interface WorkHour {
   day_of_week: number;
@@ -34,6 +35,53 @@ interface ValidationResult {
   lateMinutes: number;
 }
 
+interface ValidationStaticCache {
+  tenantId: string;
+  institutionType: string;
+  date: string;
+  cachedAt: string;
+  expiresAt: string;
+  canAttend: boolean;
+  reason: string | null;
+  isHoliday: boolean;
+  holidayName: string | null;
+  isWorkDay: boolean;
+  workHour: WorkHour | null;
+}
+
+const VALIDATION_CACHE_PREFIX = "attendance_validation_today_v1";
+const VALIDATION_CACHE_TTL_MS = 10 * 60 * 1000;
+
+function getCacheKey(tenantId: string, institutionType: string, date: string) {
+  return `${VALIDATION_CACHE_PREFIX}:${tenantId}:${institutionType}:${date}`;
+}
+
+function loadValidationCache(key: string): ValidationStaticCache | null {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ValidationStaticCache;
+    if (!parsed?.expiresAt) return null;
+    if (new Date(parsed.expiresAt).getTime() <= Date.now()) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveValidationCache(key: string, payload: Omit<ValidationStaticCache, "cachedAt" | "expiresAt">) {
+  try {
+    const data: ValidationStaticCache = {
+      ...payload,
+      cachedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + VALIDATION_CACHE_TTL_MS).toISOString(),
+    };
+    localStorage.setItem(key, JSON.stringify(data));
+  } catch {
+    return;
+  }
+}
+
 export function useAttendanceValidation(
   tenantId: string | null,
   employeeId: string | null,
@@ -52,6 +100,40 @@ export function useAttendanceValidation(
     isLate: false,
     lateMinutes: 0,
   });
+
+  const resolveWorkHourToday = useCallback((dayOfWeek: number): WorkHour | null => {
+    return (
+      workHours.find(
+        wh => wh.day_of_week === dayOfWeek &&
+        (wh.institution_type === institutionType || wh.institution_type === "all")
+      ) || null
+    );
+  }, [workHours, institutionType]);
+
+  const buildRuntimeResult = useCallback((
+    base: Omit<ValidationResult, "isLate" | "lateMinutes">,
+    now: Date,
+  ): ValidationResult => {
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const result: ValidationResult = {
+      ...base,
+      isLate: false,
+      lateMinutes: 0,
+    };
+
+    if (!base.canAttend || !base.workHour) return result;
+
+    const [inHours, inMinutes] = base.workHour.time_in.split(":").map(Number);
+    const scheduledIn = inHours * 60 + inMinutes;
+    const tolerance = (base.workHour as any).late_tolerance_minutes ?? 0;
+
+    if (currentMinutes > scheduledIn + tolerance) {
+      result.isLate = true;
+      result.lateMinutes = currentMinutes - scheduledIn;
+    }
+
+    return result;
+  }, []);
 
   const fetchData = useCallback(async () => {
     if (!tenantId) {
@@ -76,6 +158,7 @@ export function useAttendanceValidation(
 
       if (workHoursRes.data) {
         setWorkHours(workHoursRes.data);
+        setDynamicPeakWindowsFromWorkHours(workHoursRes.data);
       }
 
       if (securityRes.data?.value && typeof securityRes.data.value === 'object') {
@@ -96,7 +179,6 @@ export function useAttendanceValidation(
   const validateToday = useCallback(async (): Promise<ValidationResult> => {
     const now = new Date();
     const dayOfWeek = now.getDay(); // 0 = Sunday, 6 = Saturday
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
     const today = now.toISOString().split("T")[0];
     const year = now.getFullYear();
     const month = now.getMonth() + 1;
@@ -114,18 +196,36 @@ export function useAttendanceValidation(
       lateMinutes: 0,
     };
 
+    if (!tenantId) {
+      return {
+        ...result,
+        canAttend: false,
+        reason: "Tenant tidak ditemukan",
+      };
+    }
+
+    const cacheKey = getCacheKey(tenantId, institutionType, today);
+    const cached = loadValidationCache(cacheKey);
+    if (cached) {
+      return buildRuntimeResult({
+        canAttend: cached.canAttend,
+        reason: cached.reason,
+        isHoliday: cached.isHoliday,
+        holidayName: cached.holidayName,
+        isWorkDay: cached.isWorkDay,
+        workHour: cached.workHour,
+      }, now);
+    }
+
     // 1. Cek hari Sabtu/Minggu (weekend default libur)
     if (dayOfWeek === 0 || dayOfWeek === 6) {
       const weekendName = dayOfWeek === 0 ? "Hari Minggu" : "Hari Sabtu";
       
       // Cek apakah ada jam kerja untuk hari ini (beberapa instansi mungkin bekerja Sabtu)
-      const workHourToday = workHours.find(
-        wh => wh.day_of_week === dayOfWeek && 
-        (wh.institution_type === institutionType || wh.institution_type === "all")
-      );
+      const workHourToday = resolveWorkHourToday(dayOfWeek);
       
       if (!workHourToday) {
-        return {
+        const staticResult = {
           ...result,
           canAttend: false,
           reason: `Tidak dapat absen pada ${weekendName}. Bukan hari kerja.`,
@@ -133,22 +233,43 @@ export function useAttendanceValidation(
           holidayName: weekendName,
           isWorkDay: false,
         };
+        saveValidationCache(cacheKey, {
+          tenantId,
+          institutionType,
+          date: today,
+          canAttend: staticResult.canAttend,
+          reason: staticResult.reason,
+          isHoliday: staticResult.isHoliday,
+          holidayName: staticResult.holidayName,
+          isWorkDay: staticResult.isWorkDay,
+          workHour: staticResult.workHour,
+        });
+        return staticResult;
       }
     }
 
     // 2. Cek jam kerja untuk hari ini
-    const workHourToday = workHours.find(
-      wh => wh.day_of_week === dayOfWeek && 
-      (wh.institution_type === institutionType || wh.institution_type === "all")
-    );
+    const workHourToday = resolveWorkHourToday(dayOfWeek);
 
     if (!workHourToday) {
-      return {
+      const staticResult = {
         ...result,
         canAttend: false,
         reason: "Tidak ada jadwal kerja untuk hari ini.",
         isWorkDay: false,
       };
+      saveValidationCache(cacheKey, {
+        tenantId,
+        institutionType,
+        date: today,
+        canAttend: staticResult.canAttend,
+        reason: staticResult.reason,
+        isHoliday: staticResult.isHoliday,
+        holidayName: staticResult.holidayName,
+        isWorkDay: staticResult.isWorkDay,
+        workHour: staticResult.workHour,
+      });
+      return staticResult;
     }
 
     result.workHour = workHourToday;
@@ -164,13 +285,25 @@ export function useAttendanceValidation(
         .maybeSingle();
 
       if (nationalHoliday) {
-        return {
+        const staticResult = {
           ...result,
           canAttend: false,
           reason: `Hari ini libur nasional: ${nationalHoliday.name}`,
           isHoliday: true,
           holidayName: nationalHoliday.name,
         };
+        saveValidationCache(cacheKey, {
+          tenantId,
+          institutionType,
+          date: today,
+          canAttend: staticResult.canAttend,
+          reason: staticResult.reason,
+          isHoliday: staticResult.isHoliday,
+          holidayName: staticResult.holidayName,
+          isWorkDay: staticResult.isWorkDay,
+          workHour: staticResult.workHour,
+        });
+        return staticResult;
       }
 
       // 4. Cek work_holidays (libur tenant)
@@ -185,13 +318,25 @@ export function useAttendanceValidation(
         for (const holiday of workHolidays) {
           const dates = holiday.dates.split(",").map((d: string) => d.trim().padStart(2, "0"));
           if (dates.includes(day)) {
-            return {
+            const staticResult = {
               ...result,
               canAttend: false,
               reason: `Hari ini libur: ${holiday.description || "Hari Libur Kerja"}`,
               isHoliday: true,
               holidayName: holiday.description || "Hari Libur Kerja",
             };
+            saveValidationCache(cacheKey, {
+              tenantId,
+              institutionType,
+              date: today,
+              canAttend: staticResult.canAttend,
+              reason: staticResult.reason,
+              isHoliday: staticResult.isHoliday,
+              holidayName: staticResult.holidayName,
+              isWorkDay: staticResult.isWorkDay,
+              workHour: staticResult.workHour,
+            });
+            return staticResult;
           }
         }
       }
@@ -199,21 +344,29 @@ export function useAttendanceValidation(
       console.error("Error checking holidays:", error);
     }
 
-    // 5. Cek keterlambatan - gunakan toleransi dari work_hours atau default 0
-    const [inHours, inMinutes] = workHourToday.time_in.split(":").map(Number);
-    const scheduledIn = inHours * 60 + inMinutes;
-    // Ambil toleransi dari database, default 0 (strict/tidak ada toleransi)
-    const tolerance = (workHourToday as any).late_tolerance_minutes ?? 0;
-
-    if (currentMinutes > scheduledIn + tolerance) {
-      result.isLate = true;
-      result.lateMinutes = currentMinutes - scheduledIn;
-    }
-
     // Boleh absen
     result.canAttend = true;
-    return result;
-  }, [tenantId, workHours, institutionType]);
+    saveValidationCache(cacheKey, {
+      tenantId,
+      institutionType,
+      date: today,
+      canAttend: result.canAttend,
+      reason: result.reason,
+      isHoliday: result.isHoliday,
+      holidayName: result.holidayName,
+      isWorkDay: result.isWorkDay,
+      workHour: result.workHour,
+    });
+
+    return buildRuntimeResult({
+      canAttend: result.canAttend,
+      reason: result.reason,
+      isHoliday: result.isHoliday,
+      holidayName: result.holidayName,
+      isWorkDay: result.isWorkDay,
+      workHour: result.workHour,
+    }, now);
+  }, [tenantId, institutionType, resolveWorkHourToday, buildRuntimeResult]);
 
   // Calculate attendance status - FIXED: toleransi dari database, default 0
   const calculateStatus = useCallback((checkInTime: Date, workHour: WorkHour | null): "hadir" | "terlambat" => {

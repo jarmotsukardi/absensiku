@@ -20,6 +20,26 @@ const defaultConfig: RateLimitConfig = {
   lockout_duration_minutes: 15,
 };
 
+const parseBoolean = (value: unknown, fallback: boolean): boolean => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (value === 1) return true;
+    if (value === 0) return false;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
+  }
+  return fallback;
+};
+
+const parsePositiveInt = (value: unknown, fallback: number): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return parsed > 0 ? Math.floor(parsed) : fallback;
+};
+
 export function LoginRateLimitSettings() {
   const [config, setConfig] = useState<RateLimitConfig>(defaultConfig);
   const [isLoading, setIsLoading] = useState(true);
@@ -37,8 +57,16 @@ export function LoginRateLimitSettings() {
         .eq("key", "login_rate_limit_config")
         .maybeSingle();
 
-      if (data?.value) {
-        setConfig({ ...defaultConfig, ...(data.value as Partial<RateLimitConfig>) });
+      if (data?.value && typeof data.value === "object" && !Array.isArray(data.value)) {
+        const value = data.value as Partial<RateLimitConfig>;
+        setConfig({
+          enabled: parseBoolean(value.enabled, defaultConfig.enabled),
+          max_attempts: parsePositiveInt(value.max_attempts, defaultConfig.max_attempts),
+          lockout_duration_minutes: parsePositiveInt(
+            value.lockout_duration_minutes,
+            defaultConfig.lockout_duration_minutes
+          ),
+        });
       }
     } catch (error) {
       console.error("Error:", error);

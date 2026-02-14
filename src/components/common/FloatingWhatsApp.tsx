@@ -8,9 +8,13 @@ type AnimationEffect = "pulse" | "glow" | "wobble" | "ripple";
 interface FloatingWhatsAppSettings {
   enabled: boolean;
   phone_number: string;
-  welcome_message: string;
-  position: "left" | "right";
-  show_on_pages: string[];
+  welcome_message?: string;
+  welcome_text?: string;
+  default_message?: string;
+  position?: "left" | "right" | "bottom-left" | "bottom-right";
+  show_on_pages?: string[];
+  show_on_mobile?: boolean;
+  show_on_desktop?: boolean;
   animation_effect?: AnimationEffect;
 }
 
@@ -48,13 +52,26 @@ export function FloatingWhatsApp() {
 
   if (!settings?.enabled || !settings?.phone_number) return null;
 
+  const isMobile =
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia("(max-width: 768px)").matches
+      : false;
+  if (isMobile && settings.show_on_mobile === false) return null;
+  if (!isMobile && settings.show_on_desktop === false) return null;
+
+  const resolvedWelcomeText =
+    settings.welcome_text || settings.welcome_message || "Halo! Ada yang bisa kami bantu?";
+  const resolvedDefaultMessage =
+    settings.default_message || settings.welcome_message || "Halo, saya tertarik dengan AbsensiKu";
+
   const handleClick = () => {
     const phone = settings.phone_number.replace(/\D/g, "");
-    const message = encodeURIComponent(settings.welcome_message || "Halo, saya tertarik dengan AbsensiKu");
+    const message = encodeURIComponent(resolvedDefaultMessage);
     window.open(`https://wa.me/${phone}?text=${message}`, "_blank");
   };
 
-  const positionClass = settings.position === "left" ? "left-4" : "right-4";
+  const positionClass =
+    settings.position === "left" || settings.position === "bottom-left" ? "left-4" : "right-4";
   const effect = settings.animation_effect || "pulse";
   const animClass = animationClasses[effect] || "";
 
@@ -78,7 +95,7 @@ export function FloatingWhatsApp() {
           </div>
           <div className="bg-muted/50 rounded-lg p-3 mb-3">
             <p className="text-sm text-muted-foreground">
-              {settings.welcome_message || "Halo! Ada yang bisa kami bantu?"}
+              {resolvedWelcomeText}
             </p>
           </div>
           <Button onClick={handleClick} className="w-full bg-success hover:bg-success/90">

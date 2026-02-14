@@ -256,7 +256,11 @@ export default function OrgDashboard() {
                       </p>
                     </div>
                   </div>
-                  <Button size="sm" className="bg-amber-600 hover:bg-amber-700">
+                  <Button
+                    size="sm"
+                    className="bg-amber-600 hover:bg-amber-700"
+                    onClick={() => navigate("/org/activation")}
+                  >
                     Upgrade Sekarang
                   </Button>
                 </div>
@@ -352,7 +356,7 @@ export default function OrgDashboard() {
               {subscription?.status === "expired" && (
                 <div 
                   className="flex items-center gap-3 p-3 rounded-lg bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 cursor-pointer hover:bg-red-100 dark:hover:bg-red-500/20 transition-colors"
-                  onClick={() => navigate("/org/subscription")}
+                  onClick={() => navigate("/org/activation")}
                 >
                   <CreditCard className="h-5 w-5 text-red-500 flex-shrink-0" />
                   <div className="flex-1 min-w-0">

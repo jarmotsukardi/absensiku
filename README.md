@@ -477,3 +477,33 @@ Perintah ini menjalankan:
 - `eslint --fix` (auto-fix lint yang memungkinkan)
 - validasi ulang `lint`
 - validasi `build`
+
+---
+
+## 🔎 Verifikasi Streak Monitoring (Supabase Remote)
+
+Script ini membantu verifikasi data di `/admin/streak-monitoring` dengan klasifikasi:
+- `active`
+- `near`
+- `suspended`
+
+Perintah:
+
+```bash
+npm run streak:summary
+```
+
+Seed data sample (3 tenant) + backup otomatis:
+
+```bash
+npm run streak:seed-sample
+```
+
+Restore dari backup:
+
+```bash
+npm run streak:restore -- artifacts/streak-fixtures/backups/<nama-file-backup>.json
+```
+
+Lokasi backup:
+- `artifacts/streak-fixtures/backups/`

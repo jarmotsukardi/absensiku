@@ -1,12 +1,11 @@
 /**
  * Edge Function: batch-attendance
  * 
- * Strategy 2: Edge Function Queue Processor
- * Menerima batch attendance entries dan memproses sekaligus
- * menggunakan stored procedure process_attendance_batch.
- * 
- * Ini mengurangi jumlah koneksi database dari N menjadi 1
- * untuk setiap batch request.
+ * Queue-first ingestion:
+ * 1) Enqueue semua event absensi
+ * 2) Proses queue terurut untuk batch ini
+ *
+ * Ini memastikan idempotency dan memberi fallback retry via queue worker.
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
@@ -52,6 +51,7 @@ Deno.serve(async (req) => {
     const body = await req.json()
     const { entries } = body as { entries: Array<{
       buffer_id: string;
+      idempotency_key?: string;
       type: 'check_in' | 'check_out';
       employee_id: string;
       office_id: string;
@@ -69,9 +69,9 @@ Deno.serve(async (req) => {
     }
 
     // Limit batch size to prevent abuse
-    if (entries.length > 10) {
+    if (entries.length > 100) {
       return new Response(
-        JSON.stringify(withTrace({ success: false, message: 'Max 10 entries per batch' }, traceId)),
+        JSON.stringify(withTrace({ success: false, message: 'Max 100 entries per batch' }, traceId)),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
@@ -79,20 +79,67 @@ Deno.serve(async (req) => {
     // Use service role for batch processing
     const adminClient = createClient(supabaseUrl, supabaseServiceKey)
 
-    const { data, error } = await adminClient.rpc('process_attendance_batch', {
-      p_entries: JSON.stringify(entries),
+    const { data: enqueued, error: enqueueError } = await adminClient.rpc('enqueue_attendance_batch', {
+      p_entries: entries,
+      p_trace_id: traceId,
     })
 
-    if (error) {
-      logTraceError(traceId, 'Batch processing error', error)
+    if (enqueueError) {
+      logTraceError(traceId, 'Batch enqueue error', enqueueError)
       return new Response(
-        JSON.stringify(withTrace({ success: false, message: error.message }, traceId)),
+        JSON.stringify(withTrace({ success: false, message: enqueueError.message }, traceId)),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       )
     }
 
+    const enqueueResults = Array.isArray(enqueued) ? enqueued : []
+    const queueIds = enqueueResults
+      .map((item) => item?.queue_id)
+      .filter((id): id is string => typeof id === 'string' && id.length > 0)
+
+    let processedResults = enqueueResults
+    if (queueIds.length > 0) {
+      const { data: processed, error: processError } = await adminClient.rpc('process_attendance_queue', {
+        p_limit: Math.min(queueIds.length, 100),
+        p_trace_id: traceId,
+        p_queue_ids: queueIds,
+      })
+
+      if (processError) {
+        logTraceError(traceId, 'Queue processing error (kept queued for retry)', processError)
+      } else if (Array.isArray(processed) && processed.length > 0) {
+        const merged = new Map<string, Record<string, unknown>>()
+
+        for (const item of enqueueResults) {
+          const key = typeof item?.buffer_id === 'string' && item.buffer_id.length > 0
+            ? item.buffer_id
+            : `${item?.queue_id ?? Math.random()}`
+          merged.set(key, item as Record<string, unknown>)
+        }
+
+        for (const item of processed) {
+          const key = typeof item?.buffer_id === 'string' && item.buffer_id.length > 0
+            ? item.buffer_id
+            : `${item?.queue_id ?? Math.random()}`
+          merged.set(key, item as Record<string, unknown>)
+        }
+
+        processedResults = Array.from(merged.values())
+      }
+    }
+
+    const { data: healthData } = await adminClient.rpc('get_attendance_ingest_health')
+    const health = Array.isArray(healthData) ? healthData[0] : null
+
     return new Response(
-      JSON.stringify({ success: true, results: data }),
+      JSON.stringify({
+        success: true,
+        trace_id: traceId,
+        enqueued_count: enqueueResults.length,
+        processed_count: processedResults.filter((item) => item?.queue_status === 'processed').length,
+        results: processedResults,
+        health,
+      }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
 

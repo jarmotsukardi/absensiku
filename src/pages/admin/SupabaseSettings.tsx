@@ -489,7 +489,7 @@ const migrationChecklist = [
   }
 ];
 
-export default function SupabaseSettings() {
+export default function SupabaseSettings({ embedded = false }: { embedded?: boolean }) {
   const [activeTab, setActiveTab] = useState("info");
   const [isLoading, setIsLoading] = useState(false);
   const [showKeys, setShowKeys] = useState(false);
@@ -845,12 +845,8 @@ export default function SupabaseSettings() {
     return Math.round((checkedCount / totalItems) * 100);
   };
 
-  return (
-    <SuperAdminLayout
-      title="Pengaturan Supabase"
-      subtitle="Kelola koneksi database, backup, migrasi, dan monitoring"
-    >
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+  const content = (
+    <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
         <TabsList className="flex flex-wrap gap-1 h-auto p-1">
           <TabsTrigger value="info" className="gap-2">
             <Server className="h-4 w-4" />
@@ -1342,7 +1338,19 @@ export default function SupabaseSettings() {
             </CardContent>
           </Card>
         </TabsContent>
-      </Tabs>
+    </Tabs>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
+  return (
+    <SuperAdminLayout
+      title="Pengaturan Supabase"
+      subtitle="Kelola koneksi database, backup, migrasi, dan monitoring"
+    >
+      {content}
     </SuperAdminLayout>
   );
 }

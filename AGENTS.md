@@ -24,6 +24,8 @@ Instruksi tetap untuk agent coding di repo ini.
 - Jangan edit file yang sama secara paralel.
 - Jangan menjalankan perintah destruktif tanpa izin eksplisit user.
 - Saat ada konflik hasil paralel, utamakan konsistensi data dan deterministik output.
+- Jangan melakukan `git push`, membuat PR, atau deploy ke Vercel secara otomatis.
+- Push ke GitHub dan deploy ke Vercel hanya boleh dilakukan jika user memberi perintah eksplisit pada turn tersebut.
 
 ## Standar Logging
 - Saat terjadi error, selalu sertakan id referensi error:

@@ -35,7 +35,7 @@ export function WhatsAppGatewaySettings() {
 
   useEffect(() => {
     if (setting) {
-      setSettings({ ...settings, ...setting });
+      setSettings((prev) => ({ ...prev, ...(setting as Record<string, unknown>) }));
     }
   }, [setting]);
 
@@ -44,7 +44,7 @@ export function WhatsAppGatewaySettings() {
   };
 
   const handleProviderChange = (provider: string) => {
-    setSettings({ ...settings, provider, apiUrl: "" });
+    setSettings((prev) => ({ ...prev, provider, apiUrl: "" }));
   };
 
   const handleTestMessage = async () => {

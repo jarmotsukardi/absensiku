@@ -16,6 +16,9 @@ export interface ScalabilityProfile {
   label: string;
   maxUsers: number;
   description: string;
+  // Sync strategy
+  syncMode: 'immediate' | 'deferred';
+  deferredSyncDelayMs: number;
   // Jitter
   jitterPeakMaxMs: number;
   jitterOffpeakMaxMs: number;
@@ -32,6 +35,9 @@ export interface ScalabilityProfile {
   rpcTimeoutMaxMs: number;
   // Batch
   batchSize: number;
+  edgeFunctionMaxBatch: number;
+  syncIntervalMinMs: number;
+  syncIntervalMaxMs: number;
   // Buffer
   bufferExpiryDays: number;
   maxSyncAttempts: number;
@@ -46,6 +52,8 @@ const PROFILES: Record<ScalabilityTier, ScalabilityProfile> = {
     label: 'Small (≤5.000 user)',
     maxUsers: 5000,
     description: 'Cocok untuk organisasi kecil. Delay minimal, respons cepat.',
+    syncMode: 'immediate',
+    deferredSyncDelayMs: 0,
     jitterPeakMaxMs: 5000,
     jitterOffpeakMaxMs: 1000,
     backoffBaseMs: 1000,
@@ -57,6 +65,9 @@ const PROFILES: Record<ScalabilityTier, ScalabilityProfile> = {
     rpcTimeoutBaseMs: 10000,
     rpcTimeoutMaxMs: 30000,
     batchSize: 5,
+    edgeFunctionMaxBatch: 10,
+    syncIntervalMinMs: 8000,
+    syncIntervalMaxMs: 15000,
     bufferExpiryDays: 2,
     maxSyncAttempts: 3,
     showQueueMessage: false,
@@ -67,6 +78,8 @@ const PROFILES: Record<ScalabilityTier, ScalabilityProfile> = {
     label: 'Medium (5.001–20.000 user)',
     maxUsers: 20000,
     description: 'Untuk organisasi menengah. Jitter moderat, circuit breaker aktif.',
+    syncMode: 'deferred',
+    deferredSyncDelayMs: 10000,
     jitterPeakMaxMs: 30000,
     jitterOffpeakMaxMs: 5000,
     backoffBaseMs: 2000,
@@ -78,6 +91,9 @@ const PROFILES: Record<ScalabilityTier, ScalabilityProfile> = {
     rpcTimeoutBaseMs: 15000,
     rpcTimeoutMaxMs: 45000,
     batchSize: 10,
+    edgeFunctionMaxBatch: 25,
+    syncIntervalMinMs: 15000,
+    syncIntervalMaxMs: 30000,
     bufferExpiryDays: 3,
     maxSyncAttempts: 5,
     showQueueMessage: true,
@@ -88,6 +104,8 @@ const PROFILES: Record<ScalabilityTier, ScalabilityProfile> = {
     label: 'Large (20.001–100.000 user)',
     maxUsers: 100000,
     description: 'Untuk skala besar. Jitter diperlebar, batching agresif.',
+    syncMode: 'deferred',
+    deferredSyncDelayMs: 30000,
     jitterPeakMaxMs: 60000,
     jitterOffpeakMaxMs: 15000,
     backoffBaseMs: 3000,
@@ -99,6 +117,9 @@ const PROFILES: Record<ScalabilityTier, ScalabilityProfile> = {
     rpcTimeoutBaseMs: 20000,
     rpcTimeoutMaxMs: 60000,
     batchSize: 25,
+    edgeFunctionMaxBatch: 50,
+    syncIntervalMinMs: 25000,
+    syncIntervalMaxMs: 50000,
     bufferExpiryDays: 5,
     maxSyncAttempts: 7,
     showQueueMessage: true,
@@ -109,6 +130,8 @@ const PROFILES: Record<ScalabilityTier, ScalabilityProfile> = {
     label: 'Enterprise (100.001–500.000 user)',
     maxUsers: 500000,
     description: 'Skala enterprise. Jitter agresif 0-120s, queue message aktif.',
+    syncMode: 'deferred',
+    deferredSyncDelayMs: 60000,
     jitterPeakMaxMs: 120000,
     jitterOffpeakMaxMs: 30000,
     backoffBaseMs: 5000,
@@ -120,6 +143,9 @@ const PROFILES: Record<ScalabilityTier, ScalabilityProfile> = {
     rpcTimeoutBaseMs: 30000,
     rpcTimeoutMaxMs: 90000,
     batchSize: 50,
+    edgeFunctionMaxBatch: 100,
+    syncIntervalMinMs: 45000,
+    syncIntervalMaxMs: 90000,
     bufferExpiryDays: 7,
     maxSyncAttempts: 10,
     showQueueMessage: true,

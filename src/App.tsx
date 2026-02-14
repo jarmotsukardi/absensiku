@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { HelmetProvider } from "react-helmet-async";
 import { PersistentNotificationDialog } from "@/components/common/PersistentNotificationDialog";
 import { AndroidBackButtonHandler } from "@/hooks/useAndroidBackButton";
@@ -105,6 +105,8 @@ import FeedbackManagement from "./pages/admin/FeedbackManagement";
 import StreakMonitoring from "./pages/admin/StreakMonitoring";
 import AdminInstitutionTypesManagement from "./pages/admin/InstitutionTypesManagement";
 import AttendanceStressTest from "./pages/admin/AttendanceStressTest";
+import AttendanceReport from "./pages/admin/reports/AttendanceReport";
+import RecapReport from "./pages/admin/reports/RecapReport";
 
 const queryClient = new QueryClient();
 
@@ -144,6 +146,10 @@ const App = () => (
           <Route path="/admin/organizations/:id/edit" element={<OrganizationForm />} />
           <Route path="/admin/users" element={<UserManagement />} />
           <Route path="/admin/roles" element={<RoleManagement />} />
+          <Route path="/admin/profile" element={<Navigate to="/admin/settings" replace />} />
+          <Route path="/admin/reports" element={<Navigate to="/admin/reports/attendance" replace />} />
+          <Route path="/admin/reports/attendance" element={<AttendanceReport />} />
+          <Route path="/admin/reports/recap" element={<RecapReport />} />
           <Route path="/admin/reports/audit" element={<AuditLogs />} />
           <Route path="/admin/settings" element={<Settings />} />
           <Route path="/admin/subscriptions" element={<SubscriptionManagement />} />
@@ -201,6 +207,7 @@ const App = () => (
           <Route path="/org/reports/attendance" element={<OrgAttendanceReport />} />
           <Route path="/org/reports/recap" element={<OrgRecapReport />} />
           <Route path="/org/settings" element={<OrgSettings />} />
+          <Route path="/org/subscription" element={<Navigate to="/org/activation" replace />} />
           <Route path="/org/activation" element={<OrgActivation />} />
           <Route path="/org/profile/setup" element={<OrgProfileSetup />} />
           <Route path="/org/invitations" element={<OrgEmployeeInvitations />} />

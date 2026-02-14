@@ -124,6 +124,46 @@ export const DEFAULT_CONFIGS: Record<string, StressTestConfig> = {
     simulatedLatencyMs: 100,
     failureRate: 0.8, // High failure to trigger circuit breaker
   },
+  stage_10k: {
+    totalUsers: 10000,
+    rampUpSeconds: 45,
+    testDurationSeconds: 180,
+    scenario: 'gradual',
+    mode: 'dry_run',
+    concurrentBatchSize: 150,
+    simulatedLatencyMs: 350,
+    failureRate: 0.03,
+  },
+  stage_50k: {
+    totalUsers: 50000,
+    rampUpSeconds: 90,
+    testDurationSeconds: 240,
+    scenario: 'peak_simulation',
+    mode: 'dry_run',
+    concurrentBatchSize: 250,
+    simulatedLatencyMs: 450,
+    failureRate: 0.05,
+  },
+  stage_100k: {
+    totalUsers: 100000,
+    rampUpSeconds: 120,
+    testDurationSeconds: 300,
+    scenario: 'peak_simulation',
+    mode: 'dry_run',
+    concurrentBatchSize: 350,
+    simulatedLatencyMs: 550,
+    failureRate: 0.08,
+  },
+  stage_500k: {
+    totalUsers: 500000,
+    rampUpSeconds: 180,
+    testDurationSeconds: 420,
+    scenario: 'peak_simulation',
+    mode: 'dry_run',
+    concurrentBatchSize: 500,
+    simulatedLatencyMs: 700,
+    failureRate: 0.1,
+  },
 };
 
 // ==================== METRICS HELPERS ====================
@@ -170,8 +210,9 @@ export class StressTestEngine {
   private startTime: number = 0;
   private onUpdate: (state: StressTestState) => void;
   private status: StressTestState['status'] = 'idle';
-  private throughputWindow: { time: number; success: boolean }[] = [];
+  private throughputWindow: { time: number; success: boolean; weight: number }[] = [];
   private intervalId: ReturnType<typeof setInterval> | null = null;
+  private userScaleFactor = 1;
 
   constructor(config: StressTestConfig, onUpdate: (state: StressTestState) => void) {
     this.config = config;
@@ -190,10 +231,12 @@ export class StressTestEngine {
     // Calculate current metrics
     const elapsed = (Date.now() - this.startTime) / 1000;
     const sortedTimes = [...this.responseTimes].sort((a, b) => a - b);
+    const scaledActiveUsers = this.users.filter(u => u.status === 'jitter' || u.status === 'requesting').length * this.userScaleFactor;
+    const scaledCompletedUsers = this.users.filter(u => u.status === 'success' || u.status === 'failed' || u.status === 'circuit_blocked').length * this.userScaleFactor;
 
     this.metrics.elapsedSeconds = Math.round(elapsed);
-    this.metrics.activeUsers = this.users.filter(u => u.status === 'jitter' || u.status === 'requesting').length;
-    this.metrics.completedUsers = this.users.filter(u => u.status === 'success' || u.status === 'failed' || u.status === 'circuit_blocked').length;
+    this.metrics.activeUsers = Math.min(this.config.totalUsers, scaledActiveUsers);
+    this.metrics.completedUsers = Math.min(this.config.totalUsers, scaledCompletedUsers);
     this.metrics.avgResponseTime = sortedTimes.length > 0 ? Math.round(sortedTimes.reduce((a, b) => a + b, 0) / sortedTimes.length) : 0;
     this.metrics.p50ResponseTime = calculatePercentile(sortedTimes, 50);
     this.metrics.p95ResponseTime = calculatePercentile(sortedTimes, 95);
@@ -209,11 +252,14 @@ export class StressTestEngine {
     this.throughputWindow = this.throughputWindow.filter(e => now - e.time < 60000);
     const oneSecAgo = now - 1000;
     const recentRequests = this.throughputWindow.filter(e => e.time >= oneSecAgo);
-    const recentErrors = recentRequests.filter(e => !e.success).length;
+    const recentRps = recentRequests.reduce((acc, item) => acc + item.weight, 0);
+    const recentErrors = recentRequests
+      .filter(e => !e.success)
+      .reduce((acc, item) => acc + item.weight, 0);
     if (elapsed > 0 && this.metrics.totalRequests > 0) {
       this.metrics.throughputHistory.push({
         time: Math.round(elapsed),
-        rps: recentRequests.length,
+        rps: recentRps,
         errors: recentErrors,
       });
       // Keep last 180 entries
@@ -292,9 +338,9 @@ export class StressTestEngine {
       user.latencyMs = latency;
       user.endTime = Date.now();
       this.responseTimes.push(latency);
-      this.metrics.failureCount++;
-      this.metrics.totalRequests++;
-      this.throughputWindow.push({ time: Date.now(), success: false });
+      this.metrics.failureCount += this.userScaleFactor;
+      this.metrics.totalRequests += this.userScaleFactor;
+      this.throughputWindow.push({ time: Date.now(), success: false, weight: this.userScaleFactor });
       recordFailure();
 
       // Retry logic simulation
@@ -312,9 +358,9 @@ export class StressTestEngine {
       user.latencyMs = latency;
       user.endTime = Date.now();
       this.responseTimes.push(latency);
-      this.metrics.successCount++;
-      this.metrics.totalRequests++;
-      this.throughputWindow.push({ time: Date.now(), success: true });
+      this.metrics.successCount += this.userScaleFactor;
+      this.metrics.totalRequests += this.userScaleFactor;
+      this.throughputWindow.push({ time: Date.now(), success: true, weight: this.userScaleFactor });
       recordSuccess();
     }
   }
@@ -329,9 +375,20 @@ export class StressTestEngine {
     this.throughputWindow = [];
     this.logs = [];
     this.users = [];
+    this.userScaleFactor = 1;
+
+    const maxSimulatedUsers = this.config.mode === 'live' ? 5000 : 30000;
+    if (this.config.totalUsers > maxSimulatedUsers) {
+      this.userScaleFactor = Math.ceil(this.config.totalUsers / maxSimulatedUsers);
+      this.log(
+        'warn',
+        `Sampling aktif: simulasi ${Math.ceil(this.config.totalUsers / this.userScaleFactor).toLocaleString()} user virtual merepresentasikan ${this.config.totalUsers.toLocaleString()} user (x${this.userScaleFactor})`
+      );
+    }
 
     // Create all virtual users
-    for (let i = 0; i < this.config.totalUsers; i++) {
+    const simulatedUsers = Math.ceil(this.config.totalUsers / this.userScaleFactor);
+    for (let i = 0; i < simulatedUsers; i++) {
       this.users.push(this.createVirtualUser(i));
     }
 

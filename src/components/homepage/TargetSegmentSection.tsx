@@ -1,62 +1,89 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { CheckCircle2, Landmark, Building, Briefcase, GraduationCap, HeartHandshake } from "lucide-react";
+import { CheckCircle2, Landmark, Building, Briefcase, GraduationCap, HeartHandshake, type LucideIcon } from "lucide-react";
+import type { TargetSegmentSettings } from "@/hooks/useHomepageData";
 
-export function TargetSegmentSection() {
-  const segments = [
+interface TargetSegmentSectionProps {
+  settings?: TargetSegmentSettings;
+}
+
+const defaultSettings: TargetSegmentSettings = {
+  section_title: "Dirancang untuk Berbagai Organisasi",
+  section_subtitle: "AbsensiKu melayani kebutuhan absensi dari berbagai jenis organisasi dengan fitur yang dapat dikustomisasi.",
+  badge_text: "Solusi untuk Semua",
+  segments: [
     {
-      icon: Landmark,
       title: "Pemerintah Daerah",
       description: "Solusi absensi untuk Pemda, OPD, dan unit kerja pemerintah daerah dengan standar audit BPK.",
-      features: ["Multi OPD & Lokasi Kerja", "Audit trail & Laporan rekapitulasi", "Billing terpusat / mandiri", "Negosiasi B2B untuk skala besar"],
+      features: ["Multi OPD & Lokasi Kerja", "Audit trail Inspektorat", "Laporan rekapitulasi"],
+      icon: "Landmark",
       color: "primary",
     },
     {
-      icon: Building,
       title: "Instansi Pemerintah",
-      description: "Untuk Kementerian, Lembaga, BUMN, BUMD, dan instansi pemerintah vertikal lainnya.",
-      features: ["Struktur hierarki ASN & NIP", "WFH & absensi fleksibel", "Kalender libur nasional otomatis", "Integrasi pembayaran Xendit & Manual"],
+      description: "Untuk Kementerian, Lembaga, BUMN, BUMD, Institusi dan instansi pemerintah vertikal lainnya.",
+      features: ["Struktur hierarki ASN", "Integrasi NIP", "Sinkronisasi SIMPEG"],
+      icon: "Building",
       color: "info",
     },
     {
-      icon: Briefcase,
       title: "Perusahaan",
       description: "Solusi fleksibel untuk perusahaan swasta dari startup hingga korporasi besar.",
-      features: ["Multi shift 24/7 & rotasi kerja", "Operasional Senin–Minggu", "Overtime & mutasi pegawai", "Pembayaran QRIS, VA, E-Wallet"],
+      features: ["Multi cabang & divisi", "Shift kerja fleksibel", "API Integrasi HR & payroll"],
+      icon: "Briefcase",
       color: "accent",
     },
     {
-      icon: GraduationCap,
       title: "Sekolah",
       description: "Sistem absensi guru, staf, dan tenaga kependidikan untuk semua jenjang pendidikan.",
-      features: ["Guru & tenaga pendidik", "Kalender akademik & libur khusus", "Notifikasi & pengumuman", "Gratis hingga siap berlangganan"],
+      features: ["Guru & tenaga pendidik", "Kalender akademik", "Laporan"],
+      icon: "GraduationCap",
       color: "success",
     },
-  ];
+  ],
+};
 
-  const getColorClasses = (color: string) => {
-    const colorMap: Record<string, { gradient: string; bg: string; text: string; hoverBg: string }> = {
-      primary: {
-        gradient: "from-primary to-primary/60",
-        bg: "bg-primary/10",
-        text: "text-primary",
-        hoverBg: "group-hover:bg-primary",
-      },
-      info: { gradient: "from-info to-info/60", bg: "bg-info/10", text: "text-info", hoverBg: "group-hover:bg-info" },
-      accent: {
-        gradient: "from-accent to-accent/60",
-        bg: "bg-accent/10",
-        text: "text-accent",
-        hoverBg: "group-hover:bg-accent",
-      },
-      success: {
-        gradient: "from-success to-success/60",
-        bg: "bg-success/10",
-        text: "text-success",
-        hoverBg: "group-hover:bg-success",
-      },
-    };
-    return colorMap[color] || colorMap.primary;
+const iconMap: Record<string, LucideIcon> = {
+  Landmark,
+  Building,
+  Briefcase,
+  GraduationCap,
+};
+
+const colorMap: Record<string, { gradient: string; bg: string; text: string; hoverBg: string }> = {
+  primary: {
+    gradient: "from-primary to-primary/60",
+    bg: "bg-primary/10",
+    text: "text-primary",
+    hoverBg: "group-hover:bg-primary",
+  },
+  info: { gradient: "from-info to-info/60", bg: "bg-info/10", text: "text-info", hoverBg: "group-hover:bg-info" },
+  accent: {
+    gradient: "from-accent to-accent/60",
+    bg: "bg-accent/10",
+    text: "text-accent",
+    hoverBg: "group-hover:bg-accent",
+  },
+  success: {
+    gradient: "from-success to-success/60",
+    bg: "bg-success/10",
+    text: "text-success",
+    hoverBg: "group-hover:bg-success",
+  },
+};
+
+export function TargetSegmentSection({ settings }: TargetSegmentSectionProps) {
+  const mergedSettings: TargetSegmentSettings = {
+    ...defaultSettings,
+    ...(settings || {}),
+    segments: Array.isArray(settings?.segments) && settings.segments.length > 0
+      ? settings.segments
+      : defaultSettings.segments,
   };
+
+  const segments = mergedSettings.segments.map((segment) => ({
+    ...segment,
+    features: Array.isArray(segment.features) ? segment.features.filter((feature) => typeof feature === "string" && feature.trim()) : [],
+  }));
 
   return (
     <section className="py-20 px-4 bg-muted/30">
@@ -64,22 +91,20 @@ export function TargetSegmentSection() {
         <div className="text-center mb-16">
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-accent/10 border border-accent/20 mb-4">
             <HeartHandshake className="w-4 h-4 text-accent" />
-            <span className="text-foreground text-sm font-medium">Solusi untuk Semua</span>
+            <span className="text-foreground text-sm font-medium">{mergedSettings.badge_text}</span>
           </div>
-          <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">Dirancang untuk Berbagai Organisasi</h2>
-          <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-            AbsensiKu melayani kebutuhan absensi dari berbagai jenis organisasi dengan fitur yang dapat dikustomisasi.
-          </p>
+          <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">{mergedSettings.section_title}</h2>
+          <p className="text-muted-foreground text-lg max-w-2xl mx-auto">{mergedSettings.section_subtitle}</p>
         </div>
 
         <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
           {segments.map((segment, index) => {
-            const colors = getColorClasses(segment.color);
-            const IconComponent = segment.icon;
+            const colors = colorMap[segment.color] || colorMap.primary;
+            const IconComponent = iconMap[segment.icon] || Landmark;
 
             return (
               <Card
-                key={index}
+                key={`${segment.title}-${index}`}
                 className="group border-border/50 bg-card overflow-hidden relative hover:shadow-large transition-all duration-300 hover:-translate-y-2"
               >
                 <div className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r ${colors.gradient}`} />
@@ -94,8 +119,8 @@ export function TargetSegmentSection() {
                 <CardContent className="text-center">
                   <CardDescription className="text-muted-foreground mb-4">{segment.description}</CardDescription>
                   <ul className="text-sm text-left space-y-2">
-                    {segment.features.map((feature, fIndex) => (
-                      <li key={fIndex} className="flex items-center gap-2">
+                    {segment.features.map((feature, featureIndex) => (
+                      <li key={`${feature}-${featureIndex}`} className="flex items-center gap-2">
                         <CheckCircle2 className="w-4 h-4 text-success flex-shrink-0" />
                         <span>{feature}</span>
                       </li>

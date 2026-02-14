@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,7 @@ interface BillingActivationOverlayProps {
 }
 
 export function BillingActivationOverlay({ tenantId, employeeId, billingMode }: BillingActivationOverlayProps) {
+  const navigate = useNavigate();
   const [hasPaid, setHasPaid] = useState<boolean | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -95,8 +97,7 @@ export function BillingActivationOverlay({ tenantId, employeeId, billingMode }: 
           <Button
             className="w-full"
             onClick={() => {
-              // Navigate to activation - handled by parent
-              window.location.href = "/employee/dashboard?tab=activation";
+              navigate("/employee/dashboard?tab=activation", { replace: true });
             }}
           >
             <CreditCard className="h-4 w-4 mr-2" />

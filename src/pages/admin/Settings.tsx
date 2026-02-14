@@ -123,12 +123,12 @@ export default function Settings() {
               </TabsContent>
               <TabsContent value="database" className="mt-0">
                 <Suspense fallback={<TabFallback />}>
-                  <DatabaseManagementContent />
+                  <DatabaseManagementContent embedded />
                 </Suspense>
               </TabsContent>
               <TabsContent value="supabase" className="mt-0">
                 <Suspense fallback={<TabFallback />}>
-                  <SupabaseSettingsContent />
+                  <SupabaseSettingsContent embedded />
                 </Suspense>
               </TabsContent>
             </div>

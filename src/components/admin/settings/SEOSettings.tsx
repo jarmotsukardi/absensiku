@@ -25,7 +25,7 @@ export function SEOSettings() {
 
   useEffect(() => {
     if (setting) {
-      setSettings({ ...settings, ...setting });
+      setSettings((prev) => ({ ...prev, ...(setting as Record<string, string>) }));
     }
   }, [setting]);
 

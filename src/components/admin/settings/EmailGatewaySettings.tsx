@@ -60,19 +60,19 @@ export function EmailGatewaySettings() {
 
   useEffect(() => {
     if (setting) {
-      setSettings({ ...settings, ...setting });
+      setSettings((prev) => ({ ...prev, ...(setting as Record<string, unknown>) }));
     }
   }, [setting]);
 
   const handleProviderChange = (provider: string) => {
     const preset = SMTP_PRESETS[provider as keyof typeof SMTP_PRESETS];
-    setSettings({
-      ...settings,
+    setSettings((prev) => ({
+      ...prev,
       provider,
       smtpHost: preset.host,
       smtpPort: preset.port,
       useTLS: preset.useTLS,
-    });
+    }));
   };
 
   const handleChange = (field: string, value: string | boolean) => {

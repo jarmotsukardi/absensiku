@@ -16,9 +16,9 @@ import {
   updateEntryStatus,
   cleanupOldEntries,
   rehydratePendingEntries,
+  recoverStuckSyncEntries,
   migrateFromLocalStorage,
   type AttendanceEntry,
-  type SyncStatus,
 } from '@/lib/attendanceDB';
 import {
   canMakeRequest,
@@ -28,10 +28,12 @@ import {
   isRetryableError,
   withTimeout,
   getAdaptiveTimeout,
+  generateAdaptiveJitter,
 } from '@/lib/attendanceResilience';
-import { loadScalabilityConfig } from '@/lib/scalabilityConfig';
+import { loadScalabilityConfig, saveScalabilityConfig, type ScalabilityTier } from '@/lib/scalabilityConfig';
 import { useOnlineStatus } from './useOnlineStatus';
 import { supabase } from '@/integrations/supabase/client';
+import { reportError } from '@/lib/errorLogger';
 
 export interface SyncStats {
   pendingCount: number;
@@ -41,28 +43,64 @@ export interface SyncStats {
   lastSyncAt: string | null;
 }
 
-async function syncEntryToServer(entry: AttendanceEntry): Promise<{ success: boolean; id?: string; status?: string; message: string }> {
-  const timeout = getAdaptiveTimeout(entry.syncAttempts);
-  const rpcName = entry.type === 'check_in' ? 'process_check_in' : 'process_check_out';
-  
-  const rpcCall = supabase.rpc(rpcName, {
-    p_employee_id: entry.employeeId,
-    p_office_id: entry.officeId,
-    p_latitude: entry.latitude,
-    p_longitude: entry.longitude,
-    p_distance_meters: entry.distanceMeters,
-    p_date: entry.date,
+interface BatchSyncResult {
+  buffer_id: string;
+  success: boolean;
+  id?: string;
+  status?: string;
+  error?: string;
+  message: string;
+  queue_status?: string;
+  trace_id?: string;
+}
+
+function normalizeBatchItem(item: any): BatchSyncResult {
+  const nested = item?.process_check_in ?? item?.process_check_out ?? item ?? {};
+  return {
+    buffer_id: item?.buffer_id ?? nested?.buffer_id ?? '',
+    success: Boolean(nested?.success ?? item?.success),
+    id: nested?.id,
+    status: nested?.status,
+    error: nested?.error ?? item?.error,
+    message: nested?.message || item?.message || 'Unknown response',
+    queue_status: item?.queue_status ?? nested?.queue_status,
+    trace_id: item?.trace_id ?? nested?.trace_id,
+  };
+}
+
+async function syncBatchToServer(entries: AttendanceEntry[]): Promise<BatchSyncResult[]> {
+  const timeout = getAdaptiveTimeout(Math.max(...entries.map((entry) => entry.syncAttempts), 0));
+  const payload = entries.map((entry) => ({
+    buffer_id: entry.bufferId,
+    idempotency_key: entry.idempotencyKey,
+    type: entry.type,
+    employee_id: entry.employeeId,
+    office_id: entry.officeId,
+    latitude: entry.latitude,
+    longitude: entry.longitude,
+    distance_meters: entry.distanceMeters,
+    date: entry.date,
+  }));
+
+  const invokeCall = supabase.functions.invoke('batch-attendance', {
+    body: { entries: payload },
   });
 
   const { data, error } = await withTimeout(
-    Promise.resolve(rpcCall),
+    Promise.resolve(invokeCall),
     timeout,
-    'Koneksi ke server timeout'
+    'Koneksi sinkronisasi timeout'
   );
 
   if (error) throw error;
-  const result = data as any;
-  return { success: result?.success ?? false, id: result?.id, status: result?.status, message: result?.message || 'OK' };
+
+  const rawResults = Array.isArray((data as any)?.results)
+    ? (data as any).results
+    : Array.isArray(data)
+      ? data
+      : [];
+
+  return rawResults.map(normalizeBatchItem);
 }
 
 export function useAttendanceSync(employeeId: string | null) {
@@ -77,6 +115,41 @@ export function useAttendanceSync(employeeId: string | null) {
   const syncingRef = useRef(false);
   const mountedRef = useRef(true);
 
+  const getAdaptiveSyncIntervalMs = useCallback((): number => {
+    const profile = loadScalabilityConfig();
+    const min = Math.max(5_000, profile.syncIntervalMinMs);
+    const max = Math.max(min, profile.syncIntervalMaxMs);
+    const base = min + Math.floor(Math.random() * (max - min + 1));
+    const jitter = Math.min(generateAdaptiveJitter(0), max);
+    return Math.min(max, base + Math.floor(jitter / 2));
+  }, []);
+
+  // Best-effort: hydrate global scalability profile from DB.
+  useEffect(() => {
+    if (!employeeId) return;
+
+    const hydrateGlobalScalability = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('system_settings')
+          .select('value')
+          .eq('key', 'attendance_scalability')
+          .maybeSingle();
+
+        if (error) return;
+
+        const tier = (data?.value as { tier?: string } | null)?.tier;
+        if (tier && ['small', 'medium', 'large', 'enterprise'].includes(tier)) {
+          saveScalabilityConfig(tier as ScalabilityTier);
+        }
+      } catch {
+        // ignore - fallback to local profile
+      }
+    };
+
+    hydrateGlobalScalability();
+  }, [employeeId]);
+
   // Sync function
   const performSync = useCallback(async () => {
     if (!employeeId || syncingRef.current) return;
@@ -87,7 +160,9 @@ export function useAttendanceSync(employeeId: string | null) {
     }
 
     try {
-      await cleanupOldEntries(loadScalabilityConfig().bufferExpiryDays);
+      const profile = loadScalabilityConfig();
+      await recoverStuckSyncEntries(employeeId, 5);
+      await cleanupOldEntries(profile.bufferExpiryDays);
 
       const pending = await getPendingEntries(employeeId);
       if (pending.length === 0) {
@@ -101,57 +176,144 @@ export function useAttendanceSync(employeeId: string | null) {
         setSyncStats(prev => ({ ...prev, pendingCount: pending.length }));
       }
 
-      const batchSize = loadScalabilityConfig().batchSize;
-      const batch = pending.slice(0, batchSize);
+      const batchSize = profile.batchSize;
+      const chunkSize = Math.max(1, Math.min(profile.batchSize, profile.edgeFunctionMaxBatch));
+      const orderedPending = [...pending].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      const batch = orderedPending.slice(0, batchSize);
       let syncedInBatch = 0;
       let failedInBatch = 0;
 
-      for (const entry of batch) {
-        // Circuit breaker check
+      const markSynced = async (entry: AttendanceEntry, result: { id?: string; status?: string; message: string }) => {
+        await updateEntryStatus(entry.bufferId, {
+          syncStatus: 'synced',
+          serverRecordId: result.id || null,
+          lastSyncAttempt: new Date().toISOString(),
+        });
+        recordSuccess();
+        syncedInBatch++;
+      };
+
+      const markDeferred = async (entry: AttendanceEntry, message: string) => {
+        await updateEntryStatus(entry.bufferId, {
+          syncStatus: 'pending',
+          syncAttempts: entry.syncAttempts,
+          lastSyncAttempt: new Date().toISOString(),
+          syncError: message,
+        });
+      };
+
+      const markFailed = async (entry: AttendanceEntry, message: string) => {
+        await updateEntryStatus(entry.bufferId, {
+          syncStatus: 'failed',
+          syncAttempts: entry.syncAttempts + 1,
+          lastSyncAttempt: new Date().toISOString(),
+          syncError: message,
+        });
+        recordFailure();
+        failedInBatch++;
+      };
+
+      const shouldTreatAsSuccess = (result: BatchSyncResult | undefined): boolean => {
+        if (!result) return false;
+        if (result.success) return true;
+        return result.error === 'ALREADY_CHECKED_IN' || result.error === 'ALREADY_CHECKED_OUT';
+      };
+
+      const formatResultMessage = (result: BatchSyncResult | undefined, fallback: string): string => {
+        const base = result?.message || fallback;
+        return result?.trace_id ? `${base} (Ref: ${result.trace_id})` : base;
+      };
+
+      const isStillQueued = (result: BatchSyncResult | undefined): boolean => {
+        if (!result) return false;
+        return result.queue_status === 'queued' || result.queue_status === 'processing' || result.queue_status === 'failed';
+      };
+
+      const syncSingleEntryWithRetry = async (entry: AttendanceEntry) => {
         const cbCheck = canMakeRequest();
         if (!cbCheck.allowed) {
           console.log('[AttendanceSync] Circuit breaker open, pausing sync');
-          break;
+          return;
         }
 
         try {
           await updateEntryStatus(entry.bufferId, { syncStatus: 'syncing' });
 
-          const result = await withExponentialBackoff(
-            () => syncEntryToServer(entry),
+          const [result] = await withExponentialBackoff(
+            () => syncBatchToServer([entry]),
             {
               maxRetries: 2,
               shouldRetry: isRetryableError,
             }
           );
 
-          if (result.success) {
-            await updateEntryStatus(entry.bufferId, {
-              syncStatus: 'synced',
-              serverRecordId: result.id || null,
-              lastSyncAttempt: new Date().toISOString(),
-            });
-            recordSuccess();
-            syncedInBatch++;
+          if (shouldTreatAsSuccess(result)) {
+            await markSynced(entry, result);
+          } else if (isStillQueued(result)) {
+            await markDeferred(entry, formatResultMessage(result, 'Queued on server, waiting for processor'));
           } else {
-            await updateEntryStatus(entry.bufferId, {
-              syncStatus: 'failed',
-              syncAttempts: entry.syncAttempts + 1,
-              lastSyncAttempt: new Date().toISOString(),
-              syncError: result.message,
-            });
-            recordFailure();
-            failedInBatch++;
+            await markFailed(entry, formatResultMessage(result, 'Sync failed'));
           }
         } catch (err: any) {
-          await updateEntryStatus(entry.bufferId, {
-            syncStatus: 'failed',
-            syncAttempts: entry.syncAttempts + 1,
-            lastSyncAttempt: new Date().toISOString(),
-            syncError: err?.message || 'Sync failed',
-          });
-          recordFailure();
-          failedInBatch++;
+          await markFailed(entry, err?.message || 'Sync failed');
+        }
+      };
+
+      if (batch.length > 1) {
+        for (let i = 0; i < batch.length; i += chunkSize) {
+          const chunk = batch.slice(i, i + chunkSize);
+          const cbCheck = canMakeRequest();
+          if (!cbCheck.allowed) {
+            console.log('[AttendanceSync] Circuit breaker open, pausing sync');
+            break;
+          }
+
+          await Promise.all(
+            chunk.map((entry) => updateEntryStatus(entry.bufferId, { syncStatus: 'syncing' }))
+          );
+
+          try {
+            const results = await withExponentialBackoff(
+              () => syncBatchToServer(chunk),
+              {
+                maxRetries: 2,
+                shouldRetry: isRetryableError,
+              }
+            );
+
+            const resultMap = new Map<string, BatchSyncResult>();
+            for (const row of results) {
+              if (row.buffer_id) {
+                resultMap.set(row.buffer_id, row);
+              }
+            }
+
+            for (const entry of chunk) {
+              const result = resultMap.get(entry.bufferId);
+              if (shouldTreatAsSuccess(result)) {
+                await markSynced(entry, result);
+              } else if (isStillQueued(result)) {
+                await markDeferred(entry, formatResultMessage(result, 'Queued on server, waiting for processor'));
+              } else {
+                await markFailed(entry, formatResultMessage(result, 'No result for buffered entry'));
+              }
+            }
+          } catch (batchError: any) {
+            const errorRef = reportError(batchError, 'attendance.sync.batch_fallback', {
+              employeeId,
+              chunkSize: chunk.length,
+            });
+            console.error(`[AttendanceSync ${errorRef}] Batch sync failed, fallback to single sync:`, batchError);
+            for (const entry of chunk) {
+              await syncSingleEntryWithRetry(entry);
+            }
+          }
+        }
+      } else {
+        for (const entry of batch) {
+          await syncSingleEntryWithRetry(entry);
         }
       }
 
@@ -165,7 +327,8 @@ export function useAttendanceSync(employeeId: string | null) {
         }));
       }
     } catch (err) {
-      console.error('[AttendanceSync] Sync error:', err);
+      const errorRef = reportError(err, 'attendance.sync.performSync', { employeeId });
+      console.error(`[AttendanceSync ${errorRef}] Sync error:`, err);
     } finally {
       syncingRef.current = false;
       if (mountedRef.current) {
@@ -194,27 +357,47 @@ export function useAttendanceSync(employeeId: string | null) {
 
       // Auto sync if online and has pending
       if (navigator.onLine && pendingCount > 0) {
-        setTimeout(performSync, 2000);
+        const startupDelay = Math.max(1000, Math.floor(generateAdaptiveJitter(0) / 2));
+        window.setTimeout(performSync, startupDelay);
       }
     };
 
     init();
   }, [employeeId, performSync]);
 
-  // Periodic sync (every 30s if online and has pending)
+  // Periodic sync with adaptive interval + jitter (avoid thundering herd).
   useEffect(() => {
     if (!employeeId) return;
 
-    const interval = setInterval(async () => {
-      if (!navigator.onLine || syncingRef.current) return;
-      const pending = await getPendingEntries(employeeId);
-      if (pending.length > 0) {
-        performSync();
-      }
-    }, 30000);
+    let timer: number | null = null;
+    let stopped = false;
 
-    return () => clearInterval(interval);
-  }, [employeeId, performSync]);
+    const schedule = () => {
+      if (stopped) return;
+      const intervalMs = getAdaptiveSyncIntervalMs();
+      timer = window.setTimeout(async () => {
+        if (!navigator.onLine || syncingRef.current) {
+          schedule();
+          return;
+        }
+
+        const pending = await getPendingEntries(employeeId);
+        if (pending.length > 0) {
+          performSync();
+        }
+        schedule();
+      }, intervalMs);
+    };
+
+    schedule();
+
+    return () => {
+      stopped = true;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    };
+  }, [employeeId, performSync, getAdaptiveSyncIntervalMs]);
 
   // Cleanup on unmount
   useEffect(() => {

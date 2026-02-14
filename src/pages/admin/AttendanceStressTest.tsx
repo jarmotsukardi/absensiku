@@ -10,6 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useToast } from "@/hooks/use-toast";
 import {
   Play,
   Square,
@@ -37,6 +38,7 @@ import {
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from "recharts";
 
 export default function AttendanceStressTest() {
+  const { toast } = useToast();
   const [scenario, setScenario] = useState<string>("gradual");
   const [config, setConfig] = useState<StressTestConfig>(DEFAULT_CONFIGS.gradual);
   const [testState, setTestState] = useState<StressTestState | null>(null);
@@ -54,10 +56,19 @@ export default function AttendanceStressTest() {
   };
 
   const handleStart = useCallback(() => {
+    if (config.mode === "live" && config.totalUsers > 5000) {
+      toast({
+        title: "Live Test Dibatasi",
+        description: "Untuk keamanan, mode LIVE dibatasi maksimal 5.000 virtual users per run.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     const engine = new StressTestEngine(config, setTestState);
     engineRef.current = engine;
     engine.start();
-  }, [config]);
+  }, [config, toast]);
 
   const handleStop = useCallback(() => {
     engineRef.current?.abort();
@@ -123,6 +134,30 @@ export default function AttendanceStressTest() {
                 ))}
               </div>
 
+              <div className="space-y-2">
+                <Label className="text-xs">Staged Load Test (Rekomendasi Produksi)</Label>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { key: "stage_10k", label: "Tahap 10K" },
+                    { key: "stage_50k", label: "Tahap 50K" },
+                    { key: "stage_100k", label: "Tahap 100K" },
+                    { key: "stage_500k", label: "Tahap 500K" },
+                  ].map((stage) => (
+                    <Button
+                      key={stage.key}
+                      variant={scenario === stage.key ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => handleScenarioChange(stage.key)}
+                    >
+                      {stage.label}
+                    </Button>
+                  ))}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Jalankan bertahap: 10K → 50K → 100K → 500K, evaluasi p95 latency dan error rate di tiap tahap.
+                </p>
+              </div>
+
               <Separator />
 
               {/* Parameters */}
@@ -134,7 +169,7 @@ export default function AttendanceStressTest() {
                     value={config.totalUsers}
                     onChange={e => handleConfigChange('totalUsers', parseInt(e.target.value) || 100)}
                     min={10}
-                    max={50000}
+                    max={500000}
                   />
                 </div>
                 <div className="space-y-2">

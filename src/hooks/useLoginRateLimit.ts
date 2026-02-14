@@ -18,6 +18,26 @@ interface RateLimitState {
   lockoutUntil: number | null;
 }
 
+const parseBoolean = (value: unknown, fallback: boolean): boolean => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") {
+    if (value === 1) return true;
+    if (value === 0) return false;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
+  }
+  return fallback;
+};
+
+const parsePositiveInt = (value: unknown, fallback: number): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return parsed > 0 ? Math.floor(parsed) : fallback;
+};
+
 export function useLoginRateLimit(storageKey: string = "login_rate_limit") {
   const [config, setConfig] = useState<RateLimitConfig>(DEFAULT_CONFIG);
   const [configLoaded, setConfigLoaded] = useState(false);
@@ -67,10 +87,12 @@ export function useLoginRateLimit(storageKey: string = "login_rate_limit") {
       if (data?.value && typeof data.value === "object" && !Array.isArray(data.value)) {
         const value = data.value as Partial<RateLimitConfig>;
         setConfig({
-          enabled: typeof value.enabled === "boolean" ? value.enabled : DEFAULT_CONFIG.enabled,
-          max_attempts: Number(value.max_attempts) || DEFAULT_CONFIG.max_attempts,
-          lockout_duration_minutes:
-            Number(value.lockout_duration_minutes) || DEFAULT_CONFIG.lockout_duration_minutes,
+          enabled: parseBoolean(value.enabled, DEFAULT_CONFIG.enabled),
+          max_attempts: parsePositiveInt(value.max_attempts, DEFAULT_CONFIG.max_attempts),
+          lockout_duration_minutes: parsePositiveInt(
+            value.lockout_duration_minutes,
+            DEFAULT_CONFIG.lockout_duration_minutes
+          ),
         });
       } else {
         setConfig(DEFAULT_CONFIG);

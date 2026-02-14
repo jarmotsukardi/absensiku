@@ -55,7 +55,13 @@ export default function StreakMonitoring() {
         .select("value")
         .eq("key", "streak_threshold")
         .maybeSingle();
-      if (data) setStreakThreshold((data.value as any)?.value ?? 30);
+      if (!data?.value) return;
+
+      const rawValue = (data.value as { value?: unknown })?.value;
+      const parsedValue = Math.floor(Number(rawValue));
+      if (Number.isFinite(parsedValue) && parsedValue > 0) {
+        setStreakThreshold(parsedValue);
+      }
     } catch {}
   };
 
@@ -89,24 +95,47 @@ export default function StreakMonitoring() {
     !searchQuery || s.tenants?.name?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const activeStreaks = filtered.filter(s => s.streak_count > 0 && !s.reached_target && s.status === "tracking");
-  const nearSuspension = filtered.filter(s => s.status === "ready_for_invoicing" || s.status === "grace_period");
-  const suspended = filtered.filter(s => s.status === "suspended" || s.status === "expired");
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const isGraceExpired = (item: StreakItem): boolean => {
+    if (!item.grace_period_end) return false;
+    const graceEndDate = new Date(`${item.grace_period_end}T00:00:00`);
+    return graceEndDate < today;
+  };
+
+  const isSuspended = (item: StreakItem): boolean =>
+    Boolean(item.reached_target) && item.status !== "invoiced" && isGraceExpired(item);
+
+  const isNearSuspension = (item: StreakItem): boolean =>
+    Boolean(item.reached_target) && item.status !== "invoiced" && !isGraceExpired(item);
+
+  const isActiveTracking = (item: StreakItem): boolean =>
+    item.status === "tracking" && !item.reached_target;
+
+  const activeStreaks = filtered.filter(isActiveTracking);
+  const nearSuspension = filtered.filter(isNearSuspension);
+  const suspended = filtered.filter(isSuspended);
 
   const totalCount = streaks.length;
-  const activeCount = streaks.filter(s => s.streak_count > 0 && !s.reached_target).length;
-  const readyCount = streaks.filter(s => s.status === "ready_for_invoicing").length;
-  const suspendedCount = streaks.filter(s => s.status === "suspended" || s.status === "expired").length;
+  const activeCount = streaks.filter(isActiveTracking).length;
+  const readyCount = streaks.filter(isNearSuspension).length;
+  const suspendedCount = streaks.filter(isSuspended).length;
 
-  const statusBadge = (status: string) => {
-    switch (status) {
+  const statusBadge = (item: StreakItem) => {
+    if (isSuspended(item)) {
+      return <Badge variant="destructive">Suspended</Badge>;
+    }
+
+    switch (item.status) {
       case "ready_for_invoicing": return <Badge className="bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400">Ready</Badge>;
       case "grace_period": return <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Grace Period</Badge>;
       case "invoiced": return <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">Invoiced</Badge>;
-      case "suspended": case "expired": return <Badge variant="destructive">Suspended</Badge>;
       default: return <Badge variant="outline">Tracking</Badge>;
     }
   };
+
+  const safeThreshold = streakThreshold > 0 ? streakThreshold : 30;
 
   const renderTable = (data: StreakItem[]) => (
     data.length === 0 ? (
@@ -130,15 +159,15 @@ export default function StreakMonitoring() {
                 <TableCell className="font-medium">{s.tenants?.name || "-"}</TableCell>
                 <TableCell>
                   <div className="flex items-center gap-1">
-                    <Flame className={cn("w-4 h-4", s.streak_count >= streakThreshold - 5 ? "text-orange-500" : "text-muted-foreground")} />
+                    <Flame className={cn("w-4 h-4", s.streak_count >= Math.max(safeThreshold - 5, 1) ? "text-orange-500" : "text-muted-foreground")} />
                     <span className="font-bold">{s.streak_count}</span>
-                    <span className="text-xs text-muted-foreground">/{streakThreshold}</span>
+                    <span className="text-xs text-muted-foreground">/{safeThreshold}</span>
                   </div>
                 </TableCell>
                 <TableCell className="min-w-[120px]">
-                  <Progress value={Math.min((s.streak_count / streakThreshold) * 100, 100)} className="h-2" />
+                  <Progress value={Math.min((s.streak_count / safeThreshold) * 100, 100)} className="h-2" />
                 </TableCell>
-                <TableCell>{statusBadge(s.status)}</TableCell>
+                <TableCell>{statusBadge(s)}</TableCell>
                 <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                   {s.last_activity_date ? format(new Date(s.last_activity_date), "dd MMM yyyy", { locale: idLocale }) : "-"}
                 </TableCell>
@@ -167,7 +196,7 @@ export default function StreakMonitoring() {
         </CardContent></Card>
         <Card><CardContent className="p-4 flex items-center gap-3">
           <div className="p-2 rounded-lg bg-green-500/10"><CheckCircle2 className="w-5 h-5 text-green-500" /></div>
-          <div><p className="text-2xl font-bold">{readyCount}</p><p className="text-xs text-muted-foreground">Ready</p></div>
+          <div><p className="text-2xl font-bold">{readyCount}</p><p className="text-xs text-muted-foreground">Near Suspension</p></div>
         </CardContent></Card>
         <Card><CardContent className="p-4 flex items-center gap-3">
           <div className="p-2 rounded-lg bg-destructive/10"><AlertTriangle className="w-5 h-5 text-destructive" /></div>

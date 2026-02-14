@@ -42,6 +42,104 @@ function getConfig() {
 }
 
 const CB_STORAGE_KEY = 'attendance_circuit_breaker';
+const DYNAMIC_PEAK_STORAGE_KEY = 'attendance_dynamic_peak_windows_v1';
+
+interface DynamicPeakWindow {
+  startMinute: number;
+  endMinute: number;
+}
+
+interface DynamicPeakPayload {
+  windows: DynamicPeakWindow[];
+  updatedAt: string;
+}
+
+function normalizeMinute(minute: number): number {
+  if (!Number.isFinite(minute)) return 0;
+  const normalized = Math.floor(minute) % 1440;
+  return normalized < 0 ? normalized + 1440 : normalized;
+}
+
+function parseTimeToMinute(value?: string | null): number | null {
+  if (!value) return null;
+  const [h, m] = value.split(':');
+  const hours = Number(h);
+  const minutes = Number(m);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
+  return (hours * 60) + minutes;
+}
+
+function isInWindow(current: number, window: DynamicPeakWindow): boolean {
+  // Handle cross-midnight windows
+  if (window.startMinute <= window.endMinute) {
+    return current >= window.startMinute && current <= window.endMinute;
+  }
+  return current >= window.startMinute || current <= window.endMinute;
+}
+
+function loadDynamicPeakWindows(): DynamicPeakWindow[] {
+  try {
+    const raw = localStorage.getItem(DYNAMIC_PEAK_STORAGE_KEY);
+    if (!raw) return [];
+    const payload = JSON.parse(raw) as DynamicPeakPayload;
+    if (!payload?.updatedAt || !Array.isArray(payload.windows)) return [];
+
+    // Expire after 48h to avoid stale schedule.
+    const ageMs = Date.now() - new Date(payload.updatedAt).getTime();
+    if (!Number.isFinite(ageMs) || ageMs > (48 * 60 * 60 * 1000)) return [];
+
+    return payload.windows.filter((w) => (
+      Number.isFinite(w.startMinute) && Number.isFinite(w.endMinute)
+    ));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Set dynamic peak windows based on work hours schedule.
+ * Each shift contributes 2 windows:
+ * - near check-in: time_in - 60m .. time_in + 30m
+ * - near check-out: time_out - 30m .. time_out + 60m
+ */
+export function setDynamicPeakWindowsFromWorkHours(
+  workHours: Array<{ time_in?: string | null; time_out?: string | null }>,
+): void {
+  try {
+    const windows: DynamicPeakWindow[] = [];
+
+    for (const row of workHours) {
+      const inMinute = parseTimeToMinute(row.time_in);
+      const outMinute = parseTimeToMinute(row.time_out);
+
+      if (inMinute !== null) {
+        windows.push({
+          startMinute: normalizeMinute(inMinute - 60),
+          endMinute: normalizeMinute(inMinute + 30),
+        });
+      }
+
+      if (outMinute !== null) {
+        windows.push({
+          startMinute: normalizeMinute(outMinute - 30),
+          endMinute: normalizeMinute(outMinute + 60),
+        });
+      }
+    }
+
+    if (windows.length === 0) return;
+
+    const payload: DynamicPeakPayload = {
+      windows,
+      updatedAt: new Date().toISOString(),
+    };
+
+    localStorage.setItem(DYNAMIC_PEAK_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    return;
+  }
+}
 
 // ==================== 1. ADAPTIVE JITTER ====================
 
@@ -50,7 +148,15 @@ const CB_STORAGE_KEY = 'attendance_circuit_breaker';
  * Peak: 06:00-09:00 (check-in) dan 15:00-18:00 (check-out)
  */
 export function isPeakHours(): boolean {
-  const hour = new Date().getHours();
+  const now = new Date();
+  const currentMinute = (now.getHours() * 60) + now.getMinutes();
+  const dynamicWindows = loadDynamicPeakWindows();
+
+  if (dynamicWindows.length > 0) {
+    return dynamicWindows.some((window) => isInWindow(currentMinute, window));
+  }
+
+  const hour = now.getHours();
   return (hour >= 6 && hour <= 9) || (hour >= 15 && hour <= 18);
 }
 
@@ -193,7 +299,9 @@ function getDefaultCBState(): CircuitBreakerState {
 function saveCircuitBreaker(state: CircuitBreakerState): void {
   try {
     localStorage.setItem(CB_STORAGE_KEY, JSON.stringify(state));
-  } catch {}
+  } catch {
+    return;
+  }
 }
 
 /**

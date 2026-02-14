@@ -37,7 +37,7 @@ interface SystemSetting {
   updated_at: string;
 }
 
-export default function DatabaseManagement() {
+export default function DatabaseManagement({ embedded = false }: { embedded?: boolean }) {
   const [tableStats, setTableStats] = useState<TableStats[]>([]);
   const [systemSettings, setSystemSettings] = useState<SystemSetting[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -151,7 +151,7 @@ export default function DatabaseManagement() {
     'Organisasi (Tenants)': 'tenants',
     'Pegawai (Employees)': 'employees',
     'Kantor (Offices)': 'offices',
-    'Absensi (Attendance)': 'attendance_records',
+    'Absensi (Attendance)': 'attendance_records_partitioned',
     'Pengajuan Cuti (Leave)': 'leave_requests',
     'Role Pengguna': 'user_roles',
     'Hari Libur': 'holidays',
@@ -159,12 +159,8 @@ export default function DatabaseManagement() {
     'Notifikasi': 'notifications',
   };
 
-  return (
-    <SuperAdminLayout
-      title="Manajemen Database"
-      subtitle="Kelola dan monitor database sistem"
-    >
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+  const content = (
+    <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
         <TabsList>
           <TabsTrigger value="overview">
             <Database className="h-4 w-4 mr-2" />
@@ -375,7 +371,19 @@ export default function DatabaseManagement() {
             </CardContent>
           </Card>
         </TabsContent>
-      </Tabs>
+    </Tabs>
+  );
+
+  if (embedded) {
+    return content;
+  }
+
+  return (
+    <SuperAdminLayout
+      title="Manajemen Database"
+      subtitle="Kelola dan monitor database sistem"
+    >
+      {content}
     </SuperAdminLayout>
   );
 }

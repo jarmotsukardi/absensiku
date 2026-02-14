@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User, Session } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
@@ -16,9 +16,11 @@ import { formatToTimezone, formatTimeToTimezone, getCurrentTimeInTimezone } from
 import { format, isBefore, startOfDay } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { useDeviceBinding } from "@/hooks/useDeviceBinding";
+import { useAttendance } from "@/hooks/useAttendance";
 import { useAttendanceValidation } from "@/hooks/useAttendanceValidation";
 import { useSecurityCheck } from "@/hooks/useSecurityCheck";
 import { useWorkShifts } from "@/hooks/useWorkShifts";
+import { saveScalabilityConfig, type ScalabilityTier } from "@/lib/scalabilityConfig";
 import { CheckoutConfirmDialog } from "@/components/employee/CheckoutConfirmDialog";
 import { DesktopBlockedMessage } from "@/components/employee/DesktopBlockedMessage";
 import { DeviceRegistrationDialog } from "@/components/employee/DeviceRegistrationDialog";
@@ -128,7 +130,7 @@ interface NewsItem {
 }
 
 // Pending state type untuk optimistic UI
-type PendingStatus = 'idle' | 'pending' | 'processing' | 'success' | 'error';
+type PendingStatus = 'idle' | 'pending' | 'buffered' | 'jitter' | 'processing' | 'success' | 'error' | 'circuit_open';
 interface PendingState {
   status: PendingStatus;
   type: 'check_in' | 'check_out' | null;
@@ -159,6 +161,7 @@ const getTodayDateString = (timezone: string): string => {
 
 export default function EmployeeDashboardNew() {
   const navigate = useNavigate();
+  const location = useLocation();
   
   // Session management dengan sliding expiration 7 hari
   const sessionManagement = useSessionManagement();
@@ -204,6 +207,10 @@ export default function EmployeeDashboardNew() {
   // Selected shift untuk auto-shift
   const [selectedShiftId, setSelectedShiftId] = useState<string | null>(null);
   const [pendingFlexibleReason, setPendingFlexibleReason] = useState<string | null>(null);
+  const [pendingAttendanceMeta, setPendingAttendanceMeta] = useState<{
+    shiftId: string | null;
+    flexibleReason: string | null;
+  } | null>(null);
   
   // State untuk optimistic UI
   const [pendingState, setPendingState] = useState<PendingState>({
@@ -248,6 +255,15 @@ export default function EmployeeDashboardNew() {
       ? "pemerintahan" 
       : tenantInfo?.organization_type || "pemerintahan"
   );
+
+  const {
+    todayAttendance: offlineTodayAttendance,
+    isSubmitting: offlineSubmitting,
+    pendingState: offlinePendingState,
+    checkIn: saveCheckInOffline,
+    checkOut: saveCheckOutOffline,
+    syncStats: offlineSyncStats,
+  } = useAttendance(employee?.id || null, employee?.office_id || null);
 
   // Handler ketika loading screen selesai
   const handleLoadingComplete = useCallback(() => {
@@ -340,6 +356,132 @@ export default function EmployeeDashboardNew() {
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   }, [activeTab]);
+
+  // Sinkronkan tab dari query param, contoh: /employee/dashboard?tab=activation
+  useEffect(() => {
+    const tab = new URLSearchParams(location.search).get("tab");
+    const allowedTabs = new Set([
+      "home",
+      "history",
+      "requests",
+      "help",
+      "profile",
+      "news",
+      "articles",
+      "announcements",
+      "notifications",
+      "activation",
+    ]);
+
+    if (tab && allowedTabs.has(tab)) {
+      setActiveTab(tab as typeof activeTab);
+    }
+  }, [location.search]);
+
+  // Sinkronisasi state absensi dari offline-first hook ke UI dashboard ini
+  useEffect(() => {
+    if (!offlineTodayAttendance) return;
+
+    const mappedRecord: AttendanceRecord = {
+      id: String(offlineTodayAttendance.id),
+      date: offlineTodayAttendance.date,
+      check_in_time: offlineTodayAttendance.check_in_time,
+      check_out_time: offlineTodayAttendance.check_out_time,
+      check_in_latitude: offlineTodayAttendance.check_in_latitude,
+      check_in_longitude: offlineTodayAttendance.check_in_longitude,
+      status: offlineTodayAttendance.status || "hadir",
+      notes: offlineTodayAttendance.notes,
+      is_wfh: offlineTodayAttendance.is_wfh,
+      is_flexible_attendance: offlineTodayAttendance.is_flexible_attendance,
+      flexible_attendance_reason: offlineTodayAttendance.flexible_attendance_reason,
+    };
+
+    const currentAtt = todayAttendanceRef.current;
+    const isChanged =
+      !currentAtt ||
+      currentAtt.id !== mappedRecord.id ||
+      currentAtt.check_in_time !== mappedRecord.check_in_time ||
+      currentAtt.check_out_time !== mappedRecord.check_out_time ||
+      currentAtt.status !== mappedRecord.status;
+
+    if (isChanged) {
+      todayAttendanceRef.current = mappedRecord;
+      setTodayAttendance(mappedRecord);
+    }
+  }, [offlineTodayAttendance]);
+
+  useEffect(() => {
+    setIsSubmitting(offlineSubmitting);
+  }, [offlineSubmitting]);
+
+  useEffect(() => {
+    setPendingState((prev) => {
+      const next: PendingState = {
+        status: offlinePendingState.status as PendingStatus,
+        type: offlinePendingState.type,
+        message: offlinePendingState.message,
+      };
+      if (
+        prev.status === next.status &&
+        prev.type === next.type &&
+        prev.message === next.message
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, [offlinePendingState.status, offlinePendingState.type, offlinePendingState.message]);
+
+  // Setelah background sync selesai, refresh data server agar UI konsisten.
+  useEffect(() => {
+    if (!offlineSyncStats.lastSyncAt || offlineSyncStats.syncedCount <= 0) return;
+    fetchData();
+  }, [offlineSyncStats.lastSyncAt, offlineSyncStats.syncedCount]);
+
+  // Terapkan metadata absensi (shift/flexible) setelah record berhasil sinkron ke server.
+  useEffect(() => {
+    if (!pendingAttendanceMeta) return;
+    if (!todayAttendance?.id || !todayAttendance?.date) return;
+    if (
+      todayAttendance.id.startsWith("pending-") ||
+      todayAttendance.id.startsWith("idb-") ||
+      todayAttendance.id.startsWith("buffer-")
+    ) {
+      return;
+    }
+
+    const applyMetadata = async () => {
+      const updates: Record<string, unknown> = {};
+      if (pendingAttendanceMeta.shiftId) {
+        updates.shift_id = pendingAttendanceMeta.shiftId;
+      }
+      if (pendingAttendanceMeta.flexibleReason) {
+        updates.is_flexible_attendance = true;
+        updates.flexible_attendance_reason = pendingAttendanceMeta.flexibleReason;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        setPendingAttendanceMeta(null);
+        return;
+      }
+
+      const { error } = await supabase
+        .from("attendance_records_partitioned")
+        .update(updates)
+        .eq("id", todayAttendance.id)
+        .eq("date", todayAttendance.date);
+
+      if (error) {
+        console.error("Error applying attendance metadata:", error);
+        return;
+      }
+
+      setPendingAttendanceMeta(null);
+      fetchData();
+    };
+
+    applyMetadata();
+  }, [pendingAttendanceMeta, todayAttendance?.id, todayAttendance?.date]);
 
   // Get current device ID menggunakan utility tunggal
   const getCurrentDeviceId = (): string => {
@@ -511,7 +653,7 @@ export default function EmployeeDashboardNew() {
       const todayDayOfWeek = new Date().getDay() === 0 ? 7 : new Date().getDay();
 
       // Semua promise independen dijalankan bersamaan
-      const [tenantResult, deviceUpdateResult] = await Promise.all([
+      const [tenantResult, deviceUpdateResult, scalabilityResult] = await Promise.all([
         // 1. Fetch tenant info
         supabase
           .from("tenants")
@@ -534,6 +676,21 @@ export default function EmployeeDashboardNew() {
           }
           return Promise.resolve(null);
         })(),
+
+        // 3. Fetch profil skalabilitas global (dari admin settings)
+        supabase
+          .from("system_settings")
+          .select("value")
+          .eq("key", "attendance_scalability")
+          .maybeSingle()
+          .then(({ data, error }) => {
+            if (error) {
+              console.warn("[Scalability] Global profile unavailable, fallback to local:", error.message);
+              return { data: null };
+            }
+            return { data };
+          })
+          .catch(() => ({ data: null })),
       ]);
 
       const tenantData = tenantResult.data;
@@ -541,6 +698,12 @@ export default function EmployeeDashboardNew() {
         setTenantInfo(tenantData);
         setTimezone(tenantData.timezone || "Asia/Jakarta");
         setBillingMode((tenantData as any).billing_mode || "centralized");
+      }
+
+      const scalabilityValue = scalabilityResult?.data?.value as { tier?: string } | null;
+      const tier = scalabilityValue?.tier;
+      if (tier && ["small", "medium", "large", "enterprise"].includes(tier)) {
+        saveScalabilityConfig(tier as ScalabilityTier);
       }
 
       // Sekarang kita punya timezone & organization_type, jalankan batch kedua secara paralel
@@ -725,7 +888,7 @@ export default function EmployeeDashboardNew() {
   };
 
   // Handler untuk konfirmasi shift selection
-  const handleShiftSelection = (shiftId: string, isMissedShift: boolean) => {
+  const handleShiftSelection = (shiftId: string, _isMissedShift: boolean) => {
     setSelectedShiftId(shiftId);
     setShowShiftSelection(false);
     
@@ -743,17 +906,8 @@ export default function EmployeeDashboardNew() {
   };
 
   // Proses check-in normal (dalam radius kantor)
-  const proceedWithCheckInNormal = async (shiftId: string | null, flexibleReason: string | null) => {
+  const proceedWithCheckInNormal = async (_shiftId: string | null, flexibleReason: string | null) => {
     if (!employee) return;
-    
-    const validation = await attendanceValidation.validateToday();
-    
-    setPendingState({ 
-      status: 'pending', 
-      type: 'check_in', 
-      message: 'Absensi diterima, sedang diproses...' 
-    });
-    setIsSubmitting(true);
 
     try {
       let lat: number, lng: number;
@@ -768,235 +922,58 @@ export default function EmployeeDashboardNew() {
         setCurrentLocation({ lat, lng });
       }
 
-      // Validasi radius kantor
       const office = employee.offices;
-      if (office?.latitude && office?.longitude) {
-        const distance = calculateDistance(lat, lng, office.latitude, office.longitude);
-        const radiusLimit = office.radius_meters || 100;
-        
-        if (distance > radiusLimit && !flexibleReason) {
-          setPendingState({ status: 'idle', type: null, message: '' });
-          setIsSubmitting(false);
-          toast.error("Di Luar Radius Kantor", {
-            description: `Anda berada ${Math.round(distance)}m dari kantor. Maksimal ${radiusLimit}m.`,
-          });
-          return;
-        }
+      if (!office) {
+        toast.error("Gagal Absen Masuk", {
+          description: "Lokasi kantor belum tersedia untuk akun ini.",
+        });
+        return;
       }
 
-      // Register device jika pertama kali (device binding enabled)
-      if (deviceBinding.isEnabled && deviceBinding.isFirstTime) {
-        await deviceBinding.registerDevice();
+      // Flexible attendance tetap diizinkan dengan bypass radius lokal.
+      const officeForCheckIn = flexibleReason
+        ? { ...office, radius_meters: Math.max(office.radius_meters || 100, 9999999) }
+        : office;
+
+      const result = await saveCheckInOffline(lat, lng, officeForCheckIn as any);
+      if (!result.success) {
+        toast.error("Gagal Absen Masuk", {
+          description: result.message || "Terjadi kesalahan",
+        });
+        return;
       }
 
-      // Calculate status (hadir/terlambat)
-      const checkInTime = new Date();
-      const status = attendanceValidation.calculateStatus(checkInTime, validation.workHour);
-      const attendanceDate = getTodayDateString(tenantInfo?.timezone || timezone || "Asia/Jakarta");
-
-      // Optimistic update untuk UI
-      const optimisticRecord: AttendanceRecord = {
-        id: 'pending-' + Date.now(),
-        date: attendanceDate,
-        check_in_time: checkInTime.toISOString(),
-        check_out_time: null,
-        check_in_latitude: lat,
-        check_in_longitude: lng,
-        status,
-      };
-      setTodayAttendance(optimisticRecord);
-
-      // Update status ke processing
-      setPendingState({ 
-        status: 'processing', 
-        type: 'check_in', 
-        message: 'Menyimpan data absensi...' 
-      });
-
-      const officeId = (employee.offices as any)?.id || employee.office_id;
-      
-      // Prepare insert data dengan optional fields
-      const insertData: any = {
-        employee_id: employee.id,
-        office_id: officeId,
-        date: attendanceDate,
-        check_in_time: checkInTime.toISOString(),
-        check_in_latitude: lat,
-        check_in_longitude: lng,
-        check_in_distance_meters: office?.latitude ? Math.round(calculateDistance(lat, lng, office.latitude, office.longitude)) : null,
-        status,
-      };
-      
-      // Tambahkan shift_id jika ada
-      if (shiftId) {
-        insertData.shift_id = shiftId;
-      }
-      
-      // Tambahkan flexible attendance info jika ada
-      if (flexibleReason) {
-        insertData.is_flexible_attendance = true;
-        insertData.flexible_attendance_reason = flexibleReason;
-      }
-
-      const { data, error } = await supabase
-        .from("attendance_records_partitioned")
-        .insert(insertData)
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      setTodayAttendance(data);
       setWorkDayError(null);
       setSelectedShiftId(null);
       setPendingFlexibleReason(null);
-      
-      // Set success status
-      let statusText = status === "terlambat" ? " (Terlambat)" : "";
-      if (flexibleReason) {
-        statusText = ` - ${flexibleReason}`;
+      if (_shiftId || flexibleReason) {
+        setPendingAttendanceMeta({
+          shiftId: _shiftId,
+          flexibleReason,
+        });
+      } else {
+        setPendingAttendanceMeta(null);
       }
-      setPendingState({ 
-        status: 'success', 
-        type: 'check_in', 
-        message: `Absen masuk berhasil!${statusText}` 
-      });
 
-      toast.success(`Absen Masuk Berhasil!${statusText}`, {
-        description: flexibleReason ? `Absensi Khusus: ${flexibleReason}` : `Lokasi: ${lat.toFixed(4)}, ${lng.toFixed(4)}`,
-      });
+      let statusText = "";
+      if (flexibleReason) {
+        statusText = ` (${flexibleReason})`;
+      }
 
-      // Reset pending state setelah 3 detik
-      setTimeout(() => {
-        setPendingState({ status: 'idle', type: null, message: '' });
-      }, 3000);
+      toast.success(`Absen Masuk Tersimpan${statusText}`, {
+        description: result.message || `Lokasi: ${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+      });
     } catch (error: any) {
       console.error("Check-in error:", error);
-      
-      // Rollback optimistic update
-      setTodayAttendance(null);
-      
-      setPendingState({ 
-        status: 'error', 
-        type: 'check_in', 
-        message: 'Gagal menyimpan absensi. Silakan coba lagi.' 
-      });
-
       toast.error("Gagal Absen Masuk", {
         description: error.message || "Terjadi kesalahan",
       });
-
-      setTimeout(() => {
-        setPendingState({ status: 'idle', type: null, message: '' });
-      }, 5000);
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
   // Proses check-in dengan flexible attendance (di luar radius kantor)
   const proceedWithFlexibleCheckIn = async (reason: string) => {
-    if (!employee || !currentLocation) return;
-    
-    const validation = await attendanceValidation.validateToday();
-    
-    setPendingState({ 
-      status: 'pending', 
-      type: 'check_in', 
-      message: 'Absensi khusus diterima, sedang diproses...' 
-    });
-    setIsSubmitting(true);
-
-    try {
-      const lat = currentLocation.lat;
-      const lng = currentLocation.lng;
-
-      // Calculate status (hadir - tidak dianggap terlambat untuk absensi khusus)
-      const checkInTime = new Date();
-      const status = "hadir"; // Absensi khusus selalu hadir
-      const attendanceDate = getTodayDateString(tenantInfo?.timezone || timezone || "Asia/Jakarta");
-
-      // Optimistic update untuk UI
-      const optimisticRecord: AttendanceRecord = {
-        id: 'pending-' + Date.now(),
-        date: attendanceDate,
-        check_in_time: checkInTime.toISOString(),
-        check_out_time: null,
-        check_in_latitude: lat,
-        check_in_longitude: lng,
-        status,
-      };
-      setTodayAttendance(optimisticRecord);
-
-      // Update status ke processing
-      setPendingState({ 
-        status: 'processing', 
-        type: 'check_in', 
-        message: 'Menyimpan data absensi khusus...' 
-      });
-
-      const officeId = (employee.offices as any)?.id || employee.office_id;
-      const office = employee.offices;
-      
-      const { data, error } = await supabase
-        .from("attendance_records_partitioned")
-        .insert({
-          employee_id: employee.id,
-          office_id: officeId,
-          date: attendanceDate,
-          check_in_time: checkInTime.toISOString(),
-          check_in_latitude: lat,
-          check_in_longitude: lng,
-          check_in_distance_meters: office?.latitude ? Math.round(calculateDistance(lat, lng, office.latitude, office.longitude)) : null,
-          status,
-          is_flexible_attendance: true,
-          flexible_attendance_reason: reason,
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      setTodayAttendance(data);
-      setWorkDayError(null);
-      setPendingFlexibleReason(null);
-      
-      setPendingState({ 
-        status: 'success', 
-        type: 'check_in', 
-        message: `Absen khusus berhasil! (${reason})` 
-      });
-
-      toast.success("Absen Khusus Berhasil!", {
-        description: `Keterangan: ${reason}`,
-      });
-
-      // Reset pending state setelah 3 detik
-      setTimeout(() => {
-        setPendingState({ status: 'idle', type: null, message: '' });
-      }, 3000);
-    } catch (error: any) {
-      console.error("Flexible check-in error:", error);
-      
-      // Rollback optimistic update
-      setTodayAttendance(null);
-      
-      setPendingState({ 
-        status: 'error', 
-        type: 'check_in', 
-        message: 'Gagal menyimpan absensi khusus.' 
-      });
-
-      toast.error("Gagal Absen Khusus", {
-        description: error.message || "Terjadi kesalahan",
-      });
-
-      setTimeout(() => {
-        setPendingState({ status: 'idle', type: null, message: '' });
-      }, 5000);
-    } finally {
-      setIsSubmitting(false);
-    }
+    await proceedWithCheckInNormal(selectedShiftId, reason);
   };
 
   const handleCheckOut = async () => {
@@ -1010,111 +987,37 @@ export default function EmployeeDashboardNew() {
       return;
     }
 
-    // Validasi radius kantor
     const office = employee.offices;
-    
-    // OPTIMISTIC UI: Langsung set pending status
-    setPendingState({ 
-      status: 'pending', 
-      type: 'check_out', 
-      message: 'Absensi pulang diterima, sedang diproses...' 
-    });
-    setIsSubmitting(true);
 
     try {
+      if (!office) {
+        toast.error("Gagal Absen Pulang", {
+          description: "Lokasi kantor belum tersedia untuk akun ini.",
+        });
+        return;
+      }
+
       const position = await getCurrentPosition();
       const lat = position.coords.latitude;
       const lng = position.coords.longitude;
 
-      // Validasi radius
-      if (office?.latitude && office?.longitude) {
-        const distance = calculateDistance(lat, lng, office.latitude, office.longitude);
-        const radiusLimit = office.radius_meters || 100;
-        
-        if (distance > radiusLimit) {
-          setPendingState({ status: 'idle', type: null, message: '' });
-          setIsSubmitting(false);
-          toast.error("Di Luar Radius Kantor", {
-            description: `Anda berada ${Math.round(distance)}m dari kantor. Maksimal ${radiusLimit}m.`,
-          });
-          return;
-        }
+      const result = await saveCheckOutOffline(lat, lng, office as any);
+      if (!result.success) {
+        toast.error("Gagal Absen Pulang", {
+          description: result.message || "Terjadi kesalahan",
+        });
+        return;
       }
 
-      // Calculate checkout status
-      const checkOutTime = new Date();
-      const validation = await attendanceValidation.validateToday();
-      const newStatus = attendanceValidation.calculateCheckoutStatus(
-        checkOutTime, 
-        todayAttendance.status, 
-        validation.workHour
-      );
-
-      // Optimistic update
-      setTodayAttendance({
-        ...todayAttendance,
-        check_out_time: checkOutTime.toISOString(),
-        status: newStatus,
+      toast.success("Absen Pulang Tersimpan", {
+        description: result.message || `Lokasi: ${lat.toFixed(4)}, ${lng.toFixed(4)}`,
       });
-
-      setPendingState({ 
-        status: 'processing', 
-        type: 'check_out', 
-        message: 'Menyimpan data absensi pulang...' 
-      });
-
-      const { error } = await supabase
-        .from("attendance_records_partitioned")
-        .update({
-          check_out_time: checkOutTime.toISOString(),
-          check_out_latitude: lat,
-          check_out_longitude: lng,
-          check_out_distance_meters: office?.latitude ? Math.round(calculateDistance(lat, lng, office.latitude, office.longitude)) : null,
-          status: newStatus as "hadir" | "terlambat" | "pulang_cepat" | "terlambat_pulang_cepat",
-        })
-        .eq("id", todayAttendance.id)
-        .eq("date", todayAttendance.date); // Wajib untuk partitioned table
-
-      if (error) throw error;
-
-      const statusText = newStatus.includes("pulang_cepat") ? " (Pulang Cepat)" : "";
-      setPendingState({ 
-        status: 'success', 
-        type: 'check_out', 
-        message: `Absen pulang berhasil!${statusText}` 
-      });
-      
-      toast.success(`Absen Pulang Berhasil!${statusText}`, {
-        description: `Lokasi: ${lat.toFixed(4)}, ${lng.toFixed(4)}`,
-      });
-
-      setTimeout(() => {
-        setPendingState({ status: 'idle', type: null, message: '' });
-      }, 3000);
     } catch (error: any) {
       console.error("Check-out error:", error);
-      
-      // Rollback optimistic update
-      setTodayAttendance({
-        ...todayAttendance,
-        check_out_time: null,
-      });
-      
-      setPendingState({ 
-        status: 'error', 
-        type: 'check_out', 
-        message: 'Gagal menyimpan absensi pulang. Silakan coba lagi.' 
-      });
 
       toast.error("Gagal Absen Pulang", {
         description: error.message || "Terjadi kesalahan",
       });
-
-      setTimeout(() => {
-        setPendingState({ status: 'idle', type: null, message: '' });
-      }, 5000);
-    } finally {
-      setIsSubmitting(false);
     }
   };
 
@@ -1243,115 +1146,7 @@ export default function EmployeeDashboardNew() {
 
   // Fungsi internal untuk melanjutkan check-in setelah device terdaftar
   const proceedWithCheckIn = async () => {
-    if (!employee) return;
-    
-    const validation = await attendanceValidation.validateToday();
-    
-    setPendingState({ 
-      status: 'pending', 
-      type: 'check_in', 
-      message: 'Absensi diterima, sedang diproses...' 
-    });
-    setIsSubmitting(true);
-
-    try {
-      const position = await getCurrentPosition();
-      const lat = position.coords.latitude;
-      const lng = position.coords.longitude;
-
-      setCurrentLocation({ lat, lng });
-
-      const office = employee.offices;
-      if (office?.latitude && office?.longitude) {
-        const distance = calculateDistance(lat, lng, office.latitude, office.longitude);
-        const radiusLimit = office.radius_meters || 100;
-        
-        if (distance > radiusLimit) {
-          setPendingState({ status: 'idle', type: null, message: '' });
-          setIsSubmitting(false);
-          toast.error("Di Luar Radius Kantor", {
-            description: `Anda berada ${Math.round(distance)}m dari kantor. Maksimal ${radiusLimit}m.`,
-          });
-          return;
-        }
-      }
-
-      const checkInTime = new Date();
-      const status = attendanceValidation.calculateStatus(checkInTime, validation.workHour);
-      const attendanceDate = getTodayDateString(tenantInfo?.timezone || timezone || "Asia/Jakarta");
-
-      const optimisticRecord: AttendanceRecord = {
-        id: 'pending-' + Date.now(),
-        date: attendanceDate,
-        check_in_time: checkInTime.toISOString(),
-        check_out_time: null,
-        check_in_latitude: lat,
-        check_in_longitude: lng,
-        status,
-      };
-      setTodayAttendance(optimisticRecord);
-
-      setPendingState({ 
-        status: 'processing', 
-        type: 'check_in', 
-        message: 'Menyimpan data absensi...' 
-      });
-
-      const officeId = (employee.offices as any)?.id || employee.office_id;
-      const { data, error } = await supabase
-        .from("attendance_records_partitioned")
-        .insert({
-          employee_id: employee.id,
-          office_id: officeId,
-          date: attendanceDate,
-          check_in_time: checkInTime.toISOString(),
-          check_in_latitude: lat,
-          check_in_longitude: lng,
-          check_in_distance_meters: office?.latitude ? Math.round(calculateDistance(lat, lng, office.latitude, office.longitude)) : null,
-          status,
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      setTodayAttendance(data);
-      setWorkDayError(null);
-      
-      const statusText = status === "terlambat" ? " (Terlambat)" : "";
-      setPendingState({ 
-        status: 'success', 
-        type: 'check_in', 
-        message: `Absen masuk berhasil!${statusText}` 
-      });
-
-      toast.success(`Absen Masuk Berhasil!${statusText}`, {
-        description: `Lokasi: ${lat.toFixed(4)}, ${lng.toFixed(4)}`,
-      });
-
-      setTimeout(() => {
-        setPendingState({ status: 'idle', type: null, message: '' });
-      }, 3000);
-    } catch (error: any) {
-      console.error("Check-in error:", error);
-      setTodayAttendance(null);
-      
-      setPendingState({ 
-        status: 'error', 
-        type: 'check_in', 
-        message: 'Gagal menyimpan absensi. Silakan coba lagi.' 
-      });
-
-      toast.error("Gagal Absen Masuk", {
-        description: error.message || "Terjadi kesalahan",
-      });
-
-      setTimeout(() => {
-        setPendingState({ status: 'idle', type: null, message: '' });
-      }, 5000);
-    } finally {
-      setIsSubmitting(false);
-    }
+    await proceedWithCheckInNormal(selectedShiftId, pendingFlexibleReason);
   };
 
   return (
@@ -1663,7 +1458,10 @@ export default function EmployeeDashboardNew() {
                   const hasCheckedIn = !!(todayAttendance?.check_in_time);
                   const hasCheckedOut = !!(todayAttendance?.check_out_time);
                   const isPending = pendingState.status !== 'idle';
-                  const isOptimisticPending = todayAttendance?.id?.startsWith('pending-');
+                  const isOptimisticPending =
+                    todayAttendance?.id?.startsWith('pending-') ||
+                    todayAttendance?.id?.startsWith('idb-') ||
+                    todayAttendance?.id?.startsWith('buffer-');
                   const deviceInvalid = deviceBinding.isEnabled && !deviceBinding.isDeviceValid && !deviceBinding.isFirstTime;
                   
                   const disableCheckIn = isSubmitting || hasCheckedIn || !!attendanceError || !!workDayError || deviceInvalid || isPending || isOptimisticPending;

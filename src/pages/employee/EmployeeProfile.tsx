@@ -156,7 +156,7 @@ export default function EmployeeProfile() {
       {/* Header */}
       <header className="sticky top-0 z-50 bg-background/95 backdrop-blur border-b">
         <div className="flex items-center gap-4 px-4 h-16">
-          <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")}>
+          <Button variant="ghost" size="icon" onClick={() => navigate("/employee/dashboard")}>
             <ArrowLeft className="w-5 h-5" />
           </Button>
           <div>

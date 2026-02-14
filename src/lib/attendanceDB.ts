@@ -18,6 +18,7 @@ export type SyncStatus = 'pending' | 'syncing' | 'synced' | 'failed';
 export interface AttendanceEntry {
   id?: number; // auto-increment
   bufferId: string; // unique buffer identifier
+  idempotencyKey: string; // deterministic key for server-side dedupe
   employeeId: string;
   officeId: string;
   date: string;
@@ -76,6 +77,16 @@ function generateChecksum(data: string): string {
   return Math.abs(hash).toString(16).padStart(8, '0');
 }
 
+function createIdempotencyKey(
+  employeeId: string,
+  date: string,
+  type: 'check_in' | 'check_out',
+  bufferId: string
+): string {
+  const seed = `${employeeId}:${date}:${type}:${bufferId}`;
+  return `att-${date}-${type}-${generateChecksum(seed)}`;
+}
+
 // ==================== DATABASE ====================
 
 class AttendanceDatabase extends Dexie {
@@ -88,6 +99,23 @@ class AttendanceDatabase extends Dexie {
       attendanceEntries: '++id, bufferId, employeeId, date, syncStatus, type, [employeeId+date+type]',
       todayCache: '++id, employeeId, date, [employeeId+date]',
     });
+    this.version(2)
+      .stores({
+        attendanceEntries: '++id, bufferId, idempotencyKey, employeeId, date, syncStatus, type, [employeeId+date+type]',
+        todayCache: '++id, employeeId, date, [employeeId+date]',
+      })
+      .upgrade(async (tx) => {
+        await tx.table('attendanceEntries').toCollection().modify((entry: AttendanceEntry) => {
+          if (!entry.idempotencyKey) {
+            entry.idempotencyKey = createIdempotencyKey(
+              entry.employeeId,
+              entry.date,
+              entry.type,
+              entry.bufferId
+            );
+          }
+        });
+      });
   }
 }
 
@@ -119,10 +147,12 @@ export async function saveAttendanceEntry(
 
   const encryptedPayload = xorEncrypt(rawPayload, ENCRYPT_KEY);
   const checksum = generateChecksum(rawPayload);
+  const idempotencyKey = createIdempotencyKey(params.employeeId, params.date, params.type, bufferId);
 
   const entry: AttendanceEntry = {
     ...params,
     bufferId,
+    idempotencyKey,
     localTimezoneOffset: now.getTimezoneOffset(),
     syncStatus: 'pending',
     syncAttempts: 0,
@@ -293,30 +323,48 @@ export async function rehydratePendingEntries(employeeId: string): Promise<{
   entries: AttendanceEntry[];
   todayCache: any | null;
 }> {
+  await recoverStuckSyncEntries(employeeId);
   const pending = await getPendingEntries(employeeId);
   const todayCache = await getCachedTodayRecord(employeeId);
-  
-  // Reset entries yang stuck di 'syncing' (karena HP mati mendadak)
+
+  return {
+    pendingCount: pending.length,
+    entries: pending,
+    todayCache,
+  };
+}
+
+/**
+ * Recovery untuk entry stuck di status syncing (mis. app crash / HP mati).
+ * Entry yang sudah lebih lama dari maxStuckMinutes akan dikembalikan ke pending.
+ */
+export async function recoverStuckSyncEntries(
+  employeeId: string,
+  maxStuckMinutes: number = 5
+): Promise<number> {
+  const cutoff = Date.now() - (maxStuckMinutes * 60 * 1000);
+
   const stuckEntries = await db.attendanceEntries
     .where('syncStatus')
     .equals('syncing')
-    .filter(e => e.employeeId === employeeId)
+    .filter((entry) => {
+      if (entry.employeeId !== employeeId) return false;
+      const lastAttempt = entry.lastSyncAttempt ? new Date(entry.lastSyncAttempt).getTime() : 0;
+      const lastKnown = Number.isFinite(lastAttempt) && lastAttempt > 0
+        ? lastAttempt
+        : new Date(entry.createdAt).getTime();
+      return lastKnown <= cutoff;
+    })
     .toArray();
 
   for (const entry of stuckEntries) {
     await updateEntryStatus(entry.bufferId, {
       syncStatus: 'pending',
-      syncError: 'App restarted - retrying',
+      syncError: 'Recovered from interrupted sync',
     });
   }
 
-  const allPending = [...pending, ...stuckEntries.map(e => ({ ...e, syncStatus: 'pending' as SyncStatus }))];
-  
-  return {
-    pendingCount: allPending.length,
-    entries: allPending,
-    todayCache,
-  };
+  return stuckEntries.length;
 }
 
 /**

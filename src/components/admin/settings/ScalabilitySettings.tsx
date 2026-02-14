@@ -1,9 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 import {
   Activity,
   Zap,
@@ -36,19 +37,135 @@ export function ScalabilitySettings() {
   const { toast } = useToast();
   const [activeProfile, setActiveProfile] = useState<ScalabilityProfile>(loadScalabilityConfig());
   const [estimatedUsers, setEstimatedUsers] = useState<string>(String(activeProfile.maxUsers));
+  const [isSaving, setIsSaving] = useState(false);
+  const [isHealthLoading, setIsHealthLoading] = useState(false);
+  const [ingestHealth, setIngestHealth] = useState<{
+    queue_depth: number;
+    processing_count: number;
+    failed_count: number;
+    dead_count: number;
+    processed_last_5m: number;
+    avg_lag_seconds: number;
+    p95_lag_seconds: number;
+    max_pending_age_seconds: number;
+  } | null>(null);
   const profiles = getAllProfiles();
 
   const recommendedTier = getRecommendedTier(parseInt(estimatedUsers) || 0);
   const throughput = calculateThroughput(activeProfile);
 
-  const handleApplyProfile = (tier: ScalabilityTier) => {
+  const loadIngestHealth = useCallback(async () => {
+    setIsHealthLoading(true);
+    try {
+      const supabaseAny = supabase as any;
+      const { data, error } = await supabaseAny.rpc("get_attendance_ingest_health");
+      if (error) throw error;
+
+      const row = Array.isArray(data) ? data[0] : null;
+      if (!row) return;
+
+      setIngestHealth({
+        queue_depth: Number(row.queue_depth) || 0,
+        processing_count: Number(row.processing_count) || 0,
+        failed_count: Number(row.failed_count) || 0,
+        dead_count: Number(row.dead_count) || 0,
+        processed_last_5m: Number(row.processed_last_5m) || 0,
+        avg_lag_seconds: Number(row.avg_lag_seconds) || 0,
+        p95_lag_seconds: Number(row.p95_lag_seconds) || 0,
+        max_pending_age_seconds: Number(row.max_pending_age_seconds) || 0,
+      });
+    } catch (error) {
+      console.error("Error loading ingest health:", error);
+    } finally {
+      setIsHealthLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const loadGlobalScalability = async () => {
+      try {
+        const { data, error } = await supabase
+          .from("system_settings")
+          .select("value")
+          .eq("key", "attendance_scalability")
+          .maybeSingle();
+
+        if (error) throw error;
+
+        const value = data?.value as { tier?: ScalabilityTier } | null;
+        if (!value?.tier) return;
+
+        const profile = getAllProfiles().find((p) => p.tier === value.tier);
+        if (!profile) return;
+
+        setActiveProfile(profile);
+        setEstimatedUsers(String(profile.maxUsers));
+        saveScalabilityConfig(profile.tier);
+      } catch (error) {
+        console.error("Error loading global scalability settings:", error);
+      }
+    };
+
+    loadGlobalScalability();
+  }, []);
+
+  useEffect(() => {
+    loadIngestHealth();
+    const interval = window.setInterval(loadIngestHealth, 20000);
+    return () => window.clearInterval(interval);
+  }, [loadIngestHealth]);
+
+  const handleApplyProfile = async (tier: ScalabilityTier) => {
     const profile = profiles.find(p => p.tier === tier)!;
     setActiveProfile(profile);
     saveScalabilityConfig(tier);
-    toast({
-      title: "Profil Skalabilitas Diterapkan",
-      description: `Konfigurasi "${profile.label}" telah aktif. Semua parameter telah disesuaikan.`,
-    });
+
+    setIsSaving(true);
+    try {
+      const payload = {
+        tier,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { data: existing, error: existingError } = await supabase
+        .from("system_settings")
+        .select("id")
+        .eq("key", "attendance_scalability")
+        .maybeSingle();
+
+      if (existingError) throw existingError;
+
+      if (existing?.id) {
+        const { error } = await supabase
+          .from("system_settings")
+          .update({ value: payload, updated_at: new Date().toISOString() })
+          .eq("id", existing.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from("system_settings")
+          .insert({
+            key: "attendance_scalability",
+            value: payload,
+            description: "Konfigurasi skalabilitas absensi untuk sinkronisasi local-first",
+          });
+        if (error) throw error;
+      }
+
+      toast({
+        title: "Profil Skalabilitas Diterapkan",
+        description: `Konfigurasi "${profile.label}" aktif dan tersimpan global.`,
+      });
+    } catch (error) {
+      console.error("Error saving scalability settings:", error);
+      toast({
+        title: "Gagal Menyimpan Profil",
+        description: "Profil lokal tetap aktif, tetapi sinkronisasi global gagal.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const tierColors: Record<ScalabilityTier, string> = {
@@ -88,6 +205,66 @@ export function ScalabilitySettings() {
           {activeProfile.label}
         </Badge>
       </div>
+      {isSaving && (
+        <p className="text-xs text-muted-foreground">Menyimpan konfigurasi skalabilitas global...</p>
+      )}
+
+      {/* Ingestion Queue Health */}
+      <Card className="border-primary/20">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <Layers className="h-4 w-4" />
+              Health Ingestion Queue
+            </span>
+            <Button variant="outline" size="sm" onClick={loadIngestHealth} disabled={isHealthLoading}>
+              <RefreshCw className={cn("h-3 w-3 mr-1", isHealthLoading && "animate-spin")} />
+              Refresh
+            </Button>
+          </CardTitle>
+          <CardDescription>
+            Monitoring antrean sinkronisasi absensi real-time untuk deteksi bottleneck.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {ingestHealth ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+              <div className="p-3 rounded-md bg-muted/40">
+                <p className="text-xs text-muted-foreground">Queue Depth</p>
+                <p className="text-lg font-semibold">{ingestHealth.queue_depth.toLocaleString()}</p>
+              </div>
+              <div className="p-3 rounded-md bg-muted/40">
+                <p className="text-xs text-muted-foreground">Processing</p>
+                <p className="text-lg font-semibold">{ingestHealth.processing_count.toLocaleString()}</p>
+              </div>
+              <div className="p-3 rounded-md bg-muted/40">
+                <p className="text-xs text-muted-foreground">Failed / Dead</p>
+                <p className="text-lg font-semibold">
+                  {ingestHealth.failed_count.toLocaleString()} / {ingestHealth.dead_count.toLocaleString()}
+                </p>
+              </div>
+              <div className="p-3 rounded-md bg-muted/40">
+                <p className="text-xs text-muted-foreground">Processed 5m</p>
+                <p className="text-lg font-semibold">{ingestHealth.processed_last_5m.toLocaleString()}</p>
+              </div>
+              <div className="p-3 rounded-md bg-muted/40">
+                <p className="text-xs text-muted-foreground">Avg Lag</p>
+                <p className="text-lg font-semibold">{Math.round(ingestHealth.avg_lag_seconds)}s</p>
+              </div>
+              <div className="p-3 rounded-md bg-muted/40">
+                <p className="text-xs text-muted-foreground">P95 Lag</p>
+                <p className="text-lg font-semibold">{Math.round(ingestHealth.p95_lag_seconds)}s</p>
+              </div>
+              <div className="p-3 rounded-md bg-muted/40 col-span-2">
+                <p className="text-xs text-muted-foreground">Max Pending Age</p>
+                <p className="text-lg font-semibold">{Math.round(ingestHealth.max_pending_age_seconds)}s</p>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Belum ada data health queue.</p>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Estimasi User Input */}
       <Card className="border-primary/20">

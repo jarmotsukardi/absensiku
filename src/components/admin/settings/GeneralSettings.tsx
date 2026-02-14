@@ -76,14 +76,16 @@ export function GeneralSettings() {
       const jsonValue = JSON.parse(JSON.stringify(settings));
 
       if (existing) {
-        await supabase
+        const { error } = await supabase
           .from("system_settings")
           .update({ value: jsonValue, updated_at: new Date().toISOString() })
           .eq("key", "general_settings");
+        if (error) throw error;
       } else {
-        await supabase
+        const { error } = await supabase
           .from("system_settings")
           .insert({ key: "general_settings", value: jsonValue });
+        if (error) throw error;
       }
 
       toast.success("Pengaturan umum berhasil disimpan");

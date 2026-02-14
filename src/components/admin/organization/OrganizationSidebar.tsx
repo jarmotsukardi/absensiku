@@ -197,11 +197,11 @@ export function OrganizationSidebar({ organizationName = "Organisasi", organizat
     if (path === "/org") {
       return location.pathname === "/org";
     }
-    return location.pathname.startsWith(path);
+    return location.pathname === path || location.pathname.startsWith(`${path}/`);
   };
 
   const isSubMenuActive = (subItems: SubMenuItem[]) => {
-    return subItems.some(item => location.pathname.startsWith(item.path));
+    return subItems.some(item => isActive(item.path));
   };
 
   const toggleMenu = (title: string) => {

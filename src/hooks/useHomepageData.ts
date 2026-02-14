@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { getHomepageSectionOrder, isHomepageSectionEnabled } from "@/lib/homepageLayout";
 
 interface HomepageSection {
   id: string;
@@ -41,6 +42,28 @@ interface NewsSettings {
   show_category: boolean;
   show_date: boolean;
   show_excerpt: boolean;
+}
+
+interface TargetSegmentItem {
+  title: string;
+  description: string;
+  features: string[];
+  icon: string;
+  color: string;
+}
+
+interface TargetSegmentSettings {
+  section_title: string;
+  section_subtitle: string;
+  badge_text: string;
+  segments: TargetSegmentItem[];
+}
+
+interface PromoSidebarSettings {
+  enabled: boolean;
+  title: string;
+  subtitle: string;
+  show_banner_sidebar: boolean;
 }
 
 interface Feature {
@@ -157,6 +180,49 @@ const defaultNewsSettings: NewsSettings = {
   show_excerpt: true,
 };
 
+const defaultTargetSegmentSettings: TargetSegmentSettings = {
+  section_title: "Dirancang untuk Berbagai Organisasi",
+  section_subtitle: "AbsensiKu melayani kebutuhan absensi dari berbagai jenis organisasi dengan fitur yang dapat dikustomisasi.",
+  badge_text: "Solusi untuk Semua",
+  segments: [
+    {
+      title: "Pemerintah Daerah",
+      description: "Solusi absensi untuk Pemda, OPD, dan unit kerja pemerintah daerah dengan standar audit BPK.",
+      features: ["Multi OPD & Lokasi Kerja", "Audit trail Inspektorat", "Laporan rekapitulasi"],
+      icon: "Landmark",
+      color: "primary",
+    },
+    {
+      title: "Instansi Pemerintah",
+      description: "Untuk Kementerian, Lembaga, BUMN, BUMD, Institusi dan instansi pemerintah vertikal lainnya.",
+      features: ["Struktur hierarki ASN", "Integrasi NIP", "Sinkronisasi SIMPEG"],
+      icon: "Building",
+      color: "info",
+    },
+    {
+      title: "Perusahaan",
+      description: "Solusi fleksibel untuk perusahaan swasta dari startup hingga korporasi besar.",
+      features: ["Multi cabang & divisi", "Shift kerja fleksibel", "API Integrasi HR & payroll"],
+      icon: "Briefcase",
+      color: "accent",
+    },
+    {
+      title: "Sekolah",
+      description: "Sistem absensi guru, staf, dan tenaga kependidikan untuk semua jenjang pendidikan.",
+      features: ["Guru & tenaga pendidik", "Kalender akademik", "Laporan"],
+      icon: "GraduationCap",
+      color: "success",
+    },
+  ],
+};
+
+const defaultPromoSidebarSettings: PromoSidebarSettings = {
+  enabled: true,
+  title: "Promosi & Info Terbaru",
+  subtitle: "Dapatkan penawaran menarik dan informasi terkini dari AbsensiKu",
+  show_banner_sidebar: true,
+};
+
 const defaultCTASettings: CTASettings = {
   title: "Siap Memulai?",
   description: "Coba gratis tanpa kartu kredit. Upgrade kapan saja sesuai kebutuhan.",
@@ -199,6 +265,8 @@ export function useHomepageData() {
   const [heroSettings, setHeroSettings] = useState<HeroSettings>(defaultHeroSettings);
   const [statisticsSettings, setStatisticsSettings] = useState<StatisticsSettings>(defaultStatisticsSettings);
   const [newsSettings, setNewsSettings] = useState<NewsSettings>(defaultNewsSettings);
+  const [targetSegmentSettings, setTargetSegmentSettings] = useState<TargetSegmentSettings>(defaultTargetSegmentSettings);
+  const [promoSidebarSettings, setPromoSidebarSettings] = useState<PromoSidebarSettings>(defaultPromoSidebarSettings);
   const [pricingSectionSettings, setPricingSectionSettings] = useState<PricingSectionSettings>({ section_title: "Harga Transparan", section_subtitle: "Pilih paket yang sesuai dengan kebutuhan instansi Anda." });
   const [features, setFeatures] = useState<Feature[]>([]);
   const [pricingPlans, setPricingPlans] = useState<PricingPlan[]>([]);
@@ -215,6 +283,8 @@ export function useHomepageData() {
 
   const fetchAllData = async () => {
     try {
+      let resolvedNewsSettings: NewsSettings = defaultNewsSettings;
+
       // Fetch homepage sections
       const { data: sectionsData } = await supabase
         .from("homepage_sections")
@@ -235,7 +305,17 @@ export function useHomepageData() {
 
         const newsSection = sectionsData.find(s => s.section_key === "news");
         if (newsSection?.settings && typeof newsSection.settings === 'object') {
-          setNewsSettings({ ...defaultNewsSettings, ...newsSection.settings as Partial<NewsSettings> });
+          const mergedNewsSettings = {
+            ...defaultNewsSettings,
+            ...newsSection.settings as Partial<NewsSettings>,
+          };
+          resolvedNewsSettings = {
+            ...mergedNewsSettings,
+            max_display: Number(mergedNewsSettings.max_display) > 0
+              ? Number(mergedNewsSettings.max_display)
+              : defaultNewsSettings.max_display,
+          };
+          setNewsSettings(resolvedNewsSettings);
         }
 
         // Extract pricing section settings
@@ -262,6 +342,8 @@ export function useHomepageData() {
           "cta_settings",
           "footer_settings",
           "legal_links_settings",
+          "target_segment_settings",
+          "promo_sidebar_settings",
         ]);
 
       if (settingsData) {
@@ -301,6 +383,38 @@ export function useHomepageData() {
                 legalLinksFromSettings = setting.value as { id: string; label: string; url: string; content?: string }[];
               }
               break;
+            case "target_segment_settings":
+              if (setting.value && typeof setting.value === "object") {
+                const value = setting.value as Partial<TargetSegmentSettings>;
+                const normalizedSegments = Array.isArray(value.segments)
+                  ? value.segments
+                      .filter((segment): segment is TargetSegmentItem => !!segment && typeof segment === "object")
+                      .map((segment) => ({
+                        title: typeof segment.title === "string" ? segment.title : "",
+                        description: typeof segment.description === "string" ? segment.description : "",
+                        features: Array.isArray(segment.features)
+                          ? segment.features.filter((feature): feature is string => typeof feature === "string")
+                          : [],
+                        icon: typeof segment.icon === "string" ? segment.icon : "Landmark",
+                        color: typeof segment.color === "string" ? segment.color : "primary",
+                      }))
+                  : [];
+
+                setTargetSegmentSettings({
+                  ...defaultTargetSegmentSettings,
+                  ...value,
+                  segments: normalizedSegments.length > 0 ? normalizedSegments : defaultTargetSegmentSettings.segments,
+                });
+              }
+              break;
+            case "promo_sidebar_settings":
+              if (setting.value && typeof setting.value === "object") {
+                setPromoSidebarSettings({
+                  ...defaultPromoSidebarSettings,
+                  ...(setting.value as Partial<PromoSidebarSettings>),
+                });
+              }
+              break;
           }
         }
 
@@ -318,7 +432,7 @@ export function useHomepageData() {
         .select("id, title, slug, excerpt, image_url, category, published_at")
         .eq("is_published", true)
         .order("published_at", { ascending: false })
-        .limit(newsSettings.max_display || 6);
+        .limit(resolvedNewsSettings.max_display || 6);
 
       if (articlesData) {
         setArticles(articlesData);
@@ -331,13 +445,11 @@ export function useHomepageData() {
   };
 
   const isSectionEnabled = (key: string): boolean => {
-    const section = sections.find(s => s.section_key === key);
-    return section?.is_enabled ?? true;
+    return isHomepageSectionEnabled(sections, key);
   };
 
   const getSectionOrder = (key: string): number => {
-    const section = sections.find(s => s.section_key === key);
-    return section?.sort_order ?? 999;
+    return getHomepageSectionOrder(sections, key);
   };
 
   return {
@@ -345,6 +457,8 @@ export function useHomepageData() {
     heroSettings,
     statisticsSettings,
     newsSettings,
+    targetSegmentSettings,
+    promoSidebarSettings,
     pricingSectionSettings,
     features,
     pricingPlans,
@@ -364,6 +478,9 @@ export type {
   HeroSettings,
   StatisticsSettings,
   NewsSettings,
+  TargetSegmentSettings,
+  TargetSegmentItem,
+  PromoSidebarSettings,
   PricingSectionSettings,
   Feature,
   PricingPlan,

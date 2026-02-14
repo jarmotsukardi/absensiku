@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import { useHomepageData } from "@/hooks/useHomepageData";
 import { NavigationBar } from "@/components/homepage/NavigationBar";
 import { HeroSection } from "@/components/homepage/HeroSection";
@@ -16,27 +16,16 @@ import { AppDownloadSection } from "@/components/homepage/AppDownloadSection";
 import { PaymentMethodsSection } from "@/components/homepage/PaymentMethodsSection";
 import { ClientLogosSection } from "@/components/homepage/ClientLogosSection";
 import { Loader2 } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
-
-interface PromoSidebarSettings {
-  enabled: boolean;
-  title: string;
-  subtitle: string;
-  show_banner_sidebar: boolean;
-}
-
-const defaultPromoSettings: PromoSidebarSettings = {
-  enabled: true,
-  title: "Promosi & Info Terbaru",
-  subtitle: "Dapatkan penawaran menarik dan informasi terkini dari AbsensiKu",
-  show_banner_sidebar: true,
-};
+import { sortHomepageSectionDefinitions } from "@/lib/homepageLayout";
 
 const Index = () => {
   const {
+    sections,
     heroSettings,
     statisticsSettings,
     newsSettings,
+    targetSegmentSettings,
+    promoSidebarSettings,
     pricingSectionSettings,
     features,
     pricingPlans,
@@ -47,29 +36,7 @@ const Index = () => {
     articles,
     isLoading,
     isSectionEnabled,
-    getSectionOrder,
   } = useHomepageData();
-
-  const [promoSettings, setPromoSettings] = useState<PromoSidebarSettings>(defaultPromoSettings);
-
-  useEffect(() => {
-    const fetchPromoSettings = async () => {
-      try {
-        const { data } = await supabase
-          .from("system_settings")
-          .select("value")
-          .eq("key", "promo_sidebar_settings")
-          .maybeSingle();
-
-        if (data?.value) {
-          setPromoSettings({ ...defaultPromoSettings, ...(data.value as Partial<PromoSidebarSettings>) });
-        }
-      } catch (error) {
-        console.error("Error fetching promo settings:", error);
-      }
-    };
-    fetchPromoSettings();
-  }, []);
 
   // Define all sections with their render functions and keys
   // ALL sections are now dynamically ordered based on database sort_order
@@ -91,7 +58,9 @@ const Index = () => {
     },
     {
       key: "target_segment",
-      render: () => isSectionEnabled("target_segment") && <TargetSegmentSection key="target_segment" />,
+      render: () => isSectionEnabled("target_segment") && (
+        <TargetSegmentSection key="target_segment" settings={targetSegmentSettings} />
+      ),
     },
     {
       key: "statistics",
@@ -139,14 +108,14 @@ const Index = () => {
       render: () => {
         if (!isSectionEnabled("faq")) return null;
         // Combine FAQ with Promo Sidebar if promo is enabled
-        const showPromoInFaq = isSectionEnabled("promo_sidebar") && promoSettings.enabled && promoSettings.show_banner_sidebar;
+        const showPromoInFaq = isSectionEnabled("promo_sidebar") && promoSidebarSettings.enabled && promoSidebarSettings.show_banner_sidebar;
         return (
           <FAQSection 
             key="faq" 
             faqs={faqs} 
             showPromoSidebar={showPromoInFaq}
-            promoTitle={promoSettings.title}
-            promoSubtitle={promoSettings.subtitle}
+            promoTitle={promoSidebarSettings.title}
+            promoSubtitle={promoSidebarSettings.subtitle}
           />
         );
       },
@@ -173,19 +142,15 @@ const Index = () => {
       render: () => isSectionEnabled("footer") && <FooterSection key="footer" settings={footerSettings} />,
     },
   ], [
-    heroSettings, statisticsSettings, newsSettings, pricingSectionSettings,
+    heroSettings, statisticsSettings, newsSettings, targetSegmentSettings, pricingSectionSettings,
     features, pricingPlans, faqs, testimonials, ctaSettings, footerSettings,
-    articles, promoSettings, isSectionEnabled
+    articles, promoSidebarSettings, isSectionEnabled
   ]);
 
   // Sort sections by their sort_order from database
   const sortedSections = useMemo(() => {
-    return [...sectionDefinitions].sort((a, b) => {
-      const orderA = getSectionOrder(a.key);
-      const orderB = getSectionOrder(b.key);
-      return orderA - orderB;
-    });
-  }, [sectionDefinitions, getSectionOrder]);
+    return sortHomepageSectionDefinitions(sectionDefinitions, sections);
+  }, [sectionDefinitions, sections]);
 
   if (isLoading) {
     return (

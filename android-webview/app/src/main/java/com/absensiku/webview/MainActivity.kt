@@ -14,14 +14,18 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import java.net.URI
 
 class MainActivity : AppCompatActivity() {
+    private lateinit var rootContainer: FrameLayout
     private lateinit var webView: WebView
     private lateinit var blockPanel: LinearLayout
     private lateinit var blockReason: TextView
@@ -60,10 +64,12 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
+        rootContainer = findViewById(R.id.rootContainer)
         webView = findViewById(R.id.webView)
         blockPanel = findViewById(R.id.blockPanel)
         blockReason = findViewById(R.id.blockReason)
         retryButton = findViewById(R.id.retryButton)
+        applySystemInsets()
 
         val settings = webView.settings
         settings.javaScriptEnabled = true
@@ -182,6 +188,20 @@ class MainActivity : AppCompatActivity() {
         blockReason.text = reason
         blockPanel.visibility = View.VISIBLE
         webView.stopLoading()
+    }
+
+    private fun applySystemInsets() {
+        ViewCompat.setOnApplyWindowInsetsListener(rootContainer) { view, insets ->
+            val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+            view.setPadding(
+                systemBars.left,
+                systemBars.top,
+                systemBars.right,
+                systemBars.bottom
+            )
+            insets
+        }
+        ViewCompat.requestApplyInsets(rootContainer)
     }
 
     private fun isAllowedUrl(url: String): Boolean {

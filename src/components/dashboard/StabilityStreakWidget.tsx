@@ -31,27 +31,43 @@ interface StreakData {
 
 export function StabilityStreakWidget({ tenantId, tenantName, currentEmployeeCount, subscriptionId }: StabilityStreakWidgetProps) {
   const [streak, setStreak] = useState<StreakData | null>(null);
+  const [streakThreshold, setStreakThreshold] = useState(30);
   const [isLoading, setIsLoading] = useState(true);
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
 
   useEffect(() => {
-    const fetchStreak = async () => {
-      const { data } = await supabase
-        .from("stability_streaks")
-        .select("streak_count, status, reached_target, grace_period_end, last_activity_date")
-        .eq("tenant_id", tenantId)
-        .maybeSingle();
+    const fetchStreakAndThreshold = async () => {
+      const [streakRes, thresholdRes] = await Promise.all([
+        supabase
+          .from("stability_streaks")
+          .select("streak_count, status, reached_target, grace_period_end, last_activity_date")
+          .eq("tenant_id", tenantId)
+          .maybeSingle(),
+        supabase
+          .from("system_settings")
+          .select("value")
+          .eq("key", "streak_threshold")
+          .maybeSingle(),
+      ]);
 
-      setStreak(data);
+      setStreak(streakRes.data);
+
+      const rawThreshold = (thresholdRes.data?.value as { value?: unknown } | null)?.value;
+      const parsedThreshold = Math.floor(Number(rawThreshold));
+      if (Number.isFinite(parsedThreshold) && parsedThreshold > 0) {
+        setStreakThreshold(parsedThreshold);
+      }
+
       setIsLoading(false);
     };
 
-    if (tenantId) fetchStreak();
+    if (tenantId) fetchStreakAndThreshold();
   }, [tenantId]);
 
   if (isLoading || !streak) return null;
 
-  const progress = Math.min((streak.streak_count / 30) * 100, 100);
+  const safeThreshold = streakThreshold > 0 ? streakThreshold : 30;
+  const progress = Math.min((streak.streak_count / safeThreshold) * 100, 100);
   const isComplete = streak.reached_target;
   const isGracePeriod = streak.status === "ready_for_invoicing" || streak.status === "grace_period";
   const showPayButton = isComplete || isGracePeriod;
@@ -75,7 +91,7 @@ export function StabilityStreakWidget({ tenantId, tenantName, currentEmployeeCou
             <div className="flex items-center gap-1">
               <Zap className="w-3.5 h-3.5 text-primary" />
               <span className="text-lg font-bold text-primary">{streak.streak_count}</span>
-              <span className="text-xs text-muted-foreground">/ 30 hari</span>
+              <span className="text-xs text-muted-foreground">/ {safeThreshold} hari</span>
             </div>
           </div>
 
@@ -89,7 +105,7 @@ export function StabilityStreakWidget({ tenantId, tenantName, currentEmployeeCou
                 ? "Dalam masa tenggang pembayaran"
                 : streak.streak_count === 0
                 ? "Mulai gunakan absensi untuk memulai streak"
-                : `${30 - streak.streak_count} hari lagi untuk aktivasi`}
+                : `${Math.max(safeThreshold - streak.streak_count, 0)} hari lagi untuk aktivasi`}
             </p>
             {isGracePeriod && streak.grace_period_end && (
               <div className="flex items-center gap-1 text-xs text-amber-600">
