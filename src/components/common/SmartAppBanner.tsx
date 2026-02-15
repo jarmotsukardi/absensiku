@@ -69,7 +69,7 @@ export function SmartAppBanner({ apkUrl, appName = "AbsensiKu" }: SmartAppBanner
           {/* Info */}
           <div className="flex-1 min-w-0">
             <p className="font-semibold text-sm text-foreground truncate">{appName}</p>
-            <p className="text-xs text-muted-foreground">Install aplikasi untuk pengalaman terbaik</p>
+            <p className="text-xs text-muted-foreground">Instal aplikasi untuk pengalaman terbaik</p>
             <div className="flex items-center gap-1 mt-0.5">
               {[1, 2, 3, 4, 5].map((star) => (
                 <svg key={star} className="w-3 h-3 text-amber-400 fill-current" viewBox="0 0 20 20">
@@ -88,7 +88,7 @@ export function SmartAppBanner({ apkUrl, appName = "AbsensiKu" }: SmartAppBanner
               className="h-8 px-4 text-xs font-semibold"
             >
               <Download className="w-3 h-3 mr-1" />
-              Install
+              Instal
             </Button>
             <button
               onClick={handleDismiss}

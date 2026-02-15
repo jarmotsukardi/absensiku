@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User, Session } from "@supabase/supabase-js";
@@ -50,13 +50,7 @@ export default function EmployeeHelp() {
     return () => subscription.unsubscribe();
   }, [navigate]);
 
-  useEffect(() => {
-    if (user) {
-      fetchTenantInfo();
-    }
-  }, [user]);
-
-  const fetchTenantInfo = async () => {
+  const fetchTenantInfo = useCallback(async () => {
     try {
       const { data: empData } = await supabase
         .from("employees")
@@ -78,7 +72,13 @@ export default function EmployeeHelp() {
     } catch (error) {
       console.error("Error fetching tenant:", error);
     }
-  };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (user) {
+      void fetchTenantInfo();
+    }
+  }, [user, fetchTenantInfo]);
 
   const faqItems = [
     {
@@ -88,11 +88,11 @@ export default function EmployeeHelp() {
       items: [
         {
           question: "Bagaimana cara melakukan absensi masuk?",
-          answer: "Absensi hanya dapat dilakukan melalui aplikasi resmi (APK) yang terinstall di perangkat Android Anda. Buka aplikasi, pastikan GPS aktif, lalu tekan tombol 'Masuk' saat berada dalam radius kantor."
+          answer: "Absensi hanya dapat dilakukan melalui aplikasi mobile internal yang terpasang di perangkat Android Anda. Buka aplikasi, pastikan GPS aktif, lalu tekan tombol 'Masuk' saat berada dalam radius kantor."
         },
         {
           question: "Kenapa saya tidak bisa absen dari browser/web?",
-          answer: "Untuk keamanan dan validasi lokasi yang akurat, absensi hanya dapat dilakukan melalui aplikasi resmi Android. Hal ini untuk mencegah kecurangan dan memastikan Anda berada di lokasi kantor."
+          answer: "Untuk keamanan dan validasi lokasi yang akurat, absensi hanya dapat dilakukan melalui aplikasi mobile internal Android. Hal ini untuk mencegah kecurangan dan memastikan Anda berada di lokasi kantor."
         },
         {
           question: "Apa yang harus dilakukan jika GPS tidak akurat?",
@@ -106,8 +106,8 @@ export default function EmployeeHelp() {
       title: "Perangkat & Aplikasi",
       items: [
         {
-          question: "Bagaimana cara download aplikasi absensi?",
-          answer: "Kunjungi halaman landing organisasi Anda atau minta link download ke admin. Install APK di perangkat Android Anda, lalu login dengan akun yang sudah terdaftar."
+          question: "Bagaimana cara mengunduh aplikasi absensi?",
+          answer: "Unduh aplikasi melalui tautan resmi organisasi atau tautan resmi dari admin. Lakukan instalasi aplikasi sesuai SOP keamanan perangkat instansi, lalu login menggunakan akun terdaftar."
         },
         {
           question: "Apa itu binding perangkat?",
@@ -224,7 +224,7 @@ export default function EmployeeHelp() {
                 <h3 className="font-semibold mb-1">Tips Cepat</h3>
                 <ul className="text-sm text-muted-foreground space-y-1">
                   <li>• Pastikan GPS aktif sebelum absensi</li>
-                  <li>• Gunakan aplikasi resmi untuk absensi</li>
+                  <li>• Gunakan aplikasi mobile internal untuk absensi</li>
                   <li>• Ajukan izin/cuti sedini mungkin</li>
                 </ul>
               </div>

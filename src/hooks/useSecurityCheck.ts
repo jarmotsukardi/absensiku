@@ -2,18 +2,13 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 interface SecuritySettings {
-  detect_fake_gps: boolean;
-  detect_mock_location: boolean;
-  detect_developer_options: boolean;
-  require_official_apk: boolean;
   block_desktop_browser: boolean;
-  block_virtualization: boolean;
   require_realtime_location: boolean;
-  block_vpn: boolean;
   block_all_browsers: boolean;
   enable_device_binding: boolean;
   max_device_reset_count: number;
   require_password_change_for_reset: boolean;
+  min_android_version?: number;
 }
 
 interface SecurityCheckResult {
@@ -24,6 +19,11 @@ interface SecurityCheckResult {
   isAndroidApp: boolean;
   isBrowserBlocked: boolean;
   userAgent: string;
+}
+
+interface LocationSecurityValidationResult {
+  allowed: boolean;
+  reason: string | null;
 }
 
 // Deteksi apakah diakses dari browser desktop
@@ -59,6 +59,39 @@ const isMobileBrowser = (): boolean => {
   return /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile/i.test(ua);
 };
 
+const getAndroidBridge = (): Record<string, unknown> | null => {
+  const candidate = (window as Window & { Android?: Record<string, unknown> }).Android;
+  return candidate && typeof candidate === "object" ? candidate : null;
+};
+
+const callAndroidNumber = (methods: string[]): number | null => {
+  const bridge = getAndroidBridge();
+  if (!bridge) return null;
+  for (const methodName of methods) {
+    const method = bridge[methodName];
+    if (typeof method === "function") {
+      try {
+        const result = (method as () => unknown)();
+        if (typeof result === "number" && Number.isFinite(result)) return result;
+        if (typeof result === "string") {
+          const parsed = Number.parseFloat(result);
+          if (Number.isFinite(parsed)) return parsed;
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+  return null;
+};
+
+const parseAndroidVersionFromUA = (): number | null => {
+  const match = navigator.userAgent.match(/Android\s+(\d+(?:\.\d+)?)/i);
+  if (!match?.[1]) return null;
+  const version = Number.parseFloat(match[1]);
+  return Number.isFinite(version) ? version : null;
+};
+
 export function useSecurityCheck(tenantId?: string) {
   const [isLoading, setIsLoading] = useState(true);
   const [settings, setSettings] = useState<SecuritySettings | null>(null);
@@ -71,6 +104,25 @@ export function useSecurityCheck(tenantId?: string) {
     isBrowserBlocked: false,
     userAgent: "",
   });
+
+  const validateLocationSecurity = useCallback(
+    (position: GeolocationPosition): LocationSecurityValidationResult => {
+      if (!settings) return { allowed: true, reason: null };
+
+      if (settings.require_realtime_location) {
+        const locationAgeMs = Date.now() - position.timestamp;
+        if (locationAgeMs > 60_000) {
+          return {
+            allowed: false,
+            reason: "Lokasi tidak realtime. Aktifkan GPS dan ulangi absensi.",
+          };
+        }
+      }
+
+      return { allowed: true, reason: null };
+    },
+    [settings]
+  );
 
   const fetchSettings = useCallback(async () => {
     try {
@@ -113,14 +165,23 @@ export function useSecurityCheck(tenantId?: string) {
     if (settings.block_all_browsers && !isAndroidApp) {
       isBlocked = true;
       isBrowserBlocked = true;
-      reason = "Absensi hanya dapat dilakukan melalui aplikasi APK resmi. Browser tidak diperbolehkan.";
+      reason = "Absensi hanya dapat dilakukan melalui aplikasi mobile internal. Browser tidak diperbolehkan.";
     }
     // Cek apakah block desktop browser diaktifkan
     else if (settings.block_desktop_browser && isDesktop) {
       isBlocked = true;
-      reason = "Absensi tidak dapat dilakukan via browser Desktop. Gunakan aplikasi resmi di perangkat Android.";
+      reason = "Absensi tidak dapat dilakukan via browser Desktop. Gunakan aplikasi mobile internal di perangkat Android.";
     }
-
+    // Blokir jika versi Android di bawah minimum
+    else if (isAndroidApp && typeof settings.min_android_version === "number") {
+      const androidVersion =
+        callAndroidNumber(["getAndroidVersion", "getSystemAndroidVersion"]) ??
+        parseAndroidVersionFromUA();
+      if (androidVersion !== null && androidVersion < settings.min_android_version) {
+        isBlocked = true;
+        reason = `Versi Android minimal ${settings.min_android_version}. Perangkat Anda belum memenuhi syarat.`;
+      }
+    }
     setSecurityResult({
       isBlocked,
       reason,
@@ -136,6 +197,7 @@ export function useSecurityCheck(tenantId?: string) {
     isLoading,
     settings,
     securityResult,
+    validateLocationSecurity,
     refetch: fetchSettings,
   };
 }

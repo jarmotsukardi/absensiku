@@ -25,6 +25,7 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { ManualPaymentFlow } from "@/components/org/ManualPaymentFlow";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import type { Tables } from "@/integrations/supabase/types";
 
 interface OrgActivationTabProps {
@@ -87,7 +88,8 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
         setSelectedPkgId(pkgRes.data[0].id);
       }
     } catch (error) {
-      console.error("Error:", error);
+      const errorRef = reportError(error, "org.activation.fetch_all", { tenant_id: tenantId });
+      toast.error(appendErrorReference("Gagal memuat data aktivasi", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -145,9 +147,11 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       // Refresh invoices
       void fetchAll();
     } catch (error: unknown) {
-      console.error("Xendit error:", error);
-      const errorMessage = error instanceof Error ? error.message : "Gagal membuat invoice Xendit";
-      toast.error(errorMessage);
+      const errorRef = reportError(error, "org.activation.xendit_checkout", {
+        tenant_id: tenantId,
+        package_id: selectedPkg?.id || null,
+      });
+      toast.error(appendErrorReference("Gagal membuat invoice Xendit", errorRef));
     } finally {
       setIsCreatingXenditInvoice(false);
     }

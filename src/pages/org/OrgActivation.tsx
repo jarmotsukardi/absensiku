@@ -2,10 +2,12 @@ import { OrganizationLayout } from "@/components/admin/organization/Organization
 import { useOrganizationSettings } from "@/hooks/useOrganizationSettings";
 import { OrgActivationTab } from "@/components/org/OrgActivationTab";
 import { GlossaryPanel } from "@/components/common/GlossaryPanel";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Loader2, Zap } from "lucide-react";
 
 export default function OrgActivation() {
-  const { organization, isLoading } = useOrganizationSettings();
+  const { organization, isLoading, error, refetch } = useOrganizationSettings();
 
   if (isLoading) {
     return (
@@ -33,6 +35,18 @@ export default function OrgActivation() {
 
         {organization?.id && (
           <OrgActivationTab tenantId={organization.id} tenantName={organization.name} />
+        )}
+
+        {!organization?.id && (
+          <Alert variant="destructive">
+            <AlertDescription className="space-y-3">
+              <p>Tidak dapat memuat data organisasi untuk aktivasi.</p>
+              <p className="text-xs opacity-80">{error || "Tenant organisasi tidak ditemukan."}</p>
+              <Button variant="outline" size="sm" onClick={() => void refetch()}>
+                Coba Lagi
+              </Button>
+            </AlertDescription>
+          </Alert>
         )}
       </div>
     </OrganizationLayout>

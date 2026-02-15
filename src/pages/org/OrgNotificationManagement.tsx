@@ -16,6 +16,8 @@ import { formatDistanceToNow, format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 
 interface Notification {
   id: string;
@@ -53,15 +55,24 @@ export default function OrgNotificationManagement() {
   const [selectedEmployees, setSelectedEmployees] = useState<string[]>([]);
 
   const fetchNotifications = useCallback(async (tid: string) => {
+    try {
     // Get all employee user_ids for this tenant
-    const { data: empData } = await supabase
+    const { data: empData, error: empError } = await supabase
       .from("employees")
       .select("user_id, name")
       .eq("tenant_id", tid);
+    if (empError) throw empError;
 
-    if (!empData) return;
+    if (!empData || empData.length === 0) {
+      setNotifications([]);
+      return;
+    }
 
     const userIds = empData.map(e => e.user_id).filter(Boolean);
+    if (userIds.length === 0) {
+      setNotifications([]);
+      return;
+    }
     const userNameMap = new Map(empData.map(e => [e.user_id, e.name]));
 
     const { data, error } = await supabase
@@ -77,44 +88,58 @@ export default function OrgNotificationManagement() {
         employee_name: userNameMap.get(n.user_id) || "Unknown"
       }));
       setNotifications(enriched);
+      return;
+    }
+
+      if (error) throw error;
+    } catch (error) {
+      const errorRef = reportError(error, "org.notifications.fetch_notifications", { tenant_id: tid });
+      toast.error(appendErrorReference("Gagal memuat notifikasi organisasi", errorRef));
+      setNotifications([]);
     }
   }, []);
 
   const fetchEmployees = useCallback(async (tid: string) => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("employees")
       .select("id, user_id, name, position")
       .eq("tenant_id", tid)
       .eq("is_active", true)
       .order("name");
+    if (error) {
+      const errorRef = reportError(error, "org.notifications.fetch_employees", { tenant_id: tid });
+      toast.error(appendErrorReference("Gagal memuat data pegawai", errorRef));
+      setEmployees([]);
+      return;
+    }
 
     if (data) {
       setEmployees(data as Employee[]);
+    } else {
+      setEmployees([]);
     }
   }, []);
 
   const fetchTenantAndData = useCallback(async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      // Get tenant_id from user_roles
-      const { data: roles } = await supabase
-        .from("user_roles")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .in("role", ["admin_instansi", "super_admin"])
-        .maybeSingle();
-
-      if (roles?.tenant_id) {
-        setTenantId(roles.tenant_id);
+      const resolvedTenantId = await resolveOrgTenantId();
+      if (resolvedTenantId) {
+        setTenantId(resolvedTenantId);
         await Promise.all([
-          fetchNotifications(roles.tenant_id),
-          fetchEmployees(roles.tenant_id),
+          fetchNotifications(resolvedTenantId),
+          fetchEmployees(resolvedTenantId),
         ]);
+      } else {
+        setTenantId(null);
+        setEmployees([]);
+        setNotifications([]);
+        toast.info("Tenant organisasi tidak ditemukan.");
       }
     } catch (error) {
-      console.error("Error:", error);
+      const errorRef = reportError(error, "org.notifications.fetch_tenant_and_data");
+      toast.error(appendErrorReference("Gagal memuat halaman notifikasi", errorRef));
+      setEmployees([]);
+      setNotifications([]);
     } finally {
       setIsLoading(false);
     }
@@ -177,10 +202,14 @@ export default function OrgNotificationManagement() {
       toast.success(`Notifikasi berhasil dikirim ke ${targetUserIds.length} pegawai`);
       setIsDialogOpen(false);
       resetForm();
-      if (tenantId) fetchNotifications(tenantId);
+      if (tenantId) void fetchNotifications(tenantId);
     } catch (error) {
-      console.error('Error sending notification:', error);
-      toast.error("Gagal mengirim notifikasi");
+      const errorRef = reportError(error, "org.notifications.send", {
+        tenant_id: tenantId,
+        target_type: targetType,
+        recipients_count: targetType === "all" ? employees.length : selectedEmployees.length,
+      });
+      toast.error(appendErrorReference("Gagal mengirim notifikasi", errorRef));
     } finally {
       setIsSending(false);
     }
@@ -195,16 +224,18 @@ export default function OrgNotificationManagement() {
   };
 
   const deleteNotification = async (id: string) => {
-    const { error } = await supabase
-      .from('notifications')
-      .delete()
-      .eq('id', id);
+    try {
+      const { error } = await supabase
+        .from('notifications')
+        .delete()
+        .eq('id', id);
+      if (error) throw error;
 
-    if (!error) {
       toast.success("Notifikasi berhasil dihapus");
       setNotifications(prev => prev.filter(n => n.id !== id));
-    } else {
-      toast.error("Gagal menghapus notifikasi");
+    } catch (error) {
+      const errorRef = reportError(error, "org.notifications.delete", { notification_id: id, tenant_id: tenantId });
+      toast.error(appendErrorReference("Gagal menghapus notifikasi", errorRef));
     }
   };
 

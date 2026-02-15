@@ -7,16 +7,16 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { HelmetProvider } from "react-helmet-async";
 import { PersistentNotificationDialog } from "@/components/common/PersistentNotificationDialog";
 import { AndroidBackButtonHandler } from "@/hooks/useAndroidBackButton";
-import Index from "./pages/Index";
-import Auth from "./pages/Auth";
-import PrivacyPolicy from "./pages/PrivacyPolicy";
-import About from "./pages/About";
-import ForgotPassword from "./pages/auth/ForgotPassword";
-import ResetPassword from "./pages/auth/ResetPassword";
-import NotFound from "./pages/NotFound";
-import FAQPage from "./pages/FAQ";
 
 const queryClient = new QueryClient();
+const Index = lazy(() => import("./pages/Index"));
+const Auth = lazy(() => import("./pages/Auth"));
+const PrivacyPolicy = lazy(() => import("./pages/PrivacyPolicy"));
+const About = lazy(() => import("./pages/About"));
+const ForgotPassword = lazy(() => import("./pages/auth/ForgotPassword"));
+const ResetPassword = lazy(() => import("./pages/auth/ResetPassword"));
+const NotFound = lazy(() => import("./pages/NotFound"));
+const FAQPage = lazy(() => import("./pages/FAQ"));
 const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"));
 const TenantDashboard = lazy(() => import("./pages/admin/TenantDashboard"));
 const Organizations = lazy(() => import("./pages/admin/Organizations"));
@@ -182,6 +182,7 @@ const App = () => (
           <Route path="/org/master/work-locations" element={<OrgWorkLocationsManagement />} />
           <Route path="/org/master/positions" element={<OrgPositionsManagement />} />
           <Route path="/org/master/employee-import" element={<OrgEmployeeImport />} />
+          <Route path="/org/master" element={<Navigate to="/org/master/opd" replace />} />
           <Route path="/org/master/work-hours" element={<Navigate to="/org/schedule/work-hours" replace />} />
           <Route path="/org/schedule/national-holidays" element={<OrgNationalHolidaysManagement />} />
           <Route path="/org/schedule/holidays" element={<OrgHolidaysManagement />} />

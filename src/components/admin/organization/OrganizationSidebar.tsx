@@ -169,7 +169,7 @@ const menuGroups: MenuGroup[] = [
     items: [
       { title: "Pengaturan Umum", icon: Settings, path: "/org/settings" },
       { title: "Undangan Pegawai", icon: UserCheck, path: "/org/invitations" },
-      { title: "Landing Page & APK", icon: LandmarkIcon, path: "/org/landing-settings" },
+      { title: "Landing Page & Aplikasi", icon: LandmarkIcon, path: "/org/landing-settings" },
       { title: "Log Aktivitas", icon: ClipboardList, path: "/org/audit-log" },
     ],
   },

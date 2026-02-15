@@ -9,6 +9,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Trash2, AlertTriangle, Loader2, Shield } from "lucide-react";
 import { toast } from "sonner";
 import SingleOTPInput, { SingleOTPInputRef } from "@/components/common/SingleOTPInput";
+import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 const WORDS_POOL = [
   "hapus", "akun", "saya", "yakin", "setuju", "konfirmasi", "permanen", "mengerti",
@@ -57,24 +59,20 @@ export function AccountDeletionDialog() {
 
   const fetchOrgContact = async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.user) return;
-      const { data: emp } = await supabase
-        .from("employees")
-        .select("tenant_id")
-        .eq("user_id", session.user.id)
-        .maybeSingle();
-      if (emp?.tenant_id) {
-        const { data: tenant } = await supabase
+      const tenantId = await resolveOrgTenantId();
+      if (tenantId) {
+        const { data: tenant, error } = await supabase
           .from("tenants")
           .select("email, whatsapp")
-          .eq("id", emp.tenant_id)
+          .eq("id", tenantId)
           .single();
+        if (error) throw error;
         setOrgEmail(tenant?.email || "");
         setOrgWhatsapp(tenant?.whatsapp || "");
       }
-    } catch (e) {
-      console.error(e);
+    } catch (error) {
+      const errorRef = reportError(error, "org.account_deletion.fetch_org_contact");
+      toast.error(appendErrorReference("Gagal memuat kontak organisasi", errorRef));
     }
   };
 
@@ -172,8 +170,9 @@ export function AccountDeletionDialog() {
       toast.success("Akun Anda telah dinonaktifkan. Hubungi admin jika ingin mengaktifkan kembali.");
       navigate("/", { replace: true });
     } catch (error: unknown) {
+      const errorRef = reportError(error, "org.account_deletion.handle_delete");
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      toast.error("Gagal memproses penghapusan: " + errorMessage);
+      toast.error(appendErrorReference("Gagal memproses penghapusan: " + errorMessage, errorRef));
     } finally {
       setIsDeleting(false);
       setShowFinalConfirm(false);

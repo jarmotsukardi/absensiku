@@ -15,34 +15,23 @@ import {
   Settings,
   Save,
   Loader2,
-  Lock,
   Eye,
-  Monitor,
-  Wifi,
   Fingerprint,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface SecuritySettings {
-  // GPS Detection
-  detect_fake_gps: boolean;
-  detect_mock_location: boolean;
-  detect_developer_options: boolean;
+  // GPS Validation
   require_realtime_location: boolean;
   // Device Validation
   block_desktop_browser: boolean;
-  block_virtualization: boolean;
-  block_vpn: boolean;
   block_all_browsers: boolean;
   // Device Binding Settings
   enable_device_binding: boolean;
   max_device_reset_count: number;
   require_password_change_for_reset: boolean;
-  // APK Settings
-  require_official_apk: boolean;
-  apk_signature_check: boolean;
-  block_rooted_device: boolean;
+  // APK Compatibility
   min_android_version: number;
 }
 
@@ -50,24 +39,16 @@ export default function AttendanceSecuritySettings() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [settings, setSettings] = useState<SecuritySettings>({
-    // GPS Detection
-    detect_fake_gps: true,
-    detect_mock_location: true,
-    detect_developer_options: false,
+    // GPS Validation
     require_realtime_location: true,
     // Device Validation
     block_desktop_browser: true,
-    block_virtualization: true,
-    block_vpn: false,
     block_all_browsers: false,
     // Device Binding
     enable_device_binding: true,
     max_device_reset_count: 3,
     require_password_change_for_reset: true,
-    // APK Settings
-    require_official_apk: true,
-    apk_signature_check: true,
-    block_rooted_device: false,
+    // APK Compatibility
     min_android_version: 7,
   });
 
@@ -89,24 +70,16 @@ export default function AttendanceSecuritySettings() {
         // Merge dengan default settings untuk memastikan field baru tetap ada
         const savedSettings = data.value as Record<string, unknown>;
         setSettings(prev => ({
-          // GPS Detection
-          detect_fake_gps: typeof savedSettings.detect_fake_gps === 'boolean' ? savedSettings.detect_fake_gps : prev.detect_fake_gps,
-          detect_mock_location: typeof savedSettings.detect_mock_location === 'boolean' ? savedSettings.detect_mock_location : prev.detect_mock_location,
-          detect_developer_options: typeof savedSettings.detect_developer_options === 'boolean' ? savedSettings.detect_developer_options : prev.detect_developer_options,
+          // GPS Validation
           require_realtime_location: typeof savedSettings.require_realtime_location === 'boolean' ? savedSettings.require_realtime_location : prev.require_realtime_location,
           // Device Validation
           block_desktop_browser: typeof savedSettings.block_desktop_browser === 'boolean' ? savedSettings.block_desktop_browser : prev.block_desktop_browser,
-          block_virtualization: typeof savedSettings.block_virtualization === 'boolean' ? savedSettings.block_virtualization : prev.block_virtualization,
-          block_vpn: typeof savedSettings.block_vpn === 'boolean' ? savedSettings.block_vpn : prev.block_vpn,
           block_all_browsers: typeof savedSettings.block_all_browsers === 'boolean' ? savedSettings.block_all_browsers : prev.block_all_browsers,
           // Device Binding
           enable_device_binding: typeof savedSettings.enable_device_binding === 'boolean' ? savedSettings.enable_device_binding : prev.enable_device_binding,
           max_device_reset_count: typeof savedSettings.max_device_reset_count === 'number' ? savedSettings.max_device_reset_count : prev.max_device_reset_count,
           require_password_change_for_reset: typeof savedSettings.require_password_change_for_reset === 'boolean' ? savedSettings.require_password_change_for_reset : prev.require_password_change_for_reset,
-          // APK Settings
-          require_official_apk: typeof savedSettings.require_official_apk === 'boolean' ? savedSettings.require_official_apk : prev.require_official_apk,
-          apk_signature_check: typeof savedSettings.apk_signature_check === 'boolean' ? savedSettings.apk_signature_check : prev.apk_signature_check,
-          block_rooted_device: typeof savedSettings.block_rooted_device === 'boolean' ? savedSettings.block_rooted_device : prev.block_rooted_device,
+          // APK Compatibility
           min_android_version: typeof savedSettings.min_android_version === 'number' ? savedSettings.min_android_version : prev.min_android_version,
         }));
       }
@@ -198,10 +171,10 @@ export default function AttendanceSecuritySettings() {
 
         <Tabs defaultValue="gps" className="space-y-4">
           <TabsList className="grid w-full grid-cols-4">
-            <TabsTrigger value="gps">Deteksi GPS</TabsTrigger>
+            <TabsTrigger value="gps">Validasi GPS</TabsTrigger>
             <TabsTrigger value="device">Validasi Perangkat</TabsTrigger>
             <TabsTrigger value="binding">Device Binding</TabsTrigger>
-            <TabsTrigger value="apk">APK Resmi</TabsTrigger>
+            <TabsTrigger value="apk">Kompatibilitas Aplikasi</TabsTrigger>
           </TabsList>
 
           <TabsContent value="gps" className="space-y-4">
@@ -209,39 +182,13 @@ export default function AttendanceSecuritySettings() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <MapPin className="h-5 w-5" />
-                  Deteksi Manipulasi GPS
+                  Validasi Lokasi Realtime
                 </CardTitle>
                 <CardDescription>
-                  Pengaturan untuk mendeteksi dan mencegah penggunaan lokasi palsu
+                  Pastikan absensi memakai koordinat terbaru saat proses check-in/check-out
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label className="font-medium">Deteksi Fake GPS</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Mendeteksi aplikasi fake GPS yang terinstall di perangkat
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.detect_fake_gps}
-                    onCheckedChange={(checked) => updateSetting("detect_fake_gps", checked)}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label className="font-medium">Deteksi Mock Location</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Mendeteksi jika perangkat menggunakan mock location provider
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.detect_mock_location}
-                    onCheckedChange={(checked) => updateSetting("detect_mock_location", checked)}
-                  />
-                </div>
-
                 <div className="flex items-center justify-between">
                   <div className="space-y-1">
                     <Label className="font-medium">Wajib Lokasi Realtime</Label>
@@ -261,8 +208,8 @@ export default function AttendanceSecuritySettings() {
                     <div>
                       <h4 className="font-medium text-warning">Rekomendasi</h4>
                       <p className="text-sm text-muted-foreground mt-1">
-                        Aktifkan semua fitur deteksi GPS untuk mencegah manipulasi lokasi. 
-                        Pegawai yang terdeteksi akan mendapat notifikasi pelanggaran.
+                        Aktifkan validasi lokasi realtime agar absensi memakai data GPS terbaru,
+                        bukan lokasi cache yang sudah lama.
                       </p>
                     </div>
                   </div>
@@ -288,7 +235,7 @@ export default function AttendanceSecuritySettings() {
                     <Label className="font-medium">Blokir Semua Browser</Label>
                     <p className="text-sm text-muted-foreground">
                       Halaman /employee/login tidak dapat diakses dari browser apapun (Desktop & Mobile).
-                      Pegawai harus menggunakan aplikasi APK resmi.
+                      Pegawai harus menggunakan aplikasi mobile internal.
                     </p>
                   </div>
                   <Switch
@@ -310,53 +257,14 @@ export default function AttendanceSecuritySettings() {
                   />
                 </div>
 
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label className="font-medium">Blokir Virtualisasi</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Mendeteksi dan memblokir emulator Android/iOS
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.block_virtualization}
-                    onCheckedChange={(checked) => updateSetting("block_virtualization", checked)}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label className="font-medium">Deteksi Developer Options</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Blokir perangkat dengan opsi developer aktif (dapat di-bypass oleh developer)
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.detect_developer_options}
-                    onCheckedChange={(checked) => updateSetting("detect_developer_options", checked)}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label className="font-medium">Blokir VPN</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Mendeteksi dan memblokir koneksi melalui VPN
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.block_vpn}
-                    onCheckedChange={(checked) => updateSetting("block_vpn", checked)}
-                  />
-                </div>
-
                 <div className="p-4 bg-warning/10 border border-warning/30 rounded-lg">
                   <div className="flex items-start gap-3">
                     <AlertTriangle className="h-5 w-5 text-warning mt-0.5" />
                     <div>
                       <h4 className="font-medium text-warning">Catatan Penting</h4>
                       <ul className="text-sm text-muted-foreground mt-2 space-y-1 list-disc list-inside">
-                        <li>"Blokir Semua Browser" akan memaksa pegawai menggunakan APK resmi</li>
-                        <li>Pastikan APK sudah tersedia sebelum mengaktifkan fitur ini</li>
+                        <li>"Blokir Semua Browser" akan memaksa pegawai menggunakan aplikasi mobile internal</li>
+                        <li>Pastikan aplikasi internal sudah tersedia sebelum mengaktifkan fitur ini</li>
                         <li>Admin tetap bisa mengakses halaman via browser</li>
                       </ul>
                     </div>
@@ -458,53 +366,14 @@ export default function AttendanceSecuritySettings() {
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
-                  <Lock className="h-5 w-5" />
-                  Validasi APK Resmi
+                  <Settings className="h-5 w-5" />
+                  Kompatibilitas Aplikasi
                 </CardTitle>
                 <CardDescription>
-                  Pengaturan untuk memastikan hanya APK resmi yang dapat digunakan
+                  Batas minimum versi Android agar fitur absensi tetap stabil
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label className="font-medium">Wajib APK Resmi</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Absensi hanya dapat dilakukan melalui aplikasi APK resmi yang di-download dari sistem
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.require_official_apk}
-                    onCheckedChange={(checked) => updateSetting("require_official_apk", checked)}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label className="font-medium">Validasi Signature APK</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Memeriksa signature APK untuk memastikan keaslian aplikasi
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.apk_signature_check}
-                    onCheckedChange={(checked) => updateSetting("apk_signature_check", checked)}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <Label className="font-medium">Blokir Perangkat Root</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Mendeteksi dan memblokir perangkat yang sudah di-root
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.block_rooted_device}
-                    onCheckedChange={(checked) => updateSetting("block_rooted_device", checked)}
-                  />
-                </div>
-
                 <div className="flex items-center justify-between">
                   <div className="space-y-1">
                     <Label className="font-medium">Versi Android Minimum</Label>
@@ -526,12 +395,11 @@ export default function AttendanceSecuritySettings() {
                   <div className="flex items-start gap-3">
                     <Settings className="h-5 w-5 text-info mt-0.5" />
                     <div>
-                      <h4 className="font-medium text-info">Cara Kerja Validasi APK</h4>
+                      <h4 className="font-medium text-info">Catatan Kompatibilitas</h4>
                       <ul className="text-sm text-muted-foreground mt-2 space-y-1 list-disc list-inside">
-                        <li>APK resmi memiliki signature yang terverifikasi</li>
-                        <li>Setiap request absensi akan dicek signature APK</li>
-                        <li>Browser dan APK tidak resmi akan diblokir</li>
-                        <li>Pegawai diarahkan untuk download APK resmi dari halaman organisasi</li>
+                        <li>Perangkat di bawah versi minimum berisiko gagal akses GPS dan sinkronisasi</li>
+                        <li>Gunakan baseline Android yang sama untuk menurunkan variasi bug perangkat</li>
+                        <li>Android 7 (Nougat) masih jadi baseline minimum yang disarankan</li>
                       </ul>
                     </div>
                   </div>
@@ -543,8 +411,7 @@ export default function AttendanceSecuritySettings() {
                     <div>
                       <h4 className="font-medium text-warning">Catatan Penting</h4>
                       <ul className="text-sm text-muted-foreground mt-2 space-y-1 list-disc list-inside">
-                        <li>Blokir perangkat root dapat mencegah kecurangan namun mungkin memblokir pengguna yang sah</li>
-                        <li>Pastikan versi Android minimum sesuai dengan perangkat pegawai</li>
+                        <li>Pastikan versi Android minimum sesuai populasi perangkat pegawai</li>
                         <li>Android 7 (Nougat) adalah minimum yang disarankan untuk fitur keamanan</li>
                       </ul>
                     </div>

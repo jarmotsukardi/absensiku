@@ -54,6 +54,8 @@ interface ApkInfo {
 }
 
 const DASHBOARD_FETCH_TIMEOUT_MS = 15000;
+const DASHBOARD_LOADING_WATCHDOG_MS = 25000;
+const ORG_ACTIVE_TENANT_STORAGE_KEY = "org_active_tenant_id";
 
 export default function OrgDashboard() {
   const navigate = useNavigate();
@@ -76,6 +78,14 @@ export default function OrgDashboard() {
   const fetchDashboardData = useCallback(async () => {
     let resolvedTenantIdForLog: string | null = null;
     try {
+      const cachedTenantId = (() => {
+        try {
+          return sessionStorage.getItem(ORG_ACTIVE_TENANT_STORAGE_KEY);
+        } catch {
+          return null;
+        }
+      })();
+
       const { data: { user } } = await withTimeout(
         Promise.resolve(supabase.auth.getUser()),
         DASHBOARD_FETCH_TIMEOUT_MS,
@@ -88,22 +98,27 @@ export default function OrgDashboard() {
       }
 
       // Resolve tenant context from roles and optional query param.
-      const { data: roleRows, error: roleRowsError } = await withTimeout(
-        Promise.resolve(
-          supabase
-            .from("user_roles")
-            .select("role, tenant_id")
-            .eq("user_id", user.id)
-            .in("role", ["admin_instansi", "super_admin"])
-        ),
-        DASHBOARD_FETCH_TIMEOUT_MS,
-        "Timeout membaca role pengguna organisasi"
-      );
-      if (roleRowsError) throw roleRowsError;
+      let isSuperAdmin = false;
+      let resolvedTenantId = cachedTenantId;
 
-      const adminRole = roleRows?.find((r) => r.role === "admin_instansi" && r.tenant_id);
-      const isSuperAdmin = roleRows?.some((r) => r.role === "super_admin");
-      const resolvedTenantId = adminRole?.tenant_id || (isSuperAdmin ? queryTenantId : null);
+      if (!resolvedTenantId || queryTenantId) {
+        const { data: roleRows, error: roleRowsError } = await withTimeout(
+          Promise.resolve(
+            supabase
+              .from("user_roles")
+              .select("role, tenant_id")
+              .eq("user_id", user.id)
+              .in("role", ["admin_instansi", "super_admin"])
+          ),
+          DASHBOARD_FETCH_TIMEOUT_MS,
+          "Timeout membaca role pengguna organisasi"
+        );
+        if (roleRowsError) throw roleRowsError;
+
+        const adminRole = roleRows?.find((r) => r.role === "admin_instansi" && r.tenant_id);
+        isSuperAdmin = roleRows?.some((r) => r.role === "super_admin") || false;
+        resolvedTenantId = adminRole?.tenant_id || (isSuperAdmin ? queryTenantId : null);
+      }
       resolvedTenantIdForLog = resolvedTenantId;
 
       if (!resolvedTenantId) {
@@ -115,6 +130,12 @@ export default function OrgDashboard() {
         toast.error("Akses ditolak. Anda bukan Admin Organisasi.");
         navigate("/org/login");
         return;
+      }
+
+      try {
+        sessionStorage.setItem(ORG_ACTIVE_TENANT_STORAGE_KEY, resolvedTenantId);
+      } catch {
+        // Ignore storage failures.
       }
 
       setTenantId(resolvedTenantId);
@@ -286,6 +307,19 @@ export default function OrgDashboard() {
   useEffect(() => {
     void fetchDashboardData();
   }, [fetchDashboardData]);
+
+  useEffect(() => {
+    if (!isLoading) return;
+    const timer = window.setTimeout(() => {
+      const errorRef = reportError(new Error("Org dashboard loading watchdog timeout"), "org.dashboard.loading_watchdog", {
+        tenant_id: tenantId ?? queryTenantId ?? null,
+      });
+      toast.error(appendErrorReference("Memuat dashboard terlalu lama. Coba muat ulang halaman.", errorRef));
+      setIsLoading(false);
+    }, DASHBOARD_LOADING_WATCHDOG_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [isLoading, queryTenantId, tenantId]);
 
   const getSubscriptionStatus = () => {
     if (!subscription) return { label: "Tidak Aktif", variant: "destructive" as const };
@@ -602,7 +636,7 @@ export default function OrgDashboard() {
           </CardContent>
         </Card>
 
-        {/* APK Download */}
+        {/* App Download */}
         {apkInfo?.url && (
           <Card className="border-primary/30 bg-primary/5">
             <CardContent className="py-4">
@@ -623,7 +657,7 @@ export default function OrgDashboard() {
                   onClick={() => window.open(apkInfo.url, "_blank")}
                 >
                   <Download className="w-4 h-4 mr-2" />
-                  Download APK
+                  Unduh Aplikasi
                 </Button>
               </div>
             </CardContent>

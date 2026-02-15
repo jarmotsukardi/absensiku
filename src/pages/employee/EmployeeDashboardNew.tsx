@@ -37,6 +37,7 @@ import { JoinOrganizationCard } from "@/components/employee/JoinOrganizationCard
 import { OrganizationSelector } from "@/components/employee/OrganizationSelector";
 import { EmployeeSidebar } from "@/components/employee/EmployeeSidebar";
 import { SmartAppBanner } from "@/components/common/SmartAppBanner";
+import { EmployeeFloatingWhatsApp } from "@/components/employee/EmployeeFloatingWhatsApp";
 import DOMPurify from "dompurify";
 
 // Lazy load DeviceResetDialog di level modul untuk mencegah flicker
@@ -180,7 +181,7 @@ export default function EmployeeDashboardNew() {
   const [todayAttendance, setTodayAttendance] = useState<AttendanceRecord | null>(null);
   const todayAttendanceRef = React.useRef<AttendanceRecord | null>(null);
   const hasFetchedRef = React.useRef(false); // Mencegah double fetch
-  const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number; timestamp: number } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [news, setNews] = useState<NewsItem[]>([]);
   const [newsLoading, setNewsLoading] = useState(true); // State loading terpisah untuk news
@@ -828,6 +829,17 @@ export default function EmployeeDashboardNew() {
     });
   };
 
+  const validateLocationSecurityOrNotify = useCallback((position: GeolocationPosition): boolean => {
+    const validation = securityCheck.validateLocationSecurity(position);
+    if (validation.allowed) return true;
+
+    setAttendanceError(validation.reason || "Pemeriksaan keamanan lokasi gagal.");
+    toast.error("Tidak Bisa Absen", {
+      description: validation.reason || "Perangkat/lokasi tidak memenuhi kebijakan keamanan.",
+    });
+    return false;
+  }, [securityCheck]);
+
   const handleCheckIn = async () => {
     if (!employee) return;
     
@@ -872,13 +884,15 @@ export default function EmployeeDashboardNew() {
           
           // Jika di luar radius, tampilkan dialog flexible attendance
           if (distance > radiusLimit) {
-            setCurrentLocation({ lat, lng });
+            if (!validateLocationSecurityOrNotify(position)) return;
+            setCurrentLocation({ lat, lng, timestamp: position.timestamp });
             setShowFlexibleAttendance(true);
             return;
           }
         }
         
-        setCurrentLocation({ lat, lng });
+        if (!validateLocationSecurityOrNotify(position)) return;
+        setCurrentLocation({ lat, lng, timestamp: position.timestamp });
       } catch (error: any) {
         toast.error("Gagal Mendapatkan Lokasi", {
           description: error.message || "Aktifkan GPS dan coba lagi",
@@ -925,14 +939,15 @@ export default function EmployeeDashboardNew() {
     try {
       let lat: number, lng: number;
       
-      if (currentLocation) {
+      if (currentLocation && !securityCheck.settings?.require_realtime_location) {
         lat = currentLocation.lat;
         lng = currentLocation.lng;
       } else {
         const position = await getCurrentPosition();
+        if (!validateLocationSecurityOrNotify(position)) return;
         lat = position.coords.latitude;
         lng = position.coords.longitude;
-        setCurrentLocation({ lat, lng });
+        setCurrentLocation({ lat, lng, timestamp: position.timestamp });
       }
 
       const office = employee.offices;
@@ -1011,8 +1026,10 @@ export default function EmployeeDashboardNew() {
       }
 
       const position = await getCurrentPosition();
+      if (!validateLocationSecurityOrNotify(position)) return;
       const lat = position.coords.latitude;
       const lng = position.coords.longitude;
+      setCurrentLocation({ lat, lng, timestamp: position.timestamp });
 
       const result = await saveCheckOutOffline(lat, lng, office as any);
       if (!result.success) {
@@ -1192,6 +1209,7 @@ export default function EmployeeDashboardNew() {
 
       {/* Smart App Banner */}
       <SmartAppBanner appName={tenantInfo?.name || "AbsensiKu"} />
+      <EmployeeFloatingWhatsApp tenantId={employee?.tenant_id} />
       {/* Checkout Confirm Dialog */}
       <CheckoutConfirmDialog
         isOpen={showCheckoutConfirm}

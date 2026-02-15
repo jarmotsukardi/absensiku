@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import type { Tables } from "@/integrations/supabase/types";
+import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 
 type AttendanceRecord = Tables<"attendance_records_partitioned">;
 type EmployeeSummary = {
@@ -26,28 +27,47 @@ export default function OrgAbsentWithoutNotice() {
   const [records, setRecords] = useState<AbsentRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
-    fetchData();
+    const initTenant = async () => {
+      try {
+        setTenantId(await resolveOrgTenantId());
+      } catch {
+        setTenantId(null);
+      }
+    };
+    void initTenant();
   }, []);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
+      if (!tenantId) {
+        setRecords([]);
+        return;
+      }
+      const employeeIds = await getTenantEmployeeIds(tenantId);
+      if (employeeIds.length === 0) {
+        setRecords([]);
+        return;
+      }
+
       // Fetch dari tabel partitioned - tanpa join karena partitioned table
       const { data: attendanceData, error } = await supabase
         .from("attendance_records_partitioned")
         .select("*")
+        .in("employee_id", employeeIds)
         .eq("status", "tidak_hadir")
         .order("date", { ascending: false });
 
       if (error) throw error;
 
       // Fetch employees data untuk join manual
-      const employeeIds = [...new Set((attendanceData || []).map((record) => record.employee_id))];
+      const matchedEmployeeIds = [...new Set((attendanceData || []).map((record) => record.employee_id))];
       const { data: employeesData } = await supabase
         .from("employees")
         .select("id, name, nip, opd(code)")
-        .in("id", employeeIds);
+        .in("id", matchedEmployeeIds);
 
       // Manual join
       const recordsWithEmployee: AbsentRecord[] = (attendanceData || []).map((record) => ({
@@ -61,7 +81,16 @@ export default function OrgAbsentWithoutNotice() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (tenantId === undefined) return;
+    if (tenantId === null) {
+      setIsLoading(false);
+      return;
+    }
+    void fetchData();
+  }, [tenantId, fetchData]);
 
   const filteredRecords = records.filter((record) =>
     (record.employees?.name || "").toLowerCase().includes(searchTerm.toLowerCase())

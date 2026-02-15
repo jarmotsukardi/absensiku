@@ -172,7 +172,7 @@ export function EmployeeSidebar({
     <>
       {/* Overlay */}
       <div
-        className={`fixed inset-0 bg-black/50 z-[60] transition-opacity duration-300 ${
+        className={`fixed inset-0 bg-black/65 z-[60] transition-opacity duration-300 ${
           open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
         }`}
         onClick={onClose}
@@ -180,14 +180,14 @@ export function EmployeeSidebar({
 
       {/* Sidebar */}
       <aside
-        className={`fixed top-0 left-0 h-full w-72 bg-gradient-to-b from-card via-card to-muted/20 border-r border-border z-[70] transform transition-transform duration-300 ease-in-out shadow-2xl ${
+        className={`fixed top-0 left-0 h-full w-72 bg-[#090813] text-[#b8bfce] border-r border-[#1b1a26] z-[70] transform transition-transform duration-300 ease-in-out shadow-2xl ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border/80 bg-card/80 backdrop-blur-sm">
+        <div className="flex items-center justify-between p-4 border-b border-[#1b1a26] bg-[#090813]">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="w-11 h-11 rounded-2xl bg-primary/90 ring-2 ring-primary/20 overflow-hidden flex items-center justify-center">
+            <div className="w-11 h-11 rounded-2xl bg-[#161422] ring-2 ring-[#242238] overflow-hidden flex items-center justify-center">
               {shouldShowLogo ? (
                 <img
                   src={tenantLogoUrl || undefined}
@@ -196,40 +196,41 @@ export function EmployeeSidebar({
                   onError={() => setLogoLoadFailed(true)}
                 />
               ) : (
-                <span className="text-primary-foreground font-bold text-base">{tenantInitial}</span>
+                <span className="text-white font-bold text-base">{tenantInitial}</span>
               )}
             </div>
             <div className="min-w-0">
-              <h2 className="font-semibold text-foreground leading-tight">AbsensiKu</h2>
-              <p className="text-[11px] text-muted-foreground truncate">{tenantName || "Organisasi"}</p>
-              <p className="text-[10px] uppercase tracking-wide text-primary/80">Portal Pegawai</p>
+              <h2 className="font-semibold text-white leading-tight">AbsensiKu</h2>
+              <p className="text-[11px] text-[#b8bfce] truncate">{tenantName || "Organisasi"}</p>
+              <p className="text-[10px] uppercase tracking-wide text-[#56a7f6]">Portal Pegawai</p>
             </div>
           </div>
-          <Button variant="ghost" size="icon" className="rounded-xl" onClick={onClose}>
+          <Button variant="ghost" size="icon" className="rounded-xl text-[#b8bfce] hover:text-white hover:bg-[#1a1828]" onClick={onClose}>
             <X className="w-5 h-5" />
           </Button>
         </div>
 
         {/* Menu Items */}
         <nav className="px-3 pt-3 pb-32 space-y-2 overflow-y-auto max-h-[calc(100vh-170px)]">
-          <div className="px-3 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground/90">
+          <div className="px-3 pb-1 text-[11px] uppercase tracking-wider text-[#6f7285]">
             Menu Utama
           </div>
-          {mainMenuItems.map((item) => (
+          {mainMenuItems.map((item, idx) => (
             <div key={item.id}>
               <button
-                className={`group relative w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all duration-200 ${
+                className={`group relative w-full flex items-center justify-between px-3 py-2.5 rounded-2xl transition-all duration-200 ${
                   activeTab === item.id
-                    ? "bg-primary/12 text-primary shadow-sm"
-                    : "text-foreground/80 hover:bg-accent/70 hover:text-accent-foreground"
+                    ? "bg-[#3170f0] text-white shadow-[0_10px_20px_rgba(49,112,240,0.35)]"
+                    : "text-[#b8bfce] hover:bg-[#facc15] hover:text-[#1f1f1f]"
                 }`}
+                style={{ transitionDelay: `${idx * 28}ms` }}
                 onClick={() => {
                   onNavigateTab?.(item.id);
                   onClose();
                 }}
               >
                 {activeTab === item.id && (
-                  <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r-full bg-primary" />
+                  <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r-full bg-[#56a7f6]" />
                 )}
                 <div className="flex items-center gap-3">
                   <item.icon className="w-4 h-4" />
@@ -239,18 +240,19 @@ export function EmployeeSidebar({
             </div>
           ))}
 
-          <div className="px-3 pt-2 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground/90">
+          <div className="px-3 pt-2 pb-1 text-[11px] uppercase tracking-wider text-[#6f7285]">
             Utilitas
           </div>
 
-          {utilityMenuItems.map((item) => (
+          {utilityMenuItems.map((item, idx) => (
             <div key={item.id}>
               <button
-                className={`group relative w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all duration-200 ${
+                className={`group relative w-full flex items-center justify-between px-3 py-2.5 rounded-2xl transition-all duration-200 ${
                   activeTab === item.id
-                    ? "bg-primary/12 text-primary shadow-sm"
-                    : "text-foreground/80 hover:bg-accent/70 hover:text-accent-foreground"
+                    ? "bg-[#3170f0] text-white shadow-[0_10px_20px_rgba(49,112,240,0.35)]"
+                    : "text-[#b8bfce] hover:bg-[#facc15] hover:text-[#1f1f1f]"
                 }`}
+                style={{ transitionDelay: `${(idx + mainMenuItems.length) * 24}ms` }}
                 onClick={() => {
                   if (item.children) {
                     setExpandedMenu(expandedMenu === item.id ? null : item.id);
@@ -260,13 +262,13 @@ export function EmployeeSidebar({
                 }}
               >
                 {(activeTab === item.id || (item.id === "informasi" && isInfoActive)) && (
-                  <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r-full bg-primary" />
+                  <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r-full bg-[#56a7f6]" />
                 )}
                 <div className="flex items-center gap-3">
                   <item.icon className="w-4 h-4" />
                   <span className="font-medium text-sm leading-none">{item.label}</span>
                   {item.id === "notifications" && unreadNotificationCount > 0 && (
-                    <span className="min-w-5 h-5 px-1.5 rounded-full text-[10px] font-semibold bg-destructive text-destructive-foreground flex items-center justify-center">
+                    <span className="min-w-5 h-5 px-1.5 rounded-full text-[10px] font-semibold bg-[#fa2c56] text-white flex items-center justify-center">
                       {unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}
                     </span>
                   )}
@@ -282,14 +284,14 @@ export function EmployeeSidebar({
 
               {/* Children */}
               {item.children && expandedMenu === item.id && (
-                <div className="ml-4 pl-3 border-l border-border/80 space-y-1 mt-1 animate-fade-in">
+                <div className="ml-4 pl-3 border-l border-[#242238] space-y-1 mt-1 animate-fade-in">
                   {item.children.map((child) => (
                     <button
                       key={child.id}
                       className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-200 text-sm ${
                         activeTab === child.id
-                          ? "bg-primary/10 text-primary"
-                          : "text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground"
+                          ? "bg-[#1d2c56] text-[#56a7f6]"
+                          : "text-[#a0a6b8] hover:bg-[#facc15] hover:text-[#1f1f1f]"
                       }`}
                       onClick={child.onClick}
                     >
@@ -304,11 +306,11 @@ export function EmployeeSidebar({
         </nav>
 
         {/* Dark Mode Toggle - Bottom */}
-        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-border bg-card/95 backdrop-blur-sm">
+        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-[#1b1a26] bg-[#090813]">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              {darkMode ? <Moon className="w-5 h-5 text-primary" /> : <Sun className="w-5 h-5 text-amber-500" />}
-              <Label htmlFor="dark-mode" className="text-sm font-medium cursor-pointer">
+              {darkMode ? <Moon className="w-5 h-5 text-[#56a7f6]" /> : <Sun className="w-5 h-5 text-amber-500" />}
+              <Label htmlFor="dark-mode" className="text-sm font-medium cursor-pointer text-[#b8bfce]">
                 Mode Gelap
               </Label>
             </div>

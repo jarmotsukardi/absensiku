@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import { format, differenceInDays, isBefore, startOfDay } from "date-fns";
 import { id } from "date-fns/locale";
 import type { Enums, Tables } from "@/integrations/supabase/types";
+import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 
 type RequestStatus = Enums<"request_status">;
 type LeaveRequest = Tables<"leave_requests"> & {
@@ -28,9 +29,35 @@ export default function OrgLeaveRequests() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("menunggu");
+  const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    const initTenant = async () => {
+      try {
+        const resolved = await resolveOrgTenantId();
+        setTenantId(resolved);
+      } catch {
+        setTenantId(null);
+      }
+    };
+    void initTenant();
+  }, []);
 
   const fetchData = useCallback(async () => {
     try {
+      if (!tenantId) {
+        setRequests([]);
+        setExpiredRequests([]);
+        return;
+      }
+
+      const employeeIds = await getTenantEmployeeIds(tenantId);
+      if (employeeIds.length === 0) {
+        setRequests([]);
+        setExpiredRequests([]);
+        return;
+      }
+
       // Auto-expire: mark pending requests past start_date as expired
       const today = format(new Date(), "yyyy-MM-dd");
       await supabase
@@ -39,12 +66,14 @@ export default function OrgLeaveRequests() {
           status: "ditolak" as RequestStatus,
           rejection_reason: "Otomatis kedaluwarsa (melewati tanggal mulai)",
         })
+        .in("employee_id", employeeIds)
         .eq("status", "menunggu")
         .lt("start_date", today);
 
       let query = supabase
         .from("leave_requests")
         .select("*, employees!leave_requests_employee_id_fkey(name, nip, opd(code))")
+        .in("employee_id", employeeIds)
         .order("created_at", { ascending: false });
 
       if (statusFilter !== "all") {
@@ -66,11 +95,16 @@ export default function OrgLeaveRequests() {
     } finally {
       setIsLoading(false);
     }
-  }, [statusFilter]);
+  }, [statusFilter, tenantId]);
 
   useEffect(() => {
+    if (tenantId === undefined) return;
+    if (tenantId === null) {
+      setIsLoading(false);
+      return;
+    }
     void fetchData();
-  }, [fetchData]);
+  }, [fetchData, tenantId]);
 
   const handleApprove = async (id: string) => {
     try {
@@ -92,7 +126,7 @@ export default function OrgLeaveRequests() {
 
       if (error) throw error;
       toast.success("Permohonan disetujui");
-      fetchData();
+      void fetchData();
     } catch (error) {
       toast.error("Gagal menyetujui permohonan");
     }
@@ -110,7 +144,7 @@ export default function OrgLeaveRequests() {
 
       if (error) throw error;
       toast.success("Permohonan ditolak");
-      fetchData();
+      void fetchData();
     } catch (error) {
       toast.error("Gagal menolak permohonan");
     }

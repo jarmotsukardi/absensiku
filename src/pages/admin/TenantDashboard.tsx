@@ -450,7 +450,7 @@ export default function TenantDashboard() {
           </CardContent>
         </Card>
 
-        {/* APK Download */}
+        {/* App Download */}
         {apkInfo?.url && (
           <Card className="border-primary/30 bg-primary/5">
             <CardContent className="py-4">
@@ -471,7 +471,7 @@ export default function TenantDashboard() {
                   onClick={() => window.open(apkInfo.url, "_blank")}
                 >
                   <Download className="w-4 h-4 mr-2" />
-                  Download APK
+                  Unduh Aplikasi
                 </Button>
               </div>
             </CardContent>

@@ -82,7 +82,7 @@ const EDGE_FUNCTIONS = [
 // Storage buckets
 const STORAGE_BUCKETS = [
   { name: "organization-logos", isPublic: true, description: "Logo organisasi" },
-  { name: "apk-files", isPublic: true, description: "File APK Android" },
+  { name: "apk-files", isPublic: true, description: "File aplikasi Android" },
   { name: "news-images", isPublic: true, description: "Gambar berita/artikel" }
 ];
 

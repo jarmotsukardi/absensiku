@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,6 +15,7 @@ import { useEmployee } from "@/hooks/useEmployee";
 import type { User } from "@supabase/supabase-js";
 import type { LucideIcon } from "lucide-react";
 import type { Tables } from "@/integrations/supabase/types";
+import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 
 type WfhRequest = Tables<"wfh_requests"> & {
   employees: {
@@ -28,6 +29,7 @@ export default function OrgWfhRequests() {
   const [requests, setRequests] = useState<WfhRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
+  const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<string | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
@@ -40,19 +42,49 @@ export default function OrgWfhRequests() {
   const { employee } = useEmployee(user);
 
   useEffect(() => {
-    fetchRequests();
+    const initTenant = async () => {
+      try {
+        setTenantId(await resolveOrgTenantId());
+      } catch {
+        setTenantId(null);
+      }
+    };
+    void initTenant();
   }, []);
 
-  const fetchRequests = async () => {
+  const fetchRequests = useCallback(async () => {
     setIsLoading(true);
+    if (!tenantId) {
+      setRequests([]);
+      setIsLoading(false);
+      return;
+    }
+
+    const employeeIds = await getTenantEmployeeIds(tenantId);
+    if (employeeIds.length === 0) {
+      setRequests([]);
+      setIsLoading(false);
+      return;
+    }
+
     const { data, error } = await supabase
       .from("wfh_requests")
       .select("*, employees!wfh_requests_employee_id_fkey(name, nip, opd(name, code))")
+      .in("employee_id", employeeIds)
       .order("created_at", { ascending: false });
     
     if (!error) setRequests((data || []) as WfhRequest[]);
     setIsLoading(false);
-  };
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (tenantId === undefined) return;
+    if (tenantId === null) {
+      setIsLoading(false);
+      return;
+    }
+    void fetchRequests();
+  }, [tenantId, fetchRequests]);
 
   const handleApprove = async (id: string) => {
     if (!employee?.id) return;

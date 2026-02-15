@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { format, parseISO } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { 
   Calendar, 
   Plus, 
@@ -36,12 +37,59 @@ interface NationalHoliday {
 }
 
 interface PublicHolidayApiItem {
-  holiday_date: string;
-  holiday_name: string;
-  is_national_holiday: boolean;
+  date: string;
+  name: string;
+}
+
+interface NagerHolidayApiItem {
+  date: string;
+  localName?: string;
+  name?: string;
+  global?: boolean;
 }
 
 const ITEMS_PER_PAGE = 15;
+
+const fetchExternalNationalHolidays = async (year: string): Promise<{ holidays: PublicHolidayApiItem[]; sourceLabel: string }> => {
+  try {
+    const response = await fetch(`https://libur.deno.dev/api?year=${year}`);
+    if (response.ok) {
+      const data: unknown = await response.json();
+      if (Array.isArray(data)) {
+        const holidays = (data as PublicHolidayApiItem[])
+          .filter((holiday) => typeof holiday?.date === "string" && typeof holiday?.name === "string");
+        if (holidays.length > 0) {
+          return { holidays, sourceLabel: "libur.deno.dev" };
+        }
+      }
+    }
+  } catch {
+    // fallback
+  }
+
+  try {
+    const response = await fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/ID`);
+    if (response.ok) {
+      const data: unknown = await response.json();
+      if (Array.isArray(data)) {
+        const holidays = (data as NagerHolidayApiItem[])
+          .filter((item) => typeof item?.date === "string")
+          .filter((item) => item.global !== false)
+          .map((item) => ({
+            date: item.date,
+            name: item.localName || item.name || "Libur Nasional",
+          }));
+        if (holidays.length > 0) {
+          return { holidays, sourceLabel: "API fallback internasional" };
+        }
+      }
+    }
+  } catch {
+    // fallback
+  }
+
+  return { holidays: [], sourceLabel: "default lokal" };
+};
 
 export default function NationalHolidaysManagement() {
   const [holidays, setHolidays] = useState<NationalHoliday[]>([]);
@@ -71,50 +119,29 @@ export default function NationalHolidaysManagement() {
       if (error) throw error;
       setHolidays(data || []);
     } catch (error) {
-      console.error("Error fetching holidays:", error);
-      toast.error("Gagal memuat data");
+      const errorRef = reportError(error, "admin.national_holidays.fetch", {
+        year: selectedYear,
+      });
+      toast.error(appendErrorReference("Gagal memuat data", errorRef));
     } finally {
       setIsLoading(false);
     }
   }, [selectedYear]);
 
   useEffect(() => {
-    fetchHolidays();
+    void fetchHolidays();
   }, [fetchHolidays]);
 
-  // Fetch from external API (hari-libur-api.vercel.app)
+  // Fetch from external holiday API
   const fetchFromAPI = async () => {
     setIsFetchingAPI(true);
     try {
-      const response = await fetch(`https://api-harilibur.vercel.app/api?year=${selectedYear}`);
-      
-      if (!response.ok) {
-        // API tidak tersedia untuk tahun ini, gunakan import default
-        toast.info(`Data API tidak tersedia untuk tahun ${selectedYear}. Menggunakan import default...`);
-        await importDefaultHolidays();
-        setIsFetchingAPI(false);
-        return;
-      }
-      
-      const data: unknown = await response.json();
-      
-      if (!Array.isArray(data) || data.length === 0) {
-        // Data kosong, gunakan import default
-        toast.info(`Data API kosong untuk tahun ${selectedYear}. Menggunakan import default...`);
-        await importDefaultHolidays();
-        setIsFetchingAPI(false);
-        return;
-      }
-
-      // Filter hanya hari libur nasional (bukan cuti bersama)
-      const nationalHolidays = (data as PublicHolidayApiItem[]).filter(
-        (holiday) => holiday.is_national_holiday === true
-      );
+      const external = await fetchExternalNationalHolidays(selectedYear);
+      const nationalHolidays = external.holidays;
       
       if (nationalHolidays.length === 0) {
-        toast.info(`Tidak ada libur nasional dari API untuk tahun ${selectedYear}. Menggunakan import default...`);
+        toast.info(`Data API kosong untuk tahun ${selectedYear}. Menggunakan impor default...`);
         await importDefaultHolidays();
-        setIsFetchingAPI(false);
         return;
       }
       
@@ -122,8 +149,8 @@ export default function NationalHolidaysManagement() {
       let skippedCount = 0;
 
       for (const holiday of nationalHolidays) {
-        const holidayDate = holiday.holiday_date;
-        const holidayName = holiday.holiday_name;
+        const holidayDate = holiday.date;
+        const holidayName = holiday.name;
         
         // Check if already exists
         const exists = holidays.some(h => h.date === holidayDate);
@@ -132,7 +159,7 @@ export default function NationalHolidaysManagement() {
           const { error } = await supabase.from("national_holidays").insert({
             date: holidayDate,
             name: holidayName,
-            description: holiday.is_national_holiday ? "Libur Nasional" : "Cuti Bersama",
+            description: `Libur Nasional (sumber ${external.sourceLabel})`,
             year: parseInt(selectedYear),
             is_active: true,
           });
@@ -143,11 +170,18 @@ export default function NationalHolidaysManagement() {
         }
       }
       
-      toast.success(`Berhasil menambahkan ${insertedCount} libur nasional. ${skippedCount} sudah ada.`);
-      fetchHolidays();
+      toast.success(`Sumber ${external.sourceLabel}: ${insertedCount} ditambahkan, ${skippedCount} sudah ada.`);
+      await fetchHolidays();
     } catch (error) {
-      console.error("Error fetching from API:", error);
-      toast.info(`Gagal mengambil data API. Menggunakan import default untuk tahun ${selectedYear}...`);
+      const errorRef = reportError(error, "admin.national_holidays.pull", {
+        year: selectedYear,
+      });
+      toast.info(
+        appendErrorReference(
+          `Gagal mengambil data API. Menggunakan impor default untuk tahun ${selectedYear}...`,
+          errorRef
+        )
+      );
       await importDefaultHolidays();
     } finally {
       setIsFetchingAPI(false);
@@ -203,10 +237,13 @@ export default function NationalHolidaysManagement() {
 
       setIsDialogOpen(false);
       resetForm();
-      fetchHolidays();
+      void fetchHolidays();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Gagal menyimpan data";
-      toast.error(message);
+      const errorRef = reportError(error, "admin.national_holidays.save", {
+        holiday_id: editingHoliday?.id ?? null,
+        date: formData.date,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan data", errorRef));
     }
   };
 
@@ -221,9 +258,10 @@ export default function NationalHolidaysManagement() {
 
       if (error) throw error;
       toast.success("Hari libur berhasil dihapus");
-      fetchHolidays();
+      void fetchHolidays();
     } catch (error) {
-      toast.error("Gagal menghapus data");
+      const errorRef = reportError(error, "admin.national_holidays.delete", { holiday_id: id });
+      toast.error(appendErrorReference("Gagal menghapus data", errorRef));
     }
   };
 
@@ -276,9 +314,12 @@ export default function NationalHolidaysManagement() {
         }
       }
       toast.success(`${insertedCount} hari libur nasional berhasil diimport`);
-      fetchHolidays();
+      void fetchHolidays();
     } catch (error) {
-      toast.error("Gagal mengimport hari libur");
+      const errorRef = reportError(error, "admin.national_holidays.import_default", {
+        year: selectedYear,
+      });
+      toast.error(appendErrorReference("Gagal mengimpor hari libur", errorRef));
     }
   };
 
@@ -316,10 +357,13 @@ export default function NationalHolidaysManagement() {
       }
       
       toast.success(`Berhasil menyalin ${copiedCount} libur nasional ke tahun ${targetYear}`);
-      fetchHolidays();
+      void fetchHolidays();
     } catch (error) {
-      console.error("Error copying holidays:", error);
-      toast.error("Gagal menyalin data libur");
+      const errorRef = reportError(error, "admin.national_holidays.copy_prev_year", {
+        source_year: sourceYear,
+        target_year: targetYear,
+      });
+      toast.error(appendErrorReference("Gagal menyalin data libur", errorRef));
     }
   };
 

@@ -5,12 +5,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
-import { Star, Bug, Lightbulb, Download, Search, MessageSquare, CheckCircle2, Loader2, BarChart3, TrendingUp } from "lucide-react";
+import { Star, Bug, Lightbulb, Download, Search, MessageSquare, CheckCircle2, Loader2, Printer, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
@@ -34,6 +36,35 @@ interface FeedbackItem {
   tenants?: { name: string; } | null;
 }
 
+interface FeedbackBugSettings {
+  is_enabled: boolean;
+  bugs_enabled: boolean;
+  suggestions_enabled: boolean;
+}
+
+const createErrorRef = (scope: string) =>
+  `${scope}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+const escapeHtml = (text: string) =>
+  text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+
+const normalizeFeedbackSettings = (raw: unknown): FeedbackBugSettings => {
+  const value = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const legacyEnabled = value.is_enabled !== false;
+  const bugsEnabled = typeof value.bugs_enabled === "boolean" ? value.bugs_enabled : legacyEnabled;
+  const suggestionsEnabled = typeof value.suggestions_enabled === "boolean" ? value.suggestions_enabled : legacyEnabled;
+  return {
+    is_enabled: bugsEnabled || suggestionsEnabled,
+    bugs_enabled: bugsEnabled,
+    suggestions_enabled: suggestionsEnabled,
+  };
+};
+
 export default function FeedbackManagement() {
   const [feedbacks, setFeedbacks] = useState<FeedbackItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -44,13 +75,119 @@ export default function FeedbackManagement() {
   const [selectedFeedback, setSelectedFeedback] = useState<FeedbackItem | null>(null);
   const [resolutionNotes, setResolutionNotes] = useState("");
   const [isResolving, setIsResolving] = useState(false);
+  const [feedbackSettings, setFeedbackSettings] = useState<FeedbackBugSettings>({
+    is_enabled: true,
+    bugs_enabled: true,
+    suggestions_enabled: true,
+  });
+  const [isSavingFeedbackSetting, setIsSavingFeedbackSetting] = useState(false);
+  const [isSuperAdminUser, setIsSuperAdminUser] = useState(false);
 
   // Stats
   const [stats, setStats] = useState({ total: 0, avgRating: 0, openBugs: 0 });
 
   useEffect(() => {
     fetchFeedbacks();
+    fetchFeedbackSettings();
+    fetchAccessRole();
   }, []);
+
+  const fetchAccessRole = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setIsSuperAdminUser(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", user.id)
+        .eq("role", "super_admin")
+        .maybeSingle();
+
+      if (error) throw error;
+      setIsSuperAdminUser(Boolean(data));
+    } catch (error) {
+      const errorRef = createErrorRef("feedback-role-fetch");
+      console.error(`[${errorRef}] Error checking super admin role:`, error);
+      setIsSuperAdminUser(false);
+    }
+  };
+
+  const fetchFeedbackSettings = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("system_settings")
+        .select("value")
+        .eq("key", "feedback_bug_settings")
+        .maybeSingle();
+
+      if (error) throw error;
+      setFeedbackSettings(normalizeFeedbackSettings(data?.value));
+    } catch (error) {
+      const errorRef = createErrorRef("feedback-settings-fetch");
+      console.error(`[${errorRef}] Error fetching feedback settings:`, error);
+      toast.error(`Gagal memuat pengaturan feedback. Ref: ${errorRef}`);
+      setFeedbackSettings({
+        is_enabled: true,
+        bugs_enabled: true,
+        suggestions_enabled: true,
+      });
+    }
+  };
+
+  const saveFeedbackSettings = async (next: FeedbackBugSettings, successMessage: string) => {
+    const { data: existing, error: checkErr } = await supabase
+      .from("system_settings")
+      .select("id")
+      .eq("key", "feedback_bug_settings")
+      .maybeSingle();
+    if (checkErr) throw checkErr;
+
+    if (existing?.id) {
+      const { error } = await supabase
+        .from("system_settings")
+        .update({ value: next, updated_at: new Date().toISOString() })
+        .eq("key", "feedback_bug_settings");
+      if (error) throw error;
+    } else {
+      const { error } = await supabase
+        .from("system_settings")
+        .insert({ key: "feedback_bug_settings", value: next });
+      if (error) throw error;
+    }
+    toast.success(successMessage);
+  };
+
+  const handleToggleFeedbackEnabled = async (type: "bugs_enabled" | "suggestions_enabled", checked: boolean) => {
+    if (!isSuperAdminUser) {
+      toast.error("Hanya super admin yang dapat mengubah pengaturan ini.");
+      return;
+    }
+    const prev = feedbackSettings;
+    const next: FeedbackBugSettings = {
+      ...feedbackSettings,
+      [type]: checked,
+      is_enabled: type === "bugs_enabled"
+        ? checked || feedbackSettings.suggestions_enabled
+        : feedbackSettings.bugs_enabled || checked,
+    };
+    setFeedbackSettings(next);
+    setIsSavingFeedbackSetting(true);
+    try {
+      const label = type === "bugs_enabled" ? "Bug" : "Saran";
+      await saveFeedbackSettings(next, `Input ${label} ${checked ? "diaktifkan" : "dinonaktifkan"}`);
+    } catch (error) {
+      setFeedbackSettings(prev);
+      const errorRef = createErrorRef("feedback-settings-save");
+      console.error(`[${errorRef}] Error saving feedback settings:`, error);
+      toast.error(`Gagal menyimpan pengaturan feedback. Ref: ${errorRef}`);
+    } finally {
+      setIsSavingFeedbackSetting(false);
+    }
+  };
 
   const fetchFeedbacks = async () => {
     setIsLoading(true);
@@ -73,7 +210,9 @@ export default function FeedbackManagement() {
       const openBugs = items.filter(f => f.feedback_type === "bug" && f.status === "open").length;
       setStats({ total, avgRating: Math.round(avgRating * 10) / 10, openBugs });
     } catch (error) {
-      console.error("Error:", error);
+      const errorRef = createErrorRef("feedback-fetch");
+      console.error(`[${errorRef}] Error fetching feedback reports:`, error);
+      toast.error(`Gagal memuat feedback. Ref: ${errorRef}`);
     } finally {
       setIsLoading(false);
     }
@@ -84,7 +223,7 @@ export default function FeedbackManagement() {
     setIsResolving(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      await supabase.from("feedback_reports")
+      const { error } = await supabase.from("feedback_reports")
         .update({
           status: "resolved",
           resolved_at: new Date().toISOString(),
@@ -93,13 +232,16 @@ export default function FeedbackManagement() {
           updated_at: new Date().toISOString(),
         })
         .eq("id", selectedFeedback.id);
+      if (error) throw error;
 
       toast.success("Feedback ditandai selesai");
       setSelectedFeedback(null);
       setResolutionNotes("");
       fetchFeedbacks();
-    } catch {
-      toast.error("Gagal mengupdate feedback");
+    } catch (error) {
+      const errorRef = createErrorRef("feedback-resolve");
+      console.error(`[${errorRef}] Error resolving feedback:`, error);
+      toast.error(`Gagal mengupdate feedback. Ref: ${errorRef}`);
     } finally {
       setIsResolving(false);
     }
@@ -129,6 +271,95 @@ export default function FeedbackManagement() {
     a.download = `feedback_${format(new Date(), "yyyyMMdd")}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const printPdf = () => {
+    const filtered = getFilteredData();
+    const rowsHtml = filtered
+      .map((f, index) => {
+        const createdAt = format(new Date(f.created_at), "dd MMM yyyy HH:mm", { locale: idLocale });
+        const organization = escapeHtml(f.tenants?.name || "-");
+        const reporterName = escapeHtml(f.reporter_name || "-");
+        const reporterRole = escapeHtml(f.reporter_role || "-");
+        const feedbackType = escapeHtml(f.feedback_type || "-");
+        const rating = f.rating ? `${f.rating}/5` : "-";
+        const status = escapeHtml(f.status || "-");
+        const message = escapeHtml(f.message || "-");
+
+        return `
+          <tr>
+            <td>${index + 1}</td>
+            <td>${createdAt}</td>
+            <td>${organization}</td>
+            <td>${reporterName}</td>
+            <td>${reporterRole}</td>
+            <td>${feedbackType}</td>
+            <td>${rating}</td>
+            <td>${status}</td>
+            <td>${message}</td>
+          </tr>
+        `;
+      })
+      .join("");
+
+    const html = `
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <title>Laporan Feedback</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 24px; color: #111; }
+            h1 { font-size: 20px; margin: 0 0 6px; }
+            .meta { margin-bottom: 14px; font-size: 12px; color: #444; }
+            table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+            th, td { border: 1px solid #ddd; padding: 6px; font-size: 11px; vertical-align: top; word-wrap: break-word; }
+            th { background: #f5f5f5; text-align: left; }
+            th:nth-child(1), td:nth-child(1) { width: 30px; text-align: center; }
+            th:nth-child(2), td:nth-child(2) { width: 110px; }
+            th:nth-child(7), td:nth-child(7) { width: 60px; text-align: center; }
+            th:nth-child(8), td:nth-child(8) { width: 70px; text-align: center; }
+            .empty { margin-top: 24px; color: #555; font-size: 13px; }
+            @page { size: A4 landscape; margin: 12mm; }
+          </style>
+        </head>
+        <body>
+          <h1>Laporan Feedback & Bug</h1>
+          <div class="meta">
+            Dicetak: ${format(new Date(), "dd MMMM yyyy HH:mm", { locale: idLocale })}<br/>
+            Total Data: ${filtered.length}
+          </div>
+          ${filtered.length === 0 ? "<div class='empty'>Tidak ada data feedback untuk dicetak.</div>" : `
+            <table>
+              <thead>
+                <tr>
+                  <th>No</th>
+                  <th>Tanggal</th>
+                  <th>Organisasi</th>
+                  <th>Nama</th>
+                  <th>Role</th>
+                  <th>Tipe</th>
+                  <th>Rating</th>
+                  <th>Status</th>
+                  <th>Pesan</th>
+                </tr>
+              </thead>
+              <tbody>${rowsHtml}</tbody>
+            </table>
+          `}
+        </body>
+      </html>
+    `;
+
+    const printWindow = window.open("", "_blank", "width=1200,height=800");
+    if (!printWindow) {
+      toast.error("Gagal membuka jendela print. Izinkan popup browser.");
+      return;
+    }
+    printWindow.document.write(html);
+    printWindow.document.close();
+    printWindow.focus();
+    printWindow.print();
   };
 
   const getFilteredData = () => {
@@ -181,11 +412,53 @@ export default function FeedbackManagement() {
 
       <Card>
         <CardHeader className="pb-3">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b">
+            <div>
+              <p className="text-sm font-medium">Pengaturan Feedback & Bug</p>
+              <p className="text-xs text-muted-foreground">
+                Matikan sementara agar input feedback dari user tidak menumpuk.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant={feedbackSettings.is_enabled ? "default" : "destructive"} className="text-[11px]">
+                {feedbackSettings.is_enabled ? "Feedback ON" : "Feedback OFF"}
+              </Badge>
+              <Label htmlFor="feedback-enabled-bug" className="text-sm">
+                Bug
+              </Label>
+              <Switch
+                id="feedback-enabled-bug"
+                checked={feedbackSettings.bugs_enabled}
+                disabled={isSavingFeedbackSetting || !isSuperAdminUser}
+                onCheckedChange={(checked) => handleToggleFeedbackEnabled("bugs_enabled", checked)}
+              />
+              <Label htmlFor="feedback-enabled-saran" className="text-sm">
+                Saran
+              </Label>
+              <Switch
+                id="feedback-enabled-saran"
+                checked={feedbackSettings.suggestions_enabled}
+                disabled={isSavingFeedbackSetting || !isSuperAdminUser}
+                onCheckedChange={(checked) => handleToggleFeedbackEnabled("suggestions_enabled", checked)}
+              />
+            </div>
+          </div>
+          {!isSuperAdminUser && (
+            <div className="mt-3 flex items-center gap-2 text-xs text-amber-600">
+              <ShieldAlert className="w-4 h-4" />
+              Hanya role super_admin yang dapat mengubah pengaturan feedback.
+            </div>
+          )}
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
             <CardTitle>Daftar Feedback</CardTitle>
-            <Button variant="outline" size="sm" onClick={exportCsv}>
-              <Download className="w-4 h-4 mr-2" /> Export CSV
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={printPdf}>
+                <Printer className="w-4 h-4 mr-2" /> Print PDF
+              </Button>
+              <Button variant="outline" size="sm" onClick={exportCsv}>
+                <Download className="w-4 h-4 mr-2" /> Export CSV
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent>

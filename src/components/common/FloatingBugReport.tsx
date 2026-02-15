@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
@@ -17,14 +17,67 @@ interface FloatingBugReportProps {
   reporterRole?: "admin_organisasi" | "pegawai";
 }
 
+interface FeedbackBugSettings {
+  is_enabled: boolean;
+  bugs_enabled: boolean;
+  suggestions_enabled: boolean;
+}
+
+const normalizeFeedbackSettings = (raw: unknown): FeedbackBugSettings => {
+  const value = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const legacyEnabled = value.is_enabled !== false;
+  const bugsEnabled = typeof value.bugs_enabled === "boolean" ? value.bugs_enabled : legacyEnabled;
+  const suggestionsEnabled = typeof value.suggestions_enabled === "boolean" ? value.suggestions_enabled : legacyEnabled;
+  return {
+    is_enabled: bugsEnabled || suggestionsEnabled,
+    bugs_enabled: bugsEnabled,
+    suggestions_enabled: suggestionsEnabled,
+  };
+};
+
 export function FloatingBugReport({ tenantId, employeeId, reporterName, reporterRole = "pegawai" }: FloatingBugReportProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [settings, setSettings] = useState<FeedbackBugSettings>({
+    is_enabled: true,
+    bugs_enabled: true,
+    suggestions_enabled: true,
+  });
   const [feedbackType, setFeedbackType] = useState<"bug" | "saran">("saran");
   const [rating, setRating] = useState(0);
   const [hoverRating, setHoverRating] = useState(0);
   const [message, setMessage] = useState("");
   const [screenshotUrl, setScreenshotUrl] = useState("");
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("system_settings")
+          .select("value")
+          .eq("key", "feedback_bug_settings")
+          .maybeSingle();
+        if (error) throw error;
+        setSettings(normalizeFeedbackSettings(data?.value));
+      } catch {
+        setSettings({
+          is_enabled: true,
+          bugs_enabled: true,
+          suggestions_enabled: true,
+        });
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (feedbackType === "bug" && !settings.bugs_enabled && settings.suggestions_enabled) {
+      setFeedbackType("saran");
+      return;
+    }
+    if (feedbackType === "saran" && !settings.suggestions_enabled && settings.bugs_enabled) {
+      setFeedbackType("bug");
+    }
+  }, [feedbackType, settings.bugs_enabled, settings.suggestions_enabled]);
 
   const getMetadata = () => ({
     os_info: navigator.platform || "Unknown",
@@ -32,6 +85,19 @@ export function FloatingBugReport({ tenantId, employeeId, reporterName, reporter
   });
 
   const handleSubmit = async () => {
+    if (!settings.is_enabled) {
+      toast.error("Fitur feedback sedang dinonaktifkan sementara.");
+      setIsOpen(false);
+      return;
+    }
+    if (feedbackType === "bug" && !settings.bugs_enabled) {
+      toast.error("Input bug sedang dinonaktifkan.");
+      return;
+    }
+    if (feedbackType === "saran" && !settings.suggestions_enabled) {
+      toast.error("Input saran sedang dinonaktifkan.");
+      return;
+    }
     if (!message.trim()) {
       toast.error("Pesan tidak boleh kosong");
       return;
@@ -75,6 +141,8 @@ export function FloatingBugReport({ tenantId, employeeId, reporterName, reporter
     }
   };
 
+  if (!settings.is_enabled) return null;
+
   return (
     <>
       <button
@@ -105,8 +173,8 @@ export function FloatingBugReport({ tenantId, employeeId, reporterName, reporter
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="bug">🐛 Bug / Error</SelectItem>
-                  <SelectItem value="saran">💡 Saran / Masukan</SelectItem>
+                  {settings.bugs_enabled && <SelectItem value="bug">🐛 Bug / Error</SelectItem>}
+                  {settings.suggestions_enabled && <SelectItem value="saran">💡 Saran / Masukan</SelectItem>}
                 </SelectContent>
               </Select>
             </div>

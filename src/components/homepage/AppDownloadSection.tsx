@@ -18,7 +18,7 @@ interface AppDownloadSettings {
 
 const defaultSettings: AppDownloadSettings = {
   enabled: true,
-  title: "Download Aplikasi AbsensiKu",
+  title: "Unduh Aplikasi AbsensiKu",
   subtitle: "Tersedia untuk Android",
   description: "Unduh aplikasi mobile AbsensiKu untuk kemudahan absensi di mana saja.",
   apk_url: "",
@@ -101,7 +101,7 @@ export function AppDownloadSection() {
                 <Button size="lg" asChild className="gap-2">
                   <a href={settings.apk_url} target="_blank" rel="noopener noreferrer">
                     <Download className="w-5 h-5" />
-                    Download APK
+                    Unduh Aplikasi
                   </a>
                 </Button>
               )}
@@ -148,7 +148,7 @@ export function AppDownloadSection() {
                   {settings.show_qr_code && (
                     <div className="mt-6 p-4 bg-white rounded-xl shadow-inner">
                       <QrCode className="w-24 h-24 text-foreground" />
-                      <p className="text-xs text-muted-foreground mt-2">Scan untuk download</p>
+                      <p className="text-xs text-muted-foreground mt-2">Scan untuk unduh aplikasi</p>
                     </div>
                   )}
                 </div>

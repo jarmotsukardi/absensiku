@@ -25,11 +25,11 @@ export function APKUploadSettings() {
   const [isUploading, setIsUploading] = useState(false);
   const [activeTab, setActiveTab] = useState<APKType>("reguler");
   
-  // APK Reguler
+  // Aplikasi Reguler
   const [apkReguler, setApkReguler] = useState<APKInfo | null>(null);
   const [versionReguler, setVersionReguler] = useState("1.0.0");
   
-  // APK Pemda
+  // Aplikasi Pemda
   const [apkPemda, setApkPemda] = useState<APKInfo | null>(null);
   const [versionPemda, setVersionPemda] = useState("1.0.0");
 
@@ -39,7 +39,7 @@ export function APKUploadSettings() {
 
   const fetchAPKInfo = async () => {
     try {
-      // Fetch APK Reguler
+      // Fetch Aplikasi Reguler
       const { data: regulerData } = await supabase
         .from("system_settings")
         .select("value")
@@ -54,7 +54,7 @@ export function APKUploadSettings() {
         }
       }
 
-      // Fetch APK Pemda
+      // Fetch Aplikasi Pemda
       const { data: pemdaData } = await supabase
         .from("system_settings")
         .select("value")
@@ -69,7 +69,7 @@ export function APKUploadSettings() {
         }
       }
     } catch (error) {
-      console.error("Error fetching APK info:", error);
+      console.error("Error fetching app info:", error);
     } finally {
       setIsLoading(false);
     }
@@ -132,8 +132,8 @@ export function APKUploadSettings() {
             key: settingsKey,
             value: apkPayload,
             description: type === "reguler" 
-              ? "APK Reguler untuk organisasi umum" 
-              : "APK Khusus untuk Pemerintah Daerah",
+              ? "Aplikasi Reguler untuk organisasi umum" 
+              : "Aplikasi Khusus untuk Pemerintah Daerah",
           });
       }
 
@@ -143,11 +143,11 @@ export function APKUploadSettings() {
         setApkPemda(newApkInfo);
       }
       
-      toast.success(`APK ${type === "reguler" ? "Reguler" : "Pemda"} berhasil diupload`);
+      toast.success(`Aplikasi ${type === "reguler" ? "Reguler" : "Pemda"} berhasil diupload`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      console.error("Error uploading APK:", error);
-      toast.error("Gagal mengupload APK: " + message);
+      console.error("Error uploading app:", error);
+      toast.error("Gagal mengupload aplikasi: " + message);
     } finally {
       setIsUploading(false);
       e.target.value = "";
@@ -158,7 +158,7 @@ export function APKUploadSettings() {
     const apkInfo = type === "reguler" ? apkReguler : apkPemda;
     const settingsKey = type === "reguler" ? "global_apk" : "global_apk_pemda";
     
-    if (!apkInfo || !confirm(`Yakin ingin menghapus APK ${type === "reguler" ? "Reguler" : "Pemda"}?`)) return;
+    if (!apkInfo || !confirm(`Yakin ingin menghapus aplikasi ${type === "reguler" ? "Reguler" : "Pemda"}?`)) return;
 
     try {
       // Delete from storage
@@ -178,10 +178,10 @@ export function APKUploadSettings() {
         setApkPemda(null);
       }
       
-      toast.success(`APK ${type === "reguler" ? "Reguler" : "Pemda"} berhasil dihapus`);
+      toast.success(`Aplikasi ${type === "reguler" ? "Reguler" : "Pemda"} berhasil dihapus`);
     } catch (error) {
-      console.error("Error deleting APK:", error);
-      toast.error("Gagal menghapus APK");
+      console.error("Error deleting app:", error);
+      toast.error("Gagal menghapus aplikasi");
     }
   };
 
@@ -190,10 +190,10 @@ export function APKUploadSettings() {
     const version = type === "reguler" ? versionReguler : versionPemda;
     const setVersion = type === "reguler" ? setVersionReguler : setVersionPemda;
     const Icon = type === "reguler" ? Users : Building2;
-    const title = type === "reguler" ? "APK Reguler" : "APK Khusus Pemda";
+    const title = type === "reguler" ? "Aplikasi Reguler" : "Aplikasi Khusus Pemda";
     const description = type === "reguler" 
-      ? "APK untuk organisasi umum (Perusahaan, Instansi, Sekolah)"
-      : "APK khusus untuk Pemerintah Daerah dengan fitur tambahan";
+      ? "Aplikasi untuk organisasi umum (Perusahaan, Instansi, Sekolah)"
+      : "Aplikasi khusus untuk Pemerintah Daerah dengan fitur tambahan";
 
     return (
       <Card>
@@ -235,7 +235,7 @@ export function APKUploadSettings() {
           ) : (
             <div className="p-8 border-2 border-dashed rounded-lg text-center">
               <Smartphone className="h-12 w-12 mx-auto text-muted-foreground mb-2" />
-              <p className="text-muted-foreground">Belum ada APK yang diupload</p>
+              <p className="text-muted-foreground">Belum ada aplikasi yang diupload</p>
             </div>
           )}
 
@@ -249,7 +249,7 @@ export function APKUploadSettings() {
               />
             </div>
             <div className="grid gap-2">
-              <Label>Upload APK Baru</Label>
+              <Label>Upload Aplikasi Baru</Label>
               <div className="flex gap-2">
                 <Input
                   type="file"
@@ -281,9 +281,9 @@ export function APKUploadSettings() {
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-lg font-medium">Upload APK Aplikasi</h3>
+        <h3 className="text-lg font-medium">Upload Aplikasi Mobile</h3>
         <p className="text-sm text-muted-foreground">
-          Upload APK aplikasi absensi yang akan tersedia untuk organisasi
+          Upload aplikasi absensi yang akan tersedia untuk organisasi
         </p>
       </div>
 
@@ -291,11 +291,11 @@ export function APKUploadSettings() {
         <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="reguler" className="flex items-center gap-2">
             <Users className="h-4 w-4" />
-            APK Reguler
+            Aplikasi Reguler
           </TabsTrigger>
           <TabsTrigger value="pemda" className="flex items-center gap-2">
             <Building2 className="h-4 w-4" />
-            APK Pemda
+            Aplikasi Pemda
           </TabsTrigger>
         </TabsList>
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, Link, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -58,13 +58,8 @@ export default function OrganizationLanding() {
   const [news, setNews] = useState<NewsItem[]>([]);
   const [selectedNews, setSelectedNews] = useState<NewsItem | null>(null);
 
-  useEffect(() => {
-    if (code) {
-      fetchOrganization();
-    }
-  }, [code]);
-
-  const fetchOrganization = async () => {
+  const fetchOrganization = useCallback(async () => {
+    if (!code) return;
     try {
       // Build query - if preview mode, skip landing_enabled check
       let query = supabase
@@ -107,7 +102,11 @@ export default function OrganizationLanding() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [code, isPreview]);
+
+  useEffect(() => {
+    void fetchOrganization();
+  }, [fetchOrganization]);
 
   const stripHtml = (html: string) => {
     const doc = new DOMParser().parseFromString(html, "text/html");
@@ -252,7 +251,7 @@ export default function OrganizationLanding() {
                   <a href={organization.apk_url} target="_blank" rel="noopener noreferrer">
                     <Button size="lg" variant="outline" className="bg-white/10 border-white/30 text-primary-foreground hover:bg-white/20 w-full sm:w-auto">
                       <Download className="w-5 h-5 mr-2" />
-                      Download APK
+                      Unduh Aplikasi
                     </Button>
                   </a>
                 )}
@@ -265,7 +264,7 @@ export default function OrganizationLanding() {
                 <CardContent className="p-6">
                   {qrCodeUrl && (
                     <div className="mb-6 text-center">
-                      <p className="text-sm text-primary-foreground/70 mb-2">Scan untuk Download</p>
+                      <p className="text-sm text-primary-foreground/70 mb-2">Scan untuk Unduh Aplikasi</p>
                       <div className="w-48 h-48 mx-auto bg-white rounded-xl p-2">
                         <img src={qrCodeUrl} alt="QR Code" className="w-full h-full" />
                       </div>
@@ -384,7 +383,7 @@ export default function OrganizationLanding() {
                   <Smartphone className="w-8 h-8 text-primary" />
                 </div>
                 <h2 className="text-2xl lg:text-3xl font-bold mb-4">
-                  Download Aplikasi AbsensiKu
+                  Unduh Aplikasi AbsensiKu
                 </h2>
                 <p className="text-primary-foreground/80 mb-8">
                   Dapatkan kemudahan absensi langsung dari smartphone Anda. 
@@ -396,13 +395,13 @@ export default function OrganizationLanding() {
                     <a href={organization.apk_url} target="_blank" rel="noopener noreferrer">
                       <Button size="lg" className="btn-gold">
                         <Download className="w-5 h-5 mr-2" />
-                        Download APK Android
+                        Unduh Aplikasi Android
                       </Button>
                     </a>
                   ) : (
                     <Button size="lg" className="btn-gold" disabled>
                       <Download className="w-5 h-5 mr-2" />
-                      APK Belum Tersedia
+                      Aplikasi Belum Tersedia
                     </Button>
                   )}
                 </div>

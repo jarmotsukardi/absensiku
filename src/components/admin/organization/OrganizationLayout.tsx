@@ -17,6 +17,8 @@ interface TenantInfo {
 }
 
 const ACCESS_CHECK_TIMEOUT_MS = 12000;
+const ACCESS_LOADING_WATCHDOG_MS = 20000;
+const ORG_ACTIVE_TENANT_STORAGE_KEY = "org_active_tenant_id";
 
 export function OrganizationLayout({ children }: OrganizationLayoutProps) {
   const navigate = useNavigate();
@@ -57,6 +59,12 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
       const isPegawai = roles?.some((r) => r.role === "pegawai");
       const resolvedTenantId = adminInstansiRole?.tenant_id || (isSuperAdmin ? queryTenantId : null);
       if (resolvedTenantId) {
+        try {
+          sessionStorage.setItem(ORG_ACTIVE_TENANT_STORAGE_KEY, resolvedTenantId);
+        } catch {
+          // Ignore storage failures.
+        }
+
         // Fetch tenant info
         const { data: tenantData, error: tenantError } = await withTimeout(
           Promise.resolve(
@@ -84,6 +92,11 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
       }
 
       if (isSuperAdmin) {
+        try {
+          sessionStorage.removeItem(ORG_ACTIVE_TENANT_STORAGE_KEY);
+        } catch {
+          // Ignore storage failures.
+        }
         toast.info("Pilih organisasi dari menu admin terlebih dahulu.");
         navigate("/admin/organizations", { replace: true });
         return;
@@ -98,6 +111,11 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
         navigate("/employee/dashboard", { replace: true });
       }
     } catch (error) {
+      try {
+        sessionStorage.removeItem(ORG_ACTIVE_TENANT_STORAGE_KEY);
+      } catch {
+        // Ignore storage failures.
+      }
       const errorRef = reportError(error, "org.layout.check_access", {
         tenant_id: queryTenantId,
       });
@@ -111,6 +129,20 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
   useEffect(() => {
     void checkAccess();
   }, [checkAccess]);
+
+  useEffect(() => {
+    if (!isLoading) return;
+    const timer = window.setTimeout(() => {
+      const errorRef = reportError(new Error("Organization layout loading watchdog timeout"), "org.layout.loading_watchdog", {
+        tenant_id: queryTenantId,
+      });
+      toast.error(appendErrorReference("Verifikasi akses terlalu lama. Silakan login ulang.", errorRef));
+      setIsLoading(false);
+      navigate("/org/login", { replace: true });
+    }, ACCESS_LOADING_WATCHDOG_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [isLoading, navigate, queryTenantId]);
 
   const getOrganizationTypeLabel = (type: string) => {
     const types: Record<string, string> = {

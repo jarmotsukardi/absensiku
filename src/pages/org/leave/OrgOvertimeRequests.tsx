@@ -36,6 +36,7 @@ import {
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { resolveOrgTenantId } from "@/lib/orgTenantContext";
  
  const statusConfig: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
    pending: { label: "Menunggu", variant: "secondary" },
@@ -45,27 +46,37 @@ import { OrganizationLayout } from "@/components/admin/organization/Organization
  };
  
 export default function OrgOvertimeRequests() {
-  const [employee, setEmployee] = useState<{ id: string; tenant_id: string } | null>(null);
+  const [employee, setEmployee] = useState<{ id: string } | null>(null);
+  const [tenantId, setTenantId] = useState<string | null>(null);
+  const [isTenantReady, setIsTenantReady] = useState(false);
 
   useEffect(() => {
-    const fetchEmployee = async () => {
+    const initContext = async () => {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user) {
+        setIsTenantReady(true);
+        return;
+      }
+
+      try {
+        const resolvedTenantId = await resolveOrgTenantId();
+        setTenantId(resolvedTenantId);
+      } finally {
+        setIsTenantReady(true);
+      }
 
       const { data } = await supabase
         .from("employees")
-        .select("id, tenant_id")
+        .select("id")
         .eq("user_id", user.id)
-        .single();
+        .maybeSingle();
 
       if (data) setEmployee(data);
     };
-    void fetchEmployee();
+    void initContext();
   }, []);
-
-  const tenantId = employee?.tenant_id;
 
   const [activeTab, setActiveTab] = useState("pending");
   const [searchQuery, setSearchQuery] = useState("");
@@ -80,7 +91,7 @@ export default function OrgOvertimeRequests() {
   });
 
   const displayRequests = activeTab === "pending" ? pendingRequests : allRequests;
-  const isLoading = activeTab === "pending" ? loadingPending : loadingAll;
+  const isLoading = !isTenantReady || (activeTab === "pending" ? loadingPending : loadingAll);
 
   const filteredRequests = displayRequests.filter((req) => {
     if (!searchQuery) return true;
@@ -93,7 +104,7 @@ export default function OrgOvertimeRequests() {
   });
 
   const handleApprove = async (approved: boolean) => {
-    if (!selectedRequest || !employee) return;
+    if (!selectedRequest || !employee?.id) return;
 
     if (!approved && !rejectionReason.trim()) {
       return;

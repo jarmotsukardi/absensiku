@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { DEFAULT_TIMEZONE } from '@/lib/timezone';
+import { resolveOrgTenantId } from '@/lib/orgTenantContext';
 import type { Tables } from '@/integrations/supabase/types';
 
 type Tenant = Tables<'tenants'>;
@@ -34,37 +35,14 @@ export function useOrganizationSettings() {
 
   const fetchOrganization = useCallback(async () => {
     setIsLoading(true);
+    setError(null);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('User not authenticated');
 
-      // Resolve tenant context:
-      // 1) admin_instansi role tenant_id
-      // 2) super_admin with explicit ?tenant_id=...
-      // 3) fallback employee.tenant_id
-      const { data: roleRows, error: roleError } = await supabase
-        .from('user_roles')
-        .select('role, tenant_id')
-        .eq('user_id', user.id);
-      if (roleError) throw roleError;
-
-      const adminRole = roleRows?.find((r) => r.role === "admin_instansi" && r.tenant_id);
-      const isSuperAdmin = roleRows?.some((r) => r.role === "super_admin");
-
-      let resolvedTenantId: string | null = adminRole?.tenant_id || null;
-      if (!resolvedTenantId && isSuperAdmin && queryTenantId) {
+      let resolvedTenantId = await resolveOrgTenantId();
+      if (!resolvedTenantId && queryTenantId) {
         resolvedTenantId = queryTenantId;
-      }
-
-      if (!resolvedTenantId) {
-        const { data: employee, error: empError } = await supabase
-          .from('employees')
-          .select('tenant_id')
-          .eq('user_id', user.id)
-          .maybeSingle();
-
-        if (empError) throw empError;
-        resolvedTenantId = employee?.tenant_id || null;
       }
 
       if (!resolvedTenantId) throw new Error('Tenant not found');
@@ -100,6 +78,7 @@ export function useOrganizationSettings() {
       console.error('Error fetching organization:', err);
       const errorMessage = err instanceof Error ? err.message : 'Unknown error';
       setError(errorMessage);
+      setOrganization(null);
     } finally {
       setIsLoading(false);
     }

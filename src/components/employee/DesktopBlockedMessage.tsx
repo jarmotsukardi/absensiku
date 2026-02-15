@@ -17,7 +17,7 @@ export function DesktopBlockedMessage({ organizationName, apkUrl }: DesktopBlock
           </div>
           <CardTitle className="text-xl">Akses Ditolak</CardTitle>
           <CardDescription className="text-base">
-            Lakukan absensi di atas Aplikasi Resmi
+            Lakukan absensi melalui aplikasi mobile internal
           </CardDescription>
         </CardHeader>
         
@@ -28,7 +28,7 @@ export function DesktopBlockedMessage({ organizationName, apkUrl }: DesktopBlock
               <div>
                 <h4 className="font-medium text-sm">Gunakan Aplikasi Android</h4>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Absensi hanya dapat dilakukan melalui aplikasi resmi yang terinstall di perangkat Android Anda.
+                  Absensi hanya dapat dilakukan melalui aplikasi mobile internal yang terpasang di perangkat Android Anda.
                 </p>
               </div>
             </div>
@@ -37,8 +37,8 @@ export function DesktopBlockedMessage({ organizationName, apkUrl }: DesktopBlock
           <div className="space-y-3">
             <h4 className="font-medium text-sm text-center">Langkah-langkah:</h4>
             <ol className="text-sm text-muted-foreground space-y-2 list-decimal list-inside">
-              <li>Download aplikasi resmi dari halaman organisasi</li>
-              <li>Install APK di perangkat Android Anda</li>
+              <li>Unduh aplikasi melalui tautan resmi organisasi</li>
+              <li>Lakukan instalasi aplikasi pada perangkat Android sesuai SOP instansi</li>
               <li>Login menggunakan akun yang sama</li>
               <li>Lakukan absensi melalui aplikasi</li>
             </ol>
@@ -50,7 +50,7 @@ export function DesktopBlockedMessage({ organizationName, apkUrl }: DesktopBlock
               onClick={() => window.open(apkUrl, "_blank")}
             >
               <Download className="h-4 w-4 mr-2" />
-              Download APK Resmi
+              Unduh Aplikasi
             </Button>
           )}
 

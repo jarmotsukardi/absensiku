@@ -28,7 +28,7 @@ const settingsTabs = [
   { id: "whatsapp", label: "WhatsApp Gateway" },
   { id: "email", label: "Email Gateway" },
   { id: "seo", label: "SEO" },
-  { id: "apk", label: "Upload APK" },
+  { id: "apk", label: "Upload Aplikasi" },
   { id: "sistem", label: "Sistem" },
   { id: "floating-wa", label: "Floating WhatsApp" },
   { id: "rate-limit", label: "Rate Limit" },

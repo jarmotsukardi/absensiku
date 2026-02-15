@@ -23,7 +23,7 @@ interface AppDownloadSettings {
 
 const defaultSettings: AppDownloadSettings = {
   enabled: true,
-  title: "Download Aplikasi AbsensiKu",
+  title: "Unduh Aplikasi AbsensiKu",
   subtitle: "Tersedia untuk Android",
   description: "Unduh aplikasi mobile AbsensiKu untuk kemudahan absensi di mana saja.",
   apk_url: "",
@@ -87,7 +87,7 @@ export function AppDownloadSettings() {
           .insert({ key: "app_download_settings", value: jsonValue });
       }
 
-      toast.success("Pengaturan download aplikasi berhasil disimpan");
+      toast.success("Pengaturan unduh aplikasi berhasil disimpan");
     } catch (err) {
       toast.error("Gagal menyimpan");
     } finally {
@@ -119,18 +119,18 @@ export function AppDownloadSettings() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Download className="h-5 w-5" />
-            Pengaturan Download Aplikasi
+            Pengaturan Unduh Aplikasi
           </CardTitle>
           <CardDescription>
-            Kelola section download aplikasi mobile di halaman depan
+            Kelola section unduh aplikasi mobile di halaman depan
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           {/* Enable/Disable */}
           <div className="flex items-center justify-between rounded-lg border p-4">
             <div>
-              <Label className="font-medium">Aktifkan Section Download</Label>
-              <p className="text-sm text-muted-foreground">Tampilkan section download aplikasi di halaman depan</p>
+              <Label className="font-medium">Aktifkan Section Unduh</Label>
+              <p className="text-sm text-muted-foreground">Tampilkan section unduh aplikasi di halaman depan</p>
             </div>
             <Switch
               checked={settings.enabled}
@@ -145,7 +145,7 @@ export function AppDownloadSettings() {
               <Input
                 value={settings.title}
                 onChange={(e) => setSettings({ ...settings, title: e.target.value })}
-                placeholder="Download Aplikasi AbsensiKu"
+                placeholder="Unduh Aplikasi AbsensiKu"
               />
             </div>
             <div className="space-y-2">
@@ -173,18 +173,18 @@ export function AppDownloadSettings() {
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
                 <Smartphone className="h-4 w-4" />
-                Link Download
+                Tautan Unduh
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label>URL Download APK</Label>
+                <Label>URL Unduh Aplikasi</Label>
                 <Input
                   value={settings.apk_url}
                   onChange={(e) => setSettings({ ...settings, apk_url: e.target.value })}
                   placeholder="https://example.com/app.apk"
                 />
-                <p className="text-xs text-muted-foreground">Link langsung ke file APK</p>
+                <p className="text-xs text-muted-foreground">Tautan langsung ke file aplikasi Android</p>
               </div>
               <div className="space-y-2">
                 <Label>URL Google Play Store</Label>

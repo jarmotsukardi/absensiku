@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { format, differenceInDays } from "date-fns";
 import { id } from "date-fns/locale";
 import type { Tables } from "@/integrations/supabase/types";
+import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 
 type OfficialTravelRequest = Tables<"leave_requests"> & {
   employees: {
@@ -22,16 +23,35 @@ export default function OrgOfficialTravelList() {
   const [requests, setRequests] = useState<OfficialTravelRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
 
   useEffect(() => {
-    fetchData();
+    const initTenant = async () => {
+      try {
+        setTenantId(await resolveOrgTenantId());
+      } catch {
+        setTenantId(null);
+      }
+    };
+    void initTenant();
   }, []);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
+      if (!tenantId) {
+        setRequests([]);
+        return;
+      }
+      const employeeIds = await getTenantEmployeeIds(tenantId);
+      if (employeeIds.length === 0) {
+        setRequests([]);
+        return;
+      }
+
       const { data, error } = await supabase
         .from("leave_requests")
         .select("*, employees!leave_requests_employee_id_fkey(name, nip)")
+        .in("employee_id", employeeIds)
         .eq("leave_type", "tugas_luar")
         .order("start_date", { ascending: false });
 
@@ -42,7 +62,16 @@ export default function OrgOfficialTravelList() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (tenantId === undefined) return;
+    if (tenantId === null) {
+      setIsLoading(false);
+      return;
+    }
+    void fetchData();
+  }, [tenantId, fetchData]);
 
   const filteredRequests = requests.filter(req =>
     (req.employees?.name || "").toLowerCase().includes(searchTerm.toLowerCase())

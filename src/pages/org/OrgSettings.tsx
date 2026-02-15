@@ -19,7 +19,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { OrgFloatingWhatsappSettings } from "@/components/org/settings/OrgFloatingWhatsappSettings";
 import { AccountDeletionDialog } from "@/components/org/AccountDeletionDialog";
 import { ForgotPasswordDialog } from "@/components/auth/ForgotPasswordDialog";
-import { OrgActivationTab } from "@/components/org/OrgActivationTab";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 const ORGANIZATION_TYPES = [
   { value: "pemerintah_daerah", label: "Pemerintah Daerah" },
@@ -29,7 +29,7 @@ const ORGANIZATION_TYPES = [
 ];
 
 export default function OrgSettings() {
-  const { organization, isLoading, updateOrganization, updateTimezone } = useOrganizationSettings();
+  const { organization, isLoading, updateOrganization, updateTimezone, refetch } = useOrganizationSettings();
   const [activeTab, setActiveTab] = useState("general");
   const [isSaving, setIsSaving] = useState(false);
   const [currentTime, setCurrentTime] = useState<string>("");
@@ -985,6 +985,10 @@ export default function OrgSettings() {
             {billingOtpSent && (
               <Button
                 onClick={async () => {
+                  if (!organization?.id) {
+                    toast.error("Data organisasi belum tersedia");
+                    return;
+                  }
                   const otpCode = billingOtpRef.current?.getValue() || "";
                   if (otpCode.length !== 6) {
                     toast.error("Masukkan 6 digit kode OTP");
@@ -1006,11 +1010,14 @@ export default function OrgSettings() {
                     }
                     setShowBillingOtpDialog(false);
                     toast.success(`Mode billing berhasil diubah ke ${pendingBillingMode === "individual" ? "Billing Mandiri" : "Billing Terpusat"}`);
-                    // Refresh org data
-                    window.location.reload();
+                    await refetch();
                   } catch (err: unknown) {
-                    const errorMessage = err instanceof Error ? err.message : "Coba lagi";
-                    toast.error("Gagal verifikasi: " + errorMessage);
+                    const errorRef = reportError(err, "org.settings.verify_billing_mode_otp", {
+                      tenant_id: organization.id,
+                      pending_billing_mode: pendingBillingMode,
+                    });
+                    const message = err instanceof Error ? err.message : "Coba lagi";
+                    toast.error(appendErrorReference(`Gagal verifikasi: ${message}`, errorRef));
                   } finally {
                     setIsVerifyingBillingOtp(false);
                   }

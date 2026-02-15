@@ -14,6 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Home, Plus, Pencil, Trash2, Building2, Users, User } from "lucide-react";
 import { toast } from "sonner";
 import { useEmployee } from "@/hooks/useEmployee";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import type { Tables, TablesInsert, TablesUpdate } from "@/integrations/supabase/types";
 
 type WfhSchedule = Tables<"wfh_schedules">;
@@ -71,21 +72,57 @@ export default function OrgWfhScheduleManagement() {
   });
 
   const fetchTenantId = useCallback(async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      const { data: emp } = await supabase
+    try {
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError) throw userError;
+      if (!user) {
+        setTenantId(null);
+        setIsLoading(false);
+        return;
+      }
+
+      const { data: roleRows, error: roleError } = await supabase
+        .from("user_roles")
+        .select("role, tenant_id")
+        .eq("user_id", user.id)
+        .in("role", ["admin_instansi", "super_admin"]);
+      if (roleError) throw roleError;
+
+      const adminRole = roleRows?.find((r) => r.role === "admin_instansi" && r.tenant_id);
+      if (adminRole?.tenant_id) {
+        setTenantId(adminRole.tenant_id);
+        return;
+      }
+
+      // Fallback for accounts that do not have admin role row but still tied to employee record.
+      const { data: emp, error: empError } = await supabase
         .from("employees")
         .select("tenant_id")
         .eq("user_id", user.id)
         .maybeSingle();
-      if (emp) {
+      if (empError) throw empError;
+
+      if (emp?.tenant_id) {
         setTenantId(emp.tenant_id);
+        return;
       }
+
+      setTenantId(null);
+      setIsLoading(false);
+      toast.error("Tenant organisasi tidak ditemukan untuk akun ini.");
+    } catch (error) {
+      const errorRef = reportError(error, "org.wfh_schedule.resolve_tenant");
+      toast.error(appendErrorReference("Gagal menentukan tenant organisasi", errorRef));
+      setTenantId(null);
+      setIsLoading(false);
     }
   }, []);
 
   const fetchData = useCallback(async () => {
-    if (!tenantId) return;
+    if (!tenantId) {
+      setIsLoading(false);
+      return;
+    }
     
     setIsLoading(true);
     try {
@@ -101,7 +138,8 @@ export default function OrgWfhScheduleManagement() {
       setWorkUnits(workUnitsRes.data || []);
       setEmployees(employeesRes.data || []);
     } catch (error) {
-      toast.error("Gagal memuat data");
+      const errorRef = reportError(error, "org.wfh_schedule.fetch_data", { tenant_id: tenantId });
+      toast.error(appendErrorReference("Gagal memuat data", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -196,10 +234,13 @@ export default function OrgWfhScheduleManagement() {
 
       setIsDialogOpen(false);
       resetForm();
-      fetchData();
+      void fetchData();
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : "Gagal menyimpan jadwal";
-      toast.error(errorMessage);
+      const errorRef = reportError(error, "org.wfh_schedule.save", {
+        tenant_id: tenantId,
+        schedule_id: editingSchedule?.id ?? null,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan jadwal", errorRef));
     }
   };
 
@@ -210,9 +251,13 @@ export default function OrgWfhScheduleManagement() {
       const { error } = await supabase.from("wfh_schedules").delete().eq("id", id);
       if (error) throw error;
       toast.success("Jadwal berhasil dihapus");
-      fetchData();
+      void fetchData();
     } catch (error) {
-      toast.error("Gagal menghapus jadwal");
+      const errorRef = reportError(error, "org.wfh_schedule.delete", {
+        tenant_id: tenantId,
+        schedule_id: id,
+      });
+      toast.error(appendErrorReference("Gagal menghapus jadwal", errorRef));
     }
   };
 

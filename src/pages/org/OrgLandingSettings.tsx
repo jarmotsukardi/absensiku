@@ -58,7 +58,7 @@ export default function OrgLandingSettings() {
 
   const fetchGlobalAPKs = async () => {
     try {
-      // Fetch APK Reguler
+      // Fetch Aplikasi Reguler
       const { data: regulerData } = await supabase
         .from("system_settings")
         .select("value")
@@ -69,7 +69,7 @@ export default function OrgLandingSettings() {
         setApkReguler(regulerData.value as unknown as APKInfo);
       }
 
-      // Fetch APK Pemda
+      // Fetch Aplikasi Pemda
       const { data: pemdaData } = await supabase
         .from("system_settings")
         .select("value")
@@ -80,7 +80,7 @@ export default function OrgLandingSettings() {
         setApkPemda(pemdaData.value as unknown as APKInfo);
       }
     } catch (error) {
-      console.error("Error fetching global APKs:", error);
+      console.error("Error fetching global apps:", error);
     }
   };
 
@@ -168,7 +168,7 @@ export default function OrgLandingSettings() {
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Globe className="h-6 w-6" />
-            Pengaturan Landing Page & APK
+            Pengaturan Landing Page & Aplikasi
           </h1>
           <p className="text-muted-foreground">Kelola halaman publik dan aplikasi mobile organisasi</p>
         </div>
@@ -181,7 +181,7 @@ export default function OrgLandingSettings() {
             </TabsTrigger>
             <TabsTrigger value="apk" className="flex items-center gap-2">
               <Smartphone className="h-4 w-4" />
-              APK Mobile
+              Aplikasi Mobile
             </TabsTrigger>
             <TabsTrigger value="landing" className="flex items-center gap-2">
               <Settings className="h-4 w-4" />
@@ -229,14 +229,14 @@ export default function OrgLandingSettings() {
                       </Button>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Halaman publik organisasi dengan info download APK
+                      Halaman publik organisasi dengan informasi unduh aplikasi
                     </p>
                   </div>
                 )}
 
                 {settings.apk_url && (
                   <div className="space-y-2">
-                    <Label>Link Download APK</Label>
+                    <Label>Tautan Unduh Aplikasi</Label>
                     <div className="flex gap-2">
                       <Input value={settings.apk_url} readOnly className="flex-1 font-mono text-sm" />
                       <Button variant="outline" size="icon" onClick={() => copyLink(settings.apk_url)}>
@@ -247,7 +247,7 @@ export default function OrgLandingSettings() {
                       </Button>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      Link langsung download APK untuk pegawai
+                      Tautan langsung unduh aplikasi untuk pegawai
                     </p>
                   </div>
                 )}
@@ -258,12 +258,12 @@ export default function OrgLandingSettings() {
           {/* Tab APK */}
           <TabsContent value="apk">
             <div className="space-y-4">
-              {/* APK Reguler */}
+              {/* Aplikasi Reguler */}
               <Card className="border-accent/30 bg-accent/5">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Smartphone className="h-5 w-5 text-accent" />
-                    APK Reguler
+                    Aplikasi Reguler
                   </CardTitle>
                   <CardDescription>Untuk organisasi umum (Perusahaan, Instansi, Sekolah)</CardDescription>
                 </CardHeader>
@@ -272,15 +272,15 @@ export default function OrgLandingSettings() {
                     <div className="p-4 bg-card rounded-lg border">
                       <h4 className="font-medium mb-2 flex items-center gap-2">
                         <Download className="h-4 w-4 text-green-600" />
-                        APK Reguler v{apkReguler.version}
+                        Aplikasi Reguler v{apkReguler.version}
                       </h4>
                       <p className="text-sm text-muted-foreground mb-3">
-                        Aplikasi resmi siap didownload oleh pegawai.
+                        Aplikasi siap diunduh oleh pegawai.
                       </p>
                       <div className="flex flex-col sm:flex-row gap-2">
                         <Button onClick={() => window.open(apkReguler.url, "_blank")} className="flex-1">
                           <Download className="h-4 w-4 mr-2" />
-                          Download APK Reguler
+                          Unduh Aplikasi Reguler
                         </Button>
                         <Button variant="outline" onClick={() => copyLink(apkReguler.url)}>
                           <Copy className="h-4 w-4 mr-2" />
@@ -291,18 +291,18 @@ export default function OrgLandingSettings() {
                   ) : (
                     <div className="p-6 bg-muted/50 rounded-lg border border-dashed text-center">
                       <Smartphone className="h-12 w-12 mx-auto text-muted-foreground/50 mb-4" />
-                      <p className="text-sm text-muted-foreground">APK Reguler belum tersedia.</p>
+                      <p className="text-sm text-muted-foreground">Aplikasi Reguler belum tersedia.</p>
                     </div>
                   )}
                 </CardContent>
               </Card>
 
-              {/* APK Pemda */}
+              {/* Aplikasi Pemda */}
               <Card className="border-blue-500/30 bg-blue-50 dark:bg-blue-950/20">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Smartphone className="h-5 w-5 text-blue-600" />
-                    APK Khusus Pemda
+                    Aplikasi Khusus Pemda
                   </CardTitle>
                   <CardDescription>Khusus untuk Pemerintah Daerah dengan fitur tambahan</CardDescription>
                 </CardHeader>
@@ -311,15 +311,15 @@ export default function OrgLandingSettings() {
                     <div className="p-4 bg-card rounded-lg border">
                       <h4 className="font-medium mb-2 flex items-center gap-2">
                         <Download className="h-4 w-4 text-blue-600" />
-                        APK Pemda v{apkPemda.version}
+                        Aplikasi Pemda v{apkPemda.version}
                       </h4>
                       <p className="text-sm text-muted-foreground mb-3">
-                        Aplikasi khusus Pemerintah Daerah siap didownload.
+                        Aplikasi khusus Pemerintah Daerah siap diunduh.
                       </p>
                       <div className="flex flex-col sm:flex-row gap-2">
                         <Button onClick={() => window.open(apkPemda.url, "_blank")} variant="default" className="flex-1 bg-blue-600 hover:bg-blue-700">
                           <Download className="h-4 w-4 mr-2" />
-                          Download APK Pemda
+                          Unduh Aplikasi Pemda
                         </Button>
                         <Button variant="outline" onClick={() => copyLink(apkPemda.url)}>
                           <Copy className="h-4 w-4 mr-2" />
@@ -330,7 +330,7 @@ export default function OrgLandingSettings() {
                   ) : (
                     <div className="p-6 bg-muted/50 rounded-lg border border-dashed text-center">
                       <Smartphone className="h-12 w-12 mx-auto text-muted-foreground/50 mb-4" />
-                      <p className="text-sm text-muted-foreground">APK Pemda belum tersedia.</p>
+                      <p className="text-sm text-muted-foreground">Aplikasi Pemda belum tersedia.</p>
                     </div>
                   )}
                 </CardContent>
@@ -338,12 +338,12 @@ export default function OrgLandingSettings() {
 
               {/* Info Box */}
               <div className="rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/20 dark:border-blue-800 p-4 space-y-2">
-                <h4 className="font-medium text-blue-900 dark:text-blue-100">Informasi APK:</h4>
+                <h4 className="font-medium text-blue-900 dark:text-blue-100">Informasi Aplikasi:</h4>
                 <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1 list-disc list-inside">
-                  <li>APK diupload dan dikelola oleh SuperAdmin</li>
-                  <li>Pilih APK sesuai jenis organisasi Anda</li>
-                  <li>Pegawai dapat download APK melalui link atau landing page</li>
-                  <li>Pastikan pegawai mengaktifkan "Install dari sumber tidak dikenal" di HP</li>
+                  <li>Aplikasi mobile diupload dan dikelola oleh SuperAdmin</li>
+                  <li>Pilih aplikasi sesuai jenis organisasi Anda</li>
+                  <li>Pegawai dapat mengunduh aplikasi melalui tautan atau landing page organisasi</li>
+                  <li>Pastikan perangkat mengizinkan instalasi aplikasi dari sumber tepercaya organisasi sesuai SOP instansi</li>
                 </ul>
               </div>
             </div>
@@ -361,7 +361,7 @@ export default function OrgLandingSettings() {
                   <div>
                     <Label>Aktifkan Landing Page</Label>
                     <p className="text-sm text-muted-foreground">
-                      Halaman publik dengan info organisasi dan download APK
+                      Halaman publik dengan informasi organisasi dan unduh aplikasi
                     </p>
                   </div>
                   <Switch

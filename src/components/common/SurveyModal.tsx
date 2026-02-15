@@ -18,8 +18,31 @@ interface SurveyModalProps {
 
 const SURVEY_DAYS = [10, 20, 30];
 
+interface FeedbackBugSettings {
+  is_enabled: boolean;
+  bugs_enabled: boolean;
+  suggestions_enabled: boolean;
+}
+
+const normalizeFeedbackSettings = (raw: unknown): FeedbackBugSettings => {
+  const value = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const legacyEnabled = value.is_enabled !== false;
+  const bugsEnabled = typeof value.bugs_enabled === "boolean" ? value.bugs_enabled : legacyEnabled;
+  const suggestionsEnabled = typeof value.suggestions_enabled === "boolean" ? value.suggestions_enabled : legacyEnabled;
+  return {
+    is_enabled: bugsEnabled || suggestionsEnabled,
+    bugs_enabled: bugsEnabled,
+    suggestions_enabled: suggestionsEnabled,
+  };
+};
+
 export function SurveyModal({ tenantId, employeeId, reporterName, reporterRole = "pegawai", streakCount }: SurveyModalProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const [settings, setSettings] = useState<FeedbackBugSettings>({
+    is_enabled: true,
+    bugs_enabled: true,
+    suggestions_enabled: true,
+  });
   const [surveyDay, setSurveyDay] = useState(0);
   const [rating, setRating] = useState(0);
   const [hoverRating, setHoverRating] = useState(0);
@@ -27,6 +50,27 @@ export function SurveyModal({ tenantId, employeeId, reporterName, reporterRole =
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
+    void (async () => {
+      try {
+        const { data, error } = await supabase
+          .from("system_settings")
+          .select("value")
+          .eq("key", "feedback_bug_settings")
+          .maybeSingle();
+        if (error) throw error;
+        setSettings(normalizeFeedbackSettings(data?.value));
+      } catch {
+        setSettings({
+          is_enabled: true,
+          bugs_enabled: true,
+          suggestions_enabled: true,
+        });
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!settings.suggestions_enabled) return;
     if (!SURVEY_DAYS.includes(streakCount)) return;
 
     // Check if user already submitted survey for this day
@@ -36,9 +80,14 @@ export function SurveyModal({ tenantId, employeeId, reporterName, reporterRole =
     setSurveyDay(streakCount);
     const timer = setTimeout(() => setIsOpen(true), 2000);
     return () => clearTimeout(timer);
-  }, [streakCount, tenantId]);
+  }, [streakCount, tenantId, settings.suggestions_enabled]);
 
   const handleSubmit = async () => {
+    if (!settings.suggestions_enabled) {
+      toast.error("Fitur survei feedback sedang dinonaktifkan.");
+      setIsOpen(false);
+      return;
+    }
     if (rating === 0) {
       toast.error("Berikan rating terlebih dahulu");
       return;
@@ -83,7 +132,7 @@ export function SurveyModal({ tenantId, employeeId, reporterName, reporterRole =
     30: "Selamat 30 hari! Berikan penilaian akhir.",
   };
 
-  if (!isOpen) return null;
+  if (!settings.suggestions_enabled || !isOpen) return null;
 
   return (
     <Dialog open={isOpen} onOpenChange={setIsOpen}>

@@ -15,6 +15,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
+import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 
 // Mapping ikon untuk jenis alasan
 const REASON_ICONS: Record<string, React.ElementType> = {
@@ -70,21 +71,15 @@ export default function OrgFlexibleAttendanceRequests() {
   // Fetch tenant_id from current user
   useEffect(() => {
     const fetchTenantId = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data: roleData } = await supabase
-        .from("user_roles")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .in("role", ["admin_instansi", "super_admin"])
-        .single();
-
-      if (roleData?.tenant_id) {
-        setTenantId(roleData.tenant_id);
+      try {
+        const resolved = await resolveOrgTenantId();
+        setTenantId(resolved);
+      } catch {
+        setTenantId(null);
+        setIsLoading(false);
       }
     };
-    fetchTenantId();
+    void fetchTenantId();
   }, []);
 
   const fetchData = useCallback(async () => {
@@ -123,6 +118,10 @@ export default function OrgFlexibleAttendanceRequests() {
   useEffect(() => {
     if (tenantId) {
       void fetchData();
+      return;
+    }
+    if (tenantId === null) {
+      setIsLoading(false);
     }
   }, [tenantId, fetchData]);
 
