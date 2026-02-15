@@ -1169,9 +1169,11 @@ export default function EmployeeDashboardNew() {
         open={showSidebar}
         onClose={() => setShowSidebar(false)}
         activeTab={activeTab}
+        unreadNotificationCount={unreadNotificationCount}
         onNavigateTab={(tab) => {
           navigateToTab(tab as EmployeeTab);
         }}
+        tenantLogoUrl={tenantInfo?.logo_url || null}
         tenantWhatsapp={(tenantInfo as any)?.whatsapp || null}
         tenantName={tenantInfo?.name}
         billingMode={billingMode}

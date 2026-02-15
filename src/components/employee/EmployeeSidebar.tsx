@@ -34,6 +34,8 @@ interface EmployeeSidebarProps {
   onClose: () => void;
   onNavigateTab?: (tab: string) => void;
   activeTab?: string;
+  unreadNotificationCount?: number;
+  tenantLogoUrl?: string | null;
   tenantWhatsapp?: string | null;
   tenantName?: string | null;
   billingMode?: string | null;
@@ -46,6 +48,8 @@ export function EmployeeSidebar({
   onClose,
   onNavigateTab,
   activeTab,
+  unreadNotificationCount = 0,
+  tenantLogoUrl,
   tenantWhatsapp,
   tenantName,
   billingMode,
@@ -55,6 +59,7 @@ export function EmployeeSidebar({
   const [darkMode, setDarkMode] = useState(false);
   const [expandedMenu, setExpandedMenu] = useState<string | null>(null);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [logoLoadFailed, setLogoLoadFailed] = useState(false);
 
   useEffect(() => {
     const isDark = document.documentElement.classList.contains("dark");
@@ -160,6 +165,8 @@ export function EmployeeSidebar({
     },
   ] as const;
   const isInfoActive = activeTab === "news" || activeTab === "articles" || activeTab === "announcements";
+  const tenantInitial = (tenantName || "A").trim().charAt(0).toUpperCase();
+  const shouldShowLogo = Boolean(tenantLogoUrl && !logoLoadFailed);
 
   return (
     <>
@@ -173,60 +180,76 @@ export function EmployeeSidebar({
 
       {/* Sidebar */}
       <aside
-        className={`fixed top-0 left-0 h-full w-72 bg-card border-r border-border z-[70] transform transition-transform duration-300 ease-in-out shadow-2xl ${
+        className={`fixed top-0 left-0 h-full w-72 bg-gradient-to-b from-card via-card to-muted/20 border-r border-border z-[70] transform transition-transform duration-300 ease-in-out shadow-2xl ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center">
-              <span className="text-primary-foreground font-bold text-lg">A</span>
+        <div className="flex items-center justify-between p-4 border-b border-border/80 bg-card/80 backdrop-blur-sm">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-11 h-11 rounded-2xl bg-primary/90 ring-2 ring-primary/20 overflow-hidden flex items-center justify-center">
+              {shouldShowLogo ? (
+                <img
+                  src={tenantLogoUrl || undefined}
+                  alt={tenantName || "Logo organisasi"}
+                  className="w-full h-full object-cover"
+                  onError={() => setLogoLoadFailed(true)}
+                />
+              ) : (
+                <span className="text-primary-foreground font-bold text-base">{tenantInitial}</span>
+              )}
             </div>
-            <div>
-              <h2 className="font-bold text-foreground">AbsensiKu</h2>
-              <p className="text-xs text-muted-foreground truncate">{tenantName || "Menu Navigasi"}</p>
+            <div className="min-w-0">
+              <h2 className="font-semibold text-foreground leading-tight">AbsensiKu</h2>
+              <p className="text-[11px] text-muted-foreground truncate">{tenantName || "Organisasi"}</p>
+              <p className="text-[10px] uppercase tracking-wide text-primary/80">Portal Pegawai</p>
             </div>
           </div>
-          <Button variant="ghost" size="icon" onClick={onClose}>
+          <Button variant="ghost" size="icon" className="rounded-xl" onClick={onClose}>
             <X className="w-5 h-5" />
           </Button>
         </div>
 
         {/* Menu Items */}
-        <nav className="p-3 space-y-1 overflow-y-auto max-h-[calc(100vh-180px)]">
+        <nav className="px-3 pt-3 pb-32 space-y-2 overflow-y-auto max-h-[calc(100vh-170px)]">
+          <div className="px-3 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground/90">
+            Menu Utama
+          </div>
           {mainMenuItems.map((item) => (
             <div key={item.id}>
               <button
-                className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 ${
-                  (item.id === "informasi" && isInfoActive) || (item.id !== "informasi" && activeTab === item.id)
-                    ? "bg-primary/10 text-primary"
-                    : "text-foreground/80 hover:bg-accent hover:text-accent-foreground"
+                className={`group relative w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all duration-200 ${
+                  activeTab === item.id
+                    ? "bg-primary/12 text-primary shadow-sm"
+                    : "text-foreground/80 hover:bg-accent/70 hover:text-accent-foreground"
                 }`}
                 onClick={() => {
                   onNavigateTab?.(item.id);
                   onClose();
                 }}
               >
+                {activeTab === item.id && (
+                  <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r-full bg-primary" />
+                )}
                 <div className="flex items-center gap-3">
-                  <item.icon className="w-5 h-5" />
-                  <span className="font-medium text-sm">{item.label}</span>
+                  <item.icon className="w-4 h-4" />
+                  <span className="font-medium text-sm leading-none">{item.label}</span>
                 </div>
               </button>
             </div>
           ))}
 
-          <div className="px-4 pt-3 pb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+          <div className="px-3 pt-2 pb-1 text-[11px] uppercase tracking-wider text-muted-foreground/90">
             Utilitas
           </div>
 
           {utilityMenuItems.map((item) => (
             <div key={item.id}>
               <button
-                className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 ${
+                className={`group relative w-full flex items-center justify-between px-3 py-2.5 rounded-xl transition-all duration-200 ${
                   activeTab === item.id
-                    ? "bg-primary/10 text-primary"
-                    : "text-foreground/80 hover:bg-accent hover:text-accent-foreground"
+                    ? "bg-primary/12 text-primary shadow-sm"
+                    : "text-foreground/80 hover:bg-accent/70 hover:text-accent-foreground"
                 }`}
                 onClick={() => {
                   if (item.children) {
@@ -236,9 +259,17 @@ export function EmployeeSidebar({
                   }
                 }}
               >
+                {(activeTab === item.id || (item.id === "informasi" && isInfoActive)) && (
+                  <span className="absolute left-0 top-2 bottom-2 w-1 rounded-r-full bg-primary" />
+                )}
                 <div className="flex items-center gap-3">
-                  <item.icon className="w-5 h-5" />
-                  <span className="font-medium text-sm">{item.label}</span>
+                  <item.icon className="w-4 h-4" />
+                  <span className="font-medium text-sm leading-none">{item.label}</span>
+                  {item.id === "notifications" && unreadNotificationCount > 0 && (
+                    <span className="min-w-5 h-5 px-1.5 rounded-full text-[10px] font-semibold bg-destructive text-destructive-foreground flex items-center justify-center">
+                      {unreadNotificationCount > 99 ? "99+" : unreadNotificationCount}
+                    </span>
+                  )}
                 </div>
                 {item.children && (
                   <ChevronRight
@@ -251,30 +282,29 @@ export function EmployeeSidebar({
 
               {/* Children */}
               {item.children && expandedMenu === item.id && (
-                <div className="ml-8 space-y-1 mt-1 animate-fade-in">
+                <div className="ml-4 pl-3 border-l border-border/80 space-y-1 mt-1 animate-fade-in">
                   {item.children.map((child) => (
                     <button
                       key={child.id}
-                      className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all duration-200 text-sm ${
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-all duration-200 text-sm ${
                         activeTab === child.id
                           ? "bg-primary/10 text-primary"
-                          : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                          : "text-muted-foreground hover:bg-accent/60 hover:text-accent-foreground"
                       }`}
                       onClick={child.onClick}
                     >
-                      <child.icon className="w-4 h-4" />
-                      <span>{child.label}</span>
+                      <child.icon className="w-3.5 h-3.5" />
+                      <span className="leading-none">{child.label}</span>
                     </button>
                   ))}
                 </div>
               )}
             </div>
           ))}
-
         </nav>
 
         {/* Dark Mode Toggle - Bottom */}
-        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-border bg-card">
+        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-border bg-card/95 backdrop-blur-sm">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               {darkMode ? <Moon className="w-5 h-5 text-primary" /> : <Sun className="w-5 h-5 text-amber-500" />}
