@@ -9,9 +9,17 @@ import { Search, Calendar, Download } from "lucide-react";
 import { toast } from "sonner";
 import { format, differenceInDays } from "date-fns";
 import { id } from "date-fns/locale";
+import type { Tables } from "@/integrations/supabase/types";
+
+type ApprovedLeaveRequest = Tables<"leave_requests"> & {
+  employees: {
+    name: string;
+    nip: string | null;
+  } | null;
+};
 
 export default function OrgApprovedLeaveList() {
-  const [requests, setRequests] = useState<any[]>([]);
+  const [requests, setRequests] = useState<ApprovedLeaveRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
 
@@ -29,7 +37,7 @@ export default function OrgApprovedLeaveList() {
         .order("start_date", { ascending: false });
 
       if (error) throw error;
-      setRequests(data || []);
+      setRequests((data || []) as ApprovedLeaveRequest[]);
     } catch (error) {
       console.error("Error:", error);
       toast.error("Gagal memuat data");

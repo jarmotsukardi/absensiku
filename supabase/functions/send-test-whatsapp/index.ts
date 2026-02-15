@@ -15,8 +15,21 @@ interface WhatsAppRequest {
   senderNumber?: string;
 }
 
+type WhatsAppPayload = Record<string, unknown>;
+
+interface ProviderConfig {
+  url: string;
+  buildPayload: (to: string, message: string, apiKey: string, sender?: string) => WhatsAppPayload;
+  headers: (apiKey: string) => Record<string, string>;
+}
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return "Gagal mengirim pesan WhatsApp";
+};
+
 // Provider configurations
-const PROVIDER_CONFIGS: Record<string, { url: string; buildPayload: (to: string, message: string, apiKey: string, sender?: string) => any; headers: (apiKey: string) => Record<string, string> }> = {
+const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
   fonnte: {
     url: "https://api.fonnte.com/send",
     buildPayload: (to, message, apiKey) => ({
@@ -95,7 +108,7 @@ serve(async (req) => {
     }
 
     let url: string;
-    let payload: any;
+    let payload: WhatsAppPayload;
     let headers: Record<string, string>;
 
     if (provider === "custom" && apiUrl) {
@@ -159,12 +172,12 @@ serve(async (req) => {
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     logTraceError(traceId, "Error sending WhatsApp", error);
     return new Response(
       JSON.stringify(withTrace({ 
-        error: error.message || "Gagal mengirim pesan WhatsApp",
-        details: error.toString()
+        error: getErrorMessage(error),
+        details: String(error)
       }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

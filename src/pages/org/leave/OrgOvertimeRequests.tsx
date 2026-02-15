@@ -1,41 +1,41 @@
- import { useState, useEffect } from "react";
- import { useOvertimeRequests, OvertimeRequest } from "@/hooks/useOvertimeRequests";
- import { supabase } from "@/integrations/supabase/client";
- import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
- import { Button } from "@/components/ui/button";
- import { Input } from "@/components/ui/input";
- import { Badge } from "@/components/ui/badge";
- import { Textarea } from "@/components/ui/textarea";
- import { Label } from "@/components/ui/label";
- import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
- import {
-   Dialog,
-   DialogContent,
-   DialogHeader,
-   DialogTitle,
-   DialogFooter,
- } from "@/components/ui/dialog";
- import {
-   Table,
-   TableBody,
-   TableCell,
-   TableHead,
-   TableHeader,
-   TableRow,
- } from "@/components/ui/table";
- import { 
-   Timer, 
-   Search, 
-   CheckCircle, 
-   XCircle, 
-   Clock,
-   Calendar,
-   Loader2,
-   User
- } from "lucide-react";
- import { format } from "date-fns";
- import { id } from "date-fns/locale";
- import DashboardLayout from "@/components/dashboard/DashboardLayout";
+import { useState, useEffect } from "react";
+import { useOvertimeRequests, OvertimeRequest } from "@/hooks/useOvertimeRequests";
+import { supabase } from "@/integrations/supabase/client";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  Timer,
+  Search,
+  CheckCircle,
+  XCircle,
+  Clock,
+  Calendar,
+  Loader2,
+  User,
+} from "lucide-react";
+import { format } from "date-fns";
+import { id } from "date-fns/locale";
+import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
  
  const statusConfig: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
    pending: { label: "Menunggu", variant: "secondary" },
@@ -44,80 +44,84 @@
    cancelled: { label: "Dibatalkan", variant: "outline" },
  };
  
- export default function OrgOvertimeRequests() {
-   const [employee, setEmployee] = useState<{ id: string; tenant_id: string } | null>(null);
-   
-   useEffect(() => {
-     const fetchEmployee = async () => {
-       const { data: { user } } = await supabase.auth.getUser();
-       if (!user) return;
-       
-       const { data } = await supabase
-         .from("employees")
-         .select("id, tenant_id")
-         .eq("user_id", user.id)
-         .single();
-       
-       if (data) setEmployee(data);
-     };
-     fetchEmployee();
-   }, []);
-   
-   const tenantId = employee?.tenant_id;
-   
-   const [activeTab, setActiveTab] = useState("pending");
-   const [searchQuery, setSearchQuery] = useState("");
-   const [selectedRequest, setSelectedRequest] = useState<OvertimeRequest | null>(null);
-   const [rejectionReason, setRejectionReason] = useState("");
-   const [isProcessing, setIsProcessing] = useState(false);
- 
-   const { requests: pendingRequests, isLoading: loadingPending, approveRequest } = 
-     useOvertimeRequests({ tenantId: tenantId || undefined, status: "pending" });
-   const { requests: allRequests, isLoading: loadingAll } = 
-     useOvertimeRequests({ tenantId: tenantId || undefined });
- 
-   const displayRequests = activeTab === "pending" ? pendingRequests : allRequests;
-   const isLoading = activeTab === "pending" ? loadingPending : loadingAll;
- 
-   const filteredRequests = displayRequests.filter((req) => {
-     if (!searchQuery) return true;
-     const query = searchQuery.toLowerCase();
-     return (
-       req.request_number.toLowerCase().includes(query) ||
-       req.employee?.name?.toLowerCase().includes(query) ||
-       req.employee?.nik?.toLowerCase().includes(query)
-     );
-   });
- 
-   const handleApprove = async (approved: boolean) => {
-     if (!selectedRequest || !employee) return;
-     
-     if (!approved && !rejectionReason.trim()) {
-       return;
-     }
- 
-     setIsProcessing(true);
-     const success = await approveRequest(
-       selectedRequest.id,
-       employee.id,
-       approved,
-       approved ? undefined : rejectionReason
-     );
- 
-     if (success) {
-       setSelectedRequest(null);
-       setRejectionReason("");
-     }
-     setIsProcessing(false);
-   };
- 
-   return (
-     <DashboardLayout 
-       title="Pengajuan Lembur"
-       subtitle="Kelola pengajuan lembur pegawai"
-     >
-       <div className="space-y-4">
-         <Tabs value={activeTab} onValueChange={setActiveTab}>
+export default function OrgOvertimeRequests() {
+  const [employee, setEmployee] = useState<{ id: string; tenant_id: string } | null>(null);
+
+  useEffect(() => {
+    const fetchEmployee = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data } = await supabase
+        .from("employees")
+        .select("id, tenant_id")
+        .eq("user_id", user.id)
+        .single();
+
+      if (data) setEmployee(data);
+    };
+    void fetchEmployee();
+  }, []);
+
+  const tenantId = employee?.tenant_id;
+
+  const [activeTab, setActiveTab] = useState("pending");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedRequest, setSelectedRequest] = useState<OvertimeRequest | null>(null);
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [isProcessing, setIsProcessing] = useState(false);
+
+  const { requests: pendingRequests, isLoading: loadingPending, approveRequest } =
+    useOvertimeRequests({ tenantId: tenantId || undefined, status: "pending" });
+  const { requests: allRequests, isLoading: loadingAll } = useOvertimeRequests({
+    tenantId: tenantId || undefined,
+  });
+
+  const displayRequests = activeTab === "pending" ? pendingRequests : allRequests;
+  const isLoading = activeTab === "pending" ? loadingPending : loadingAll;
+
+  const filteredRequests = displayRequests.filter((req) => {
+    if (!searchQuery) return true;
+    const query = searchQuery.toLowerCase();
+    return (
+      req.request_number.toLowerCase().includes(query) ||
+      req.employee?.name?.toLowerCase().includes(query) ||
+      req.employee?.nik?.toLowerCase().includes(query)
+    );
+  });
+
+  const handleApprove = async (approved: boolean) => {
+    if (!selectedRequest || !employee) return;
+
+    if (!approved && !rejectionReason.trim()) {
+      return;
+    }
+
+    setIsProcessing(true);
+    const success = await approveRequest(
+      selectedRequest.id,
+      employee.id,
+      approved,
+      approved ? undefined : rejectionReason
+    );
+
+    if (success) {
+      setSelectedRequest(null);
+      setRejectionReason("");
+    }
+    setIsProcessing(false);
+  };
+
+  return (
+    <OrganizationLayout>
+      <div className="space-y-4">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Pengajuan Lembur</h1>
+          <p className="text-sm text-muted-foreground">Kelola pengajuan lembur pegawai</p>
+        </div>
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
              <TabsList>
                <TabsTrigger value="pending" className="relative">
@@ -263,10 +267,10 @@
              )}
            </DialogContent>
          </Dialog>
-       </div>
-     </DashboardLayout>
-   );
- }
+      </div>
+    </OrganizationLayout>
+  );
+}
  
  function RequestsTable({ 
    requests, 

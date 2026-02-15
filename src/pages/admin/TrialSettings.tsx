@@ -7,6 +7,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Save, Loader2, Flame, Clock, AlertTriangle } from "lucide-react";
+import type { Json } from "@/integrations/supabase/types";
+
+const getNumericSettingValue = (settingValue: Json, fallback: number) => {
+  if (typeof settingValue === "object" && settingValue !== null && !Array.isArray(settingValue)) {
+    const value = (settingValue as Record<string, unknown>).value;
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+
+  return fallback;
+};
 
 export default function TrialSettings({ embedded = false }: { embedded?: boolean }) {
   const [streakThreshold, setStreakThreshold] = useState(30);
@@ -25,12 +38,12 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
         .select("key, value")
         .in("key", ["streak_threshold", "streak_grace_period_days"]);
 
-      if (data) {
-        const threshold = data.find(d => d.key === "streak_threshold");
-        const grace = data.find(d => d.key === "streak_grace_period_days");
-        if (threshold) setStreakThreshold((threshold.value as any)?.value ?? 30);
-        if (grace) setGracePeriodDays((grace.value as any)?.value ?? 7);
-      }
+	      if (data) {
+	        const threshold = data.find(d => d.key === "streak_threshold");
+	        const grace = data.find(d => d.key === "streak_grace_period_days");
+	        if (threshold) setStreakThreshold(getNumericSettingValue(threshold.value, 30));
+	        if (grace) setGracePeriodDays(getNumericSettingValue(grace.value, 7));
+	      }
     } catch (error) {
       console.error("Error:", error);
     } finally {
@@ -41,10 +54,12 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      for (const item of [
+      const settingsPayload: Array<{ key: string; value: Json; description: string }> = [
         { key: "streak_threshold", value: { value: streakThreshold }, description: "Jumlah hari streak untuk aktivasi" },
         { key: "streak_grace_period_days", value: { value: gracePeriodDays }, description: "Masa tenggang pembayaran (hari)" },
-      ]) {
+      ];
+
+      for (const item of settingsPayload) {
         const { data: existing } = await supabase
           .from("system_settings")
           .select("id")
@@ -52,9 +67,14 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
           .maybeSingle();
 
         if (existing) {
-          await supabase.from("system_settings").update({ value: item.value as any, updated_at: new Date().toISOString() }).eq("id", existing.id);
+          await supabase
+            .from("system_settings")
+            .update({ value: item.value, updated_at: new Date().toISOString() })
+            .eq("id", existing.id);
         } else {
-          await supabase.from("system_settings").insert({ key: item.key, value: item.value as any, description: item.description });
+          await supabase
+            .from("system_settings")
+            .insert({ key: item.key, value: item.value, description: item.description });
         }
       }
       toast.success("Konfigurasi streak berhasil disimpan");

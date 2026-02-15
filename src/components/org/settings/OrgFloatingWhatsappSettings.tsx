@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,26 +8,39 @@ import { Textarea } from "@/components/ui/textarea";
 import { MessageSquare, Phone, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import type { Json } from "@/integrations/supabase/types";
 
 interface OrgFloatingWhatsappSettingsProps {
   tenantId: string;
 }
 
+interface FloatingWhatsappSettingValue {
+  enabled: boolean;
+  phone: string;
+  message: string;
+  position: string;
+}
+
+const DEFAULT_MESSAGE = "Halo, saya butuh bantuan terkait aplikasi absensi.";
+
+const toJsonObject = (value: Json): Record<string, Json> | null => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, Json>;
+};
+
 export function OrgFloatingWhatsappSettings({ tenantId }: OrgFloatingWhatsappSettingsProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [settings, setSettings] = useState({
+  const [settings, setSettings] = useState<FloatingWhatsappSettingValue>({
     enabled: false,
     phone: "",
-    message: "Halo, saya butuh bantuan terkait aplikasi absensi.",
+    message: DEFAULT_MESSAGE,
     position: "bottom-right",
   });
 
-  useEffect(() => {
-    fetchSettings();
-  }, [tenantId]);
-
-  const fetchSettings = async () => {
+  const fetchSettings = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from("organization_settings")
@@ -39,12 +52,17 @@ export function OrgFloatingWhatsappSettings({ tenantId }: OrgFloatingWhatsappSet
       if (error && error.code !== "PGRST116") throw error;
 
       if (data?.setting_value) {
-        const value = data.setting_value as any;
+        const value = toJsonObject(data.setting_value);
+        const enabled = value?.enabled;
+        const phone = value?.phone;
+        const message = value?.message;
+        const position = value?.position;
+
         setSettings({
-          enabled: value.enabled || false,
-          phone: value.phone || "",
-          message: value.message || "Halo, saya butuh bantuan terkait aplikasi absensi.",
-          position: value.position || "bottom-right",
+          enabled: typeof enabled === "boolean" ? enabled : false,
+          phone: typeof phone === "string" ? phone : "",
+          message: typeof message === "string" ? message : DEFAULT_MESSAGE,
+          position: typeof position === "string" ? position : "bottom-right",
         });
       }
     } catch (error) {
@@ -52,7 +70,11 @@ export function OrgFloatingWhatsappSettings({ tenantId }: OrgFloatingWhatsappSet
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [tenantId]);
+
+  useEffect(() => {
+    void fetchSettings();
+  }, [fetchSettings]);
 
   const handleSave = async () => {
     if (settings.enabled && !settings.phone) {

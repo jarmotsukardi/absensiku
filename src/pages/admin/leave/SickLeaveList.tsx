@@ -14,9 +14,10 @@ import { id as localeId } from "date-fns/locale";
 
 type LeaveRequest = Tables<"leave_requests">;
 type Employee = Tables<"employees">;
+type LeaveRequestWithEmployee = LeaveRequest & { employee?: Employee | null };
 
 export default function SickLeaveList() {
-  const [requests, setRequests] = useState<(LeaveRequest & { employee?: Employee })[]>([]);
+  const [requests, setRequests] = useState<LeaveRequestWithEmployee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
 
@@ -31,7 +32,7 @@ export default function SickLeaveList() {
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      setRequests((data || []) as any);
+      setRequests((data as LeaveRequestWithEmployee[]) || []);
     } catch (error) {
       console.error("Error fetching data:", error);
       toast.error("Gagal memuat data");
@@ -62,7 +63,7 @@ export default function SickLeaveList() {
   };
 
   const filteredRequests = requests.filter((req) =>
-    (req.employee as any)?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    req.employee?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     req.reason.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
@@ -139,10 +140,10 @@ export default function SickLeaveList() {
                       
                       return (
                         <TableRow key={req.id}>
-                          <TableCell>{index + 1}</TableCell>
-                          <TableCell className="font-medium">
-                            {(req.employee as any)?.name || "-"}
-                          </TableCell>
+                        <TableCell>{index + 1}</TableCell>
+                        <TableCell className="font-medium">
+                          {req.employee?.name || "-"}
+                        </TableCell>
                           <TableCell>
                             {format(startDate, "dd MMM yyyy", { locale: localeId })}
                           </TableCell>

@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
+import type { Tables } from "@/integrations/supabase/types";
 import { 
   Globe, 
   Link as LinkIcon, 
@@ -31,10 +32,12 @@ interface APKInfo {
   fileName: string;
 }
 
+type Tenant = Tables<"tenants">;
+
 export default function OrgLandingSettings() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [tenant, setTenant] = useState<any>(null);
+  const [tenant, setTenant] = useState<Tenant | null>(null);
   
   // APK Global dari SuperAdmin
   const [apkReguler, setApkReguler] = useState<APKInfo | null>(null);

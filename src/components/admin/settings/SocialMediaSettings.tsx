@@ -27,6 +27,11 @@ const defaultSettings: SocialMediaData = {
   social_telegram: "",
 };
 
+const readString = (obj: Record<string, unknown>, key: string): string => {
+  const value = obj[key];
+  return typeof value === "string" ? value : "";
+};
+
 export function SocialMediaSettings() {
   const [settings, setSettings] = useState<SocialMediaData>(defaultSettings);
   const [isLoading, setIsLoading] = useState(true);
@@ -45,16 +50,16 @@ export function SocialMediaSettings() {
         .eq("key", "footer_settings")
         .maybeSingle();
 
-      if (data?.value) {
-        const footerData = data.value as Record<string, any>;
+      if (data?.value && typeof data.value === "object" && !Array.isArray(data.value)) {
+        const footerData = data.value as Record<string, unknown>;
         setSettings({
-          social_facebook: footerData.social_facebook || "",
-          social_instagram: footerData.social_instagram || "",
-          social_twitter: footerData.social_twitter || "",
-          social_youtube: footerData.social_youtube || "",
-          social_linkedin: footerData.social_linkedin || "",
-          social_tiktok: footerData.social_tiktok || "",
-          social_telegram: footerData.social_telegram || "",
+          social_facebook: readString(footerData, "social_facebook"),
+          social_instagram: readString(footerData, "social_instagram"),
+          social_twitter: readString(footerData, "social_twitter"),
+          social_youtube: readString(footerData, "social_youtube"),
+          social_linkedin: readString(footerData, "social_linkedin"),
+          social_tiktok: readString(footerData, "social_tiktok"),
+          social_telegram: readString(footerData, "social_telegram"),
         });
       }
     } catch (error) {
@@ -74,7 +79,10 @@ export function SocialMediaSettings() {
         .eq("key", "footer_settings")
         .maybeSingle();
 
-      const footerData = (existing?.value as Record<string, any>) || {};
+      const footerData =
+        existing?.value && typeof existing.value === "object" && !Array.isArray(existing.value)
+          ? (existing.value as Record<string, unknown>)
+          : {};
       const updatedFooter = { ...footerData, ...settings };
 
       if (existing) {

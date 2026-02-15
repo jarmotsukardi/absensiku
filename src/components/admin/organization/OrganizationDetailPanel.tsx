@@ -6,21 +6,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
+import type { Tables } from "@/integrations/supabase/types";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 
-interface Organization {
-  id: string;
-  name: string;
-  code: string;
-  email: string | null;
-  phone: string | null;
-  address: string | null;
-  organization_type: string | null;
-  description: string | null;
-  is_active: boolean | null;
-  created_at: string | null;
-}
+type Organization = Tables<"tenants">;
 
 interface OrganizationDetailPanelProps {
   orgId: string | null;
@@ -42,7 +32,7 @@ export function OrganizationDetailPanel({ orgId, onClose }: OrganizationDetailPa
     officesCount: 0,
     opdCount: 0,
   });
-  const [subscription, setSubscription] = useState<any>(null);
+  const [subscription, setSubscription] = useState<Tables<"subscriptions"> | null>(null);
 
   useEffect(() => {
     if (orgId) {
@@ -228,7 +218,7 @@ export function OrganizationDetailPanel({ orgId, onClose }: OrganizationDetailPa
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">Mode Billing</span>
                     <Badge variant="outline">
-                      {(organization as any)?.billing_mode === "individual" ? "Mandiri" : "Terpusat"}
+                      {organization.billing_mode === "individual" ? "Mandiri" : "Terpusat"}
                     </Badge>
                   </div>
                 </div>

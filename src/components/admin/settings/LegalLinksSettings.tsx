@@ -90,7 +90,7 @@ export function LegalLinksSettings() {
         .maybeSingle();
 
       if (footerData?.value) {
-        const footerSettings = footerData.value as Record<string, any>;
+        const footerSettings = footerData.value as Record<string, unknown>;
         footerSettings.legal_links = links;
         await supabase
           .from("system_settings")

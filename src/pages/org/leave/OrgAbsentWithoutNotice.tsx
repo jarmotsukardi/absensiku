@@ -9,9 +9,21 @@ import { Search, FileWarning, Download } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
+import type { Tables } from "@/integrations/supabase/types";
+
+type AttendanceRecord = Tables<"attendance_records_partitioned">;
+type EmployeeSummary = {
+  id: string;
+  name: string;
+  nip: string | null;
+  opd: { code: string } | null;
+};
+type AbsentRecord = AttendanceRecord & {
+  employees: EmployeeSummary | null;
+};
 
 export default function OrgAbsentWithoutNotice() {
-  const [records, setRecords] = useState<any[]>([]);
+  const [records, setRecords] = useState<AbsentRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
 
@@ -31,16 +43,16 @@ export default function OrgAbsentWithoutNotice() {
       if (error) throw error;
 
       // Fetch employees data untuk join manual
-      const employeeIds = [...new Set(attendanceData?.map(r => r.employee_id) || [])];
+      const employeeIds = [...new Set((attendanceData || []).map((record) => record.employee_id))];
       const { data: employeesData } = await supabase
         .from("employees")
         .select("id, name, nip, opd(code)")
         .in("id", employeeIds);
 
       // Manual join
-      const recordsWithEmployee = (attendanceData || []).map(rec => ({
-        ...rec,
-        employees: employeesData?.find(e => e.id === rec.employee_id) || null
+      const recordsWithEmployee: AbsentRecord[] = (attendanceData || []).map((record) => ({
+        ...record,
+        employees: (employeesData?.find((employee) => employee.id === record.employee_id) || null) as EmployeeSummary | null,
       }));
 
       setRecords(recordsWithEmployee);
@@ -51,8 +63,8 @@ export default function OrgAbsentWithoutNotice() {
     }
   };
 
-  const filteredRecords = records.filter(rec =>
-    (rec.employees?.name || "").toLowerCase().includes(searchTerm.toLowerCase())
+  const filteredRecords = records.filter((record) =>
+    (record.employees?.name || "").toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -101,14 +113,14 @@ export default function OrgAbsentWithoutNotice() {
                 ) : filteredRecords.length === 0 ? (
                   <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">Tidak ada data</TableCell></TableRow>
                 ) : (
-                  filteredRecords.map((rec, i) => (
-                    <TableRow key={rec.id}>
-                      <TableCell>{i + 1}</TableCell>
-                      <TableCell>{format(new Date(rec.date), "d MMM yyyy", { locale: id })}</TableCell>
-                      <TableCell>{rec.employees?.name}</TableCell>
-                      <TableCell className="font-mono text-sm">{rec.employees?.nip || "-"}</TableCell>
-                      <TableCell>{rec.employees?.opd?.code || "-"}</TableCell>
-                      <TableCell>{rec.notes || "-"}</TableCell>
+                  filteredRecords.map((record, index) => (
+                    <TableRow key={record.id}>
+                      <TableCell>{index + 1}</TableCell>
+                      <TableCell>{format(new Date(record.date), "d MMM yyyy", { locale: id })}</TableCell>
+                      <TableCell>{record.employees?.name}</TableCell>
+                      <TableCell className="font-mono text-sm">{record.employees?.nip || "-"}</TableCell>
+                      <TableCell>{record.employees?.opd?.code || "-"}</TableCell>
+                      <TableCell>{record.notes || "-"}</TableCell>
                     </TableRow>
                   ))
                 )}

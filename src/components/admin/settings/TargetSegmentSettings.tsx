@@ -127,7 +127,11 @@ export function TargetSegmentSettings() {
     }
   };
 
-  const updateSegment = (index: number, field: keyof SegmentItem, value: any) => {
+  const updateSegment = <K extends keyof SegmentItem>(
+    index: number,
+    field: K,
+    value: SegmentItem[K]
+  ) => {
     const newSegments = [...config.segments];
     newSegments[index] = { ...newSegments[index], [field]: value };
     setConfig({ ...config, segments: newSegments });

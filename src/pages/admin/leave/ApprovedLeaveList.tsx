@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,20 +9,22 @@ import { Badge } from "@/components/ui/badge";
 import { Search, Calendar, Download, Filter } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Tables } from "@/integrations/supabase/types";
+import { Enums, Tables } from "@/integrations/supabase/types";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 
 type LeaveRequest = Tables<"leave_requests">;
 type Employee = Tables<"employees">;
+type LeaveType = Enums<"leave_type">;
+type LeaveRequestWithEmployee = LeaveRequest & { employee?: Employee | null };
 
 export default function ApprovedLeaveList() {
-  const [requests, setRequests] = useState<(LeaveRequest & { employee?: Employee })[]>([]);
+  const [requests, setRequests] = useState<LeaveRequestWithEmployee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
       
@@ -33,24 +35,24 @@ export default function ApprovedLeaveList() {
         .order("start_date", { ascending: false });
 
       if (typeFilter !== "all") {
-        query = query.eq("leave_type", typeFilter as any);
+        query = query.eq("leave_type", typeFilter as LeaveType);
       }
 
       const { data, error } = await query;
 
       if (error) throw error;
-      setRequests((data || []) as any);
+      setRequests((data as LeaveRequestWithEmployee[]) || []);
     } catch (error) {
       console.error("Error fetching data:", error);
       toast.error("Gagal memuat data");
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [typeFilter]);
 
   useEffect(() => {
     fetchData();
-  }, [typeFilter]);
+  }, [fetchData]);
 
   const handleExport = () => {
     toast.info("Fitur export ke Excel akan segera tersedia");
@@ -69,7 +71,7 @@ export default function ApprovedLeaveList() {
   };
 
   const filteredRequests = requests.filter((req) =>
-    (req.employee as any)?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    req.employee?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     req.reason.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
@@ -159,10 +161,10 @@ export default function ApprovedLeaveList() {
                       
                       return (
                         <TableRow key={req.id}>
-                          <TableCell>{index + 1}</TableCell>
-                          <TableCell className="font-medium">
-                            {(req.employee as any)?.name || "-"}
-                          </TableCell>
+                        <TableCell>{index + 1}</TableCell>
+                        <TableCell className="font-medium">
+                          {req.employee?.name || "-"}
+                        </TableCell>
                           <TableCell>
                             <Badge variant="secondary">{getLeaveTypeLabel(req.leave_type)}</Badge>
                           </TableCell>

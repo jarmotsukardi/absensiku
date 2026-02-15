@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -32,13 +32,9 @@ export function OverdueRequestsOverlay({ tenantId }: { tenantId: string | null }
   const [overdueItems, setOverdueItems] = useState<OverdueItem[]>([]);
   const [isVisible, setIsVisible] = useState(false);
 
-  useEffect(() => {
-    if (tenantId) {
-      checkOverdueRequests();
-    }
-  }, [tenantId]);
+  const checkOverdueRequests = useCallback(async () => {
+    if (!tenantId) return;
 
-  const checkOverdueRequests = async () => {
     const now = new Date();
     const items: OverdueItem[] = [];
 
@@ -149,7 +145,13 @@ export function OverdueRequestsOverlay({ tenantId }: { tenantId: string | null }
     } catch (error) {
       console.error("Error checking overdue requests:", error);
     }
-  };
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (tenantId) {
+      void checkOverdueRequests();
+    }
+  }, [tenantId, checkOverdueRequests]);
 
   if (!isVisible || overdueItems.length === 0) return null;
 

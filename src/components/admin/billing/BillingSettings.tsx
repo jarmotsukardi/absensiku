@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useBillingSettings } from "@/hooks/useBilling";
 import { supabase } from "@/integrations/supabase/client";
+import type { Json } from "@/integrations/supabase/types";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -46,7 +47,7 @@ export function BillingSettings() {
       if (manual) setManualPaymentEnabled(manual.value !== false);
       setInitialized(true);
     }
-  }, [settings, isLoading, initialized]);
+  }, [settings, isLoading, initialized, getSetting]);
 
   // Fetch billing_settings (bank account info) from system_settings
   useEffect(() => {
@@ -57,12 +58,12 @@ export function BillingSettings() {
         .eq("key", "billing_settings")
         .maybeSingle();
 
-      if (data?.value) {
-        const val = data.value as any;
-        setBankName(val.bank_name || "");
-        setBankAccount(val.bank_account || "");
-        setBankAccountName(val.bank_account_name || "");
-        setPaymentInstructions(val.payment_instructions || "");
+      if (data?.value && typeof data.value === "object" && !Array.isArray(data.value)) {
+        const value = data.value as Record<string, unknown>;
+        setBankName(typeof value.bank_name === "string" ? value.bank_name : "");
+        setBankAccount(typeof value.bank_account === "string" ? value.bank_account : "");
+        setBankAccountName(typeof value.bank_account_name === "string" ? value.bank_account_name : "");
+        setPaymentInstructions(typeof value.payment_instructions === "string" ? value.payment_instructions : "");
       }
     };
     fetchBankSettings();
@@ -82,7 +83,7 @@ export function BillingSettings() {
       ]);
 
       // Save bank account settings
-      const bankPayload = {
+      const bankPayload: Json = {
         bank_name: bankName,
         bank_account: bankAccount,
         bank_account_name: bankAccountName,
@@ -98,14 +99,14 @@ export function BillingSettings() {
       if (existing) {
         await supabase
           .from("system_settings")
-          .update({ value: bankPayload as any, updated_at: new Date().toISOString() })
+          .update({ value: bankPayload, updated_at: new Date().toISOString() })
           .eq("key", "billing_settings");
       } else {
         await supabase
           .from("system_settings")
           .insert({
             key: "billing_settings",
-            value: bankPayload as any,
+            value: bankPayload,
             description: "Pengaturan rekening bank pemilik aplikasi",
           });
       }

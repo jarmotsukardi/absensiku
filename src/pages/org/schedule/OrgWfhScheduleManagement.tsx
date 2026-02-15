@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,7 +14,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Home, Plus, Pencil, Trash2, Building2, Users, User } from "lucide-react";
 import { toast } from "sonner";
 import { useEmployee } from "@/hooks/useEmployee";
-import type { Tables } from "@/integrations/supabase/types";
+import type { Tables, TablesInsert, TablesUpdate } from "@/integrations/supabase/types";
 
 type WfhSchedule = Tables<"wfh_schedules">;
 type OPD = Tables<"opd">;
@@ -70,17 +70,7 @@ export default function OrgWfhScheduleManagement() {
     is_active: true,
   });
 
-  useEffect(() => {
-    fetchTenantId();
-  }, []);
-
-  useEffect(() => {
-    if (tenantId) {
-      fetchData();
-    }
-  }, [tenantId]);
-
-  const fetchTenantId = async () => {
+  const fetchTenantId = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
       const { data: emp } = await supabase
@@ -92,9 +82,9 @@ export default function OrgWfhScheduleManagement() {
         setTenantId(emp.tenant_id);
       }
     }
-  };
+  }, []);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     if (!tenantId) return;
     
     setIsLoading(true);
@@ -115,7 +105,17 @@ export default function OrgWfhScheduleManagement() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [tenantId]);
+
+  useEffect(() => {
+    void fetchTenantId();
+  }, [fetchTenantId]);
+
+  useEffect(() => {
+    if (tenantId) {
+      void fetchData();
+    }
+  }, [tenantId, fetchData]);
 
   const resetForm = () => {
     setFormData({
@@ -165,7 +165,7 @@ export default function OrgWfhScheduleManagement() {
     if (!tenantId) return;
 
     try {
-      const scheduleData: any = {
+      const scheduleData: TablesUpdate<"wfh_schedules"> = {
         tenant_id: tenantId,
         is_active: formData.is_active,
         description: formData.description || null,
@@ -189,7 +189,7 @@ export default function OrgWfhScheduleManagement() {
       } else {
         const { error } = await supabase
           .from("wfh_schedules")
-          .insert(scheduleData);
+          .insert(scheduleData as TablesInsert<"wfh_schedules">);
         if (error) throw error;
         toast.success("Jadwal WFH berhasil ditambahkan");
       }
@@ -197,8 +197,9 @@ export default function OrgWfhScheduleManagement() {
       setIsDialogOpen(false);
       resetForm();
       fetchData();
-    } catch (error: any) {
-      toast.error(error.message || "Gagal menyimpan jadwal");
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Gagal menyimpan jadwal";
+      toast.error(errorMessage);
     }
   };
 
@@ -270,7 +271,18 @@ export default function OrgWfhScheduleManagement() {
               <div className="space-y-4">
                 <div className="grid gap-2">
                   <Label>Berlaku Untuk</Label>
-                  <Select value={formData.scope} onValueChange={(v: any) => setFormData({ ...formData, scope: v, opd_id: null, work_unit_id: null, employee_id: null })}>
+                  <Select
+                    value={formData.scope}
+                    onValueChange={(value) =>
+                      setFormData({
+                        ...formData,
+                        scope: value as ScheduleFormData["scope"],
+                        opd_id: null,
+                        work_unit_id: null,
+                        employee_id: null,
+                      })
+                    }
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -334,7 +346,12 @@ export default function OrgWfhScheduleManagement() {
 
                 <div className="grid gap-2">
                   <Label>Tipe Jadwal</Label>
-                  <Select value={formData.schedule_type} onValueChange={(v: any) => setFormData({ ...formData, schedule_type: v })}>
+                  <Select
+                    value={formData.schedule_type}
+                    onValueChange={(value) =>
+                      setFormData({ ...formData, schedule_type: value as ScheduleFormData["schedule_type"] })
+                    }
+                  >
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="recurring">Berulang (Hari Tertentu)</SelectItem>

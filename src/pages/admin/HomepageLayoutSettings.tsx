@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import type { ComponentType } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import type { Json } from "@/integrations/supabase/types";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -38,10 +40,10 @@ interface HomepageSection {
   section_name: string;
   is_enabled: boolean;
   sort_order: number;
-  settings: any;
+  settings: Json;
 }
 
-const sectionIcons: Record<string, any> = {
+const sectionIcons: Record<string, ComponentType<{ className?: string }>> = {
   banner_promo: Megaphone, hero: Image, features: Layout, clients: Users, payment_methods: CreditCard,
   articles: FileText, testimonials: Users, faq: HelpCircle, cta: Phone,
   footer: Layout, pricing: CreditCard, statistics: BarChart3, partners: Users,

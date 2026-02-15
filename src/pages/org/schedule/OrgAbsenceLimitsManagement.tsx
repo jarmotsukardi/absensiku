@@ -24,6 +24,8 @@ interface AbsenceLimit {
   updated_at: string;
 }
 
+type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
+
 export default function OrgAbsenceLimitsManagement() {
   const [limits, setLimits] = useState<AbsenceLimit[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -163,7 +165,7 @@ export default function OrgAbsenceLimitsManagement() {
     currentPage * itemsPerPage
   );
 
-  const getWarningBadgeColor = (type: string) => {
+  const getWarningBadgeColor = (type: string): BadgeVariant => {
     if (type.includes("Lisan")) return "secondary";
     if (type.includes("Tertulis") && !type.includes("Pemotongan")) return "outline";
     if (type.includes("Pemotongan")) return "default";
@@ -283,7 +285,7 @@ export default function OrgAbsenceLimitsManagement() {
                       <TableCell>{(currentPage - 1) * itemsPerPage + index + 1}</TableCell>
                       <TableCell className="font-bold text-lg">{limit.max_days} hari</TableCell>
                       <TableCell>
-                        <Badge variant={getWarningBadgeColor(limit.warning_type) as any}>
+                        <Badge variant={getWarningBadgeColor(limit.warning_type)}>
                           {limit.warning_type}
                         </Badge>
                       </TableCell>

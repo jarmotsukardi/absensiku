@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -53,6 +53,7 @@ interface ApkInfo {
 
 export default function OrgDashboard() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [isLoading, setIsLoading] = useState(true);
   const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -67,11 +68,7 @@ export default function OrgDashboard() {
   const [userName, setUserName] = useState("");
   const [apkInfo, setApkInfo] = useState<ApkInfo | null>(null);
 
-  useEffect(() => {
-    fetchDashboardData();
-  }, []);
-
-  const fetchDashboardData = async () => {
+  const fetchDashboardData = useCallback(async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       
@@ -80,77 +77,103 @@ export default function OrgDashboard() {
         return;
       }
 
-      // Check if user is admin_instansi
-      const { data: roleData } = await supabase
+      // Resolve tenant context from roles and optional query param.
+      const { data: roleRows } = await supabase
         .from("user_roles")
         .select("role, tenant_id")
         .eq("user_id", user.id)
-        .in("role", ["admin_instansi", "super_admin"])
-        .single();
+        .in("role", ["admin_instansi", "super_admin"]);
 
-      if (!roleData) {
+      const adminRole = roleRows?.find((r) => r.role === "admin_instansi" && r.tenant_id);
+      const isSuperAdmin = roleRows?.some((r) => r.role === "super_admin");
+      const queryTenantId = searchParams.get("tenant_id");
+      const resolvedTenantId = adminRole?.tenant_id || (isSuperAdmin ? queryTenantId : null);
+
+      if (!resolvedTenantId) {
+        if (isSuperAdmin) {
+          toast.info("Pilih organisasi dari menu admin terlebih dahulu.");
+          navigate("/admin/organizations");
+          return;
+        }
         toast.error("Akses ditolak. Anda bukan Admin Organisasi.");
         navigate("/org/login");
         return;
       }
 
-      const tenantId = roleData.tenant_id;
-      setTenantId(tenantId);
+      setTenantId(resolvedTenantId);
 
       // Fetch subscription
-      if (tenantId) {
-        const { data: subData } = await supabase
-          .from("subscriptions")
-          .select("*")
-          .eq("tenant_id", tenantId)
-          .single();
+      const { data: subData } = await supabase
+        .from("subscriptions")
+        .select("*")
+        .eq("tenant_id", resolvedTenantId)
+        .maybeSingle();
 
-        if (subData) {
-          setSubscription(subData);
-        }
+      if (subData) {
+        setSubscription(subData);
       }
 
-      // Fetch employee info for name
-      const { data: empData } = await supabase
-        .from("employees")
-        .select("name")
-        .eq("user_id", user.id)
-        .single();
-
-      if (empData) {
-        setUserName(empData.name);
+      // Fetch display name (tenant name for super admin context, otherwise employee name).
+      if (isSuperAdmin && queryTenantId) {
+        const { data: tenantData } = await supabase
+          .from("tenants")
+          .select("name")
+          .eq("id", queryTenantId)
+          .maybeSingle();
+        setUserName(tenantData?.name || "Admin Organisasi");
+      } else {
+        const { data: empData } = await supabase
+          .from("employees")
+          .select("name")
+          .eq("user_id", user.id)
+          .eq("tenant_id", resolvedTenantId)
+          .maybeSingle();
+        if (empData?.name) {
+          setUserName(empData.name);
+        }
       }
 
       // Fetch stats
       const today = new Date().toISOString().split('T')[0];
+      const { data: officeRows } = await supabase
+        .from("offices")
+        .select("id")
+        .eq("tenant_id", resolvedTenantId);
+      const officeIds = (officeRows || []).map((row) => row.id);
+      const attendancePromise = officeIds.length > 0
+        ? supabase
+          .from("attendance_records_partitioned")
+          .select("id", { count: "exact" })
+          .in("office_id", officeIds)
+          .eq("date", today)
+        : Promise.resolve({ count: 0 as number | null });
 
       const [employeesRes, officesRes, attendanceRes, leavesRes, wfhRes, invitationsRes, apkSettings] = await Promise.all([
         supabase
           .from("employees")
           .select("id", { count: "exact" })
-          .eq("tenant_id", tenantId)
+          .eq("tenant_id", resolvedTenantId)
           .eq("is_active", true),
         supabase
           .from("offices")
           .select("id", { count: "exact" })
-          .eq("tenant_id", tenantId)
+          .eq("tenant_id", resolvedTenantId)
           .eq("is_active", true),
-        supabase
-          .from("attendance_records_partitioned")
-          .select("id", { count: "exact" })
-          .eq("date", today),
+        attendancePromise,
         supabase
           .from("leave_requests")
           .select("id", { count: "exact" })
+          .eq("tenant_id", resolvedTenantId)
           .eq("status", "menunggu"),
         supabase
           .from("wfh_requests")
           .select("id", { count: "exact" })
+          .eq("tenant_id", resolvedTenantId)
           .eq("status", "pending"),
         supabase
           .from("employee_invitations")
           .select("id", { count: "exact" })
-          .eq("tenant_id", tenantId)
+          .eq("tenant_id", resolvedTenantId)
           .eq("status", "pending")
           .lt("expires_at", new Date().toISOString()),
         supabase
@@ -187,7 +210,11 @@ export default function OrgDashboard() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [navigate, searchParams]);
+
+  useEffect(() => {
+    void fetchDashboardData();
+  }, [fetchDashboardData]);
 
   const getSubscriptionStatus = () => {
     if (!subscription) return { label: "Tidak Aktif", variant: "destructive" as const };

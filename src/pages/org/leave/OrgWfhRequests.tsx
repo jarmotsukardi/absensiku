@@ -12,11 +12,22 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { useEmployee } from "@/hooks/useEmployee";
+import type { User } from "@supabase/supabase-js";
+import type { LucideIcon } from "lucide-react";
+import type { Tables } from "@/integrations/supabase/types";
+
+type WfhRequest = Tables<"wfh_requests"> & {
+  employees: {
+    name: string;
+    nip: string | null;
+    opd: { name: string; code: string } | null;
+  } | null;
+};
 
 export default function OrgWfhRequests() {
-  const [requests, setRequests] = useState<any[]>([]);
+  const [requests, setRequests] = useState<WfhRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<string | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
@@ -39,7 +50,7 @@ export default function OrgWfhRequests() {
       .select("*, employees!wfh_requests_employee_id_fkey(name, nip, opd(name, code))")
       .order("created_at", { ascending: false });
     
-    if (!error) setRequests(data || []);
+    if (!error) setRequests((data || []) as WfhRequest[]);
     setIsLoading(false);
   };
 
@@ -53,7 +64,7 @@ export default function OrgWfhRequests() {
     
     if (!error) {
       toast.success("Pengajuan WFH disetujui");
-      fetchRequests();
+      void fetchRequests();
     }
     setIsSubmitting(false);
   };
@@ -70,13 +81,13 @@ export default function OrgWfhRequests() {
       toast.success("Pengajuan WFH ditolak");
       setRejectDialogOpen(false);
       setRejectionReason("");
-      fetchRequests();
+      void fetchRequests();
     }
     setIsSubmitting(false);
   };
 
   const getStatusBadge = (status: string) => {
-    const map: Record<string, { icon: any; label: string; class: string }> = {
+    const map: Record<string, { icon: LucideIcon; label: string; class: string }> = {
       disetujui: { icon: CheckCircle2, label: "Disetujui", class: "bg-green-500/10 text-green-700 border-green-500/30" },
       ditolak: { icon: XCircle, label: "Ditolak", class: "bg-red-500/10 text-red-700 border-red-500/30" },
       menunggu: { icon: Clock, label: "Menunggu", class: "bg-amber-500/10 text-amber-700 border-amber-500/30" },

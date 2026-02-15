@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "base_local_url": "http://localhost:5173",
+  "priority_order": [
+    "/admin",
+    "/org",
+    "/employee",
+    "/dashboard"
+  ],
+  "routes": {
+    "admin": [
+      "/admin/login",
+      "/admin",
+      "/admin/settings",
+      "/admin/streak-monitoring",
+      "/admin/subscriptions",
+      "/admin/homepage-layout"
+    ],
+    "org": [
+      "/org/login",
+      "/org/dashboard",
+      "/org/settings",
+      "/org/master/work-hours"
+    ],
+    "employee": [
+      "/employee/login",
+      "/employee/dashboard",
+      "/employee/profile"
+    ],
+    "global": [
+      "/",
+      "/dashboard"
+    ]
+  }
+}
+

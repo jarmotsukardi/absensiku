@@ -95,8 +95,9 @@ export function AccountDeletionDialog() {
         toast.success("Kode OTP telah dikirim");
       }
       setOtpSent(true);
-    } catch (error: any) {
-      toast.error("Gagal mengirim OTP: " + (error.message || "Coba lagi"));
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Coba lagi";
+      toast.error("Gagal mengirim OTP: " + errorMessage);
     } finally {
       setIsSendingOtp(false);
     }
@@ -119,7 +120,7 @@ export function AccountDeletionDialog() {
       }
       toast.success("OTP terverifikasi");
       setStep("phrase");
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast.error("Gagal verifikasi OTP");
     } finally {
       setIsVerifyingOtp(false);
@@ -170,8 +171,9 @@ export function AccountDeletionDialog() {
       await supabase.auth.signOut();
       toast.success("Akun Anda telah dinonaktifkan. Hubungi admin jika ingin mengaktifkan kembali.");
       navigate("/", { replace: true });
-    } catch (error: any) {
-      toast.error("Gagal memproses penghapusan: " + error.message);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      toast.error("Gagal memproses penghapusan: " + errorMessage);
     } finally {
       setIsDeleting(false);
       setShowFinalConfirm(false);

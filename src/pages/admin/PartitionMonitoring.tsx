@@ -122,10 +122,11 @@ const PartitionMonitoring = () => {
 
       // Refresh data
       await fetchData();
-    } catch (error: any) {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Terjadi kesalahan";
       console.error('Maintenance error:', error);
       toast.error('Gagal menjalankan maintenance', {
-        description: error.message
+        description: message
       });
     } finally {
       setIsRunningMaintenance(false);

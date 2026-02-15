@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -115,10 +115,6 @@ export default function Organizations() {
     fetchOrganizations();
   }, []);
 
-  useEffect(() => {
-    filterOrganizations();
-  }, [organizations, searchQuery, activeTab]);
-
   const fetchOrganizations = async () => {
     try {
       const { data, error } = await supabase
@@ -135,7 +131,7 @@ export default function Organizations() {
     }
   };
 
-  const filterOrganizations = () => {
+  const filterOrganizations = useCallback(() => {
     let filtered = [...organizations];
 
     if (activeTab !== "all") {
@@ -153,7 +149,11 @@ export default function Organizations() {
 
     setFilteredOrgs(filtered);
     setCurrentPage(1);
-  };
+  }, [organizations, searchQuery, activeTab]);
+
+  useEffect(() => {
+    filterOrganizations();
+  }, [filterOrganizations]);
 
   const openEditDialog = (org: Organization) => {
     setEditingOrg(org);
@@ -213,7 +213,11 @@ export default function Organizations() {
 
   return (
     <SuperAdminLayout title="Organisasi" subtitle="Kelola semua organisasi terdaftar">
-      <Tabs value={mainView} onValueChange={(v) => setMainView(v as any)} className="space-y-6">
+      <Tabs
+        value={mainView}
+        onValueChange={(value) => setMainView(value as "organizations" | "institution-types")}
+        className="space-y-6"
+      >
         <TabsList>
           <TabsTrigger value="organizations" className="gap-2">
             <Building2 className="h-4 w-4" />

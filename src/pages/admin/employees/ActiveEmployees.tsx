@@ -505,7 +505,7 @@ export default function ActiveEmployees() {
                         <TableCell>{index + 1}</TableCell>
                         <TableCell className="font-mono text-sm">{emp.nip || "-"}</TableCell>
                         <TableCell className="font-medium">{emp.name}</TableCell>
-                        <TableCell>{(emp as any).opd?.code || "-"}</TableCell>
+                        <TableCell>{emp.opd?.code || "-"}</TableCell>
                         <TableCell>{emp.position || "-"}</TableCell>
                         <TableCell className="text-sm text-muted-foreground">{emp.email}</TableCell>
                         <TableCell className="text-right">

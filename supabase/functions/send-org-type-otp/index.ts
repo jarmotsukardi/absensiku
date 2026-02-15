@@ -13,6 +13,11 @@ interface SendOrgTypeOTPRequest {
   whatsapp: string;
 }
 
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return "Terjadi kesalahan internal";
+};
+
 // Generate 6-digit OTP
 const generateOTP = (): string => {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -131,10 +136,10 @@ serve(async (req: Request): Promise<Response> => {
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     logTraceError(traceId, "Error in send-org-type-otp", error);
     return new Response(
-      JSON.stringify(withTrace({ error: error.message || "Terjadi kesalahan internal" }, traceId)),
+      JSON.stringify(withTrace({ error: getErrorMessage(error) }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

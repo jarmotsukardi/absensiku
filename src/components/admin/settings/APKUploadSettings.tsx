@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { Loader2, Upload, Smartphone, Download, Trash2, Building2, Users } from "lucide-react";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
+import type { Json } from "@/integrations/supabase/types";
 
 interface APKInfo {
   url: string;
@@ -110,6 +111,7 @@ export function APKUploadSettings() {
         updatedAt: new Date().toISOString(),
         fileName: fileName,
       };
+      const apkPayload: Json = newApkInfo;
 
       // Save to system_settings
       const { data: existing } = await supabase
@@ -121,14 +123,14 @@ export function APKUploadSettings() {
       if (existing) {
         await supabase
           .from("system_settings")
-          .update({ value: newApkInfo as any, updated_at: new Date().toISOString() })
+          .update({ value: apkPayload, updated_at: new Date().toISOString() })
           .eq("key", settingsKey);
       } else {
         await supabase
           .from("system_settings")
           .insert({
             key: settingsKey,
-            value: newApkInfo as any,
+            value: apkPayload,
             description: type === "reguler" 
               ? "APK Reguler untuk organisasi umum" 
               : "APK Khusus untuk Pemerintah Daerah",
@@ -142,9 +144,10 @@ export function APKUploadSettings() {
       }
       
       toast.success(`APK ${type === "reguler" ? "Reguler" : "Pemda"} berhasil diupload`);
-    } catch (error: any) {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
       console.error("Error uploading APK:", error);
-      toast.error("Gagal mengupload APK: " + error.message);
+      toast.error("Gagal mengupload APK: " + message);
     } finally {
       setIsUploading(false);
       e.target.value = "";

@@ -507,3 +507,111 @@ npm run streak:restore -- artifacts/streak-fixtures/backups/<nama-file-backup>.j
 
 Lokasi backup:
 - `artifacts/streak-fixtures/backups/`
+
+---
+
+## 🤖 Multi-Model Orchestration (Tetap)
+
+Workflow ini memecah task besar menjadi subtask independen, lalu mengeksekusi subtask tersebut secara paralel dengan model berbeda.
+
+File:
+- `scripts/multi-model-orchestrator.mjs`
+- `scripts/multi-model.config.json`
+
+### Setup
+
+API key bersifat opsional:
+
+```env
+OPENAI_API_KEY=your_api_key
+```
+
+Jika `OPENAI_API_KEY` tidak tersedia, orchestrator tetap berjalan dalam mode lokal (tanpa API call).
+
+### Jalankan
+
+Planner + eksekusi subtask paralel:
+
+```bash
+npm run orchestrate:models -- --task "Audit dan perbaiki modul /org/ end-to-end"
+```
+
+Simulasi tanpa API call:
+
+```bash
+npm run orchestrate:models -- --task "Perbaiki performa login" --dry-run
+```
+
+Paksa mode lokal (meski API key ada):
+
+```bash
+npm run orchestrate:models -- --task "Perbaiki performa login" --local
+```
+
+Pakai file subtask sendiri:
+
+```bash
+npm run orchestrate:models -- --task-file artifacts/subtasks.json
+```
+
+### Output artifacts
+
+Disimpan otomatis ke:
+- `artifacts/model-orchestration/<run-id>/run-info.json`
+- `artifacts/model-orchestration/<run-id>/plan.json`
+- `artifacts/model-orchestration/<run-id>/results.json`
+- `artifacts/model-orchestration/<run-id>/summary.md`
+- `artifacts/model-orchestration/<run-id>/*.md` (hasil tiap subtask)
+
+### Mapping model default
+
+Default mapping sudah mengikuti preferensi:
+- arsitektur: `gpt-5.3-codex`
+- implementasi: `gpt-5.2-codex`
+- review: `gpt-5.1-codex-max`
+- boilerplate: `gpt-5.1-code-mini`
+- fallback: `gpt-5.2`
+
+Ubah sesuai kebutuhan di `scripts/multi-model.config.json`.
+
+---
+
+## ⚡ Ops Readiness (Agar Kerja Lebih Cepat)
+
+Untuk mempercepat pembagian task besar, siapkan data minimum berikut:
+
+- akun uji per role
+- dataset uji inti
+- rute smoke-check prioritas
+
+Lokasi file:
+- `ops/working-profile.json`
+- `ops/smoke-routes.json`
+- `ops/test-accounts.template.json`
+- `ops/test-dataset.template.json`
+- `ops/README.md`
+
+Inisialisasi file lokal (tidak dipush):
+
+```bash
+npm run ops:readiness -- --init
+```
+
+Validasi kelengkapan:
+
+```bash
+npm run ops:readiness
+```
+
+Jika output `Ops readiness: SIAP`, berarti kebutuhan minimum sudah lengkap untuk eksekusi paralel yang lebih cepat.
+
+Audit route prioritas (`/admin`, `/org`, `/employee`, `/dashboard`):
+
+```bash
+npm run routes:trace
+```
+
+Perintah ini mengecek:
+- route yang didefinisikan di `src/App.tsx`
+- path yang dipanggil lewat `navigate/to/href` di `src/`
+- kecocokan dengan `ops/smoke-routes.json`

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -107,38 +107,7 @@ export default function OrgOPDAdminsManagement() {
     can_invite_employees: true,
   });
 
-  useEffect(() => {
-    fetchTenantAndData();
-  }, [currentPage]);
-
-  const fetchTenantAndData = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data: roleData } = await supabase
-        .from("user_roles")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      if (!roleData?.tenant_id) return;
-      setTenantId(roleData.tenant_id);
-
-      await Promise.all([
-        fetchAdmins(roleData.tenant_id),
-        fetchOpdList(roleData.tenant_id),
-        fetchEmployees(roleData.tenant_id),
-      ]);
-    } catch (error) {
-      console.error("Error:", error);
-      toast.error("Gagal memuat data");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const fetchAdmins = async (tid: string) => {
+  const fetchAdmins = useCallback(async (tid: string) => {
     // Count total
     const { count } = await supabase
       .from("opd_admins")
@@ -164,9 +133,9 @@ export default function OrgOPDAdminsManagement() {
 
     if (error) throw error;
     setAdmins((data as unknown as OPDAdmin[]) || []);
-  };
+  }, [currentPage]);
 
-  const fetchOpdList = async (tid: string) => {
+  const fetchOpdList = useCallback(async (tid: string) => {
     const { data, error } = await supabase
       .from("opd")
       .select("id, name, code")
@@ -176,9 +145,9 @@ export default function OrgOPDAdminsManagement() {
 
     if (error) throw error;
     setOpdList(data || []);
-  };
+  }, []);
 
-  const fetchEmployees = async (tid: string) => {
+  const fetchEmployees = useCallback(async (tid: string) => {
     const { data, error } = await supabase
       .from("employees")
       .select("id, name, email, nik, opd_id")
@@ -188,7 +157,38 @@ export default function OrgOPDAdminsManagement() {
 
     if (error) throw error;
     setEmployees(data || []);
-  };
+  }, []);
+
+  const fetchTenantAndData = useCallback(async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data: roleData } = await supabase
+        .from("user_roles")
+        .select("tenant_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+
+      if (!roleData?.tenant_id) return;
+      setTenantId(roleData.tenant_id);
+
+      await Promise.all([
+        fetchAdmins(roleData.tenant_id),
+        fetchOpdList(roleData.tenant_id),
+        fetchEmployees(roleData.tenant_id),
+      ]);
+    } catch (error) {
+      console.error("Error:", error);
+      toast.error("Gagal memuat data");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [fetchAdmins, fetchEmployees, fetchOpdList]);
+
+  useEffect(() => {
+    void fetchTenantAndData();
+  }, [fetchTenantAndData]);
 
   const handleSubmit = async () => {
     if (!formData.opd_id || !formData.employee_id) {

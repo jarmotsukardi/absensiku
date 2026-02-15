@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,11 +34,7 @@ export function OrganizationOffices({ tenantId }: OrganizationOfficesProps) {
   const [offices, setOffices] = useState<Office[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    fetchOffices();
-  }, [tenantId]);
-
-  const fetchOffices = async () => {
+  const fetchOffices = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from("offices")
@@ -54,7 +50,11 @@ export function OrganizationOffices({ tenantId }: OrganizationOfficesProps) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [tenantId]);
+
+  useEffect(() => {
+    fetchOffices();
+  }, [fetchOffices]);
 
   const formatTime = (time: string | null) => {
     if (!time) return "-";

@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import type { TablesUpdate } from "@/integrations/supabase/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -19,15 +20,7 @@ export function BillingPolicySettings({ tenantId, currentMode, onUpdate }: Billi
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
-  useEffect(() => {
-    if (currentMode) {
-      setBillingMode(currentMode);
-    } else {
-      fetchCurrentMode();
-    }
-  }, [tenantId, currentMode]);
-
-  const fetchCurrentMode = async () => {
+  const fetchCurrentMode = useCallback(async () => {
     setIsLoading(true);
     try {
       const { data, error } = await supabase
@@ -37,30 +30,41 @@ export function BillingPolicySettings({ tenantId, currentMode, onUpdate }: Billi
         .single();
 
       if (error) throw error;
-      setBillingMode((data as any)?.billing_mode || "centralized");
+      setBillingMode(data?.billing_mode || "centralized");
     } catch (err) {
       console.error("Error fetching billing mode:", err);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (currentMode) {
+      setBillingMode(currentMode);
+    } else {
+      fetchCurrentMode();
+    }
+  }, [currentMode, fetchCurrentMode]);
 
   const handleSave = async () => {
     setIsSaving(true);
     try {
+      const updatePayload: TablesUpdate<"tenants"> = {
+        billing_mode: billingMode,
+        billing_mode_updated_at: new Date().toISOString(),
+      };
+
       const { error } = await supabase
         .from("tenants")
-        .update({
-          billing_mode: billingMode,
-          billing_mode_updated_at: new Date().toISOString(),
-        } as any)
+        .update(updatePayload)
         .eq("id", tenantId);
 
       if (error) throw error;
       toast.success("Kebijakan pembayaran berhasil disimpan");
       onUpdate?.();
-    } catch (err: any) {
-      toast.error("Gagal menyimpan: " + err.message);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      toast.error("Gagal menyimpan: " + message);
     } finally {
       setIsSaving(false);
     }

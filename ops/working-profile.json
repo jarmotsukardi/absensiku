@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "owner": "jarmotsukardi",
+  "updated_at": "2026-02-15",
+  "workflow_policy": {
+    "priority_order": [
+      "/admin",
+      "/org",
+      "/employee",
+      "/dashboard"
+    ],
+    "definition_of_done": [
+      "fungsi utama berjalan",
+      "relasi data benar",
+      "error mengandung trace_id atau log_id",
+      "tidak ada regresi utama"
+    ],
+    "parallel_limits": {
+      "max_subtasks": 4,
+      "max_files_per_edit_batch": 6
+    },
+    "validation_pipeline": [
+      "npm run autofix",
+      "npm run lint -- --max-warnings=100000",
+      "npm run test",
+      "npm run build"
+    ],
+    "requires_discussion_before_execution": [
+      "migration_atau_ubah_schema_database",
+      "hapus_ganti_banyak_file",
+      "push_github",
+      "deploy_vercel",
+      "ubah_auth_credential_secret"
+    ],
+    "deployment_rule": "push dan deploy hanya jika user perintah eksplisit pada turn itu"
+  }
+}
+

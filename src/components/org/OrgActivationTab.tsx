@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -25,26 +25,36 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { ManualPaymentFlow } from "@/components/org/ManualPaymentFlow";
+import type { Tables } from "@/integrations/supabase/types";
 
 interface OrgActivationTabProps {
   tenantId: string;
   tenantName: string;
 }
 
-interface SubscriptionPackage {
-  id: string;
-  name: string;
-  duration_months: number;
-  base_price_per_month: number;
-  discount_percentage: number;
+type SubscriptionPackage = Tables<"subscription_packages">;
+type Subscription = Tables<"subscriptions">;
+type Invoice = Tables<"invoices">;
+type SystemSetting = Tables<"system_settings">;
+
+interface XenditSettingValue {
+  enabled?: boolean;
+}
+
+interface XenditInvoiceResponse {
+  success?: boolean;
+  error?: string;
+  invoice?: {
+    invoice_url?: string | null;
+  };
 }
 
 type PaymentMethod = "manual" | "xendit";
 
 export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps) {
   const [packages, setPackages] = useState<SubscriptionPackage[]>([]);
-  const [subscription, setSubscription] = useState<any>(null);
-  const [invoices, setInvoices] = useState<any[]>([]);
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [employeeCount, setEmployeeCount] = useState(0);
   const [selectedPkgId, setSelectedPkgId] = useState<string>("");
   const [memberSlider, setMemberSlider] = useState([10]);
@@ -53,11 +63,7 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
   const [isCreatingXenditInvoice, setIsCreatingXenditInvoice] = useState(false);
   const [xenditEnabled, setXenditEnabled] = useState(false);
 
-  useEffect(() => {
-    fetchAll();
-  }, [tenantId]);
-
-  const fetchAll = async () => {
+  const fetchAll = useCallback(async () => {
     try {
       const [pkgRes, subRes, invRes, empRes, xenditRes] = await Promise.all([
         supabase.from("subscription_packages").select("*").eq("is_active", true).order("sort_order"),
@@ -72,7 +78,11 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       setInvoices(invRes.data || []);
       setEmployeeCount(empRes.count || 0);
       setMemberSlider([empRes.count || 10]);
-      setXenditEnabled(xenditRes.data?.value === true || (xenditRes.data?.value as any)?.enabled === true);
+      const xenditSetting = xenditRes.data as SystemSetting | null;
+      const settingValue = xenditSetting?.value;
+      const isObjectSetting = typeof settingValue === "object" && settingValue !== null && !Array.isArray(settingValue);
+      const enabledFromObject = isObjectSetting ? (settingValue as XenditSettingValue).enabled === true : false;
+      setXenditEnabled(settingValue === true || enabledFromObject);
       if (pkgRes.data && pkgRes.data.length > 0) {
         setSelectedPkgId(pkgRes.data[0].id);
       }
@@ -81,7 +91,11 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [tenantId]);
+
+  useEffect(() => {
+    void fetchAll();
+  }, [fetchAll]);
 
   const selectedPkg = packages.find((p) => p.id === selectedPkgId);
 
@@ -108,7 +122,7 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
     if (!selectedPkg) return;
     setIsCreatingXenditInvoice(true);
     try {
-      const { data, error } = await supabase.functions.invoke("create-xendit-invoice", {
+      const { data, error } = await supabase.functions.invoke<XenditInvoiceResponse>("create-xendit-invoice", {
         body: {
           tenant_id: tenantId,
           package_id: selectedPkg.id,
@@ -129,10 +143,11 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       }
 
       // Refresh invoices
-      fetchAll();
-    } catch (error: any) {
+      void fetchAll();
+    } catch (error: unknown) {
       console.error("Xendit error:", error);
-      toast.error(error.message || "Gagal membuat invoice Xendit");
+      const errorMessage = error instanceof Error ? error.message : "Gagal membuat invoice Xendit";
+      toast.error(errorMessage);
     } finally {
       setIsCreatingXenditInvoice(false);
     }

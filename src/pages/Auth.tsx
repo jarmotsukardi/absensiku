@@ -80,11 +80,11 @@ const Auth = () => {
           return;
         } else {
           // Pegawai - redirect ke dashboard
-          navigate("/dashboard", { replace: true });
+          navigate("/employee/dashboard", { replace: true });
         }
       } else {
         // User tanpa role khusus - kemungkinan pegawai biasa
-        navigate("/dashboard", { replace: true });
+        navigate("/employee/dashboard", { replace: true });
       }
     } catch (error) {
       navigate("/employee/dashboard", { replace: true });

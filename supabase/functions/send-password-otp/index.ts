@@ -36,6 +36,20 @@ interface ResolvedAccount {
   source: "employee" | "auth_admin";
 }
 
+type AdminSupabaseClient = ReturnType<typeof createClient>;
+
+interface AuthUserRecord {
+  id?: string;
+  email?: string;
+  user_metadata?: {
+    name?: string;
+  };
+}
+
+interface UserRoleRow {
+  role: string;
+}
+
 const ROLE_MAP: Record<string, { label: string }> = {
   admin: { label: "Super Admin" },
   org: { label: "Admin Organisasi" },
@@ -98,6 +112,11 @@ const withTrace = <T extends Record<string, unknown>>(payload: T, traceId: strin
   trace_id: traceId,
 });
 
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return "Terjadi kesalahan internal";
+};
+
 const pickBestEmployeeCandidate = (rows: EmployeeCandidate[]): EmployeeCandidate | null => {
   if (!rows.length) return null;
   const sorted = [...rows].sort((a, b) => {
@@ -112,13 +131,13 @@ const pickBestEmployeeCandidate = (rows: EmployeeCandidate[]): EmployeeCandidate
   return sorted[0];
 };
 
-const findAuthUserByEmail = async (supabase: any, normalizedEmail: string) => {
+const findAuthUserByEmail = async (supabase: AdminSupabaseClient, normalizedEmail: string): Promise<AuthUserRecord | null> => {
   let page = 1;
   while (true) {
     const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
     if (error) throw new Error(`Gagal membaca auth users: ${error.message}`);
-    const users = data?.users || [];
-    const found = users.find((u: any) => String(u?.email || "").toLowerCase() === normalizedEmail);
+    const users = (data?.users || []) as AuthUserRecord[];
+    const found = users.find((u) => String(u?.email || "").toLowerCase() === normalizedEmail);
     if (found) return found;
     if (!users.length) break;
     page += 1;
@@ -127,7 +146,7 @@ const findAuthUserByEmail = async (supabase: any, normalizedEmail: string) => {
 };
 
 const resolveAccount = async (
-  supabase: any,
+  supabase: AdminSupabaseClient,
   email: string,
   loginType?: "employee" | "org" | "admin"
 ): Promise<{ account: ResolvedAccount | null; hasEmployeeRow: boolean; hasInactiveEmployee: boolean }> => {
@@ -198,7 +217,7 @@ const hashOTP = async (otp: string): Promise<string> => {
 };
 
 // Check rate limit
-const checkRateLimit = async (supabase: any, email: string): Promise<{ allowed: boolean; message?: string }> => {
+const checkRateLimit = async (supabase: AdminSupabaseClient, email: string): Promise<{ allowed: boolean; message?: string }> => {
   const { data: rateLimit } = await supabase
     .from("rate_limit_otp")
     .select("*")
@@ -291,10 +310,10 @@ serve(async (req: Request): Promise<Response> => {
       account = resolved.account;
       hasEmployeeRow = resolved.hasEmployeeRow;
       hasInactiveEmployee = resolved.hasInactiveEmployee;
-    } catch (resolveError: any) {
-      console.error(`[${traceId}] Error resolving account:`, resolveError?.message);
+    } catch (resolveError: unknown) {
+      console.error(`[${traceId}] Error resolving account:`, getErrorMessage(resolveError));
       return new Response(
-        JSON.stringify(withTrace({ error: resolveError?.message || "Gagal memeriksa email" }, traceId)),
+        JSON.stringify(withTrace({ error: getErrorMessage(resolveError) || "Gagal memeriksa email" }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -322,7 +341,7 @@ serve(async (req: Request): Promise<Response> => {
         .select("role")
         .eq("user_id", account.userId);
 
-      const roles = (userRoles || []).map((r: any) => r.role);
+      const roles = ((userRoles || []) as UserRoleRow[]).map((r) => r.role);
       const isSuperAdmin = roles.includes("super_admin");
       const isAdminInstansi = roles.includes("admin_instansi");
 
@@ -601,8 +620,9 @@ serve(async (req: Request): Promise<Response> => {
       await client.close();
       console.log("OTP email sent successfully to:", authEmail);
       
-    } catch (smtpError: any) {
-      console.error("SMTP Error:", smtpError.message);
+    } catch (smtpError: unknown) {
+      const smtpErrorMessage = getErrorMessage(smtpError);
+      console.error("SMTP Error:", smtpErrorMessage);
       
       const resendApiKey = Deno.env.get("RESEND_API_KEY");
       if (resendApiKey) {
@@ -623,15 +643,15 @@ serve(async (req: Request): Promise<Response> => {
           });
           
           if (!resendResponse.ok) {
-            throw new Error(`SMTP gagal: ${smtpError.message}. Fallback juga gagal.`);
+            throw new Error(`SMTP gagal: ${smtpErrorMessage}. Fallback juga gagal.`);
           }
           
           console.log("Email sent via Resend fallback");
-        } catch (fallbackError: any) {
-          throw new Error(`Gagal mengirim email: ${smtpError.message}`);
+        } catch (_fallbackError: unknown) {
+          throw new Error(`Gagal mengirim email: ${smtpErrorMessage}`);
         }
       } else {
-        throw new Error(`Gagal mengirim email via SMTP: ${smtpError.message}`);
+        throw new Error(`Gagal mengirim email via SMTP: ${smtpErrorMessage}`);
       }
     }
 
@@ -645,10 +665,10 @@ serve(async (req: Request): Promise<Response> => {
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error(`[${traceId}] Error in send-password-otp:`, error);
     return new Response(
-      JSON.stringify(withTrace({ error: error.message || "Terjadi kesalahan internal" }, traceId)),
+      JSON.stringify(withTrace({ error: getErrorMessage(error) }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

@@ -26,6 +26,13 @@ interface ResolvedAccount {
   authEmail: string;
 }
 
+type AdminSupabaseClient = ReturnType<typeof createClient>;
+
+interface AuthUserRecord {
+  id?: string;
+  email?: string;
+}
+
 const pickBestEmployeeCandidate = (rows: EmployeeCandidate[]): EmployeeCandidate | null => {
   if (!rows.length) return null;
   const sorted = [...rows].sort((a, b) => {
@@ -39,13 +46,13 @@ const pickBestEmployeeCandidate = (rows: EmployeeCandidate[]): EmployeeCandidate
   return sorted[0];
 };
 
-const findAuthUserByEmail = async (supabase: any, normalizedEmail: string) => {
+const findAuthUserByEmail = async (supabase: AdminSupabaseClient, normalizedEmail: string): Promise<AuthUserRecord | null> => {
   let page = 1;
   while (true) {
     const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
     if (error) throw new Error(`Gagal membaca auth users: ${error.message}`);
-    const users = data?.users || [];
-    const found = users.find((u: any) => String(u?.email || "").toLowerCase() === normalizedEmail);
+    const users = (data?.users || []) as AuthUserRecord[];
+    const found = users.find((u) => String(u?.email || "").toLowerCase() === normalizedEmail);
     if (found) return found;
     if (!users.length) break;
     page += 1;
@@ -53,7 +60,7 @@ const findAuthUserByEmail = async (supabase: any, normalizedEmail: string) => {
   return null;
 };
 
-const resolveAccount = async (supabase: any, email: string): Promise<ResolvedAccount | null> => {
+const resolveAccount = async (supabase: AdminSupabaseClient, email: string): Promise<ResolvedAccount | null> => {
   const normalizedEmail = email.trim().toLowerCase();
 
   const { data: employees, error: empError } = await supabase
@@ -86,6 +93,11 @@ const withTrace = <T extends Record<string, unknown>>(payload: T, traceId: strin
   trace_id: traceId,
 });
 
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return "Terjadi kesalahan internal";
+};
+
 // Hash OTP with SHA-256
 const hashOTP = async (otp: string): Promise<string> => {
   const encoder = new TextEncoder();
@@ -96,7 +108,7 @@ const hashOTP = async (otp: string): Promise<string> => {
 };
 
 // Check rate limit for verification
-const checkVerifyRateLimit = async (supabase: any, email: string): Promise<{ allowed: boolean; message?: string }> => {
+const checkVerifyRateLimit = async (supabase: AdminSupabaseClient, email: string): Promise<{ allowed: boolean; message?: string }> => {
   const { data: rateLimit } = await supabase
     .from("rate_limit_otp")
     .select("*")
@@ -153,7 +165,7 @@ const checkVerifyRateLimit = async (supabase: any, email: string): Promise<{ all
 };
 
 // Reset verify attempts on successful verification
-const resetVerifyAttempts = async (supabase: any, email: string) => {
+const resetVerifyAttempts = async (supabase: AdminSupabaseClient, email: string) => {
   await supabase.from("rate_limit_otp")
     .delete()
     .eq("identifier", email)
@@ -191,10 +203,10 @@ serve(async (req: Request): Promise<Response> => {
     let account: ResolvedAccount | null = null;
     try {
       account = await resolveAccount(supabase, email);
-    } catch (resolveError: any) {
-      console.error(`[${traceId}] Resolve account error:`, resolveError?.message);
+    } catch (resolveError: unknown) {
+      console.error(`[${traceId}] Resolve account error:`, getErrorMessage(resolveError));
       return new Response(
-        JSON.stringify(withTrace({ error: resolveError?.message || "Gagal memeriksa email", code: "EMAIL_LOOKUP_FAILED" }, traceId)),
+        JSON.stringify(withTrace({ error: getErrorMessage(resolveError) || "Gagal memeriksa email", code: "EMAIL_LOOKUP_FAILED" }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -277,10 +289,10 @@ serve(async (req: Request): Promise<Response> => {
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error(`[${traceId}] Error in verify-password-otp:`, error);
     return new Response(
-      JSON.stringify(withTrace({ error: error.message || "Terjadi kesalahan internal" }, traceId)),
+      JSON.stringify(withTrace({ error: getErrorMessage(error) }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

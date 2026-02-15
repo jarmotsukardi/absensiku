@@ -119,9 +119,10 @@ export function EmailGatewaySettings() {
       }
 
       toast.success(`Email tes berhasil dikirim ke ${testEmail}!`);
-    } catch (error: any) {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Gagal mengirim email tes";
       console.error("Test email error:", error);
-      toast.error(error.message || "Gagal mengirim email tes");
+      toast.error(message);
     } finally {
       setIsTesting(false);
     }

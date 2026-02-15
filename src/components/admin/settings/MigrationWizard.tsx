@@ -373,7 +373,7 @@ export function MigrationWizard() {
           </div>
         );
         
-      case 2: // Migrasi Schema
+      case 2: { // Migrasi Schema
         const partitionSQL = generatePartitionSQL();
         const storageBucketSQL = generateStorageBucketSQL();
         
@@ -474,6 +474,7 @@ export function MigrationWizard() {
             </div>
           </div>
         );
+      }
         
       case 3: // Migrasi Data
         return (

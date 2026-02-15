@@ -315,7 +315,7 @@ export default function WorkLocationsManagement() {
                       <TableRow key={loc.id}>
                         <TableCell>{index + 1}</TableCell>
                         <TableCell className="font-medium">{loc.name}</TableCell>
-                        <TableCell>{(loc as any).opd?.code || "-"}</TableCell>
+                        <TableCell>{loc.opd?.code || "-"}</TableCell>
                         <TableCell className="text-sm text-muted-foreground">
                           {loc.latitude}, {loc.longitude}
                         </TableCell>

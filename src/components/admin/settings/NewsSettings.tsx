@@ -192,8 +192,9 @@ export function NewsSettings() {
       
       setIsDialogOpen(false);
       fetchData();
-    } catch (error: any) {
-      toast.error("Gagal menyimpan: " + error.message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Gagal menyimpan data";
+      toast.error("Gagal menyimpan: " + message);
     }
   };
 

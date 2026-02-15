@@ -1,3 +1,4 @@
+import { Suspense, lazy } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -8,107 +9,99 @@ import { PersistentNotificationDialog } from "@/components/common/PersistentNoti
 import { AndroidBackButtonHandler } from "@/hooks/useAndroidBackButton";
 import Index from "./pages/Index";
 import Auth from "./pages/Auth";
-import Dashboard from "./pages/Dashboard";
-import EmployeeDashboard from "./pages/EmployeeDashboard";
-import LeaveRequests from "./pages/LeaveRequests";
-import AttendanceHistory from "./pages/AttendanceHistory";
-import AdminDashboard from "./pages/admin/AdminDashboard";
-import TenantDashboard from "./pages/admin/TenantDashboard";
-import Organizations from "./pages/admin/Organizations";
-import OrganizationForm from "./pages/admin/OrganizationForm";
-import OrganizationDetail from "./pages/admin/OrganizationDetail";
-import UserManagement from "./pages/admin/UserManagement";
-import RoleManagement from "./pages/admin/RoleManagement";
-import AuditLogs from "./pages/admin/AuditLogs";
-import Settings from "./pages/admin/Settings";
-import SubscriptionManagement from "./pages/admin/SubscriptionManagement";
-import MasterOffices from "./pages/admin/MasterOffices";
-import MasterEmployees from "./pages/admin/MasterEmployees";
-import MasterHolidays from "./pages/admin/MasterHolidays";
-import LeaveApprovals from "./pages/admin/LeaveApprovals";
-import NotificationManagement from "./pages/admin/NotificationManagement";
-import DatabaseManagement from "./pages/admin/DatabaseManagement";
-import PartitionMonitoring from "./pages/admin/PartitionMonitoring";
-import FAQManagement from "./pages/admin/FAQManagement";
-import SuperAdminLogin from "./pages/admin/SuperAdminLogin";
-import OrganizationTypeSettings from "./pages/admin/OrganizationTypeSettings";
-import HomepageLayoutSettings from "./pages/admin/HomepageLayoutSettings";
-import NationalHolidaysManagement from "./pages/admin/NationalHolidaysManagement";
-import ManualPaymentsManagement from "./pages/admin/ManualPaymentsManagement";
-import TrialSettings from "./pages/admin/TrialSettings";
-import SupabaseSettings from "./pages/admin/SupabaseSettings";
-import BillingDashboard from "./pages/admin/billing/BillingDashboard";
-import OPDManagement from "./pages/admin/master/OPDManagement";
-import OPDAdminsManagement from "./pages/admin/master/OPDAdminsManagement";
-import EmployeeImport from "./pages/admin/master/EmployeeImport";
-// Organization Admin Pages
-import OrgDashboard from "./pages/org/OrgDashboard";
-import OrgOPDManagement from "./pages/org/master/OrgOPDManagement";
-import OrgEmployeeInvitations from "./pages/org/OrgEmployeeInvitations";
-import OrgLandingSettings from "./pages/org/OrgLandingSettings";
-// Employee Pages
-import EmployeeLogin from "./pages/employee/EmployeeLogin";
-import EmployeeDashboardNew from "./pages/employee/EmployeeDashboardNew";
-import EmployeeProfile from "./pages/employee/EmployeeProfile";
-import EmployeeHelp from "./pages/employee/EmployeeHelp";
-// Dashboard Pages (Web untuk pegawai)
-import DashboardProfile from "./pages/dashboard/DashboardProfile";
-import DashboardHelp from "./pages/dashboard/DashboardHelp";
-import DashboardAttendanceHistory from "./pages/dashboard/DashboardAttendanceHistory";
-import DashboardLeaveRequests from "./pages/dashboard/DashboardLeaveRequests";
-import DashboardNotifications from "./pages/dashboard/DashboardNotifications";
-// Org Login
-import OrgLogin from "./pages/org/OrgLogin";
-// Landing Pages
-import OrganizationLanding from "./pages/landing/OrganizationLanding";
-import NewsDetail from "./pages/news/NewsDetail";
 import PrivacyPolicy from "./pages/PrivacyPolicy";
 import About from "./pages/About";
-import OrgInstitutionTypesManagement from "./pages/org/master/OrgInstitutionTypesManagement";
-import OrgWorkUnitsManagement from "./pages/org/master/OrgWorkUnitsManagement";
-import OrgWorkLocationsManagement from "./pages/org/master/OrgWorkLocationsManagement";
-import OrgPositionsManagement from "./pages/org/master/OrgPositionsManagement";
-import OrgHolidaysManagement from "./pages/org/schedule/OrgHolidaysManagement";
-import OrgNationalHolidaysManagement from "./pages/org/schedule/OrgNationalHolidaysManagement";
-import OrgWorkHoursManagement from "./pages/org/schedule/OrgWorkHoursManagement";
-import OrgAbsenceLimitsManagement from "./pages/org/schedule/OrgAbsenceLimitsManagement";
-import OrgWfhScheduleManagement from "./pages/org/schedule/OrgWfhScheduleManagement";
-import AttendanceSecuritySettings from "./pages/admin/AttendanceSecuritySettings";
-import OrgActiveEmployees from "./pages/org/employees/OrgActiveEmployees";
-import OrgInactiveEmployees from "./pages/org/employees/OrgInactiveEmployees";
-import OrgLeaveRequests from "./pages/org/leave/OrgLeaveRequests";
-import OrgApprovedLeaveList from "./pages/org/leave/OrgApprovedLeaveList";
-import OrgSickLeaveList from "./pages/org/leave/OrgSickLeaveList";
-import OrgOfficialTravelList from "./pages/org/leave/OrgOfficialTravelList";
-import OrgAbsentWithoutNotice from "./pages/org/leave/OrgAbsentWithoutNotice";
-import OrgWfhRequests from "./pages/org/leave/OrgWfhRequests";
-import OrgFlexibleAttendanceRequests from "./pages/org/leave/OrgFlexibleAttendanceRequests";
-import OrgAttendanceReport from "./pages/org/reports/OrgAttendanceReport";
-import OrgRecapReport from "./pages/org/reports/OrgRecapReport";
-import OrgSettings from "./pages/org/OrgSettings";
-import OrgActivation from "./pages/org/OrgActivation";
-import OrgProfileSetup from "./pages/org/OrgProfileSetup";
-import OrgOPDAdminsManagement from "./pages/org/master/OrgOPDAdminsManagement";
-import OrgEmployeeImport from "./pages/org/master/OrgEmployeeImport";
-import OrgNewsManagement from "./pages/org/OrgNewsManagement";
-import OrgNotificationManagement from "./pages/org/OrgNotificationManagement";
-import OrgHelp from "./pages/org/OrgHelp";
-import OrgAuditLog from "./pages/org/OrgAuditLog";
-import OrgMutationRequests from "./pages/org/employees/OrgMutationRequests";
 import ForgotPassword from "./pages/auth/ForgotPassword";
 import ResetPassword from "./pages/auth/ResetPassword";
 import NotFound from "./pages/NotFound";
-import OrgOvertimeRequests from "./pages/org/leave/OrgOvertimeRequests";
-import OrgOvertimeSettings from "./pages/org/schedule/OrgOvertimeSettings";
 import FAQPage from "./pages/FAQ";
-import FeedbackManagement from "./pages/admin/FeedbackManagement";
-import StreakMonitoring from "./pages/admin/StreakMonitoring";
-import AdminInstitutionTypesManagement from "./pages/admin/InstitutionTypesManagement";
-import AttendanceStressTest from "./pages/admin/AttendanceStressTest";
-import AttendanceReport from "./pages/admin/reports/AttendanceReport";
-import RecapReport from "./pages/admin/reports/RecapReport";
 
 const queryClient = new QueryClient();
+const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"));
+const TenantDashboard = lazy(() => import("./pages/admin/TenantDashboard"));
+const Organizations = lazy(() => import("./pages/admin/Organizations"));
+const OrganizationForm = lazy(() => import("./pages/admin/OrganizationForm"));
+const OrganizationDetail = lazy(() => import("./pages/admin/OrganizationDetail"));
+const UserManagement = lazy(() => import("./pages/admin/UserManagement"));
+const RoleManagement = lazy(() => import("./pages/admin/RoleManagement"));
+const AuditLogs = lazy(() => import("./pages/admin/AuditLogs"));
+const Settings = lazy(() => import("./pages/admin/Settings"));
+const SubscriptionManagement = lazy(() => import("./pages/admin/SubscriptionManagement"));
+const MasterOffices = lazy(() => import("./pages/admin/MasterOffices"));
+const MasterEmployees = lazy(() => import("./pages/admin/MasterEmployees"));
+const MasterHolidays = lazy(() => import("./pages/admin/MasterHolidays"));
+const LeaveApprovals = lazy(() => import("./pages/admin/LeaveApprovals"));
+const NotificationManagement = lazy(() => import("./pages/admin/NotificationManagement"));
+const PartitionMonitoring = lazy(() => import("./pages/admin/PartitionMonitoring"));
+const FAQManagement = lazy(() => import("./pages/admin/FAQManagement"));
+const SuperAdminLogin = lazy(() => import("./pages/admin/SuperAdminLogin"));
+const OrganizationTypeSettings = lazy(() => import("./pages/admin/OrganizationTypeSettings"));
+const HomepageLayoutSettings = lazy(() => import("./pages/admin/HomepageLayoutSettings"));
+const NationalHolidaysManagement = lazy(() => import("./pages/admin/NationalHolidaysManagement"));
+const ManualPaymentsManagement = lazy(() => import("./pages/admin/ManualPaymentsManagement"));
+const BillingDashboard = lazy(() => import("./pages/admin/billing/BillingDashboard"));
+const OPDManagement = lazy(() => import("./pages/admin/master/OPDManagement"));
+const OPDAdminsManagement = lazy(() => import("./pages/admin/master/OPDAdminsManagement"));
+const EmployeeImport = lazy(() => import("./pages/admin/master/EmployeeImport"));
+const OrgDashboard = lazy(() => import("./pages/org/OrgDashboard"));
+const OrgOPDManagement = lazy(() => import("./pages/org/master/OrgOPDManagement"));
+const OrgEmployeeInvitations = lazy(() => import("./pages/org/OrgEmployeeInvitations"));
+const OrgLandingSettings = lazy(() => import("./pages/org/OrgLandingSettings"));
+const EmployeeLogin = lazy(() => import("./pages/employee/EmployeeLogin"));
+const EmployeeDashboardNew = lazy(() => import("./pages/employee/EmployeeDashboardNew"));
+const EmployeeProfile = lazy(() => import("./pages/employee/EmployeeProfile"));
+const EmployeeHelp = lazy(() => import("./pages/employee/EmployeeHelp"));
+const OrgLogin = lazy(() => import("./pages/org/OrgLogin"));
+const OrganizationLanding = lazy(() => import("./pages/landing/OrganizationLanding"));
+const NewsDetail = lazy(() => import("./pages/news/NewsDetail"));
+const OrgInstitutionTypesManagement = lazy(() => import("./pages/org/master/OrgInstitutionTypesManagement"));
+const OrgWorkUnitsManagement = lazy(() => import("./pages/org/master/OrgWorkUnitsManagement"));
+const OrgWorkLocationsManagement = lazy(() => import("./pages/org/master/OrgWorkLocationsManagement"));
+const OrgPositionsManagement = lazy(() => import("./pages/org/master/OrgPositionsManagement"));
+const OrgHolidaysManagement = lazy(() => import("./pages/org/schedule/OrgHolidaysManagement"));
+const OrgNationalHolidaysManagement = lazy(() => import("./pages/org/schedule/OrgNationalHolidaysManagement"));
+const OrgWorkHoursManagement = lazy(() => import("./pages/org/schedule/OrgWorkHoursManagement"));
+const OrgAbsenceLimitsManagement = lazy(() => import("./pages/org/schedule/OrgAbsenceLimitsManagement"));
+const OrgWfhScheduleManagement = lazy(() => import("./pages/org/schedule/OrgWfhScheduleManagement"));
+const AttendanceSecuritySettings = lazy(() => import("./pages/admin/AttendanceSecuritySettings"));
+const OrgActiveEmployees = lazy(() => import("./pages/org/employees/OrgActiveEmployees"));
+const OrgInactiveEmployees = lazy(() => import("./pages/org/employees/OrgInactiveEmployees"));
+const OrgLeaveRequests = lazy(() => import("./pages/org/leave/OrgLeaveRequests"));
+const OrgApprovedLeaveList = lazy(() => import("./pages/org/leave/OrgApprovedLeaveList"));
+const OrgSickLeaveList = lazy(() => import("./pages/org/leave/OrgSickLeaveList"));
+const OrgOfficialTravelList = lazy(() => import("./pages/org/leave/OrgOfficialTravelList"));
+const OrgAbsentWithoutNotice = lazy(() => import("./pages/org/leave/OrgAbsentWithoutNotice"));
+const OrgWfhRequests = lazy(() => import("./pages/org/leave/OrgWfhRequests"));
+const OrgFlexibleAttendanceRequests = lazy(() => import("./pages/org/leave/OrgFlexibleAttendanceRequests"));
+const OrgAttendanceReport = lazy(() => import("./pages/org/reports/OrgAttendanceReport"));
+const OrgRecapReport = lazy(() => import("./pages/org/reports/OrgRecapReport"));
+const OrgSettings = lazy(() => import("./pages/org/OrgSettings"));
+const OrgActivation = lazy(() => import("./pages/org/OrgActivation"));
+const OrgProfileSetup = lazy(() => import("./pages/org/OrgProfileSetup"));
+const OrgOPDAdminsManagement = lazy(() => import("./pages/org/master/OrgOPDAdminsManagement"));
+const OrgEmployeeImport = lazy(() => import("./pages/org/master/OrgEmployeeImport"));
+const OrgNewsManagement = lazy(() => import("./pages/org/OrgNewsManagement"));
+const OrgNotificationManagement = lazy(() => import("./pages/org/OrgNotificationManagement"));
+const OrgHelp = lazy(() => import("./pages/org/OrgHelp"));
+const OrgAuditLog = lazy(() => import("./pages/org/OrgAuditLog"));
+const OrgMutationRequests = lazy(() => import("./pages/org/employees/OrgMutationRequests"));
+const OrgOvertimeRequests = lazy(() => import("./pages/org/leave/OrgOvertimeRequests"));
+const OrgOvertimeSettings = lazy(() => import("./pages/org/schedule/OrgOvertimeSettings"));
+const FeedbackManagement = lazy(() => import("./pages/admin/FeedbackManagement"));
+const StreakMonitoring = lazy(() => import("./pages/admin/StreakMonitoring"));
+const AdminInstitutionTypesManagement = lazy(() => import("./pages/admin/InstitutionTypesManagement"));
+const AttendanceStressTest = lazy(() => import("./pages/admin/AttendanceStressTest"));
+const AttendanceReport = lazy(() => import("./pages/admin/reports/AttendanceReport"));
+const RecapReport = lazy(() => import("./pages/admin/reports/RecapReport"));
+const DatabaseManagement = lazy(() => import("./pages/admin/DatabaseManagement"));
+const TrialSettings = lazy(() => import("./pages/admin/TrialSettings"));
+const SupabaseSettings = lazy(() => import("./pages/admin/SupabaseSettings"));
+
+const RouteLoadingFallback = () => (
+  <div className="min-h-screen bg-background flex items-center justify-center">
+    <p className="text-sm text-muted-foreground">Memuat halaman...</p>
+  </div>
+);
 
 const App = () => (
   <HelmetProvider>
@@ -118,23 +111,24 @@ const App = () => (
         <Sonner />
         <BrowserRouter>
           <AndroidBackButtonHandler />
-          <Routes>
-            <Route path="/" element={<Index />} />
-            <Route path="/faq" element={<FAQPage />} />
-          <Route path="/about" element={<About />} />
-          <Route path="/privacy-policy" element={<PrivacyPolicy />} />
-          <Route path="/auth" element={<Auth />} />
-          <Route path="/auth/forgot-password" element={<ForgotPassword />} />
-          <Route path="/auth/reset-password" element={<ResetPassword />} />
-          <Route path="/dashboard" element={<EmployeeDashboard />} />
-          <Route path="/dashboard/profile" element={<DashboardProfile />} />
-          <Route path="/dashboard/help" element={<DashboardHelp />} />
-          <Route path="/dashboard/attendance-history" element={<DashboardAttendanceHistory />} />
-          <Route path="/dashboard/leave-requests" element={<DashboardLeaveRequests />} />
-          <Route path="/dashboard/notifications" element={<DashboardNotifications />} />
-          <Route path="/notifications" element={<DashboardNotifications />} />
-          <Route path="/leave-requests" element={<LeaveRequests />} />
-          <Route path="/attendance-history" element={<AttendanceHistory />} />
+          <Suspense fallback={<RouteLoadingFallback />}>
+            <Routes>
+              <Route path="/" element={<Index />} />
+              <Route path="/faq" element={<FAQPage />} />
+              <Route path="/about" element={<About />} />
+              <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+              <Route path="/auth" element={<Auth />} />
+              <Route path="/auth/forgot-password" element={<ForgotPassword />} />
+              <Route path="/auth/reset-password" element={<ResetPassword />} />
+              <Route path="/dashboard" element={<Navigate to="/employee/dashboard" replace />} />
+              <Route path="/dashboard/profile" element={<Navigate to="/employee/dashboard?tab=profile" replace />} />
+              <Route path="/dashboard/help" element={<Navigate to="/employee/dashboard?tab=help" replace />} />
+              <Route path="/dashboard/attendance-history" element={<Navigate to="/employee/dashboard?tab=history" replace />} />
+              <Route path="/dashboard/leave-requests" element={<Navigate to="/employee/dashboard?tab=requests" replace />} />
+              <Route path="/dashboard/notifications" element={<Navigate to="/employee/dashboard?tab=notifications" replace />} />
+              <Route path="/notifications" element={<Navigate to="/employee/dashboard?tab=notifications" replace />} />
+              <Route path="/leave-requests" element={<Navigate to="/employee/dashboard?tab=requests" replace />} />
+              <Route path="/attendance-history" element={<Navigate to="/employee/dashboard?tab=history" replace />} />
           
           {/* Super Admin Routes */}
           <Route path="/admin/login" element={<SuperAdminLogin />} />
@@ -180,6 +174,7 @@ const App = () => (
           {/* Organization Admin Routes */}
           <Route path="/org/login" element={<OrgLogin />} />
           <Route path="/org" element={<OrgDashboard />} />
+          <Route path="/org/dashboard" element={<Navigate to="/org" replace />} />
           <Route path="/org/master/opd" element={<OrgOPDManagement />} />
           <Route path="/org/master/opd-admins" element={<OrgOPDAdminsManagement />} />
           <Route path="/org/master/institution-types" element={<OrgInstitutionTypesManagement />} />
@@ -187,6 +182,7 @@ const App = () => (
           <Route path="/org/master/work-locations" element={<OrgWorkLocationsManagement />} />
           <Route path="/org/master/positions" element={<OrgPositionsManagement />} />
           <Route path="/org/master/employee-import" element={<OrgEmployeeImport />} />
+          <Route path="/org/master/work-hours" element={<Navigate to="/org/schedule/work-hours" replace />} />
           <Route path="/org/schedule/national-holidays" element={<OrgNationalHolidaysManagement />} />
           <Route path="/org/schedule/holidays" element={<OrgHolidaysManagement />} />
           <Route path="/org/schedule/work-hours" element={<OrgWorkHoursManagement />} />
@@ -229,8 +225,9 @@ const App = () => (
           {/* News Detail Page */}
           <Route path="/news/:id" element={<NewsDetail />} />
           
-          <Route path="*" element={<NotFound />} />
-        </Routes>
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </Suspense>
         <PersistentNotificationDialog />
       </BrowserRouter>
     </TooltipProvider>

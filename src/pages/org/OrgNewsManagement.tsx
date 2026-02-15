@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -77,11 +77,25 @@ export default function OrgNewsManagement() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchTenantAndNews();
+  const fetchNews = useCallback(async (tid: string) => {
+    setIsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("news")
+        .select("*")
+        .eq("tenant_id", tid)
+        .order("created_at", { ascending: false });
+
+      if (error) throw error;
+      setNews(data || []);
+    } catch (error) {
+      console.error("Error fetching news:", error);
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
 
-  const fetchTenantAndNews = async () => {
+  const fetchTenantAndNews = useCallback(async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -100,25 +114,11 @@ export default function OrgNewsManagement() {
       console.error("Error:", error);
       toast.error("Gagal memuat data");
     }
-  };
+  }, [fetchNews]);
 
-  const fetchNews = async (tid: string) => {
-    setIsLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from("news")
-        .select("*")
-        .eq("tenant_id", tid)
-        .order("created_at", { ascending: false });
-
-      if (error) throw error;
-      setNews(data || []);
-    } catch (error) {
-      console.error("Error fetching news:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  useEffect(() => {
+    void fetchTenantAndNews();
+  }, [fetchTenantAndNews]);
 
   const handleSubmit = async () => {
     if (!formData.title.trim() || !formData.content.trim()) {

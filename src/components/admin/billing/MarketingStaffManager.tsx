@@ -62,6 +62,8 @@ export function MarketingStaffManager() {
   const [showDialog, setShowDialog] = useState(false);
   const [editingStaff, setEditingStaff] = useState<Partial<MarketingStaff> | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const getErrorMessage = (error: unknown) =>
+    error instanceof Error ? error.message : "Unknown error";
 
   const fetchStaff = useCallback(async () => {
     try {
@@ -132,8 +134,8 @@ export function MarketingStaffManager() {
       setShowDialog(false);
       setEditingStaff(null);
       fetchStaff();
-    } catch (error: any) {
-      toast.error("Gagal menyimpan: " + error.message);
+    } catch (error) {
+      toast.error("Gagal menyimpan: " + getErrorMessage(error));
     } finally {
       setIsSaving(false);
     }
@@ -146,8 +148,8 @@ export function MarketingStaffManager() {
       if (error) throw error;
       toast.success("Marketing dihapus");
       fetchStaff();
-    } catch (error: any) {
-      toast.error("Gagal menghapus: " + error.message);
+    } catch (error) {
+      toast.error("Gagal menghapus: " + getErrorMessage(error));
     }
   };
 

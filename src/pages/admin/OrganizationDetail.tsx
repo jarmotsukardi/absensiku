@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -59,14 +59,7 @@ export default function OrganizationDetail() {
     opdCount: 0,
   });
 
-  useEffect(() => {
-    if (orgId) {
-      fetchOrganization(orgId);
-      fetchStats(orgId);
-    }
-  }, [orgId]);
-
-  const fetchOrganization = async (id: string) => {
+  const fetchOrganization = useCallback(async (id: string) => {
     try {
       const { data, error } = await supabase
         .from("tenants")
@@ -83,7 +76,14 @@ export default function OrganizationDetail() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [navigate]);
+
+  useEffect(() => {
+    if (orgId) {
+      fetchOrganization(orgId);
+      fetchStats(orgId);
+    }
+  }, [orgId, fetchOrganization]);
 
   const fetchStats = async (tenantId: string) => {
     try {

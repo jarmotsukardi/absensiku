@@ -19,11 +19,32 @@ interface OrganizationSettingsProps {
   tenantId: string;
 }
 
+type OrganizationSettingsState = {
+  defaultWorkStart: string;
+  defaultWorkEnd: string;
+  lateToleranceMinutes: number;
+  earlyLeaveToleranceMinutes: number;
+  workDays: string[];
+  defaultRadiusMeters: number;
+  requireGpsForCheckout: boolean;
+  allowMockLocation: boolean;
+  enableWhatsAppNotification: boolean;
+  enableEmailNotification: boolean;
+  sendDailyReminder: boolean;
+  reminderTime: string;
+  requireApprovalForLeave: boolean;
+  requireApprovalForCorrection: boolean;
+  autoApproveAfterDays: number;
+  maxLoginAttempts: number;
+  sessionTimeoutMinutes: number;
+  requireStrongPassword: boolean;
+};
+
 export function OrganizationSettings({ tenantId }: OrganizationSettingsProps) {
   const [isSaving, setIsSaving] = useState(false);
   const { settings: wfhSettings, updateSetting: updateWfhSetting, isLoading: wfhLoading } = useWfhSettings(tenantId);
   
-  const [settings, setSettings] = useState({
+  const [settings, setSettings] = useState<OrganizationSettingsState>({
     // Jam Kerja
     defaultWorkStart: "08:00",
     defaultWorkEnd: "17:00",
@@ -55,7 +76,10 @@ export function OrganizationSettings({ tenantId }: OrganizationSettingsProps) {
     requireStrongPassword: true,
   });
 
-  const handleChange = (field: string, value: any) => {
+  const handleChange = <K extends keyof OrganizationSettingsState>(
+    field: K,
+    value: OrganizationSettingsState[K]
+  ) => {
     setSettings((prev) => ({ ...prev, [field]: value }));
   };
 

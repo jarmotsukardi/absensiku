@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "notes": "Salin ke ops/test-dataset.local.json dan isi data real backup Supabase yang dipakai testing.",
+  "tenant_primary": {
+    "id": "",
+    "name": "",
+    "code": "",
+    "subscription_status": "active"
+  },
+  "sample_users": {
+    "superadmin_email": "",
+    "org_admin_email": "",
+    "employee_email": ""
+  },
+  "core_scenarios": {
+    "streak_monitoring": {
+      "active_tenant_id": "",
+      "near_suspended_tenant_id": "",
+      "suspended_tenant_id": ""
+    },
+    "auth_and_rate_limit": {
+      "employee_locked_user_email": "",
+      "org_reset_password_user_email": "",
+      "superadmin_reset_password_user_email": ""
+    },
+    "attendance_scale": {
+      "work_hours_profile_id": "",
+      "target_concurrent_users": 500000
+    }
+  }
+}
+

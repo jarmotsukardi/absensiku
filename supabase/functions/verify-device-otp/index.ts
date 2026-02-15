@@ -16,6 +16,11 @@ interface VerifyDeviceOTPRequest {
   newAndroidId?: string;
 }
 
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return "Terjadi kesalahan internal";
+};
+
 // Hash OTP with SHA-256
 const hashOTP = async (otp: string): Promise<string> => {
   const encoder = new TextEncoder();
@@ -158,10 +163,10 @@ serve(async (req: Request): Promise<Response> => {
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     logTraceError(traceId, "Error in verify-device-otp", error);
     return new Response(
-      JSON.stringify(withTrace({ error: error.message || "Terjadi kesalahan internal" }, traceId)),
+      JSON.stringify(withTrace({ error: getErrorMessage(error) }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

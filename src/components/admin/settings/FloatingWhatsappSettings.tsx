@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,11 +24,7 @@ export function FloatingWhatsappSettings() {
     animation_effect: "pulse" as string,
   });
 
-  useEffect(() => {
-    fetchSettings();
-  }, []);
-
-  const fetchSettings = async () => {
+  const fetchSettings = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from("system_settings")
@@ -46,7 +42,11 @@ export function FloatingWhatsappSettings() {
     } finally {
       setIsFetching(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchSettings();
+  }, [fetchSettings]);
 
   const handleChange = (field: string, value: string | boolean) => {
     setSettings((prev) => ({ ...prev, [field]: value }));

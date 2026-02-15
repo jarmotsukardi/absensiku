@@ -69,7 +69,7 @@ export default function OrgInactiveEmployees() {
     currentPage * ITEMS_PER_PAGE
   );
 
-  const getFullName = (emp: any) => {
+  const getFullName = (emp: Employee) => {
     const parts = [emp.gelar_depan, emp.name, emp.gelar_belakang].filter(Boolean);
     return parts.join(" ");
   };

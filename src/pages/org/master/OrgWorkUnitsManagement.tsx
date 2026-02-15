@@ -84,8 +84,9 @@ export default function OrgWorkUnitsManagement() {
 
       if (workUnitsError) throw workUnitsError;
       setWorkUnits(workUnitsData || []);
-    } catch (error: any) {
-      toast.error("Gagal memuat data: " + error.message);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      toast.error("Gagal memuat data: " + errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -143,8 +144,9 @@ export default function OrgWorkUnitsManagement() {
       setIsDialogOpen(false);
       resetForm();
       fetchData();
-    } catch (error: any) {
-      toast.error("Gagal menyimpan: " + error.message);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      toast.error("Gagal menyimpan: " + errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -175,8 +177,9 @@ export default function OrgWorkUnitsManagement() {
       if (error) throw error;
       toast.success("Satuan kerja berhasil dihapus");
       fetchData();
-    } catch (error: any) {
-      toast.error("Gagal menghapus: " + error.message);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      toast.error("Gagal menghapus: " + errorMessage);
     }
   };
 
@@ -190,8 +193,9 @@ export default function OrgWorkUnitsManagement() {
       if (error) throw error;
       toast.success("Status berhasil diperbarui");
       fetchData();
-    } catch (error: any) {
-      toast.error("Gagal mengubah status: " + error.message);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      toast.error("Gagal mengubah status: " + errorMessage);
     }
   };
 

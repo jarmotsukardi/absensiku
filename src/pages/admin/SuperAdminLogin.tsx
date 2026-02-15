@@ -134,7 +134,7 @@ export default function SuperAdminLogin() {
                 title: "Dialihkan", 
                 description: "Anda dialihkan ke dashboard pegawai.",
               });
-              navigate("/dashboard", { replace: true });
+              navigate("/employee/dashboard", { replace: true });
             }
           }
         }, 0);
@@ -169,12 +169,13 @@ export default function SuperAdminLogin() {
         title: "Kode OTP Terkirim",
         description: "Silakan periksa email Anda untuk kode 2FA.",
       });
-    } catch (error: any) {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Tidak dapat mengirim kode 2FA.";
       console.error("Error sending 2FA OTP:", error);
       toast({
         variant: "destructive",
         title: "Gagal Mengirim OTP",
-        description: error.message || "Tidak dapat mengirim kode 2FA.",
+        description: message,
       });
     } finally {
       setIsSendingOtp(false);
@@ -261,7 +262,7 @@ export default function SuperAdminLogin() {
               title: "Dialihkan",
               description: "Anda dialihkan ke dashboard pegawai.",
             });
-            navigate("/dashboard", { replace: true });
+            navigate("/employee/dashboard", { replace: true });
           }
           return;
         }
@@ -349,11 +350,12 @@ export default function SuperAdminLogin() {
         title: "Verifikasi Berhasil",
         description: "Anda akan dialihkan ke dashboard.",
       });
-    } catch (error: any) {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Terjadi kesalahan saat verifikasi.";
       toast({
         variant: "destructive",
         title: "Verifikasi Gagal",
-        description: error.message || "Terjadi kesalahan saat verifikasi.",
+        description: message,
       });
     } finally {
       setIsLoading(false);

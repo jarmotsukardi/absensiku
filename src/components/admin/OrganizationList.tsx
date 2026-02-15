@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import type { Tables } from "@/integrations/supabase/types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -35,19 +36,10 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 
-interface Organization {
-  id: string;
-  name: string;
-  code: string;
-  email: string | null;
-  phone: string | null;
-  address: string | null;
-  organization_type: string | null;
-  is_active: boolean | null;
-  created_at: string | null;
+type Organization = Tables<"tenants"> & {
   employees_count?: number;
   subscription_status?: string;
-}
+};
 
 interface OrganizationListProps {
   filterType?: string;
@@ -73,11 +65,7 @@ export function OrganizationList({ filterType }: OrganizationListProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
 
-  useEffect(() => {
-    fetchOrganizations();
-  }, [filterType]);
-
-  const fetchOrganizations = async () => {
+  const fetchOrganizations = useCallback(async () => {
     try {
       setIsLoading(true);
       
@@ -96,7 +84,7 @@ export function OrganizationList({ filterType }: OrganizationListProps) {
 
       // Fetch employee counts and subscription status for each tenant
       const orgsWithDetails = await Promise.all(
-        (tenants || []).map(async (tenant: any) => {
+        (tenants || []).map(async (tenant) => {
           const { count: employeesCount } = await supabase
             .from("employees")
             .select("*", { count: "exact", head: true })
@@ -123,7 +111,11 @@ export function OrganizationList({ filterType }: OrganizationListProps) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [filterType]);
+
+  useEffect(() => {
+    fetchOrganizations();
+  }, [fetchOrganizations]);
 
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Apakah Anda yakin ingin menghapus "${name}"?`)) return;

@@ -60,8 +60,8 @@ export default function AbsentWithoutNotice() {
   };
 
   const filteredRecords = records.filter((rec) => {
-    const matchesSearch = (rec.employee as any)?.name?.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesOpd = filterOpd === "all" || (rec.employee as any)?.opd_id === filterOpd;
+    const matchesSearch = rec.employee?.name?.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesOpd = filterOpd === "all" || rec.employee?.opd_id === filterOpd;
     return matchesSearch && matchesOpd;
   });
 
@@ -151,10 +151,10 @@ export default function AbsentWithoutNotice() {
                           {format(new Date(rec.date), "dd MMM yyyy", { locale: localeId })}
                         </TableCell>
                         <TableCell className="font-medium">
-                          {(rec.employee as any)?.name || "-"}
+                          {rec.employee?.name || "-"}
                         </TableCell>
                         <TableCell>
-                          {(rec.employee as any)?.opd?.code || "-"}
+                          {rec.employee?.opd?.code || "-"}
                         </TableCell>
                         <TableCell>
                           <Badge variant="destructive">Tanpa Keterangan</Badge>

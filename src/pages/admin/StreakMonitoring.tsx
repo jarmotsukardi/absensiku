@@ -62,7 +62,9 @@ export default function StreakMonitoring() {
       if (Number.isFinite(parsedValue) && parsedValue > 0) {
         setStreakThreshold(parsedValue);
       }
-    } catch {}
+    } catch (error) {
+      console.error("Error fetching streak threshold:", error);
+    }
   };
 
   const fetchStreaks = async () => {
@@ -87,8 +89,10 @@ export default function StreakMonitoring() {
         .select("id, tenant_id, amount, status, created_at, payment_method, tenants:tenant_id(name)")
         .order("created_at", { ascending: false })
         .limit(50);
-      setPayments((data || []) as any[]);
-    } catch {}
+      setPayments((data as PaymentLog[]) || []);
+    } catch (error) {
+      console.error("Error fetching payment logs:", error);
+    }
   };
 
   const filtered = streaks.filter(s =>
@@ -299,7 +303,7 @@ export default function StreakMonitoring() {
                     <TableBody>
                       {payments.map(p => (
                         <TableRow key={p.id}>
-                          <TableCell className="font-medium">{(p.tenants as any)?.name || "-"}</TableCell>
+                          <TableCell className="font-medium">{p.tenants?.name || "-"}</TableCell>
                           <TableCell>Rp {Number(p.amount).toLocaleString("id-ID")}</TableCell>
                           <TableCell className="text-sm">{p.payment_method || "-"}</TableCell>
                           <TableCell>

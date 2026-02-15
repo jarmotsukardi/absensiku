@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
-import { SidebarProvider } from "@/components/ui/sidebar";
-import { OrganizationSidebar } from "@/components/admin/organization/OrganizationSidebar";
+import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,12 +18,8 @@ import {
   XCircle, 
   AlertCircle,
   Loader2,
-  Info,
   BookOpen,
-  HelpCircle,
-  Menu
 } from "lucide-react";
-import { SidebarTrigger } from "@/components/ui/sidebar";
 
 interface ImportRow {
   rowNum: number;
@@ -326,272 +321,260 @@ export default function OrgEmployeeImport() {
   const errorCount = previewData.filter(r => r.status === "error").length;
 
   return (
-    <SidebarProvider>
-      <div className="min-h-screen flex w-full bg-background">
-        <OrganizationSidebar />
-        <div className="flex-1 flex flex-col">
-          <header className="sticky top-0 z-30 flex items-center gap-4 border-b bg-background/95 backdrop-blur px-6 py-4">
-            <SidebarTrigger>
-              <Button variant="ghost" size="icon" className="md:hidden">
-                <Menu className="h-5 w-5" />
-              </Button>
-            </SidebarTrigger>
-            <div>
-              <h1 className="text-xl font-bold text-foreground">Import Pegawai</h1>
-              <p className="text-sm text-muted-foreground">Import data pegawai dari file CSV</p>
-            </div>
-          </header>
-
-          <main className="flex-1 p-6 space-y-6">
-            {/* Panduan Import */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <BookOpen className="h-5 w-5 text-primary" />
-                  Panduan Import Pegawai
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <Accordion type="single" collapsible className="w-full">
-                  <AccordionItem value="langkah">
-                    <AccordionTrigger>Langkah-langkah Import</AccordionTrigger>
-                    <AccordionContent>
-                      <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
-                        <li><strong>Download Template:</strong> Klik tombol "Download Template CSV" untuk mendapatkan format yang benar</li>
-                        <li><strong>Isi Data:</strong> Buka file dengan Excel/Google Sheets dan isi data pegawai sesuai kolom</li>
-                        <li><strong>Simpan sebagai CSV:</strong> Simpan file dengan format CSV (Comma Separated Values)</li>
-                        <li><strong>Upload File:</strong> Pilih file CSV yang sudah diisi</li>
-                        <li><strong>Periksa Preview:</strong> Pastikan tidak ada error pada data yang akan diimport</li>
-                        <li><strong>Import:</strong> Klik tombol Import untuk memproses data</li>
-                      </ol>
-                    </AccordionContent>
-                  </AccordionItem>
-                  
-                  <AccordionItem value="format">
-                    <AccordionTrigger>Format Kolom</AccordionTrigger>
-                    <AccordionContent>
-                      <div className="space-y-3 text-sm">
-                        <div className="grid gap-2">
-                          <div className="flex justify-between border-b pb-1">
-                            <span className="font-medium">NIK</span>
-                            <span className="text-muted-foreground">16 digit angka (wajib)</span>
-                          </div>
-                          <div className="flex justify-between border-b pb-1">
-                            <span className="font-medium">NIP</span>
-                            <span className="text-muted-foreground">18 digit untuk ASN (opsional)</span>
-                          </div>
-                          <div className="flex justify-between border-b pb-1">
-                            <span className="font-medium">Nama Lengkap</span>
-                            <span className="text-muted-foreground">Nama tanpa gelar (wajib)</span>
-                          </div>
-                          <div className="flex justify-between border-b pb-1">
-                            <span className="font-medium">Gelar Depan/Belakang</span>
-                            <span className="text-muted-foreground">Dr., Drs., M.Si., S.Kom. (opsional)</span>
-                          </div>
-                          <div className="flex justify-between border-b pb-1">
-                            <span className="font-medium">Email</span>
-                            <span className="text-muted-foreground">Email aktif (wajib)</span>
-                          </div>
-                          <div className="flex justify-between border-b pb-1">
-                            <span className="font-medium">Jenis Kelamin</span>
-                            <span className="text-muted-foreground">L = Laki-laki, P = Perempuan</span>
-                          </div>
-                          <div className="flex justify-between border-b pb-1">
-                            <span className="font-medium">Kode OPD</span>
-                            <span className="text-muted-foreground">Sesuai dengan kode OPD yang sudah dibuat</span>
-                          </div>
-                        </div>
-                      </div>
-                    </AccordionContent>
-                  </AccordionItem>
-
-                  <AccordionItem value="tips">
-                    <AccordionTrigger>Tips & Perhatian</AccordionTrigger>
-                    <AccordionContent>
-                      <ul className="list-disc list-inside space-y-2 text-sm text-muted-foreground">
-                        <li>Pastikan NIK dan Email belum terdaftar di sistem</li>
-                        <li>Kode OPD harus sesuai dengan OPD yang sudah dibuat di menu Master OPD</li>
-                        <li>Gunakan format file CSV (bukan Excel .xlsx)</li>
-                        <li>Jika menggunakan Excel, Save As dengan tipe "CSV UTF-8"</li>
-                        <li>Periksa preview sebelum import untuk menghindari kesalahan</li>
-                        <li>Maksimal 100 pegawai per import untuk performa optimal</li>
-                      </ul>
-                    </AccordionContent>
-                  </AccordionItem>
-                </Accordion>
-              </CardContent>
-            </Card>
-
-            {/* Template Download */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <FileSpreadsheet className="h-5 w-5" />
-                  Template Import
-                </CardTitle>
-                <CardDescription>
-                  Download template dan isi dengan data pegawai yang akan diimport
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Button onClick={downloadTemplate} variant="outline">
-                  <Download className="h-4 w-4 mr-2" />
-                  Download Template CSV
-                </Button>
-              </CardContent>
-            </Card>
-
-            {/* Upload Section */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Upload className="h-5 w-5" />
-                  Upload File
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label>File CSV</Label>
-                  <Input
-                    type="file"
-                    accept=".csv"
-                    onChange={handleFileChange}
-                    className="max-w-md"
-                  />
-                  {file && (
-                    <p className="text-sm text-muted-foreground">
-                      File: {file.name} ({(file.size / 1024).toFixed(2)} KB)
-                    </p>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Preview Section */}
-            {isLoading ? (
-              <Card>
-                <CardContent className="py-10">
-                  <div className="flex flex-col items-center justify-center gap-2">
-                    <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                    <p className="text-muted-foreground">Memproses file...</p>
-                  </div>
-                </CardContent>
-              </Card>
-            ) : previewData.length > 0 ? (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Preview Data</CardTitle>
-                  <CardDescription className="flex items-center gap-4">
-                    <span className="flex items-center gap-1">
-                      <CheckCircle2 className="h-4 w-4 text-green-500" />
-                      Valid: {validCount}
-                    </span>
-                    <span className="flex items-center gap-1">
-                      <XCircle className="h-4 w-4 text-destructive" />
-                      Error: {errorCount}
-                    </span>
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="rounded-md border overflow-x-auto">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead className="w-12">Baris</TableHead>
-                          <TableHead>Status</TableHead>
-                          <TableHead>NIK</TableHead>
-                          <TableHead>NIP</TableHead>
-                          <TableHead>Nama</TableHead>
-                          <TableHead>Email</TableHead>
-                          <TableHead>Kode OPD</TableHead>
-                          <TableHead>Keterangan</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {previewData.slice(0, 20).map((row) => (
-                          <TableRow key={row.rowNum} className={row.status === "error" ? "bg-destructive/5" : ""}>
-                            <TableCell>{row.rowNum}</TableCell>
-                            <TableCell>
-                              {row.status === "valid" ? (
-                                <CheckCircle2 className="h-4 w-4 text-green-500" />
-                              ) : (
-                                <XCircle className="h-4 w-4 text-destructive" />
-                              )}
-                            </TableCell>
-                            <TableCell className="font-mono text-sm">{row.nik}</TableCell>
-                            <TableCell className="font-mono text-sm">{row.nip || "-"}</TableCell>
-                            <TableCell>{row.name}</TableCell>
-                            <TableCell>{row.email}</TableCell>
-                            <TableCell>{row.opd_code || "-"}</TableCell>
-                            <TableCell>
-                              {row.errors.length > 0 && (
-                                <div className="space-y-1">
-                                  {row.errors.map((err, i) => (
-                                    <Badge key={i} variant="destructive" className="text-xs">
-                                      {err}
-                                    </Badge>
-                                  ))}
-                                </div>
-                              )}
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </div>
-
-                  {previewData.length > 20 && (
-                    <p className="text-sm text-muted-foreground mt-2">
-                      Menampilkan 20 dari {previewData.length} baris
-                    </p>
-                  )}
-
-                  <div className="flex justify-end mt-4 gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        setFile(null);
-                        setPreviewData([]);
-                        setImportResult(null);
-                      }}
-                    >
-                      Reset
-                    </Button>
-                    <Button
-                      onClick={handleImport}
-                      disabled={validCount === 0 || isImporting}
-                    >
-                      {isImporting ? (
-                        <>
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          Mengimport...
-                        </>
-                      ) : (
-                        <>
-                          <Upload className="h-4 w-4 mr-2" />
-                          Import {validCount} Data Valid
-                        </>
-                      )}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ) : null}
-
-            {/* Import Result */}
-            {importResult && (
-              <Alert variant={importResult.failed > 0 ? "destructive" : "default"}>
-                <AlertCircle className="h-4 w-4" />
-                <AlertTitle>Hasil Import</AlertTitle>
-                <AlertDescription>
-                  <p>Berhasil: {importResult.success} pegawai</p>
-                  {importResult.failed > 0 && <p>Gagal: {importResult.failed} pegawai</p>}
-                </AlertDescription>
-              </Alert>
-            )}
-          </main>
+    <OrganizationLayout>
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Import Pegawai</h1>
+          <p className="text-sm text-muted-foreground">Import data pegawai dari file CSV</p>
         </div>
+
+        {/* Panduan Import */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <BookOpen className="h-5 w-5 text-primary" />
+              Panduan Import Pegawai
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Accordion type="single" collapsible className="w-full">
+              <AccordionItem value="langkah">
+                <AccordionTrigger>Langkah-langkah Import</AccordionTrigger>
+                <AccordionContent>
+                  <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
+                    <li><strong>Download Template:</strong> Klik tombol "Download Template CSV" untuk mendapatkan format yang benar</li>
+                    <li><strong>Isi Data:</strong> Buka file dengan Excel/Google Sheets dan isi data pegawai sesuai kolom</li>
+                    <li><strong>Simpan sebagai CSV:</strong> Simpan file dengan format CSV (Comma Separated Values)</li>
+                    <li><strong>Upload File:</strong> Pilih file CSV yang sudah diisi</li>
+                    <li><strong>Periksa Preview:</strong> Pastikan tidak ada error pada data yang akan diimport</li>
+                    <li><strong>Import:</strong> Klik tombol Import untuk memproses data</li>
+                  </ol>
+                </AccordionContent>
+              </AccordionItem>
+              
+              <AccordionItem value="format">
+                <AccordionTrigger>Format Kolom</AccordionTrigger>
+                <AccordionContent>
+                  <div className="space-y-3 text-sm">
+                    <div className="grid gap-2">
+                      <div className="flex justify-between border-b pb-1">
+                        <span className="font-medium">NIK</span>
+                        <span className="text-muted-foreground">16 digit angka (wajib)</span>
+                      </div>
+                      <div className="flex justify-between border-b pb-1">
+                        <span className="font-medium">NIP</span>
+                        <span className="text-muted-foreground">18 digit untuk ASN (opsional)</span>
+                      </div>
+                      <div className="flex justify-between border-b pb-1">
+                        <span className="font-medium">Nama Lengkap</span>
+                        <span className="text-muted-foreground">Nama tanpa gelar (wajib)</span>
+                      </div>
+                      <div className="flex justify-between border-b pb-1">
+                        <span className="font-medium">Gelar Depan/Belakang</span>
+                        <span className="text-muted-foreground">Dr., Drs., M.Si., S.Kom. (opsional)</span>
+                      </div>
+                      <div className="flex justify-between border-b pb-1">
+                        <span className="font-medium">Email</span>
+                        <span className="text-muted-foreground">Email aktif (wajib)</span>
+                      </div>
+                      <div className="flex justify-between border-b pb-1">
+                        <span className="font-medium">Jenis Kelamin</span>
+                        <span className="text-muted-foreground">L = Laki-laki, P = Perempuan</span>
+                      </div>
+                      <div className="flex justify-between border-b pb-1">
+                        <span className="font-medium">Kode OPD</span>
+                        <span className="text-muted-foreground">Sesuai dengan kode OPD yang sudah dibuat</span>
+                      </div>
+                    </div>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+
+              <AccordionItem value="tips">
+                <AccordionTrigger>Tips & Perhatian</AccordionTrigger>
+                <AccordionContent>
+                  <ul className="list-disc list-inside space-y-2 text-sm text-muted-foreground">
+                    <li>Pastikan NIK dan Email belum terdaftar di sistem</li>
+                    <li>Kode OPD harus sesuai dengan OPD yang sudah dibuat di menu Master OPD</li>
+                    <li>Gunakan format file CSV (bukan Excel .xlsx)</li>
+                    <li>Jika menggunakan Excel, Save As dengan tipe "CSV UTF-8"</li>
+                    <li>Periksa preview sebelum import untuk menghindari kesalahan</li>
+                    <li>Maksimal 100 pegawai per import untuk performa optimal</li>
+                  </ul>
+                </AccordionContent>
+              </AccordionItem>
+            </Accordion>
+          </CardContent>
+        </Card>
+
+        {/* Template Download */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <FileSpreadsheet className="h-5 w-5" />
+              Template Import
+            </CardTitle>
+            <CardDescription>
+              Download template dan isi dengan data pegawai yang akan diimport
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button onClick={downloadTemplate} variant="outline">
+              <Download className="h-4 w-4 mr-2" />
+              Download Template CSV
+            </Button>
+          </CardContent>
+        </Card>
+
+        {/* Upload Section */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Upload className="h-5 w-5" />
+              Upload File
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>File CSV</Label>
+              <Input
+                type="file"
+                accept=".csv"
+                onChange={handleFileChange}
+                className="max-w-md"
+              />
+              {file && (
+                <p className="text-sm text-muted-foreground">
+                  File: {file.name} ({(file.size / 1024).toFixed(2)} KB)
+                </p>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Preview Section */}
+        {isLoading ? (
+          <Card>
+            <CardContent className="py-10">
+              <div className="flex flex-col items-center justify-center gap-2">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                <p className="text-muted-foreground">Memproses file...</p>
+              </div>
+            </CardContent>
+          </Card>
+        ) : previewData.length > 0 ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Preview Data</CardTitle>
+              <CardDescription className="flex items-center gap-4">
+                <span className="flex items-center gap-1">
+                  <CheckCircle2 className="h-4 w-4 text-green-500" />
+                  Valid: {validCount}
+                </span>
+                <span className="flex items-center gap-1">
+                  <XCircle className="h-4 w-4 text-destructive" />
+                  Error: {errorCount}
+                </span>
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-12">Baris</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>NIK</TableHead>
+                      <TableHead>NIP</TableHead>
+                      <TableHead>Nama</TableHead>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Kode OPD</TableHead>
+                      <TableHead>Keterangan</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {previewData.slice(0, 20).map((row) => (
+                      <TableRow key={row.rowNum} className={row.status === "error" ? "bg-destructive/5" : ""}>
+                        <TableCell>{row.rowNum}</TableCell>
+                        <TableCell>
+                          {row.status === "valid" ? (
+                            <CheckCircle2 className="h-4 w-4 text-green-500" />
+                          ) : (
+                            <XCircle className="h-4 w-4 text-destructive" />
+                          )}
+                        </TableCell>
+                        <TableCell className="font-mono text-sm">{row.nik}</TableCell>
+                        <TableCell className="font-mono text-sm">{row.nip || "-"}</TableCell>
+                        <TableCell>{row.name}</TableCell>
+                        <TableCell>{row.email}</TableCell>
+                        <TableCell>{row.opd_code || "-"}</TableCell>
+                        <TableCell>
+                          {row.errors.length > 0 && (
+                            <div className="space-y-1">
+                              {row.errors.map((err, i) => (
+                                <Badge key={i} variant="destructive" className="text-xs">
+                                  {err}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {previewData.length > 20 && (
+                <p className="text-sm text-muted-foreground mt-2">
+                  Menampilkan 20 dari {previewData.length} baris
+                </p>
+              )}
+
+              <div className="flex justify-end mt-4 gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setFile(null);
+                    setPreviewData([]);
+                    setImportResult(null);
+                  }}
+                >
+                  Reset
+                </Button>
+                <Button
+                  onClick={handleImport}
+                  disabled={validCount === 0 || isImporting}
+                >
+                  {isImporting ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Mengimport...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="h-4 w-4 mr-2" />
+                      Import {validCount} Data Valid
+                    </>
+                  )}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {/* Import Result */}
+        {importResult && (
+          <Alert variant={importResult.failed > 0 ? "destructive" : "default"}>
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Hasil Import</AlertTitle>
+            <AlertDescription>
+              <p>Berhasil: {importResult.success} pegawai</p>
+              {importResult.failed > 0 && <p>Gagal: {importResult.failed} pegawai</p>}
+            </AlertDescription>
+          </Alert>
+        )}
       </div>
-    </SidebarProvider>
+    </OrganizationLayout>
   );
 }

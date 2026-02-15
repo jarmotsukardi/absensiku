@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,7 +35,7 @@ export default function AttendanceReport() {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
       
@@ -62,11 +62,11 @@ export default function AttendanceReport() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [startDate, endDate]);
 
   useEffect(() => {
     fetchData();
-  }, [startDate, endDate]);
+  }, [fetchData]);
 
   const handleExport = () => {
     const headers = ["No", "Tanggal", "NIP", "Nama", "OPD", "Lokasi", "Jam Masuk", "Jam Keluar", "Status"];
@@ -75,10 +75,10 @@ export default function AttendanceReport() {
       ...filteredRecords.map((rec, index) => [
         index + 1,
         format(new Date(rec.date), "dd/MM/yyyy"),
-        (rec.employee as any)?.nip || "-",
-        `"${(rec.employee as any)?.name || "-"}"`,
-        (rec.employee as any)?.opd?.code || "-",
-        `"${(rec.office as any)?.name || "-"}"`,
+        rec.employee?.nip || "-",
+        `"${rec.employee?.name || "-"}"`,
+        rec.employee?.opd?.code || "-",
+        `"${rec.office?.name || "-"}"`,
         rec.check_in_time ? format(new Date(rec.check_in_time), "HH:mm") : "-",
         rec.check_out_time ? format(new Date(rec.check_out_time), "HH:mm") : "-",
         rec.status || "-",
@@ -116,10 +116,10 @@ export default function AttendanceReport() {
   };
 
   const filteredRecords = records.filter((rec) => {
-    const matchesOpd = filterOpd === "all" || (rec.employee as any)?.opd_id === filterOpd;
+    const matchesOpd = filterOpd === "all" || rec.employee?.opd_id === filterOpd;
     const matchesSearch = searchTerm === "" || 
-      (rec.employee as any)?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      (rec.employee as any)?.nip?.includes(searchTerm);
+      rec.employee?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      rec.employee?.nip?.includes(searchTerm);
     return matchesOpd && matchesSearch;
   });
 
@@ -293,13 +293,13 @@ export default function AttendanceReport() {
                           {format(new Date(rec.date), "dd MMM yyyy", { locale: localeId })}
                         </TableCell>
                         <TableCell className="font-mono text-sm">
-                          {(rec.employee as any)?.nip || "-"}
+                          {rec.employee?.nip || "-"}
                         </TableCell>
                         <TableCell className="font-medium">
-                          {(rec.employee as any)?.name || "-"}
+                          {rec.employee?.name || "-"}
                         </TableCell>
-                        <TableCell>{(rec.employee as any)?.opd?.code || "-"}</TableCell>
-                        <TableCell>{(rec.office as any)?.name || "-"}</TableCell>
+                        <TableCell>{rec.employee?.opd?.code || "-"}</TableCell>
+                        <TableCell>{rec.office?.name || "-"}</TableCell>
                         <TableCell>
                           {rec.check_in_time ? format(new Date(rec.check_in_time), "HH:mm") : "-"}
                         </TableCell>

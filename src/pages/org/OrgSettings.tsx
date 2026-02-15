@@ -128,8 +128,8 @@ export default function OrgSettings() {
         logo_url: organization.logo_url || "",
         landing_hero_image: organization.landing_hero_image || "",
         whatsapp: organization.whatsapp || "",
-        pic_name: (organization as any).pic_name || "",
-        pic_whatsapp: (organization as any).pic_whatsapp || "",
+        pic_name: organization.pic_name || "",
+        pic_whatsapp: organization.pic_whatsapp || "",
       });
     }
   }, [organization]);
@@ -183,7 +183,7 @@ export default function OrgSettings() {
       }
 
       setOtpSent(true);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error sending OTP:", error);
       toast.error("Gagal mengirim OTP. Coba lagi.");
     } finally {
@@ -215,13 +215,13 @@ export default function OrgSettings() {
 
       // Update organization type
       await updateOrganization({
-        organization_type: pendingOrgType as any,
+        organization_type: pendingOrgType,
       });
 
       setFormData({ ...formData, organization_type: pendingOrgType });
       setShowOtpDialog(false);
       toast.success("Jenis organisasi berhasil diubah");
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error verifying OTP:", error);
       toast.error("Gagal verifikasi OTP");
     } finally {
@@ -241,7 +241,7 @@ export default function OrgSettings() {
         whatsapp: formData.whatsapp,
         pic_name: formData.pic_name,
         pic_whatsapp: formData.pic_whatsapp,
-      } as any);
+      });
     } finally {
       setIsSaving(false);
     }
@@ -554,12 +554,12 @@ export default function OrgSettings() {
                   <button
                     type="button"
                     className={`p-5 rounded-xl border-2 text-left transition-all relative ${
-                      (organization as any)?.billing_mode !== "individual"
+                      organization?.billing_mode !== "individual"
                         ? "border-primary bg-primary/5"
                         : "border-border hover:border-primary/50"
                     }`}
                     onClick={() => {
-                      if ((organization as any)?.billing_mode === "individual") {
+                      if (organization?.billing_mode === "individual") {
                         setPendingBillingMode("centralized");
                         setShowBillingOtpDialog(true);
                         setBillingOtpSent(false);
@@ -570,7 +570,7 @@ export default function OrgSettings() {
                       }
                     }}
                     onMouseEnter={() => {
-                      if ((organization as any)?.billing_mode !== "individual" && activeEmployeeCount >= b2bThreshold) {
+                      if (organization?.billing_mode !== "individual" && activeEmployeeCount >= b2bThreshold) {
                         setShowB2bOverlay(true);
                       }
                     }}
@@ -587,7 +587,7 @@ export default function OrgSettings() {
                     )}
                     <div className="flex items-start gap-3">
                       <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                        (organization as any)?.billing_mode !== "individual" ? "bg-primary text-primary-foreground" : "bg-muted"
+                        organization?.billing_mode !== "individual" ? "bg-primary text-primary-foreground" : "bg-muted"
                       }`}>
                         <Building2 className="h-5 w-5" />
                       </div>
@@ -608,12 +608,12 @@ export default function OrgSettings() {
                   <button
                     type="button"
                     className={`p-5 rounded-xl border-2 text-left transition-all ${
-                      (organization as any)?.billing_mode === "individual"
+                      organization?.billing_mode === "individual"
                         ? "border-primary bg-primary/5"
                         : "border-border hover:border-primary/50"
                     }`}
                     onClick={() => {
-                      if ((organization as any)?.billing_mode !== "individual") {
+                      if (organization?.billing_mode !== "individual") {
                         setPendingBillingMode("individual");
                         setShowBillingOtpDialog(true);
                         setBillingOtpSent(false);
@@ -624,7 +624,7 @@ export default function OrgSettings() {
                   >
                     <div className="flex items-start gap-3">
                       <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                        (organization as any)?.billing_mode === "individual" ? "bg-primary text-primary-foreground" : "bg-muted"
+                        organization?.billing_mode === "individual" ? "bg-primary text-primary-foreground" : "bg-muted"
                       }`}>
                         <Users className="h-5 w-5" />
                       </div>
@@ -925,8 +925,9 @@ export default function OrgSettings() {
                       toast.success("Kode OTP telah dikirim ke WhatsApp Anda");
                     }
                     setBillingOtpSent(true);
-                  } catch (err: any) {
-                    toast.error("Gagal mengirim OTP: " + (err.message || "Coba lagi"));
+                  } catch (err: unknown) {
+                    const errorMessage = err instanceof Error ? err.message : "Coba lagi";
+                    toast.error("Gagal mengirim OTP: " + errorMessage);
                   } finally {
                     setIsSendingBillingOtp(false);
                   }
@@ -965,7 +966,7 @@ export default function OrgSettings() {
                       if (error) throw error;
                       if (data.demo_otp) toast.info(`[DEMO] Kode OTP: ${data.demo_otp}`);
                       else toast.success("Kode OTP dikirim ulang");
-                    } catch (err: any) {
+                    } catch (err: unknown) {
                       toast.error("Gagal mengirim OTP");
                     } finally {
                       setIsSendingBillingOtp(false);
@@ -1007,8 +1008,9 @@ export default function OrgSettings() {
                     toast.success(`Mode billing berhasil diubah ke ${pendingBillingMode === "individual" ? "Billing Mandiri" : "Billing Terpusat"}`);
                     // Refresh org data
                     window.location.reload();
-                  } catch (err: any) {
-                    toast.error("Gagal verifikasi: " + (err.message || "Coba lagi"));
+                  } catch (err: unknown) {
+                    const errorMessage = err instanceof Error ? err.message : "Coba lagi";
+                    toast.error("Gagal verifikasi: " + errorMessage);
                   } finally {
                     setIsVerifyingBillingOtp(false);
                   }

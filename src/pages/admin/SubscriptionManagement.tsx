@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +34,9 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+
+type SubscriptionStatus = "trial" | "active" | "expired" | "cancelled";
 
 interface Subscription {
   id: string;
@@ -51,12 +54,17 @@ interface Subscription {
   employees_count?: number;
 }
 
-const statusLabels: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
+const statusLabels: Record<SubscriptionStatus, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
   trial: { label: "Trial", variant: "secondary" },
   active: { label: "Aktif", variant: "default" },
   expired: { label: "Expired", variant: "destructive" },
   cancelled: { label: "Dibatalkan", variant: "outline" },
 };
+
+const DEFAULT_SUBSCRIPTION_STATUS: SubscriptionStatus = "trial";
+
+const isSubscriptionStatus = (status: string | null | undefined): status is SubscriptionStatus =>
+  status === "trial" || status === "active" || status === "expired" || status === "cancelled";
 
 export default function SubscriptionManagement() {
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
@@ -71,11 +79,7 @@ export default function SubscriptionManagement() {
     totalRevenue: 0,
   });
 
-  useEffect(() => {
-    fetchSubscriptions();
-  }, [statusFilter]);
-
-  const fetchSubscriptions = async () => {
+  const fetchSubscriptions = useCallback(async () => {
     try {
       setIsLoading(true);
 
@@ -88,7 +92,7 @@ export default function SubscriptionManagement() {
         .order("created_at", { ascending: false });
 
       if (statusFilter !== "all") {
-        query = query.eq("status", statusFilter as "trial" | "active" | "expired" | "cancelled");
+        query = query.eq("status", statusFilter as SubscriptionStatus);
       }
 
       const { data, error } = await query;
@@ -96,13 +100,20 @@ export default function SubscriptionManagement() {
 
       // Fetch employee counts
       const subsWithCounts = await Promise.all(
-        (data || []).map(async (sub: any) => {
-          const { count } = await supabase
+        (data || []).map(async (sub: Subscription) => {
+          const { count, error: countError } = await supabase
             .from("employees")
             .select("*", { count: "exact", head: true })
             .eq("tenant_id", sub.tenant_id);
 
-          return { ...sub, employees_count: count || 0 };
+          if (countError) {
+            reportError(countError, "admin.subscriptions.fetch_employee_count", {
+              subscription_id: sub.id,
+              tenant_id: sub.tenant_id,
+            });
+          }
+
+          return { ...sub, employees_count: countError ? 0 : count || 0 };
         })
       );
 
@@ -118,26 +129,41 @@ export default function SubscriptionManagement() {
         totalRevenue: allSubs.filter((s) => s.status === "active").length * 500000,
       });
     } catch (error) {
-      console.error("Error fetching subscriptions:", error);
-      toast.error("Gagal memuat data langganan");
+      const errorRef = reportError(error, "admin.subscriptions.fetch", {
+        status_filter: statusFilter,
+      });
+      toast.error(appendErrorReference("Gagal memuat data langganan", errorRef));
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [statusFilter]);
+
+  useEffect(() => {
+    void fetchSubscriptions();
+  }, [fetchSubscriptions]);
 
   const updateSubscriptionStatus = async (subId: string, newStatus: string) => {
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("subscriptions")
-        .update({ status: newStatus as "trial" | "active" | "expired" | "cancelled" })
-        .eq("id", subId);
+        .update({ status: newStatus as SubscriptionStatus })
+        .eq("id", subId)
+        .select("id")
+        .maybeSingle();
 
       if (error) throw error;
+      if (!data?.id) {
+        throw new Error("Status tidak berubah karena data tidak ditemukan atau akses ditolak");
+      }
+
       toast.success("Status langganan berhasil diperbarui");
-      fetchSubscriptions();
+      await fetchSubscriptions();
     } catch (error) {
-      console.error("Error updating subscription:", error);
-      toast.error("Gagal memperbarui status");
+      const errorRef = reportError(error, "admin.subscriptions.update_status", {
+        subscription_id: subId,
+        next_status: newStatus,
+      });
+      toast.error(appendErrorReference("Gagal memperbarui status", errorRef));
     }
   };
 
@@ -284,54 +310,59 @@ export default function SubscriptionManagement() {
                         </TableCell>
                       </TableRow>
                     ) : (
-                      filteredSubscriptions.map((sub) => (
-                        <TableRow key={sub.id}>
-                          <TableCell>
-                            <div>
-                              <p className="font-medium">{sub.tenant?.name || "-"}</p>
-                              <p className="text-sm text-muted-foreground">{sub.tenant?.code}</p>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant={statusLabels[sub.status || "trial"]?.variant}>
-                              {statusLabels[sub.status || "trial"]?.label}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <div className="flex items-center justify-center gap-1">
-                              <Users className="h-4 w-4 text-muted-foreground" />
-                              {sub.employees_count}
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-center">{sub.max_employees || 2}</TableCell>
-                          <TableCell>
-                            {sub.start_date
-                              ? format(new Date(sub.start_date), "d MMM yyyy", { locale: id })
-                              : "-"}
-                          </TableCell>
-                          <TableCell>
-                            {sub.end_date
-                              ? format(new Date(sub.end_date), "d MMM yyyy", { locale: id })
-                              : "-"}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Select
-                              value={sub.status || "trial"}
-                              onValueChange={(value) => updateSubscriptionStatus(sub.id, value)}
-                            >
-                              <SelectTrigger className="w-[120px]">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="trial">Trial</SelectItem>
-                                <SelectItem value="active">Aktif</SelectItem>
-                                <SelectItem value="expired">Expired</SelectItem>
-                                <SelectItem value="cancelled">Dibatalkan</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </TableCell>
-                        </TableRow>
-                      ))
+                      filteredSubscriptions.map((sub) => {
+                        const normalizedStatus = isSubscriptionStatus(sub.status)
+                          ? sub.status
+                          : DEFAULT_SUBSCRIPTION_STATUS;
+                        return (
+                          <TableRow key={sub.id}>
+                            <TableCell>
+                              <div>
+                                <p className="font-medium">{sub.tenant?.name || "-"}</p>
+                                <p className="text-sm text-muted-foreground">{sub.tenant?.code}</p>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant={statusLabels[normalizedStatus].variant}>
+                                {statusLabels[normalizedStatus].label}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-center">
+                              <div className="flex items-center justify-center gap-1">
+                                <Users className="h-4 w-4 text-muted-foreground" />
+                                {sub.employees_count}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-center">{sub.max_employees || 2}</TableCell>
+                            <TableCell>
+                              {sub.start_date
+                                ? format(new Date(sub.start_date), "d MMM yyyy", { locale: id })
+                                : "-"}
+                            </TableCell>
+                            <TableCell>
+                              {sub.end_date
+                                ? format(new Date(sub.end_date), "d MMM yyyy", { locale: id })
+                                : "-"}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Select
+                                value={normalizedStatus}
+                                onValueChange={(value) => updateSubscriptionStatus(sub.id, value)}
+                              >
+                                <SelectTrigger className="w-[120px]">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="trial">Trial</SelectItem>
+                                  <SelectItem value="active">Aktif</SelectItem>
+                                  <SelectItem value="expired">Expired</SelectItem>
+                                  <SelectItem value="cancelled">Dibatalkan</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })
                     )}
                   </TableBody>
                 </Table>

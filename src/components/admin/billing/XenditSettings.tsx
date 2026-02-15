@@ -10,6 +10,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Loader2, Save, Key, Webhook, Shield, ExternalLink, Copy, CheckCircle, AlertCircle, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import type { Json } from "@/integrations/supabase/types";
 
 export function XenditSettings() {
   const { settings, isLoading, getSetting, updateSetting } = useBillingSettings();
@@ -54,7 +55,7 @@ export function XenditSettings() {
       const projectId = import.meta.env.VITE_SUPABASE_PROJECT_ID || "uvzruextguakdocvhfay";
       setWebhookUrl(`https://${projectId}.supabase.co/functions/v1/xendit-webhook`);
     }
-  }, [settings, isLoading]);
+  }, [settings, isLoading, getSetting]);
 
   // Fetch B2B threshold from system_settings
   useEffect(() => {
@@ -64,8 +65,14 @@ export function XenditSettings() {
         .select("value")
         .eq("key", "b2b_negotiation_threshold")
         .maybeSingle();
-      if (data?.value) {
-        setB2bThreshold(String((data.value as any)?.value ?? 2000));
+      if (data?.value && typeof data.value === "object" && !Array.isArray(data.value)) {
+        const value = data.value as Record<string, unknown>;
+        const parsedValue = value.value;
+        setB2bThreshold(
+          typeof parsedValue === "number" || typeof parsedValue === "string"
+            ? String(parsedValue)
+            : "2000"
+        );
       }
     };
     fetchB2b();
@@ -104,12 +111,21 @@ export function XenditSettings() {
         .eq("key", "b2b_negotiation_threshold")
         .maybeSingle();
 
-      const val = { value: parseInt(b2bThreshold) || 2000 };
+      const valuePayload: Json = { value: parseInt(b2bThreshold, 10) || 2000 };
 
       if (existing) {
-        await supabase.from("system_settings").update({ value: val as any, updated_at: new Date().toISOString() }).eq("id", existing.id);
+        await supabase
+          .from("system_settings")
+          .update({ value: valuePayload, updated_at: new Date().toISOString() })
+          .eq("id", existing.id);
       } else {
-        await supabase.from("system_settings").insert({ key: "b2b_negotiation_threshold", value: val as any, description: "Ambang batas pegawai untuk negosiasi B2B" });
+        await supabase
+          .from("system_settings")
+          .insert({
+            key: "b2b_negotiation_threshold",
+            value: valuePayload,
+            description: "Ambang batas pegawai untuk negosiasi B2B",
+          });
       }
       toast.success("Ambang batas B2B berhasil disimpan");
     } catch (error) {
@@ -149,10 +165,11 @@ export function XenditSettings() {
           message: `Koneksi gagal: ${response.status} - ${error}`,
         });
       }
-    } catch (error: any) {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
       setTestResult({
         success: false,
-        message: `Error: ${error.message}`,
+        message: `Error: ${message}`,
       });
     } finally {
       setIsTesting(false);

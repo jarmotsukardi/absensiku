@@ -57,8 +57,7 @@ export function ScalabilitySettings() {
   const loadIngestHealth = useCallback(async () => {
     setIsHealthLoading(true);
     try {
-      const supabaseAny = supabase as any;
-      const { data, error } = await supabaseAny.rpc("get_attendance_ingest_health");
+      const { data, error } = await supabase.rpc("get_attendance_ingest_health");
       if (error) throw error;
 
       const row = Array.isArray(data) ? data[0] : null;

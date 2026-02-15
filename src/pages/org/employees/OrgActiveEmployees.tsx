@@ -20,6 +20,12 @@ type OPD = Tables<"opd">;
 type Office = Tables<"offices">;
 type WorkUnit = Tables<"work_units">;
 type Position = Tables<"positions">;
+type EmployeeWithRelations = Employee & {
+  opd?: OPD | null;
+  office?: Office | null;
+  work_unit?: WorkUnit | null;
+  position_rel?: Position | null;
+};
 
 const GENDER_OPTIONS = [
   { value: "laki-laki", label: "Laki-Laki" },
@@ -54,7 +60,7 @@ const GOLONGAN_OPTIONS = [
 const ITEMS_PER_PAGE = 10;
 
 export default function OrgActiveEmployees() {
-  const [employees, setEmployees] = useState<(Employee & { opd?: OPD | null; office?: Office | null; work_unit?: WorkUnit | null; position_rel?: Position | null })[]>([]);
+  const [employees, setEmployees] = useState<EmployeeWithRelations[]>([]);
   const [opds, setOpds] = useState<OPD[]>([]);
   const [offices, setOffices] = useState<Office[]>([]);
   const [workUnits, setWorkUnits] = useState<WorkUnit[]>([]);
@@ -239,9 +245,10 @@ export default function OrgActiveEmployees() {
       setIsDialogOpen(false);
       resetForm();
       fetchData();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error saving employee:", error);
-      toast.error(error.message || "Gagal menyimpan pegawai");
+      const errorMessage = error instanceof Error ? error.message : "Gagal menyimpan pegawai";
+      toast.error(errorMessage);
     }
   };
 
@@ -255,7 +262,7 @@ export default function OrgActiveEmployees() {
     setIsEditing(false);
   };
 
-  const handleEdit = (emp: any) => {
+  const handleEdit = (emp: EmployeeWithRelations) => {
     setFormData({
       id: emp.id,
       nip: emp.nip || "",
@@ -299,13 +306,14 @@ export default function OrgActiveEmployees() {
       });
       if (error) throw error;
       toast.success(`Link reset password telah dikirim ke ${email}`);
-    } catch (error: any) {
-      toast.error(error.message || "Gagal mengirim link reset password");
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Gagal mengirim link reset password";
+      toast.error(errorMessage);
     }
   };
 
   // State for activation
-  const [activationDialog, setActivationDialog] = useState<{ open: boolean; employee: any | null; inviteCode: string | null }>({
+  const [activationDialog, setActivationDialog] = useState<{ open: boolean; employee: EmployeeWithRelations | null; inviteCode: string | null }>({
     open: false,
     employee: null,
     inviteCode: null,
@@ -313,7 +321,7 @@ export default function OrgActiveEmployees() {
   const [isActivating, setIsActivating] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const handleActivateAccount = async (emp: any) => {
+  const handleActivateAccount = async (emp: EmployeeWithRelations) => {
     setIsActivating(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -361,9 +369,10 @@ export default function OrgActiveEmployees() {
 
       setActivationDialog({ open: true, employee: emp, inviteCode });
       toast.success("Kode undangan berhasil dibuat");
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error creating invitation:", error);
-      toast.error(error.message || "Gagal membuat kode undangan");
+      const errorMessage = error instanceof Error ? error.message : "Gagal membuat kode undangan";
+      toast.error(errorMessage);
     } finally {
       setIsActivating(false);
     }
@@ -395,9 +404,10 @@ export default function OrgActiveEmployees() {
 
       if (error) throw error;
       toast.success(`Device ID untuk ${emp.name} berhasil direset. Pegawai mendapat 1 kesempatan reset baru.`);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error resetting device:", error);
-      toast.error(error.message || "Gagal reset device ID");
+      const errorMessage = error instanceof Error ? error.message : "Gagal reset device ID";
+      toast.error(errorMessage);
     }
   };
 
@@ -430,7 +440,7 @@ export default function OrgActiveEmployees() {
     currentPage * ITEMS_PER_PAGE
   );
 
-  const getFullName = (emp: any) => {
+  const getFullName = (emp: EmployeeWithRelations) => {
     const parts = [emp.gelar_depan, emp.name, emp.gelar_belakang].filter(Boolean);
     return parts.join(" ");
   };

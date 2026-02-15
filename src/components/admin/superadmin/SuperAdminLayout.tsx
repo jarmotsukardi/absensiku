@@ -65,8 +65,8 @@ export function SuperAdminLayout({ children, title, subtitle }: SuperAdminLayout
               toast.info("Anda dialihkan ke panel Admin Organisasi.");
               navigate("/org", { replace: true });
             } else {
-              toast.info("Anda dialihkan ke dashboard.");
-              navigate("/dashboard", { replace: true });
+              toast.info("Anda dialihkan ke dashboard pegawai.");
+              navigate("/employee/dashboard", { replace: true });
             }
             return;
           }
@@ -84,8 +84,8 @@ export function SuperAdminLayout({ children, title, subtitle }: SuperAdminLayout
             toast.info("Anda dialihkan ke panel Admin Organisasi.");
             navigate("/org", { replace: true });
           } else {
-            toast.info("Anda dialihkan ke dashboard.");
-            navigate("/dashboard", { replace: true });
+            toast.info("Anda dialihkan ke dashboard pegawai.");
+            navigate("/employee/dashboard", { replace: true });
           }
           return;
         } else {

@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "notes": "Salin file ini ke ops/test-accounts.local.json lalu isi datanya. File .local tidak dipush.",
+  "superadmin": {
+    "email": "superadmin@example.com",
+    "password": "",
+    "otp_fallback": "",
+    "notes": ""
+  },
+  "org_admin": {
+    "email": "org-admin@example.com",
+    "password": "",
+    "tenant_id": "",
+    "tenant_name": "",
+    "notes": ""
+  },
+  "employee": {
+    "email": "employee@example.com",
+    "password": "",
+    "employee_id": "",
+    "tenant_id": "",
+    "android_id": "",
+    "notes": ""
+  }
+}
+

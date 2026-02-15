@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -60,35 +60,17 @@ export function AdminMutationForm({ open, onOpenChange, employee, onSuccess }: A
   const [filteredWorkUnits, setFilteredWorkUnits] = useState<WorkUnit[]>([]);
   const [filteredOffices, setFilteredOffices] = useState<Office[]>([]);
 
-  useEffect(() => {
-    if (open && employee?.tenant_id) {
-      fetchMasterData();
-      // Set initial values from employee data
-      setSelectedOpdId(employee.opd_id || "");
-      setSelectedWorkUnitId(employee.work_unit_id || "");
-      setSelectedOfficeId(employee.office_id || "");
-    }
-  }, [open, employee]);
+  const tenantId = employee?.tenant_id ?? null;
 
-  useEffect(() => {
-    if (selectedOpdId) {
-      setFilteredWorkUnits(workUnits.filter((wu) => wu.opd_id === selectedOpdId));
-      setFilteredOffices(offices.filter((o) => o.opd_id === selectedOpdId));
-    } else {
-      setFilteredWorkUnits([]);
-      setFilteredOffices([]);
-    }
-  }, [selectedOpdId, workUnits, offices]);
+  const fetchMasterData = useCallback(async () => {
+    if (!tenantId) return;
 
-  const fetchMasterData = async () => {
-    if (!employee?.tenant_id) return;
-    
     setIsLoading(true);
     try {
       const [opdRes, workUnitRes, officeRes] = await Promise.all([
-        supabase.from("opd").select("id, name").eq("tenant_id", employee.tenant_id).eq("is_active", true).order("name"),
-        supabase.from("work_units").select("id, name, opd_id").eq("tenant_id", employee.tenant_id).eq("is_active", true).order("name"),
-        supabase.from("offices").select("id, name, opd_id").eq("tenant_id", employee.tenant_id).eq("is_active", true).order("name"),
+        supabase.from("opd").select("id, name").eq("tenant_id", tenantId).eq("is_active", true).order("name"),
+        supabase.from("work_units").select("id, name, opd_id").eq("tenant_id", tenantId).eq("is_active", true).order("name"),
+        supabase.from("offices").select("id, name, opd_id").eq("tenant_id", tenantId).eq("is_active", true).order("name"),
       ]);
 
       setOpdList(opdRes.data || []);
@@ -99,7 +81,27 @@ export function AdminMutationForm({ open, onOpenChange, employee, onSuccess }: A
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (open && tenantId) {
+      void fetchMasterData();
+      // Set initial values from employee data
+      setSelectedOpdId(employee?.opd_id || "");
+      setSelectedWorkUnitId(employee?.work_unit_id || "");
+      setSelectedOfficeId(employee?.office_id || "");
+    }
+  }, [open, employee, fetchMasterData, tenantId]);
+
+  useEffect(() => {
+    if (selectedOpdId) {
+      setFilteredWorkUnits(workUnits.filter((wu) => wu.opd_id === selectedOpdId));
+      setFilteredOffices(offices.filter((o) => o.opd_id === selectedOpdId));
+    } else {
+      setFilteredWorkUnits([]);
+      setFilteredOffices([]);
+    }
+  }, [selectedOpdId, workUnits, offices]);
 
   const handleSubmit = async () => {
     if (!employee || !reason.trim()) {
@@ -126,8 +128,6 @@ export function AdminMutationForm({ open, onOpenChange, employee, onSuccess }: A
       if (selectedOpdId !== (employee.opd_id || "")) {
         requestedChanges.opd_id = selectedOpdId;
         originalData.opd_id = employee.opd?.name || "-";
-        const newOpd = opdList.find((o) => o.id === selectedOpdId);
-        requestedChanges.opd_id = selectedOpdId;
       }
       if (selectedWorkUnitId !== (employee.work_unit_id || "")) {
         requestedChanges.work_unit_id = selectedWorkUnitId;
@@ -182,9 +182,10 @@ export function AdminMutationForm({ open, onOpenChange, employee, onSuccess }: A
       onOpenChange(false);
       setReason("");
       onSuccess?.();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error processing mutation:", error);
-      toast.error("Gagal melakukan mutasi", { description: error.message });
+      const errorMessage = error instanceof Error ? error.message : "Gagal melakukan mutasi";
+      toast.error("Gagal melakukan mutasi", { description: errorMessage });
     } finally {
       setIsSaving(false);
     }

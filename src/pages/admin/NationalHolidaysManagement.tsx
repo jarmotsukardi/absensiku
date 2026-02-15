@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,6 +35,12 @@ interface NationalHoliday {
   is_active: boolean;
 }
 
+interface PublicHolidayApiItem {
+  holiday_date: string;
+  holiday_name: string;
+  is_national_holiday: boolean;
+}
+
 const ITEMS_PER_PAGE = 15;
 
 export default function NationalHolidaysManagement() {
@@ -54,11 +60,7 @@ export default function NationalHolidaysManagement() {
 
   const years = Array.from({ length: 5 }, (_, i) => (new Date().getFullYear() - 1 + i).toString());
 
-  useEffect(() => {
-    fetchHolidays();
-  }, [selectedYear]);
-
-  const fetchHolidays = async () => {
+  const fetchHolidays = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from("national_holidays")
@@ -74,7 +76,11 @@ export default function NationalHolidaysManagement() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [selectedYear]);
+
+  useEffect(() => {
+    fetchHolidays();
+  }, [fetchHolidays]);
 
   // Fetch from external API (hari-libur-api.vercel.app)
   const fetchFromAPI = async () => {
@@ -90,7 +96,7 @@ export default function NationalHolidaysManagement() {
         return;
       }
       
-      const data = await response.json();
+      const data: unknown = await response.json();
       
       if (!Array.isArray(data) || data.length === 0) {
         // Data kosong, gunakan import default
@@ -101,7 +107,9 @@ export default function NationalHolidaysManagement() {
       }
 
       // Filter hanya hari libur nasional (bukan cuti bersama)
-      const nationalHolidays = data.filter((h: any) => h.is_national_holiday === true);
+      const nationalHolidays = (data as PublicHolidayApiItem[]).filter(
+        (holiday) => holiday.is_national_holiday === true
+      );
       
       if (nationalHolidays.length === 0) {
         toast.info(`Tidak ada libur nasional dari API untuk tahun ${selectedYear}. Menggunakan import default...`);
@@ -196,8 +204,9 @@ export default function NationalHolidaysManagement() {
       setIsDialogOpen(false);
       resetForm();
       fetchHolidays();
-    } catch (error: any) {
-      toast.error(error.message || "Gagal menyimpan data");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Gagal menyimpan data";
+      toast.error(message);
     }
   };
 

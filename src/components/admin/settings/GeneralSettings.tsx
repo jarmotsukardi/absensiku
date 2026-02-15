@@ -13,6 +13,7 @@ interface GeneralSettingsData {
   siteName: string;
   siteTagline: string;
   siteDescription: string;
+  logoUrl: string;
   adminEmail: string;
   supportEmail: string;
   supportPhone: string;
@@ -25,6 +26,7 @@ const defaultSettings: GeneralSettingsData = {
   siteName: "AbsensiKu",
   siteTagline: "Platform Absensi GPS Terpercaya",
   siteDescription: "Aplikasi absensi pegawai berbasis GPS untuk pemerintah dan swasta",
+  logoUrl: "",
   adminEmail: "admin@absensi.app",
   supportEmail: "support@absensi.app",
   supportPhone: "021-12345678",
@@ -156,13 +158,13 @@ export function GeneralSettings() {
             <div className="space-y-2">
               <Label>Logo Situs (URL)</Label>
               <Input
-                value={(settings as any).logoUrl || ""}
+                value={settings.logoUrl || ""}
                 onChange={(e) => handleChange("logoUrl", e.target.value)}
                 placeholder="https://example.com/logo.png"
               />
-              {(settings as any).logoUrl && (
+              {settings.logoUrl && (
                 <div className="h-16 w-16 rounded-lg bg-muted flex items-center justify-center overflow-hidden">
-                  <img src={(settings as any).logoUrl} alt="Logo" className="h-full object-contain" />
+                  <img src={settings.logoUrl} alt="Logo" className="h-full object-contain" />
                 </div>
               )}
             </div>

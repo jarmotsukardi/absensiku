@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,27 +9,52 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
+import type { Enums, Json, Tables, TablesUpdate } from "@/integrations/supabase/types";
 import { toast } from "sonner";
 import { Search, ClipboardList, Loader2, Check, X, Eye, ArrowRight, UserCog, Plus } from "lucide-react";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { AdminMutationForm } from "@/components/org/AdminMutationForm";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+
+type MutationRequestRow = Tables<"mutation_requests">;
+type MutationStatus = Enums<"request_status">;
+
+interface EmployeeOption {
+  id: string;
+  name: string;
+  nip: string | null;
+  tenant_id: string;
+  opd_id: string | null;
+  work_unit_id: string | null;
+  office_id: string | null;
+  opd: { id: string; name: string } | null;
+  work_unit: { id: string; name: string } | null;
+  offices: { id: string; name: string } | null;
+}
+
+const toJsonRecord = (value: Json | null): Record<string, Json | undefined> => {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, Json | undefined>;
+  }
+  return {};
+};
+
 interface MutationRequest {
   id: string;
   employee_id: string;
   mutation_type: "profile_change" | "transfer";
-  requested_changes: Record<string, any>;
-  original_data: Record<string, any>;
+  requested_changes: Record<string, Json | undefined>;
+  original_data: Record<string, Json | undefined>;
   reason: string;
-  status: "menunggu" | "disetujui" | "ditolak";
+  status: MutationStatus;
   rejection_reason: string | null;
   created_at: string;
   approved_at: string | null;
   employees: {
     id: string;
     name: string;
-    nip: string;
+    nip: string | null;
     opd: { name: string } | null;
   };
 }
@@ -47,16 +72,11 @@ export default function OrgMutationRequests() {
   
   // State untuk tambah mutasi admin
   const [showAddMutationDialog, setShowAddMutationDialog] = useState(false);
-  const [employees, setEmployees] = useState<any[]>([]);
+  const [employees, setEmployees] = useState<EmployeeOption[]>([]);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>("");
-  const [selectedEmployee, setSelectedEmployee] = useState<any>(null);
+  const [selectedEmployee, setSelectedEmployee] = useState<EmployeeOption | null>(null);
 
-  useEffect(() => {
-    fetchData();
-    fetchEmployees();
-  }, [statusFilter]);
-  
-  const fetchEmployees = async () => {
+  const fetchEmployees = useCallback(async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -76,11 +96,11 @@ export default function OrgMutationRequests() {
         .eq("is_active", true)
         .order("name");
       
-      setEmployees(data || []);
+      setEmployees((data || []) as EmployeeOption[]);
     } catch (error) {
       console.error("Error fetching employees:", error);
     }
-  };
+  }, []);
   
   const handleOpenAddMutation = () => {
     setSelectedEmployeeId("");
@@ -90,11 +110,11 @@ export default function OrgMutationRequests() {
   
   const handleEmployeeSelect = (employeeId: string) => {
     setSelectedEmployeeId(employeeId);
-    const emp = employees.find(e => e.id === employeeId);
+    const emp = employees.find((employee) => employee.id === employeeId);
     setSelectedEmployee(emp || null);
   };
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
       let query = supabase
@@ -103,7 +123,7 @@ export default function OrgMutationRequests() {
         .order("created_at", { ascending: false });
 
       if (statusFilter !== "all") {
-        query = query.eq("status", statusFilter);
+        query = query.eq("status", statusFilter as MutationStatus);
       }
 
       const { data, error } = await query;
@@ -111,7 +131,7 @@ export default function OrgMutationRequests() {
       
       // Fetch employee data separately
       const requestsWithEmployees = await Promise.all(
-        (data || []).map(async (req) => {
+        (data || []).map(async (req: MutationRequestRow) => {
           const { data: empData } = await supabase
             .from("employees")
             .select("id, name, nip, opd(name)")
@@ -120,6 +140,8 @@ export default function OrgMutationRequests() {
           
           return {
             ...req,
+            requested_changes: toJsonRecord(req.requested_changes),
+            original_data: toJsonRecord(req.original_data),
             employees: empData || { id: "", name: "-", nip: "-", opd: null },
           } as MutationRequest;
         })
@@ -132,7 +154,12 @@ export default function OrgMutationRequests() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [statusFilter]);
+
+  useEffect(() => {
+    void fetchData();
+    void fetchEmployees();
+  }, [fetchData, fetchEmployees]);
 
   const handleApprove = async (request: MutationRequest) => {
     setIsProcessing(true);
@@ -149,7 +176,7 @@ export default function OrgMutationRequests() {
       if (updateError) throw updateError;
 
       // Filter out non-column fields (display-only fields like opd_name, work_unit_name, office_name)
-      const updateData: Record<string, any> = {};
+      const updateData: Record<string, unknown> = {};
       const excludeFields = ["opd_name", "work_unit_name", "office_name"];
       
       Object.entries(request.requested_changes).forEach(([key, value]) => {
@@ -162,7 +189,7 @@ export default function OrgMutationRequests() {
       if (Object.keys(updateData).length > 0) {
         const { error: employeeError } = await supabase
           .from("employees")
-          .update(updateData)
+          .update(updateData as TablesUpdate<"employees">)
           .eq("id", request.employee_id);
 
         if (employeeError) throw employeeError;
@@ -189,10 +216,11 @@ export default function OrgMutationRequests() {
 
       toast.success("Pengajuan mutasi disetujui");
       setShowDetailDialog(false);
-      fetchData();
-    } catch (error: any) {
+      void fetchData();
+    } catch (error: unknown) {
       console.error("Error approving:", error);
-      toast.error("Gagal menyetujui pengajuan", { description: error.message });
+      const errorMessage = error instanceof Error ? error.message : "Gagal menyetujui pengajuan";
+      toast.error("Gagal menyetujui pengajuan", { description: errorMessage });
     } finally {
       setIsProcessing(false);
     }
@@ -240,10 +268,11 @@ export default function OrgMutationRequests() {
       setShowRejectDialog(false);
       setShowDetailDialog(false);
       setRejectionReason("");
-      fetchData();
-    } catch (error: any) {
+      void fetchData();
+    } catch (error: unknown) {
       console.error("Error rejecting:", error);
-      toast.error("Gagal menolak pengajuan", { description: error.message });
+      const errorMessage = error instanceof Error ? error.message : "Gagal menolak pengajuan";
+      toast.error("Gagal menolak pengajuan", { description: errorMessage });
     } finally {
       setIsProcessing(false);
     }
@@ -542,7 +571,7 @@ export default function OrgMutationRequests() {
           employee={selectedEmployee}
           onSuccess={() => {
             setSelectedEmployee(null);
-            fetchData();
+            void fetchData();
           }}
         />
       </div>

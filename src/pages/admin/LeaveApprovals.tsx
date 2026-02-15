@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -98,10 +98,6 @@ export default function LeaveApprovals() {
     fetchLeaveRequests();
   }, []);
 
-  useEffect(() => {
-    filterRequests();
-  }, [requests, searchQuery, statusFilter, typeFilter]);
-
   const fetchLeaveRequests = async () => {
     setIsLoading(true);
     try {
@@ -120,7 +116,7 @@ export default function LeaveApprovals() {
     }
   };
 
-  const filterRequests = () => {
+  const filterRequests = useCallback(() => {
     let filtered = [...requests];
     if (statusFilter !== "all") filtered = filtered.filter(r => r.status === statusFilter);
     if (typeFilter !== "all") filtered = filtered.filter(r => r.leave_type === typeFilter);
@@ -133,7 +129,11 @@ export default function LeaveApprovals() {
       );
     }
     setFilteredRequests(filtered);
-  };
+  }, [requests, searchQuery, statusFilter, typeFilter]);
+
+  useEffect(() => {
+    filterRequests();
+  }, [filterRequests]);
 
   const handleApprove = async () => {
     if (!selectedRequest) return;

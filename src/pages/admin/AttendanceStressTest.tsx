@@ -44,7 +44,10 @@ export default function AttendanceStressTest() {
   const [testState, setTestState] = useState<StressTestState | null>(null);
   const engineRef = useRef<StressTestEngine | null>(null);
 
-  const handleConfigChange = (key: keyof StressTestConfig, value: any) => {
+  const handleConfigChange = <K extends keyof StressTestConfig>(
+    key: K,
+    value: StressTestConfig[K]
+  ) => {
     setConfig(prev => ({ ...prev, [key]: value }));
   };
 

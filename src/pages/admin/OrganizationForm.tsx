@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -78,13 +78,7 @@ export default function OrganizationForm() {
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  useEffect(() => {
-    if (isEdit && id && isAuthorized) {
-      fetchOrganization(id);
-    }
-  }, [id, isEdit, isAuthorized]);
-
-  const fetchOrganization = async (orgId: string) => {
+  const fetchOrganization = useCallback(async (orgId: string) => {
     try {
       const { data, error } = await supabase
         .from("tenants")
@@ -113,7 +107,13 @@ export default function OrganizationForm() {
     } finally {
       setIsFetching(false);
     }
-  };
+  }, [navigate]);
+
+  useEffect(() => {
+    if (isEdit && id && isAuthorized) {
+      fetchOrganization(id);
+    }
+  }, [id, isEdit, isAuthorized, fetchOrganization]);
 
   const handleChange = (field: keyof OrganizationFormData, value: string | boolean) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
@@ -180,9 +180,15 @@ export default function OrganizationForm() {
       }
 
       navigate("/admin");
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error saving organization:", error);
-      if (error.code === "23505") {
+      const isUniqueCodeError =
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        (error as { code?: string }).code === "23505";
+
+      if (isUniqueCodeError) {
         toast.error("Kode organisasi sudah digunakan");
         setErrors({ code: "Kode sudah digunakan" });
       } else {

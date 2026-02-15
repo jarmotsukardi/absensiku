@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,20 +9,22 @@ import { Badge } from "@/components/ui/badge";
 import { Search, FileText, Check, X, Filter } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-import { Tables } from "@/integrations/supabase/types";
+import { Enums, Tables } from "@/integrations/supabase/types";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 
 type LeaveRequest = Tables<"leave_requests">;
 type Employee = Tables<"employees">;
+type RequestStatus = Enums<"request_status">;
+type LeaveRequestWithEmployee = LeaveRequest & { employee?: Employee | null };
 
 export default function LeaveRequestsAdmin() {
-  const [requests, setRequests] = useState<(LeaveRequest & { employee?: Employee })[]>([]);
+  const [requests, setRequests] = useState<LeaveRequestWithEmployee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("menunggu");
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
       
@@ -32,24 +34,24 @@ export default function LeaveRequestsAdmin() {
         .order("created_at", { ascending: false });
 
       if (statusFilter !== "all") {
-        query = query.eq("status", statusFilter as any);
+        query = query.eq("status", statusFilter as RequestStatus);
       }
 
       const { data, error } = await query;
 
       if (error) throw error;
-      setRequests((data || []) as any);
+      setRequests((data as LeaveRequestWithEmployee[]) || []);
     } catch (error) {
       console.error("Error fetching data:", error);
       toast.error("Gagal memuat data");
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [statusFilter]);
 
   useEffect(() => {
     fetchData();
-  }, [statusFilter]);
+  }, [fetchData]);
 
   const handleApprove = async (id: string) => {
     try {
@@ -128,7 +130,7 @@ export default function LeaveRequestsAdmin() {
   };
 
   const filteredRequests = requests.filter((req) =>
-    (req.employee as any)?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    req.employee?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     req.reason.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
@@ -208,7 +210,7 @@ export default function LeaveRequestsAdmin() {
                       <TableRow key={req.id}>
                         <TableCell>{index + 1}</TableCell>
                         <TableCell className="font-medium">
-                          {(req.employee as any)?.name || "-"}
+                          {req.employee?.name || "-"}
                         </TableCell>
                         <TableCell>
                           <Badge variant="secondary">{getLeaveTypeLabel(req.leave_type)}</Badge>

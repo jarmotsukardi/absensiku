@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -100,11 +100,7 @@ export default function AuditLogs() {
 
   const monthOptions = getMonthOptions();
 
-  useEffect(() => {
-    fetchLogs();
-  }, [monthFilter, currentPage]);
-
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     setIsLoading(true);
     try {
       // Parse month filter
@@ -144,7 +140,11 @@ export default function AuditLogs() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [monthFilter, currentPage]);
+
+  useEffect(() => {
+    fetchLogs();
+  }, [fetchLogs]);
 
   const filteredLogs = logs.filter(log => {
     if (actionFilter !== "all" && log.action !== actionFilter) return false;

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -51,7 +51,7 @@ export default function RecapReport() {
   const [filterMonth, setFilterMonth] = useState<string>(String(new Date().getMonth() + 1));
   const [filterYear, setFilterYear] = useState<string>(String(new Date().getFullYear()));
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
       
@@ -80,10 +80,14 @@ export default function RecapReport() {
       const employeeRecords: Record<string, RecapData> = {};
       
       (employeeResult.data || []).forEach(emp => {
+        const opdCode =
+          typeof emp.opd === "object" && emp.opd !== null && "code" in emp.opd
+            ? String((emp.opd as { code?: string }).code || "-")
+            : "-";
         employeeRecords[emp.id] = {
           employee_id: emp.id,
           employee_name: emp.name,
-          opd_code: (emp.opd as any)?.code || "-",
+          opd_code: opdCode,
           total_days: 0,
           hadir: 0,
           terlambat: 0,
@@ -112,11 +116,11 @@ export default function RecapReport() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [filterMonth, filterYear]);
 
   useEffect(() => {
     fetchData();
-  }, [filterMonth, filterYear]);
+  }, [fetchData]);
 
   const handleExport = () => {
     const headers = ["No", "Nama", "OPD", "Total", "Hadir", "Terlambat", "Izin", "Sakit", "Cuti", "Tidak Hadir", "Tugas Luar"];

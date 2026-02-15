@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -107,14 +107,12 @@ export default function UserManagement() {
   const [selectedUser, setSelectedUser] = useState<AdminUser | null>(null);
   const [newPassword, setNewPassword] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const getErrorMessage = (error: unknown) =>
+    error instanceof Error ? error.message : "Terjadi kesalahan";
 
   useEffect(() => {
     fetchAdminUsers();
   }, []);
-
-  useEffect(() => {
-    filterUsers();
-  }, [users, searchQuery, orgTypeFilter]);
 
   const fetchAdminUsers = async () => {
     try {
@@ -189,7 +187,7 @@ export default function UserManagement() {
     }
   };
 
-  const filterUsers = () => {
+  const filterUsers = useCallback(() => {
     let filtered = [...users];
 
     if (orgTypeFilter !== "all") {
@@ -206,7 +204,11 @@ export default function UserManagement() {
 
     setFilteredUsers(filtered);
     setCurrentPage(1);
-  };
+  }, [users, orgTypeFilter, searchQuery]);
+
+  useEffect(() => {
+    filterUsers();
+  }, [filterUsers]);
 
   const totalPages = Math.ceil(filteredUsers.length / ITEMS_PER_PAGE);
   const paginatedUsers = filteredUsers.slice(
@@ -232,8 +234,8 @@ export default function UserManagement() {
       toast.info("Fitur reset password memerlukan konfigurasi edge function dengan service role");
       setPasswordDialogOpen(false);
       setNewPassword("");
-    } catch (error: any) {
-      toast.error(error.message || "Gagal reset password");
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     } finally {
       setIsSaving(false);
     }
@@ -250,8 +252,8 @@ export default function UserManagement() {
       
       toast.success(user.is_active ? "User dinonaktifkan" : "User diaktifkan");
       fetchAdminUsers();
-    } catch (error: any) {
-      toast.error(error.message || "Gagal mengubah status");
+    } catch (error) {
+      toast.error(getErrorMessage(error));
     }
   };
 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -87,7 +87,7 @@ export default function OrgFlexibleAttendanceRequests() {
     fetchTenantId();
   }, []);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     if (!tenantId) return;
     
     setIsLoading(true);
@@ -112,19 +112,19 @@ export default function OrgFlexibleAttendanceRequests() {
 
       if (error) throw error;
       setRequests((data || []) as FlexibleRequest[]);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error fetching data:", error);
       toast.error("Gagal memuat data");
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [statusFilter, tenantId]);
 
   useEffect(() => {
     if (tenantId) {
-      fetchData();
+      void fetchData();
     }
-  }, [statusFilter, tenantId]);
+  }, [tenantId, fetchData]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -164,8 +164,9 @@ export default function OrgFlexibleAttendanceRequests() {
       setDialogMode(null);
       setSelectedRequest(null);
       fetchData();
-    } catch (error: any) {
-      toast.error(error.message || "Gagal menyetujui permohonan");
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Gagal menyetujui permohonan";
+      toast.error(errorMessage);
     } finally {
       setIsProcessing(false);
     }
@@ -207,8 +208,9 @@ export default function OrgFlexibleAttendanceRequests() {
       setSelectedRequest(null);
       setRejectionReason("");
       fetchData();
-    } catch (error: any) {
-      toast.error(error.message || "Gagal menolak permohonan");
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Gagal menolak permohonan";
+      toast.error(errorMessage);
     } finally {
       setIsProcessing(false);
     }

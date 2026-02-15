@@ -1,7 +1,7 @@
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Briefcase, Search, RotateCcw, Plus, Pencil, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -65,7 +65,7 @@ export default function OrgPositionsManagement() {
     is_active: true,
   });
 
-  const fetchPositions = async () => {
+  const fetchPositions = useCallback(async () => {
     setIsLoading(true);
     try {
       let query = supabase
@@ -97,9 +97,9 @@ export default function OrgPositionsManagement() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [currentPage, searchTerm, selectedWorkUnit]);
 
-  const fetchWorkUnits = async () => {
+  const fetchWorkUnits = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from('work_units')
@@ -112,15 +112,15 @@ export default function OrgPositionsManagement() {
     } catch (error) {
       console.error('Error fetching work units:', error);
     }
-  };
-
-  useEffect(() => {
-    fetchWorkUnits();
   }, []);
 
   useEffect(() => {
-    fetchPositions();
-  }, [searchTerm, selectedWorkUnit, currentPage]);
+    void fetchWorkUnits();
+  }, [fetchWorkUnits]);
+
+  useEffect(() => {
+    void fetchPositions();
+  }, [fetchPositions]);
 
   const totalPages = Math.ceil(totalCount / ITEMS_PER_PAGE);
 
@@ -201,9 +201,10 @@ export default function OrgPositionsManagement() {
 
       setIsDialogOpen(false);
       fetchPositions();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error saving position:', error);
-      toast({ title: "Error", description: error.message || "Gagal menyimpan jabatan", variant: "destructive" });
+      const errorMessage = error instanceof Error ? error.message : "Gagal menyimpan jabatan";
+      toast({ title: "Error", description: errorMessage, variant: "destructive" });
     } finally {
       setIsSubmitting(false);
     }
@@ -223,9 +224,10 @@ export default function OrgPositionsManagement() {
       toast({ title: "Berhasil", description: "Jabatan berhasil dihapus" });
       setIsDeleteDialogOpen(false);
       fetchPositions();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error deleting position:', error);
-      toast({ title: "Error", description: error.message || "Gagal menghapus jabatan", variant: "destructive" });
+      const errorMessage = error instanceof Error ? error.message : "Gagal menghapus jabatan";
+      toast({ title: "Error", description: errorMessage, variant: "destructive" });
     } finally {
       setIsSubmitting(false);
     }

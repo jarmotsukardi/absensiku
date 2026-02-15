@@ -20,6 +20,7 @@ import {
   MapPin,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import type { Tables } from "@/integrations/supabase/types";
 import { toast } from "sonner";
 
 interface OrgTypeSettings {
@@ -28,6 +29,7 @@ interface OrgTypeSettings {
   leave_types: { enabled: string[] };
   work_schedule: { default_start: string; default_end: string; work_days: number[] };
 }
+type OrganizationTypeSettingRow = Tables<"organization_type_settings">;
 
 const ORG_TYPES = [
   { value: "pemerintah_daerah", label: "Pemerintah Daerah", icon: Landmark, color: "text-blue-500" },
@@ -97,11 +99,12 @@ export default function OrganizationTypeSettings() {
         grouped[orgType.value] = { ...defaultSettings };
       }
 
-      (data || []).forEach((row: any) => {
+      (data as OrganizationTypeSettingRow[] | null)?.forEach((row) => {
         if (!grouped[row.organization_type]) {
           grouped[row.organization_type] = { ...defaultSettings };
         }
-        grouped[row.organization_type][row.setting_key as keyof OrgTypeSettings] = row.setting_value;
+        const settingKey = row.setting_key as keyof OrgTypeSettings;
+        grouped[row.organization_type][settingKey] = row.setting_value as OrgTypeSettings[typeof settingKey];
       });
 
       setSettings(grouped);
@@ -113,7 +116,11 @@ export default function OrganizationTypeSettings() {
     }
   };
 
-  const updateSetting = (orgType: string, key: keyof OrgTypeSettings, value: any) => {
+  const updateSetting = <K extends keyof OrgTypeSettings>(
+    orgType: string,
+    key: K,
+    value: OrgTypeSettings[K]
+  ) => {
     setSettings(prev => ({
       ...prev,
       [orgType]: {
@@ -145,9 +152,10 @@ export default function OrganizationTypeSettings() {
       }
 
       toast.success("Pengaturan berhasil disimpan");
-    } catch (error: any) {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Gagal menyimpan pengaturan";
       console.error("Error saving settings:", error);
-      toast.error(error.message || "Gagal menyimpan pengaturan");
+      toast.error(message);
     } finally {
       setIsSaving(false);
     }

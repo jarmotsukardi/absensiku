@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { OrganizationSidebar } from "./OrganizationSidebar";
 import { supabase } from "@/integrations/supabase/client";
@@ -16,14 +16,11 @@ interface TenantInfo {
 
 export function OrganizationLayout({ children }: OrganizationLayoutProps) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [isLoading, setIsLoading] = useState(true);
   const [tenant, setTenant] = useState<TenantInfo | null>(null);
 
-  useEffect(() => {
-    checkAccess();
-  }, []);
-
-  const checkAccess = async () => {
+  const checkAccess = useCallback(async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       
@@ -40,41 +37,44 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
         .eq("user_id", user.id);
 
       const isSuperAdmin = roles?.some((r) => r.role === "super_admin");
-      const adminInstansiRole = roles?.find((r) => r.role === "admin_instansi");
+      const adminInstansiRole = roles?.find((r) => r.role === "admin_instansi" && r.tenant_id);
       const isPegawai = roles?.some((r) => r.role === "pegawai");
+      const queryTenantId = searchParams.get("tenant_id");
 
-      // If super_admin, they can access org pages too
-      if (isSuperAdmin) {
-        setTenant({ name: "Super Admin", organization_type: "Super Admin" });
-        setIsLoading(false);
-        return;
-      }
-
-      if (adminInstansiRole) {
+      const resolvedTenantId = adminInstansiRole?.tenant_id || (isSuperAdmin ? queryTenantId : null);
+      if (resolvedTenantId) {
         // Fetch tenant info
         const { data: tenantData } = await supabase
           .from("tenants")
           .select("name, organization_type")
-          .eq("id", adminInstansiRole.tenant_id)
-          .single();
+          .eq("id", resolvedTenantId)
+          .maybeSingle();
 
         if (tenantData) {
           setTenant({
             name: tenantData.name,
             organization_type: getOrganizationTypeLabel(tenantData.organization_type || ""),
           });
+        } else {
+          setTenant({ name: "Organisasi", organization_type: "Admin Organisasi" });
         }
         setIsLoading(false);
+        return;
+      }
+
+      if (isSuperAdmin) {
+        toast.info("Pilih organisasi dari menu admin terlebih dahulu.");
+        navigate("/admin/organizations", { replace: true });
         return;
       }
 
       // Bukan admin - redirect ke halaman yang sesuai tanpa logout
       if (isPegawai) {
         toast.info("Anda dialihkan ke dashboard pegawai.");
-        navigate("/dashboard", { replace: true });
+        navigate("/employee/dashboard", { replace: true });
       } else {
         toast.info("Akun tidak memiliki akses admin.");
-        navigate("/dashboard", { replace: true });
+        navigate("/employee/dashboard", { replace: true });
       }
     } catch (error) {
       console.error("Error checking access:", error);
@@ -83,7 +83,11 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [navigate, searchParams]);
+
+  useEffect(() => {
+    void checkAccess();
+  }, [checkAccess]);
 
   const getOrganizationTypeLabel = (type: string) => {
     const types: Record<string, string> = {

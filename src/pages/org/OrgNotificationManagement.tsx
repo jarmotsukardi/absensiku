@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -52,38 +52,7 @@ export default function OrgNotificationManagement() {
   const [targetType, setTargetType] = useState<string>("all");
   const [selectedEmployees, setSelectedEmployees] = useState<string[]>([]);
 
-  useEffect(() => {
-    fetchTenantAndData();
-  }, []);
-
-  const fetchTenantAndData = async () => {
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      // Get tenant_id from user_roles
-      const { data: roles } = await supabase
-        .from("user_roles")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .in("role", ["admin_instansi", "super_admin"])
-        .maybeSingle();
-
-      if (roles?.tenant_id) {
-        setTenantId(roles.tenant_id);
-        await Promise.all([
-          fetchNotifications(roles.tenant_id),
-          fetchEmployees(roles.tenant_id)
-        ]);
-      }
-    } catch (error) {
-      console.error("Error:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const fetchNotifications = async (tid: string) => {
+  const fetchNotifications = useCallback(async (tid: string) => {
     // Get all employee user_ids for this tenant
     const { data: empData } = await supabase
       .from("employees")
@@ -109,9 +78,9 @@ export default function OrgNotificationManagement() {
       }));
       setNotifications(enriched);
     }
-  };
+  }, []);
 
-  const fetchEmployees = async (tid: string) => {
+  const fetchEmployees = useCallback(async (tid: string) => {
     const { data } = await supabase
       .from("employees")
       .select("id, user_id, name, position")
@@ -122,7 +91,38 @@ export default function OrgNotificationManagement() {
     if (data) {
       setEmployees(data as Employee[]);
     }
-  };
+  }, []);
+
+  const fetchTenantAndData = useCallback(async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      // Get tenant_id from user_roles
+      const { data: roles } = await supabase
+        .from("user_roles")
+        .select("tenant_id")
+        .eq("user_id", user.id)
+        .in("role", ["admin_instansi", "super_admin"])
+        .maybeSingle();
+
+      if (roles?.tenant_id) {
+        setTenantId(roles.tenant_id);
+        await Promise.all([
+          fetchNotifications(roles.tenant_id),
+          fetchEmployees(roles.tenant_id),
+        ]);
+      }
+    } catch (error) {
+      console.error("Error:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [fetchEmployees, fetchNotifications]);
+
+  useEffect(() => {
+    void fetchTenantAndData();
+  }, [fetchTenantAndData]);
 
   const sendNotification = async () => {
     if (!title || !message) {

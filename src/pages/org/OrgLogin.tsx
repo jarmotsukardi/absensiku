@@ -206,7 +206,7 @@ export default function OrgLogin() {
             title: "Dialihkan",
             description: "Anda dialihkan ke dashboard pegawai.",
           });
-          navigate("/dashboard", { replace: true });
+          navigate("/employee/dashboard", { replace: true });
           return;
         } else {
           // User tanpa role - mungkin baru daftar, redirect ke dashboard
@@ -214,7 +214,7 @@ export default function OrgLogin() {
             title: "Dialihkan",
             description: "Akun belum memiliki role, silakan hubungi admin.",
           });
-          navigate("/dashboard", { replace: true });
+          navigate("/employee/dashboard", { replace: true });
           return;
         }
       }

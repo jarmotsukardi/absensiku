@@ -1,94 +1,103 @@
- import { useState, useEffect } from "react";
- import { useOvertimeSettings } from "@/hooks/useOvertimeRequests";
- import { supabase } from "@/integrations/supabase/client";
- import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
- import { Button } from "@/components/ui/button";
- import { Input } from "@/components/ui/input";
- import { Label } from "@/components/ui/label";
- import { Switch } from "@/components/ui/switch";
- import { Textarea } from "@/components/ui/textarea";
- import { Loader2, Save, Timer, Clock, Calendar, Percent } from "lucide-react";
- import DashboardLayout from "@/components/dashboard/DashboardLayout";
+import { useState, useEffect } from "react";
+import { useOvertimeSettings } from "@/hooks/useOvertimeRequests";
+import { supabase } from "@/integrations/supabase/client";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { Loader2, Save, Timer, Clock, Calendar, Percent } from "lucide-react";
+import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
  
- export default function OrgOvertimeSettings() {
-   const [tenantId, setTenantId] = useState<string | undefined>(undefined);
-   
-   useEffect(() => {
-     const fetchTenantId = async () => {
-       const { data: { user } } = await supabase.auth.getUser();
-       if (!user) return;
-       
-       const { data } = await supabase
-         .from("employees")
-         .select("tenant_id")
-         .eq("user_id", user.id)
-         .single();
-       
-       if (data) setTenantId(data.tenant_id);
-     };
-     fetchTenantId();
-   }, []);
-   
-   const { settings, isLoading, saveSettings } = useOvertimeSettings(tenantId);
- 
-   const [isSaving, setIsSaving] = useState(false);
-   
-   const [formData, setFormData] = useState({
-     is_enabled: true,
-     min_hours: 1,
-     max_hours_per_day: 4,
-     max_hours_per_month: 40,
-     requires_approval: true,
-     rate_multiplier: 1.5,
-     weekend_rate_multiplier: 2.0,
-     holiday_rate_multiplier: 2.5,
-     allow_multi_date_request: true,
-     max_dates_per_request: 10,
-     auto_reject_after_days: 3,
-     notes: "",
-   });
- 
-   useEffect(() => {
-     if (settings) {
-       setFormData({
-         is_enabled: settings.is_enabled,
-         min_hours: settings.min_hours,
-         max_hours_per_day: settings.max_hours_per_day,
-         max_hours_per_month: settings.max_hours_per_month,
-         requires_approval: settings.requires_approval,
-         rate_multiplier: settings.rate_multiplier,
-         weekend_rate_multiplier: settings.weekend_rate_multiplier,
-         holiday_rate_multiplier: settings.holiday_rate_multiplier,
-         allow_multi_date_request: settings.allow_multi_date_request,
-         max_dates_per_request: settings.max_dates_per_request,
-         auto_reject_after_days: settings.auto_reject_after_days,
-         notes: settings.notes || "",
-       });
-     }
-   }, [settings]);
- 
-   const handleSave = async () => {
-     setIsSaving(true);
-     await saveSettings(formData);
-     setIsSaving(false);
-   };
- 
-   if (isLoading) {
-     return (
-       <DashboardLayout title="Pengaturan Lembur" subtitle="Konfigurasi aturan lembur">
-         <div className="flex items-center justify-center h-32">
-           <Loader2 className="h-6 w-6 animate-spin" />
-         </div>
-       </DashboardLayout>
-     );
-   }
- 
-   return (
-     <DashboardLayout 
-       title="Pengaturan Lembur"
-       subtitle="Konfigurasi aturan dan kebijakan lembur"
-     >
-       <div className="space-y-6 max-w-3xl">
+export default function OrgOvertimeSettings() {
+  const [tenantId, setTenantId] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    const fetchTenantId = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data } = await supabase
+        .from("employees")
+        .select("tenant_id")
+        .eq("user_id", user.id)
+        .single();
+
+      if (data) setTenantId(data.tenant_id);
+    };
+    void fetchTenantId();
+  }, []);
+
+  const { settings, isLoading, saveSettings } = useOvertimeSettings(tenantId);
+
+  const [isSaving, setIsSaving] = useState(false);
+
+  const [formData, setFormData] = useState({
+    is_enabled: true,
+    min_hours: 1,
+    max_hours_per_day: 4,
+    max_hours_per_month: 40,
+    requires_approval: true,
+    rate_multiplier: 1.5,
+    weekend_rate_multiplier: 2.0,
+    holiday_rate_multiplier: 2.5,
+    allow_multi_date_request: true,
+    max_dates_per_request: 10,
+    auto_reject_after_days: 3,
+    notes: "",
+  });
+
+  useEffect(() => {
+    if (settings) {
+      setFormData({
+        is_enabled: settings.is_enabled,
+        min_hours: settings.min_hours,
+        max_hours_per_day: settings.max_hours_per_day,
+        max_hours_per_month: settings.max_hours_per_month,
+        requires_approval: settings.requires_approval,
+        rate_multiplier: settings.rate_multiplier,
+        weekend_rate_multiplier: settings.weekend_rate_multiplier,
+        holiday_rate_multiplier: settings.holiday_rate_multiplier,
+        allow_multi_date_request: settings.allow_multi_date_request,
+        max_dates_per_request: settings.max_dates_per_request,
+        auto_reject_after_days: settings.auto_reject_after_days,
+        notes: settings.notes || "",
+      });
+    }
+  }, [settings]);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    await saveSettings(formData);
+    setIsSaving(false);
+  };
+
+  if (isLoading) {
+    return (
+      <OrganizationLayout>
+        <div className="space-y-4">
+          <div>
+            <h1 className="text-2xl font-bold text-foreground">Pengaturan Lembur</h1>
+            <p className="text-sm text-muted-foreground">Konfigurasi aturan lembur organisasi</p>
+          </div>
+          <div className="flex items-center justify-center h-32">
+            <Loader2 className="h-6 w-6 animate-spin" />
+          </div>
+        </div>
+      </OrganizationLayout>
+    );
+  }
+
+  return (
+    <OrganizationLayout>
+      <div className="space-y-6 max-w-3xl">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Pengaturan Lembur</h1>
+          <p className="text-sm text-muted-foreground">Konfigurasi aturan dan kebijakan lembur</p>
+        </div>
          {/* Enable/Disable */}
          <Card>
            <CardHeader className="pb-3">
@@ -285,7 +294,7 @@
              Simpan Pengaturan
            </Button>
          </div>
-       </div>
-     </DashboardLayout>
-   );
- }
+      </div>
+    </OrganizationLayout>
+  );
+}

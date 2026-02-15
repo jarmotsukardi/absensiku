@@ -11,6 +11,11 @@ interface JoinOrganizationRequest {
   invitation_code: string;
 }
 
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return "Terjadi kesalahan internal";
+};
+
 serve(async (req: Request): Promise<Response> => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -188,10 +193,10 @@ serve(async (req: Request): Promise<Response> => {
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     logTraceError(traceId, "Error in join-organization", error);
     return new Response(
-      JSON.stringify(withTrace({ error: error.message || "Terjadi kesalahan internal" }, traceId)),
+      JSON.stringify(withTrace({ error: getErrorMessage(error) }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

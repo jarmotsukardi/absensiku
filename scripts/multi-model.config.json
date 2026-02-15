@@ -1,0 +1,28 @@
+{
+  "orchestrator": {
+    "planner_model": "gpt-5.3-codex",
+    "default_model": "gpt-5.2-codex",
+    "fallback_models": [
+      "gpt-5.1-codex-max",
+      "gpt-5.2",
+      "gpt-5.1-code-mini"
+    ],
+    "max_parallel": 4
+  },
+  "routing": {
+    "architecture": "gpt-5.3-codex",
+    "implementation": "gpt-5.2-codex",
+    "review": "gpt-5.1-codex-max",
+    "boilerplate": "gpt-5.1-code-mini",
+    "qa": "gpt-5.2",
+    "default": "gpt-5.2-codex"
+  },
+  "model_aliases": {
+    "gpt 5.3 codex": "gpt-5.3-codex",
+    "gpt 5.2 codex": "gpt-5.2-codex",
+    "gpt 5.1 codex max": "gpt-5.1-codex-max",
+    "gpt 5.2": "gpt-5.2",
+    "gpt 5.1 code mini": "gpt-5.1-code-mini"
+  }
+}
+

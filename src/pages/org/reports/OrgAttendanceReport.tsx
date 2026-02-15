@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,6 +17,18 @@ import type { Tables } from "@/integrations/supabase/types";
 import { calculateKeterangan, type AttendanceKeterangan } from "@/hooks/useWorkHours";
 
 type OPD = Tables<"opd">;
+type AttendanceRecord = Tables<"attendance_records_partitioned">;
+type AttendanceEmployee = {
+  id: string;
+  name: string;
+  nip: string | null;
+  opd: Pick<Tables<"opd">, "id" | "code" | "name"> | null;
+};
+type AttendanceOffice = Pick<Tables<"offices">, "id" | "name">;
+type AttendanceReportRecord = AttendanceRecord & {
+  employees: AttendanceEmployee | null;
+  offices: AttendanceOffice | null;
+};
 
 interface WorkHoursInfo {
   time_in: string;
@@ -62,7 +74,7 @@ const STATUS_OPTIONS = ["Hadir", "Izin", "Cuti", "Sakit", "Tugas Luar", "Tidak H
 const KETERANGAN_OPTIONS = ["Hadir", "Telat", "Pulang Cepat", "Telat + Pulang Cepat", "Tidak Absen Pulang"];
 
 export default function OrgAttendanceReport() {
-  const [records, setRecords] = useState<any[]>([]);
+  const [records, setRecords] = useState<AttendanceReportRecord[]>([]);
   const [opds, setOpds] = useState<OPD[]>([]);
   const [workHours, setWorkHours] = useState<WorkHoursInfo[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -78,11 +90,21 @@ export default function OrgAttendanceReport() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
 
-  useEffect(() => {
-    fetchInitialData();
+  const fetchOpds = useCallback(async () => {
+    const { data } = await supabase.from("opd").select("*").order("name");
+    setOpds(data || []);
   }, []);
 
-  const fetchInitialData = async () => {
+  const fetchWorkHours = useCallback(async (tid: string) => {
+    const { data } = await supabase
+      .from("work_hours")
+      .select("time_in, time_out, day_of_week, institution_type")
+      .eq("tenant_id", tid)
+      .eq("is_active", true);
+    setWorkHours(data || []);
+  }, []);
+
+  const fetchInitialData = useCallback(async () => {
     // Dapatkan tenant_id dari user
     const { data: { user } } = await supabase.auth.getUser();
     if (user) {
@@ -98,31 +120,21 @@ export default function OrgAttendanceReport() {
       }
     }
     fetchOpds();
-  };
+  }, [fetchOpds, fetchWorkHours]);
 
-  const fetchOpds = async () => {
-    const { data } = await supabase.from("opd").select("*").order("name");
-    setOpds(data || []);
-  };
-
-  const fetchWorkHours = async (tid: string) => {
-    const { data } = await supabase
-      .from("work_hours")
-      .select("time_in, time_out, day_of_week, institution_type")
-      .eq("tenant_id", tid)
-      .eq("is_active", true);
-    setWorkHours(data || []);
-  };
+  useEffect(() => {
+    void fetchInitialData();
+  }, [fetchInitialData]);
 
   // Helper untuk mendapatkan jam kerja berdasarkan hari dan jenis instansi
-  const getWorkHoursForRecord = (record: any): WorkHoursInfo | null => {
+  const getWorkHoursForRecord = (record: AttendanceReportRecord): WorkHoursInfo | null => {
     const dayOfWeek = getDayOfWeek(record.date);
     // Default ke pemerintahan, bisa di-extend untuk jenis lain
     return workHours.find(wh => wh.day_of_week === dayOfWeek && wh.institution_type === "pemerintahan") || null;
   };
 
   // Menghitung status dan keterangan untuk record
-  const getRecordKeterangan = (record: any): AttendanceKeterangan => {
+  const getRecordKeterangan = (record: AttendanceReportRecord): AttendanceKeterangan => {
     const wh = getWorkHoursForRecord(record);
     return calculateKeterangan(record, wh);
   };
@@ -156,27 +168,44 @@ export default function OrgAttendanceReport() {
       if (employeesResult.error) throw employeesResult.error;
       if (officesResult.error) throw officesResult.error;
 
+      const attendanceRows = (attendanceResult.data || []) as AttendanceRecord[];
+      const employeeRows = (employeesResult.data || []) as Array<{
+        id: string;
+        name: string;
+        nip: string | null;
+        opd: Pick<Tables<"opd">, "id" | "code" | "name">
+          | Array<Pick<Tables<"opd">, "id" | "code" | "name">>
+          | null;
+      }>;
+      const officeRows = (officesResult.data || []) as AttendanceOffice[];
+
       // Build lookup maps
-      const employeeMap = new Map<string, any>();
-      (employeesResult.data || []).forEach((emp: any) => {
-        employeeMap.set(emp.id, emp);
+      const employeeMap = new Map<string, AttendanceEmployee>();
+      employeeRows.forEach((emp) => {
+        const opd = Array.isArray(emp.opd) ? (emp.opd[0] || null) : emp.opd;
+        employeeMap.set(emp.id, {
+          id: emp.id,
+          name: emp.name,
+          nip: emp.nip,
+          opd,
+        });
       });
 
-      const officeMap = new Map<string, any>();
-      (officesResult.data || []).forEach((office: any) => {
+      const officeMap = new Map<string, AttendanceOffice>();
+      officeRows.forEach((office) => {
         officeMap.set(office.id, office);
       });
 
       // Join data di client
-      const data = (attendanceResult.data || []).map((att: any) => ({
+      const data: AttendanceReportRecord[] = attendanceRows.map((att) => ({
         ...att,
-        employees: employeeMap.get(att.employee_id),
-        offices: officeMap.get(att.office_id),
+        employees: employeeMap.get(att.employee_id) || null,
+        offices: officeMap.get(att.office_id) || null,
       }));
 
       let filtered = data;
       if (filterOpd !== "all") {
-        filtered = filtered.filter((r: any) => r.employees?.opd?.id === filterOpd);
+        filtered = filtered.filter((r) => r.employees?.opd?.id === filterOpd);
       }
       setRecords(filtered);
     } catch (error) {

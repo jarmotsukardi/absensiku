@@ -84,9 +84,10 @@ export function WhatsAppGatewaySettings() {
       }
 
       toast.success(`Pesan tes berhasil dikirim ke ${testPhone}!`);
-    } catch (error: any) {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Gagal mengirim pesan tes";
       console.error("Test WhatsApp error:", error);
-      toast.error(error.message || "Gagal mengirim pesan tes");
+      toast.error(message);
     } finally {
       setIsTesting(false);
     }

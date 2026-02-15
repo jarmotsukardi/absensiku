@@ -55,6 +55,8 @@ export default function OPDAdminsManagement() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const getErrorMessage = (error: unknown) =>
+    error instanceof Error ? error.message : "Terjadi kesalahan";
   
   const [formData, setFormData] = useState({
     id: "",
@@ -129,7 +131,7 @@ export default function OPDAdminsManagement() {
 
       if (employeesError) throw employeesError;
       setEmployees(employeesData || []);
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error fetching data:", error);
       toast.error("Gagal memuat data");
     } finally {
@@ -192,9 +194,9 @@ export default function OPDAdminsManagement() {
 
       resetForm();
       fetchData();
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error saving admin:", error);
-      toast.error("Gagal menyimpan: " + error.message);
+      toast.error("Gagal menyimpan: " + getErrorMessage(error));
     }
   };
 
@@ -221,9 +223,9 @@ export default function OPDAdminsManagement() {
       if (error) throw error;
       toast.success("Admin OPD berhasil dihapus");
       fetchData();
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error deleting admin:", error);
-      toast.error("Gagal menghapus: " + error.message);
+      toast.error("Gagal menghapus: " + getErrorMessage(error));
     }
   };
 

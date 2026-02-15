@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,11 +24,7 @@ export default function OrgProfileSetup() {
     npwp: "",
   });
 
-  useEffect(() => {
-    checkAndLoadProfile();
-  }, []);
-
-  const checkAndLoadProfile = async () => {
+  const checkAndLoadProfile = useCallback(async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
@@ -78,7 +74,11 @@ export default function OrgProfileSetup() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [navigate]);
+
+  useEffect(() => {
+    void checkAndLoadProfile();
+  }, [checkAndLoadProfile]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -114,9 +114,10 @@ export default function OrgProfileSetup() {
 
       toast.success("Profil organisasi berhasil disimpan!");
       navigate("/org");
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error saving profile:", error);
-      toast.error(error.message || "Gagal menyimpan profil");
+      const errorMessage = error instanceof Error ? error.message : "Gagal menyimpan profil";
+      toast.error(errorMessage);
     } finally {
       setIsSaving(false);
     }

@@ -29,6 +29,7 @@ import {
   CalendarClock,
 } from "lucide-react";
 import { addDays, format } from "date-fns";
+import type { TablesInsert } from "@/integrations/supabase/types";
 
 interface Invitation {
   id: string;
@@ -57,6 +58,8 @@ interface Office {
   name: string;
 }
 
+type InvitationType = "individual" | "opd" | "office";
+
 const ITEMS_PER_PAGE = 15;
 
 export default function OrgEmployeeInvitations() {
@@ -67,7 +70,7 @@ export default function OrgEmployeeInvitations() {
   const [filterOpdId, setFilterOpdId] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [invitationType, setInvitationType] = useState<"individual" | "opd" | "office">("individual");
+  const [invitationType, setInvitationType] = useState<InvitationType>("individual");
   const [expiryDays, setExpiryDays] = useState("7");
   const [formData, setFormData] = useState({
     name: "",
@@ -175,7 +178,7 @@ export default function OrgEmployeeInvitations() {
       const code = generateInvitationCode();
       const expiresAt = addDays(new Date(), parseInt(expiryDays));
 
-      const insertData: any = {
+      const insertData: TablesInsert<"employee_invitations"> = {
         tenant_id: tenantId,
         invitation_code: code,
         invitation_type: invitationType,
@@ -206,9 +209,10 @@ export default function OrgEmployeeInvitations() {
       setGeneratedCode(code);
       toast.success("Undangan berhasil dibuat!");
       fetchTenantAndData();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error creating invitation:", error);
-      toast.error(error.message || "Gagal membuat undangan");
+      const errorMessage = error instanceof Error ? error.message : "Gagal membuat undangan";
+      toast.error(errorMessage);
     }
   };
 
@@ -273,7 +277,7 @@ export default function OrgEmployeeInvitations() {
                           inv.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
                           inv.invitation_code.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === "all" || inv.status === filterStatus;
-    const matchesOpd = filterOpdId === "all" || (inv.opd as any)?.id === filterOpdId || (!inv.opd && filterOpdId === "none");
+    const matchesOpd = filterOpdId === "all" || inv.opd?.id === filterOpdId || (!inv.opd && filterOpdId === "none");
     return matchesSearch && matchesStatus && matchesOpd;
   });
 
@@ -345,7 +349,7 @@ export default function OrgEmployeeInvitations() {
                   {/* Invitation Type */}
                   <div className="space-y-2">
                     <Label>Jenis Undangan</Label>
-                    <Tabs value={invitationType} onValueChange={(v) => setInvitationType(v as any)}>
+                    <Tabs value={invitationType} onValueChange={(value) => setInvitationType(value as InvitationType)}>
                       <TabsList className="grid w-full grid-cols-3">
                         <TabsTrigger value="individual" className="flex items-center gap-1">
                           <User className="h-3 w-3" />

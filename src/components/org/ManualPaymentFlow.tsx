@@ -44,15 +44,22 @@ import {
 import { toast } from "sonner";
 import { format, addMonths } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
+import type { Json, Tables } from "@/integrations/supabase/types";
 
-interface SubscriptionPackage {
-  id: string;
-  name: string;
-  duration_months: number;
-  base_price_per_month: number;
-  discount_percentage: number;
-  features: any;
+type SubscriptionPackage = Tables<"subscription_packages">;
+
+interface BillingSettingsValue {
+  bank_name?: string;
+  bank_account?: string;
+  bank_account_name?: string;
 }
+
+const toJsonObject = (value: Json | null | undefined): Record<string, Json> | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, Json>;
+};
 
 interface ManualPaymentFlowProps {
   tenantId: string;
@@ -184,8 +191,9 @@ export function ManualPaymentFlow({
       
       // Now proceed with payment
       setShowConfirmDialog(true);
-    } catch (error: any) {
-      toast.error("Gagal menonaktifkan pegawai: " + error.message);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      toast.error("Gagal menonaktifkan pegawai: " + errorMessage);
     } finally {
       setIsDeactivating(false);
     }
@@ -278,11 +286,14 @@ export function ManualPaymentFlow({
         .eq("key", "billing_settings")
         .maybeSingle();
 
-      const bankInfo = billingSettings?.value
+      const billingValue = toJsonObject(billingSettings?.value);
+      const settings = billingValue as BillingSettingsValue | null;
+
+      const bankInfo = settings
         ? {
-            bank: (billingSettings.value as any).bank_name || "BCA",
-            account: (billingSettings.value as any).bank_account || "1234567890",
-            name: (billingSettings.value as any).bank_account_name || "PT AbsensiKu Indonesia",
+            bank: settings.bank_name || "BCA",
+            account: settings.bank_account || "1234567890",
+            name: settings.bank_account_name || "PT AbsensiKu Indonesia",
           }
         : {
             bank: "BCA",
@@ -299,9 +310,10 @@ export function ManualPaymentFlow({
       });
 
       toast.success("Langganan berhasil diaktifkan! Silakan transfer sesuai nominal.");
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error creating payment:", error);
-      toast.error("Gagal membuat pembayaran: " + error.message);
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      toast.error("Gagal membuat pembayaran: " + errorMessage);
     } finally {
       setIsSubmitting(false);
       setShowConfirmDialog(false);

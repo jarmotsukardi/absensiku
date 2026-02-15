@@ -19,6 +19,21 @@ interface EmailRequest {
   useTLS: boolean;
 }
 
+interface SMTPConnectionConfig {
+  hostname: string;
+  port: number;
+  auth: {
+    username: string;
+    password: string;
+  };
+  tls?: boolean;
+}
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return "Gagal mengirim email";
+};
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -76,7 +91,7 @@ serve(async (req) => {
     // Konfigurasi berbeda untuk port 465 (SSL) dan 587 (STARTTLS)
     // Port 465 = implicit TLS (langsung SSL)
     // Port 587 = STARTTLS (mulai plain lalu upgrade ke TLS)
-    const connectionConfig: any = {
+    const connectionConfig: SMTPConnectionConfig = {
       hostname: smtpHost,
       port: port,
       auth: {
@@ -131,10 +146,10 @@ serve(async (req) => {
       JSON.stringify({ success: true, message: "Email berhasil dikirim" }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     logTraceError(traceId, "Error sending email", error);
     
-    let errorMessage = error.message || "Gagal mengirim email";
+    let errorMessage = getErrorMessage(error);
     
     // Berikan pesan error yang lebih jelas
     if (errorMessage.includes("NaN") || errorMessage.includes("connection")) {
@@ -146,7 +161,7 @@ serve(async (req) => {
     return new Response(
       JSON.stringify(withTrace({ 
         error: errorMessage,
-        details: error.toString()
+        details: String(error)
       }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { supabase } from "@/integrations/supabase/client";
+import type { Json } from "@/integrations/supabase/types";
 import { formatToTimezone } from "@/lib/timezone";
 import { History, Search, Filter, Plus, Pencil, Trash2, User, Calendar, Loader2, RefreshCw } from "lucide-react";
 
@@ -15,13 +16,20 @@ interface AuditLog {
   action: string;
   table_name: string;
   record_id: string | null;
-  old_values: any;
-  new_values: any;
+  old_values: Json | null;
+  new_values: Json | null;
   created_at: string;
   employee: {
     name: string;
   } | null;
 }
+
+const toJsonObject = (value: Json | null): Record<string, Json> | null => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, Json>;
+};
 
 const actionLabels: Record<string, { label: string; color: string; icon: React.ElementType }> = {
   INSERT: { label: "Tambah", color: "bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400", icon: Plus },
@@ -56,11 +64,7 @@ export default function OrgAuditLog() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
 
-  useEffect(() => {
-    fetchLogs();
-  }, [currentPage]);
-
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     setIsLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -110,7 +114,11 @@ export default function OrgAuditLog() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [currentPage]);
+
+  useEffect(() => {
+    void fetchLogs();
+  }, [fetchLogs]);
 
   const filteredLogs = logs.filter((log) => {
     const matchesSearch = 
@@ -131,14 +139,19 @@ export default function OrgAuditLog() {
       return "Data dihapus";
     }
     if (log.action === "INSERT") {
-      if (log.new_values?.name) return `Menambah: ${log.new_values.name}`;
-      if (log.new_values?.email) return `Menambah: ${log.new_values.email}`;
+      const newValues = toJsonObject(log.new_values);
+      const name = newValues?.name;
+      const email = newValues?.email;
+      if (typeof name === "string") return `Menambah: ${name}`;
+      if (typeof email === "string") return `Menambah: ${email}`;
       return "Data baru ditambahkan";
     }
-    if (log.action === "UPDATE" && log.old_values && log.new_values) {
+    const oldValues = toJsonObject(log.old_values);
+    const newValues = toJsonObject(log.new_values);
+    if (log.action === "UPDATE" && oldValues && newValues) {
       const changedFields: string[] = [];
-      for (const key of Object.keys(log.new_values)) {
-        if (log.old_values[key] !== log.new_values[key] && !['updated_at', 'created_at'].includes(key)) {
+      for (const key of Object.keys(newValues)) {
+        if (oldValues[key] !== newValues[key] && !["updated_at", "created_at"].includes(key)) {
           changedFields.push(key);
         }
       }
@@ -160,7 +173,7 @@ export default function OrgAuditLog() {
             </h1>
             <p className="text-muted-foreground">Riwayat perubahan data di organisasi Anda</p>
           </div>
-          <Button variant="outline" size="sm" onClick={fetchLogs} disabled={isLoading}>
+          <Button variant="outline" size="sm" onClick={() => void fetchLogs()} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
             Refresh
           </Button>

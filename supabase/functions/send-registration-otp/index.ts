@@ -12,6 +12,21 @@ interface SendRegistrationOTPRequest {
   email: string;
 }
 
+interface SMTPConnectionConfig {
+  hostname: string;
+  port: number;
+  auth: {
+    username: string;
+    password: string;
+  };
+  tls?: boolean;
+}
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return "Terjadi kesalahan internal";
+};
+
 // Generate 6-digit OTP
 const generateOTP = (): string => {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -38,24 +53,40 @@ const sendEmailViaSMTP = async (
   to: string,
   subject: string,
   htmlContent: string,
-  settings: any
+  settings: Record<string, unknown>
 ): Promise<boolean> => {
   try {
     const { SMTPClient } = await import("https://deno.land/x/denomailer@1.6.0/mod.ts");
     
-    const smtpHost = settings.smtpHost || settings.smtp_host;
-    const smtpPort = parseInt(settings.smtpPort || settings.smtp_port) || 465;
-    const smtpUser = settings.smtpUser || settings.smtp_user;
-    const smtpPassword = settings.smtpPassword || settings.smtp_password;
-    const senderEmail = settings.senderEmail || settings.sender_email || smtpUser;
-    const senderName = settings.senderName || settings.sender_name || "AbsensiKu";
+    const smtpHost =
+      (typeof settings["smtpHost"] === "string" ? settings["smtpHost"] : undefined) ||
+      (typeof settings["smtp_host"] === "string" ? settings["smtp_host"] : undefined) ||
+      "";
+    const smtpPortRaw = settings["smtpPort"] ?? settings["smtp_port"];
+    const smtpPort = parseInt(String(smtpPortRaw ?? "")) || 465;
+    const smtpUser =
+      (typeof settings["smtpUser"] === "string" ? settings["smtpUser"] : undefined) ||
+      (typeof settings["smtp_user"] === "string" ? settings["smtp_user"] : undefined) ||
+      "";
+    const smtpPassword =
+      (typeof settings["smtpPassword"] === "string" ? settings["smtpPassword"] : undefined) ||
+      (typeof settings["smtp_password"] === "string" ? settings["smtp_password"] : undefined) ||
+      "";
+    const senderEmail =
+      (typeof settings["senderEmail"] === "string" ? settings["senderEmail"] : undefined) ||
+      (typeof settings["sender_email"] === "string" ? settings["sender_email"] : undefined) ||
+      smtpUser;
+    const senderName =
+      (typeof settings["senderName"] === "string" ? settings["senderName"] : undefined) ||
+      (typeof settings["sender_name"] === "string" ? settings["sender_name"] : undefined) ||
+      "AbsensiKu";
     
     if (!smtpHost || !smtpUser || !smtpPassword) {
       console.log("SMTP configuration incomplete");
       return false;
     }
     
-    const connectionConfig: any = {
+    const connectionConfig: SMTPConnectionConfig = {
       hostname: smtpHost,
       port: smtpPort,
       auth: {
@@ -70,7 +101,7 @@ const sendEmailViaSMTP = async (
     } else if (smtpPort === 587) {
       connectionConfig.tls = false;
     } else {
-      connectionConfig.tls = settings.useTLS ?? true;
+      connectionConfig.tls = typeof settings["useTLS"] === "boolean" ? settings["useTLS"] : true;
     }
 
     console.log("Sending OTP email via SMTP to:", to);
@@ -179,7 +210,7 @@ serve(async (req: Request): Promise<Response> => {
       .eq("key", "email_gateway")
       .maybeSingle();
 
-    const settings = emailSettings?.value as any;
+    const settings = (emailSettings?.value as Record<string, unknown> | null) ?? null;
 
     // Build email HTML
     const emailHtml = `
@@ -206,16 +237,21 @@ serve(async (req: Request): Promise<Response> => {
     let emailSent = false;
     
     // Try Resend first if available
-    if (settings?.resend_api_key) {
+    const resendApiKey = typeof settings?.["resend_api_key"] === "string" ? settings["resend_api_key"] : "";
+    const resendFromEmail = typeof settings?.["resend_from_email"] === "string"
+      ? settings["resend_from_email"]
+      : "AbsensiKu <noreply@absensiku.com>";
+
+    if (resendApiKey) {
       try {
         const resendRes = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: {
-            "Authorization": `Bearer ${settings.resend_api_key}`,
+            "Authorization": `Bearer ${resendApiKey}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            from: settings.resend_from_email || "AbsensiKu <noreply@absensiku.com>",
+            from: resendFromEmail,
             to: normalizedEmail,
             subject: "Kode OTP Registrasi - AbsensiKu",
             html: emailHtml,
@@ -266,10 +302,10 @@ serve(async (req: Request): Promise<Response> => {
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     logTraceError(traceId, "Error in send-registration-otp", error);
     return new Response(
-      JSON.stringify(withTrace({ error: error.message || "Terjadi kesalahan internal" }, traceId)),
+      JSON.stringify(withTrace({ error: getErrorMessage(error) }, traceId)),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }

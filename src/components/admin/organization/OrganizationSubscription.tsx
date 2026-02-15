@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -59,11 +59,7 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
     duration: "1_month",
   });
 
-  useEffect(() => {
-    fetchSubscription();
-  }, [tenantId]);
-
-  const fetchSubscription = async () => {
+  const fetchSubscription = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from("subscriptions")
@@ -86,7 +82,11 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [tenantId]);
+
+  useEffect(() => {
+    fetchSubscription();
+  }, [fetchSubscription]);
 
   const handleSave = async () => {
     setIsSaving(true);

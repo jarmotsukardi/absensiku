@@ -16,6 +16,11 @@ interface CreateInvoiceRequest {
   description?: string;
 }
 
+interface BillingSettingRow {
+  setting_key: string;
+  setting_value: { value?: number; amount?: number } | null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -102,8 +107,9 @@ serve(async (req) => {
       .from("billing_settings")
       .select("setting_key, setting_value");
 
+    const settingsRows = (billingSettings ?? []) as BillingSettingRow[];
     const getSettingValue = (key: string, defaultValue: number) => {
-      const setting = billingSettings?.find((s: any) => s.setting_key === key);
+      const setting = settingsRows.find((s) => s.setting_key === key);
       return setting?.setting_value?.value ?? setting?.setting_value?.amount ?? defaultValue;
     };
 

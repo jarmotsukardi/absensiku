@@ -97,7 +97,12 @@ serve(async (req) => {
 
     // Map Xendit status to our status
     let newStatus = invoice.status;
-    const updates: any = { updated_at: new Date().toISOString() };
+    const updates: {
+      updated_at: string;
+      status?: string;
+      paid_at?: string;
+      payment_method_type?: string;
+    } = { updated_at: new Date().toISOString() };
 
     if (status === "PAID" || status === "SETTLED") {
       newStatus = "PAID";

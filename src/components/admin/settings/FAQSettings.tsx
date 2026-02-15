@@ -42,12 +42,17 @@ export function FAQSettings() {
     try {
       const { data } = await supabase.from("system_settings").select("value").eq("key", "faq_settings").maybeSingle();
       if (data?.value) {
-        const val = data.value as any;
-        if (Array.isArray(val)) {
-          setFaqs(val.sort((a: FAQ, b: FAQ) => a.sort_order - b.sort_order));
-        } else if (val.items && Array.isArray(val.items)) {
-          setFaqs(val.items.sort((a: FAQ, b: FAQ) => a.sort_order - b.sort_order));
-          setBannerImageUrl(val.banner_image_url || "");
+        const value = data.value;
+        if (Array.isArray(value)) {
+          setFaqs((value as FAQ[]).sort((a, b) => a.sort_order - b.sort_order));
+        } else if (typeof value === "object" && value !== null) {
+          const settingsValue = value as { items?: FAQ[]; banner_image_url?: string };
+          if (Array.isArray(settingsValue.items)) {
+            setFaqs(settingsValue.items.sort((a, b) => a.sort_order - b.sort_order));
+          }
+          if (typeof settingsValue.banner_image_url === "string") {
+            setBannerImageUrl(settingsValue.banner_image_url);
+          }
         }
       }
     } catch (error) {

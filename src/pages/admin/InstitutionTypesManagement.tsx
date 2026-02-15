@@ -108,7 +108,12 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
       setIsDialogOpen(false);
       resetForm();
       fetchTypes();
-    } catch (err: any) { toast.error(err.message); } finally { setIsSaving(false); }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Gagal menyimpan";
+      toast.error(message);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleEdit = (type: InstitutionType) => {
@@ -132,7 +137,10 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
       if (error) throw error;
       toast.success("Berhasil dihapus");
       fetchTypes();
-    } catch (err: any) { toast.error(err.message); }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Gagal menghapus";
+      toast.error(message);
+    }
   };
 
   const resetForm = () => {

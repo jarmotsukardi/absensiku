@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,25 +11,34 @@ import { Search, ClipboardList, Check, X, AlertTriangle, Clock } from "lucide-re
 import { toast } from "sonner";
 import { format, differenceInDays, isBefore, startOfDay } from "date-fns";
 import { id } from "date-fns/locale";
+import type { Enums, Tables } from "@/integrations/supabase/types";
+
+type RequestStatus = Enums<"request_status">;
+type LeaveRequest = Tables<"leave_requests"> & {
+  employees: {
+    name: string;
+    nip: string | null;
+    opd: { code: string } | null;
+  } | null;
+};
 
 export default function OrgLeaveRequests() {
-  const [requests, setRequests] = useState<any[]>([]);
-  const [expiredRequests, setExpiredRequests] = useState<any[]>([]);
+  const [requests, setRequests] = useState<LeaveRequest[]>([]);
+  const [expiredRequests, setExpiredRequests] = useState<LeaveRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("menunggu");
 
-  useEffect(() => {
-    fetchData();
-  }, [statusFilter]);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       // Auto-expire: mark pending requests past start_date as expired
       const today = format(new Date(), "yyyy-MM-dd");
       await supabase
         .from("leave_requests")
-        .update({ status: "ditolak" as any, rejection_reason: "Otomatis kedaluwarsa (melewati tanggal mulai)" })
+        .update({
+          status: "ditolak" as RequestStatus,
+          rejection_reason: "Otomatis kedaluwarsa (melewati tanggal mulai)",
+        })
         .eq("status", "menunggu")
         .lt("start_date", today);
 
@@ -39,7 +48,7 @@ export default function OrgLeaveRequests() {
         .order("created_at", { ascending: false });
 
       if (statusFilter !== "all") {
-        query = query.eq("status", statusFilter as "menunggu" | "disetujui" | "ditolak");
+        query = query.eq("status", statusFilter as RequestStatus);
       }
 
       const { data, error } = await query;
@@ -49,15 +58,19 @@ export default function OrgLeaveRequests() {
       const expired = (data || []).filter(
         (r) => r.status === "ditolak" && r.rejection_reason?.includes("kedaluwarsa")
       );
-      setExpiredRequests(expired);
-      setRequests(data || []);
+      setExpiredRequests(expired as LeaveRequest[]);
+      setRequests((data || []) as LeaveRequest[]);
     } catch (error) {
       console.error("Error fetching data:", error);
       toast.error("Gagal memuat data");
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [statusFilter]);
+
+  useEffect(() => {
+    void fetchData();
+  }, [fetchData]);
 
   const handleApprove = async (id: string) => {
     try {

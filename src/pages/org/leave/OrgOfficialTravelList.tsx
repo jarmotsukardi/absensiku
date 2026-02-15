@@ -9,9 +9,17 @@ import { Search, Plane, Download } from "lucide-react";
 import { toast } from "sonner";
 import { format, differenceInDays } from "date-fns";
 import { id } from "date-fns/locale";
+import type { Tables } from "@/integrations/supabase/types";
+
+type OfficialTravelRequest = Tables<"leave_requests"> & {
+  employees: {
+    name: string;
+    nip: string | null;
+  } | null;
+};
 
 export default function OrgOfficialTravelList() {
-  const [requests, setRequests] = useState<any[]>([]);
+  const [requests, setRequests] = useState<OfficialTravelRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
 
@@ -28,7 +36,7 @@ export default function OrgOfficialTravelList() {
         .order("start_date", { ascending: false });
 
       if (error) throw error;
-      setRequests(data || []);
+      setRequests((data || []) as OfficialTravelRequest[]);
     } catch (error) {
       toast.error("Gagal memuat data");
     } finally {

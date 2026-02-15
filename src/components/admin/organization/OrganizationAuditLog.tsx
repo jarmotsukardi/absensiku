@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import type { Json, Tables } from "@/integrations/supabase/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -7,18 +8,13 @@ import { FileText, Search, User, Calendar, ArrowRight } from "lucide-react";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 
-interface AuditLog {
-  id: string;
-  action: string;
-  table_name: string;
-  record_id: string | null;
-  old_values: any;
-  new_values: any;
-  created_at: string | null;
+type AuditLog = Omit<Tables<"audit_logs">, "old_values" | "new_values"> & {
+  old_values: Json | null;
+  new_values: Json | null;
   employee?: {
     name: string;
   } | null;
-}
+};
 
 interface OrganizationAuditLogProps {
   tenantId: string;
@@ -45,11 +41,7 @@ export function OrganizationAuditLog({ tenantId }: OrganizationAuditLogProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
 
-  useEffect(() => {
-    fetchLogs();
-  }, [tenantId]);
-
-  const fetchLogs = async () => {
+  const fetchLogs = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from("audit_logs")
@@ -62,13 +54,17 @@ export function OrganizationAuditLog({ tenantId }: OrganizationAuditLogProps) {
         .limit(100);
 
       if (error) throw error;
-      setLogs(data || []);
+      setLogs((data as AuditLog[]) || []);
     } catch (error) {
       console.error("Error fetching audit logs:", error);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [tenantId]);
+
+  useEffect(() => {
+    fetchLogs();
+  }, [fetchLogs]);
 
   const filteredLogs = logs.filter((log) => {
     const query = searchQuery.toLowerCase();

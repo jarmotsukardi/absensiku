@@ -36,6 +36,7 @@ import {
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { supabase } from "@/integrations/supabase/client";
+import type { TablesUpdate } from "@/integrations/supabase/types";
 import { toast } from "sonner";
 
 const formatCurrency = (amount: number) => {
@@ -85,7 +86,7 @@ export function ManualPaymentVerification() {
 
     try {
       // Update invoice status
-      const updates: any = {
+      const updates: TablesUpdate<"invoices"> = {
         status: approved ? "PAID" : "CANCELLED",
         updated_at: new Date().toISOString(),
       };
@@ -166,8 +167,9 @@ export function ManualPaymentVerification() {
       setShowVerifyDialog(false);
       setSelectedInvoice(null);
       refetch();
-    } catch (error: any) {
-      toast.error("Gagal memproses: " + error.message);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      toast.error("Gagal memproses: " + message);
     } finally {
       setIsProcessing(false);
     }

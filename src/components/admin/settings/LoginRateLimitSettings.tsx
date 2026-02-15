@@ -93,9 +93,10 @@ export function LoginRateLimitSettings() {
       if (error) throw error;
 
       toast.success("Pengaturan rate limit berhasil disimpan");
-    } catch (error: any) {
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Gagal menyimpan";
       console.error("Error saving login rate limit config:", error);
-      toast.error(error?.message || "Gagal menyimpan");
+      toast.error(message);
     } finally {
       setIsSaving(false);
     }

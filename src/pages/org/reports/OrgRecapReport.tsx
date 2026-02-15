@@ -12,6 +12,13 @@ import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 
 type OPD = Tables<"opd">;
+type AttendanceRecapRecord = Pick<Tables<"attendance_records_partitioned">, "employee_id" | "status" | "is_wfh">;
+type EmployeeRecap = {
+  id: string;
+  name: string;
+  nip: string | null;
+  opd: { id: string; code: string } | null;
+};
 
 interface RecapData {
   employee_id: string;
@@ -70,15 +77,29 @@ export default function OrgRecapReport() {
       if (employeesResult.error) throw employeesResult.error;
 
       // Build employee lookup map
-      const employeeMap = new Map<string, any>();
-      (employeesResult.data || []).forEach((emp: any) => {
-        employeeMap.set(emp.id, emp);
+      const employeeRows = (employeesResult.data || []) as Array<{
+        id: string;
+        name: string;
+        nip: string | null;
+        opd: { id: string; code: string } | Array<{ id: string; code: string }> | null;
+      }>;
+
+      const employeeMap = new Map<string, EmployeeRecap>();
+      employeeRows.forEach((emp) => {
+        const opd = Array.isArray(emp.opd) ? (emp.opd[0] || null) : emp.opd;
+        employeeMap.set(emp.id, {
+          id: emp.id,
+          name: emp.name,
+          nip: emp.nip,
+          opd,
+        });
       });
 
       const grouped: Record<string, RecapData> = {};
       
-      (attendanceResult.data || []).forEach((rec: any) => {
-        const empId = rec.employee_id;
+      (attendanceResult.data || []).forEach((rec) => {
+        const record = rec as AttendanceRecapRecord;
+        const empId = record.employee_id;
         const emp = employeeMap.get(empId);
         
         if (!grouped[empId]) {
@@ -92,10 +113,10 @@ export default function OrgRecapReport() {
           };
         }
         // Count WFH attendance
-        if (rec.is_wfh) {
+        if (record.is_wfh) {
           (grouped[empId].wfh as number)++;
         }
-        const status = rec.status as keyof RecapData;
+        const status = record.status as keyof RecapData;
         if (typeof grouped[empId][status] === "number") {
           (grouped[empId][status] as number)++;
         }
