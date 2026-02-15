@@ -1191,6 +1191,7 @@ export default function EmployeeDashboardNew() {
           navigateToTab(tab as EmployeeTab);
         }}
         tenantLogoUrl={tenantInfo?.logo_url || null}
+        tenantId={employee?.tenant_id || null}
         tenantWhatsapp={(tenantInfo as any)?.whatsapp || null}
         tenantName={tenantInfo?.name}
         billingMode={billingMode}

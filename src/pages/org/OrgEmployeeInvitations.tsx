@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,7 +21,8 @@ import {
   ChevronLeft, 
   ChevronRight,
   Link as LinkIcon,
-  Mail,
+  Pencil,
+  Trash2,
   MessageSquare,
   Building2,
   MapPin,
@@ -65,7 +66,9 @@ const ITEMS_PER_PAGE = 15;
 export default function OrgEmployeeInvitations() {
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [totalInvitations, setTotalInvitations] = useState(0);
   const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [filterOpdId, setFilterOpdId] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
@@ -81,18 +84,46 @@ export default function OrgEmployeeInvitations() {
     office_id: "",
   });
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [editingInvitationId, setEditingInvitationId] = useState<string | null>(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [editFormData, setEditFormData] = useState({
+    name: "",
+    email: "",
+    phone: "",
+    nik: "",
+    opd_id: "",
+    office_id: "",
+    expires_at: "",
+    status: "pending",
+  });
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [officeList, setOfficeList] = useState<Office[]>([]);
 
   useEffect(() => {
-    fetchTenantAndData();
+    void fetchTenantAndData();
   }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm.trim());
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  useEffect(() => {
+    if (!tenantId) return;
+    void fetchInvitations();
+  }, [tenantId, fetchInvitations]);
 
   const fetchTenantAndData = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user) {
+        setIsLoading(false);
+        return;
+      }
 
       const { data: roleData } = await supabase
         .from("user_roles")
@@ -100,22 +131,11 @@ export default function OrgEmployeeInvitations() {
         .eq("user_id", user.id)
         .maybeSingle();
 
-      if (!roleData?.tenant_id) return;
+      if (!roleData?.tenant_id) {
+        setIsLoading(false);
+        return;
+      }
       setTenantId(roleData.tenant_id);
-
-      // Fetch invitations with OPD and Office data
-      const { data: invData, error: invError } = await supabase
-        .from("employee_invitations")
-        .select(`
-          *,
-          opd:opd_id(id, name),
-          office:office_id(id, name)
-        `)
-        .eq("tenant_id", roleData.tenant_id)
-        .order("created_at", { ascending: false });
-
-      if (invError) throw invError;
-      setInvitations((invData || []) as Invitation[]);
 
       // Fetch OPD list
       const { data: opdData } = await supabase
@@ -137,10 +157,56 @@ export default function OrgEmployeeInvitations() {
     } catch (error) {
       console.error("Error fetching data:", error);
       toast.error("Gagal memuat data");
+    }
+  };
+
+  const fetchInvitations = useCallback(async () => {
+    if (!tenantId) return;
+    setIsLoading(true);
+    try {
+      const from = (currentPage - 1) * ITEMS_PER_PAGE;
+      const to = from + ITEMS_PER_PAGE - 1;
+
+      let query = supabase
+        .from("employee_invitations")
+        .select(`
+          *,
+          opd:opd_id(id, name),
+          office:office_id(id, name)
+        `, { count: "exact" })
+        .eq("tenant_id", tenantId);
+
+      if (filterStatus !== "all") {
+        query = query.eq("status", filterStatus);
+      }
+
+      if (filterOpdId !== "all") {
+        if (filterOpdId === "none") {
+          query = query.is("opd_id", null);
+        } else {
+          query = query.eq("opd_id", filterOpdId);
+        }
+      }
+
+      if (debouncedSearchTerm) {
+        const escaped = debouncedSearchTerm.replace(/[%_]/g, "");
+        query = query.or(`name.ilike.%${escaped}%,email.ilike.%${escaped}%,invitation_code.ilike.%${escaped}%`);
+      }
+
+      const { data, count, error } = await query
+        .order("created_at", { ascending: false })
+        .range(from, to);
+
+      if (error) throw error;
+      setInvitations((data || []) as Invitation[]);
+      setTotalInvitations(count || 0);
+    } catch (error) {
+      console.error("Error fetching invitations:", error);
+      toast.error("Gagal memuat daftar undangan");
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [tenantId, currentPage, filterStatus, filterOpdId, debouncedSearchTerm]);
 
   const generateInvitationCode = () => {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -208,7 +274,10 @@ export default function OrgEmployeeInvitations() {
 
       setGeneratedCode(code);
       toast.success("Undangan berhasil dibuat!");
-      fetchTenantAndData();
+      setCurrentPage(1);
+      if (currentPage === 1) {
+        await fetchInvitations();
+      }
     } catch (error: unknown) {
       console.error("Error creating invitation:", error);
       const errorMessage = error instanceof Error ? error.message : "Gagal membuat undangan";
@@ -238,7 +307,7 @@ export default function OrgEmployeeInvitations() {
 
       if (error) throw error;
       toast.success("Undangan diverifikasi!");
-      fetchTenantAndData();
+      await fetchInvitations();
     } catch (error) {
       toast.error("Gagal memverifikasi");
     }
@@ -253,9 +322,86 @@ export default function OrgEmployeeInvitations() {
 
       if (error) throw error;
       toast.success("Undangan ditolak");
-      fetchTenantAndData();
+      await fetchInvitations();
     } catch (error) {
       toast.error("Gagal menolak");
+    }
+  };
+
+  const openEditDialog = (inv: Invitation) => {
+    setEditingInvitationId(inv.id);
+    setEditFormData({
+      name: inv.name || "",
+      email: inv.email || "",
+      phone: inv.phone || "",
+      nik: inv.nik || "",
+      opd_id: inv.opd?.id || "",
+      office_id: inv.office?.id || "",
+      expires_at: inv.expires_at ? new Date(inv.expires_at).toISOString().slice(0, 10) : "",
+      status: inv.status || "pending",
+    });
+    setIsEditDialogOpen(true);
+  };
+
+  const handleUpdateInvitation = async () => {
+    if (!editingInvitationId) return;
+    if (!editFormData.name || !editFormData.email || !editFormData.nik) {
+      toast.error("Nama, Email, dan NIK harus diisi");
+      return;
+    }
+
+    setIsSavingEdit(true);
+    try {
+      const payload: Partial<TablesInsert<"employee_invitations">> & { status?: string } = {
+        name: editFormData.name,
+        email: editFormData.email,
+        phone: editFormData.phone || null,
+        nik: editFormData.nik,
+        opd_id: editFormData.opd_id || null,
+        office_id: editFormData.office_id || null,
+        status: editFormData.status,
+      };
+
+      if (editFormData.expires_at) {
+        payload.expires_at = new Date(`${editFormData.expires_at}T23:59:59`).toISOString();
+      } else {
+        payload.expires_at = null;
+      }
+
+      const { error } = await supabase
+        .from("employee_invitations")
+        .update(payload)
+        .eq("id", editingInvitationId);
+
+      if (error) throw error;
+
+      toast.success("Undangan berhasil diperbarui");
+      setIsEditDialogOpen(false);
+      setEditingInvitationId(null);
+      await fetchInvitations();
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Gagal memperbarui undangan";
+      toast.error(errorMessage);
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleDeleteInvitation = async (id: string) => {
+    const confirmed = window.confirm("Hapus undangan ini? Tindakan ini tidak dapat dibatalkan.");
+    if (!confirmed) return;
+
+    try {
+      const { error } = await supabase
+        .from("employee_invitations")
+        .delete()
+        .eq("id", id);
+      if (error) throw error;
+      toast.success("Undangan berhasil dihapus");
+      await fetchInvitations();
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : "Gagal menghapus undangan";
+      toast.error(errorMessage);
     }
   };
 
@@ -272,20 +418,21 @@ export default function OrgEmployeeInvitations() {
     window.open(waUrl, "_blank");
   };
 
-  const filteredInvitations = invitations.filter(inv => {
-    const matchesSearch = inv.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          inv.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                          inv.invitation_code.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = filterStatus === "all" || inv.status === filterStatus;
-    const matchesOpd = filterOpdId === "all" || inv.opd?.id === filterOpdId || (!inv.opd && filterOpdId === "none");
-    return matchesSearch && matchesStatus && matchesOpd;
-  });
-
-  const totalPages = Math.ceil(filteredInvitations.length / ITEMS_PER_PAGE);
-  const paginatedInvitations = filteredInvitations.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
+  const totalPages = Math.ceil(totalInvitations / ITEMS_PER_PAGE);
+  const pageNumbers = Array.from({ length: totalPages }, (_, i) => i + 1);
+  const visiblePageNumbers = pageNumbers.filter((page) =>
+    page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1
   );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterStatus, filterOpdId]);
+
+  useEffect(() => {
+    if (totalPages > 0 && currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -522,7 +669,7 @@ export default function OrgEmployeeInvitations() {
         <Card>
           <CardHeader>
             <CardTitle>Daftar Undangan</CardTitle>
-            <CardDescription>{filteredInvitations.length} undangan</CardDescription>
+            <CardDescription>{totalInvitations} undangan</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex flex-col sm:flex-row gap-4 mb-4">
@@ -579,14 +726,14 @@ export default function OrgEmployeeInvitations() {
                       <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto"></div>
                     </TableCell>
                   </TableRow>
-                ) : paginatedInvitations.length === 0 ? (
+                ) : invitations.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                       Belum ada undangan
                     </TableCell>
                   </TableRow>
                 ) : (
-                  paginatedInvitations.map((inv) => (
+                  invitations.map((inv) => (
                     <TableRow key={inv.id}>
                       <TableCell>
                         <div>
@@ -617,6 +764,12 @@ export default function OrgEmployeeInvitations() {
                           <Button variant="ghost" size="icon" onClick={() => copyInviteLink(inv.invitation_code)}>
                             <LinkIcon className="h-4 w-4" />
                           </Button>
+                          <Button variant="ghost" size="icon" onClick={() => openEditDialog(inv)}>
+                            <Pencil className="h-4 w-4 text-blue-500" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => handleDeleteInvitation(inv.id)}>
+                            <Trash2 className="h-4 w-4 text-red-500" />
+                          </Button>
                           {inv.status === "pending" && !isExpired(inv.expires_at) && (
                             <>
                               <Button variant="ghost" size="icon" onClick={() => handleVerify(inv.id)}>
@@ -638,9 +791,9 @@ export default function OrgEmployeeInvitations() {
             {totalPages > 1 && (
               <div className="flex items-center justify-between mt-4 pt-4 border-t">
                 <p className="text-sm text-muted-foreground">
-                  Halaman {currentPage} dari {totalPages}
+                  Halaman {currentPage} dari {totalPages} • Menampilkan {invitations.length} dari {totalInvitations} data
                 </p>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
                   <Button
                     variant="outline"
                     size="sm"
@@ -649,6 +802,22 @@ export default function OrgEmployeeInvitations() {
                   >
                     <ChevronLeft className="h-4 w-4" />
                   </Button>
+                  {visiblePageNumbers.map((page, idx) => {
+                    const prevPage = visiblePageNumbers[idx - 1];
+                    const showEllipsis = prevPage && page - prevPage > 1;
+                    return (
+                      <div key={page} className="flex items-center gap-1">
+                        {showEllipsis && <span className="px-2 text-muted-foreground">...</span>}
+                        <Button
+                          variant={page === currentPage ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => setCurrentPage(page)}
+                        >
+                          {page}
+                        </Button>
+                      </div>
+                    );
+                  })}
                   <Button
                     variant="outline"
                     size="sm"
@@ -663,6 +832,83 @@ export default function OrgEmployeeInvitations() {
           </CardContent>
         </Card>
       </div>
+
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Edit Undangan</DialogTitle>
+            <DialogDescription>Perbarui data undangan pegawai.</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2">
+            <div className="grid gap-2">
+              <Label>Nama Lengkap *</Label>
+              <Input
+                value={editFormData.name}
+                onChange={(e) => setEditFormData((prev) => ({ ...prev, name: e.target.value }))}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label>Email *</Label>
+              <Input
+                type="email"
+                value={editFormData.email}
+                onChange={(e) => setEditFormData((prev) => ({ ...prev, email: e.target.value }))}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label>No. WhatsApp</Label>
+              <Input
+                value={editFormData.phone}
+                onChange={(e) => setEditFormData((prev) => ({ ...prev, phone: e.target.value }))}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label>NIK *</Label>
+              <Input
+                value={editFormData.nik}
+                maxLength={16}
+                onChange={(e) => setEditFormData((prev) => ({ ...prev, nik: e.target.value }))}
+              />
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid gap-2">
+                <Label>Tanggal Kedaluwarsa</Label>
+                <Input
+                  type="date"
+                  value={editFormData.expires_at}
+                  onChange={(e) => setEditFormData((prev) => ({ ...prev, expires_at: e.target.value }))}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>Status</Label>
+                <Select
+                  value={editFormData.status}
+                  onValueChange={(value) => setEditFormData((prev) => ({ ...prev, status: value }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pending">Menunggu</SelectItem>
+                    <SelectItem value="verified">Terverifikasi</SelectItem>
+                    <SelectItem value="rejected">Ditolak</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsEditDialogOpen(false)} disabled={isSavingEdit}>
+              Batal
+            </Button>
+            <Button onClick={handleUpdateInvitation} disabled={isSavingEdit}>
+              {isSavingEdit ? "Menyimpan..." : "Simpan Perubahan"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </OrganizationLayout>
   );
 }

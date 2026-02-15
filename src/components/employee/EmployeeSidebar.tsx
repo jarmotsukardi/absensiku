@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { ForgotPasswordDialog } from "@/components/auth/ForgotPasswordDialog";
+import { supabase } from "@/integrations/supabase/client";
 import {
   Home,
   History,
@@ -35,6 +36,7 @@ interface EmployeeSidebarProps {
   onNavigateTab?: (tab: string) => void;
   activeTab?: string;
   unreadNotificationCount?: number;
+  tenantId?: string | null;
   tenantLogoUrl?: string | null;
   tenantWhatsapp?: string | null;
   tenantName?: string | null;
@@ -49,6 +51,7 @@ export function EmployeeSidebar({
   onNavigateTab,
   activeTab,
   unreadNotificationCount = 0,
+  tenantId,
   tenantLogoUrl,
   tenantWhatsapp,
   tenantName,
@@ -60,11 +63,47 @@ export function EmployeeSidebar({
   const [expandedMenu, setExpandedMenu] = useState<string | null>(null);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [logoLoadFailed, setLogoLoadFailed] = useState(false);
+  const [floatingWhatsappPhone, setFloatingWhatsappPhone] = useState<string | null>(null);
+  const [floatingWhatsappMessage, setFloatingWhatsappMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const isDark = document.documentElement.classList.contains("dark");
     setDarkMode(isDark);
   }, []);
+
+  useEffect(() => {
+    const fetchFloatingWhatsapp = async () => {
+      if (!tenantId) {
+        setFloatingWhatsappPhone(null);
+        setFloatingWhatsappMessage(null);
+        return;
+      }
+
+      const { data } = await supabase
+        .from("organization_settings")
+        .select("setting_value")
+        .eq("tenant_id", tenantId)
+        .eq("setting_key", "floating_whatsapp")
+        .maybeSingle();
+
+      const value = (data?.setting_value || {}) as Record<string, unknown>;
+      const enabled = value.enabled === true;
+      const rawPhone = (typeof value.phone === "string" ? value.phone : "") ||
+        (typeof value.phone_number === "string" ? value.phone_number : "");
+      const rawMessage = (typeof value.message === "string" ? value.message : "") ||
+        (typeof value.default_message === "string" ? value.default_message : "");
+
+      if (enabled && rawPhone) {
+        setFloatingWhatsappPhone(rawPhone);
+        setFloatingWhatsappMessage(rawMessage || null);
+      } else {
+        setFloatingWhatsappPhone(null);
+        setFloatingWhatsappMessage(null);
+      }
+    };
+
+    void fetchFloatingWhatsapp();
+  }, [tenantId]);
 
   const toggleDarkMode = () => {
     const newMode = !darkMode;
@@ -79,13 +118,14 @@ export function EmployeeSidebar({
   };
 
   const handleContactAdmin = () => {
-    // Prioritas: PIC WhatsApp > Tenant WhatsApp
-    const waNumber = picWhatsapp || tenantWhatsapp;
+    // Prioritas: floating_whatsapp (org settings) > PIC WhatsApp > tenant WhatsApp.
+    const waNumber = floatingWhatsappPhone || picWhatsapp || tenantWhatsapp;
     if (waNumber) {
       const cleanNumber = waNumber.replace(/\D/g, "");
       const formattedNumber = cleanNumber.startsWith("0") ? "62" + cleanNumber.slice(1) : cleanNumber;
       const contactName = picName ? ` (${picName})` : "";
-      window.open(`https://wa.me/${formattedNumber}?text=Halo Admin${contactName}, saya membutuhkan bantuan.`, "_blank");
+      const defaultMessage = floatingWhatsappMessage || `Halo Admin${contactName}, saya membutuhkan bantuan.`;
+      window.open(`https://wa.me/${formattedNumber}?text=${encodeURIComponent(defaultMessage)}`, "_blank");
     }
     onClose();
   };
