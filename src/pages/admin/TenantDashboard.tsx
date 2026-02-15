@@ -4,7 +4,6 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Progress } from "@/components/ui/progress";
 import { 
   Building2, 
   Users, 
@@ -37,7 +36,6 @@ interface TenantInfo {
 
 interface SubscriptionInfo {
   status: string;
-  max_employees: number;
   start_date: string | null;
   end_date: string | null;
 }
@@ -216,11 +214,6 @@ export default function TenantDashboard() {
     return Math.max(0, differenceInDays(new Date(subscription.end_date), new Date()));
   };
 
-  const getEmployeeUsagePercent = () => {
-    if (!subscription?.max_employees) return 0;
-    return Math.min(100, (stats.totalEmployees / subscription.max_employees) * 100);
-  };
-
   const getOrganizationTypeLabel = (type: string) => {
     const types: Record<string, string> = {
       pemerintah_daerah: "Pemerintah Daerah",
@@ -241,7 +234,6 @@ export default function TenantDashboard() {
 
   const status = getSubscriptionStatus();
   const daysRemaining = getDaysRemaining();
-  const employeeUsage = getEmployeeUsagePercent();
 
   return (
     <div className="min-h-screen bg-background">
@@ -318,13 +310,7 @@ export default function TenantDashboard() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">{stats.totalEmployees}</div>
-              <div className="mt-2">
-                <div className="flex justify-between text-xs text-muted-foreground mb-1">
-                  <span>Kuota terpakai</span>
-                  <span>{stats.totalEmployees}/{subscription?.max_employees || 0}</span>
-                </div>
-                <Progress value={employeeUsage} className="h-1.5" />
-              </div>
+              <p className="text-xs text-muted-foreground mt-2">Akses berbasis kebijakan streak</p>
             </CardContent>
           </Card>
 
@@ -435,8 +421,8 @@ export default function TenantDashboard() {
                 <Badge variant={status.variant} className="mt-1">{status.label}</Badge>
               </div>
               <div className="p-4 rounded-lg bg-muted/50">
-                <p className="text-sm text-muted-foreground">Maksimal Pegawai</p>
-                <p className="font-semibold mt-1">{subscription?.max_employees || 0} orang</p>
+                <p className="text-sm text-muted-foreground">Kebijakan Akses</p>
+                <p className="font-semibold mt-1">Streak Monitoring</p>
               </div>
               <div className="p-4 rounded-lg bg-muted/50">
                 <p className="text-sm text-muted-foreground">Berakhir</p>

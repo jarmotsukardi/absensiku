@@ -95,7 +95,6 @@ CREATE TABLE public.subscriptions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   status subscription_status DEFAULT 'trial',
-  max_employees INTEGER DEFAULT 2,
   max_offices INTEGER DEFAULT 1,
   start_date DATE DEFAULT CURRENT_DATE,
   end_date DATE,

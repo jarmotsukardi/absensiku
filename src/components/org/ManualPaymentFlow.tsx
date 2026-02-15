@@ -22,16 +22,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import {
   CreditCard,
   CheckCircle2,
   Copy,
@@ -39,7 +29,6 @@ import {
   Receipt,
   AlertTriangle,
   Banknote,
-  UserMinus,
 } from "lucide-react";
 import { toast } from "sonner";
 import { format, addMonths } from "date-fns";
@@ -88,11 +77,6 @@ export function ManualPaymentFlow({
     bankInfo: { bank: string; account: string; name: string };
   } | null>(null);
 
-  // Employee count enforcement
-  const [showEmployeeMismatchDialog, setShowEmployeeMismatchDialog] = useState(false);
-  const [excessEmployees, setExcessEmployees] = useState<{ id: string; name: string; created_at: string }[]>([]);
-  const [isDeactivating, setIsDeactivating] = useState(false);
-
   useEffect(() => {
     fetchPackages();
   }, []);
@@ -140,71 +124,8 @@ export function ManualPaymentFlow({
       minimumFractionDigits: 0,
     }).format(amount);
 
-  // Check if employee count matches actual active employees
-  const validateEmployeeCount = async (): Promise<boolean> => {
-    const { count, error } = await supabase
-      .from("employees")
-      .select("id", { count: "exact", head: true })
-      .eq("tenant_id", tenantId)
-      .eq("is_active", true);
-
-    if (error) {
-      console.error("Error counting employees:", error);
-      return true; // Allow on error
-    }
-
-    const activeCount = count || 0;
-
-    if (activeCount > employeeCount) {
-      // Fetch the excess employees (newest first) to deactivate
-      const excess = activeCount - employeeCount;
-      const { data: excessEmps } = await supabase
-        .from("employees")
-        .select("id, name, created_at")
-        .eq("tenant_id", tenantId)
-        .eq("is_active", true)
-        .order("created_at", { ascending: false })
-        .limit(excess);
-
-      setExcessEmployees(excessEmps || []);
-      setShowEmployeeMismatchDialog(true);
-      return false;
-    }
-
-    return true;
-  };
-
-  const handleDeactivateExcessEmployees = async () => {
-    setIsDeactivating(true);
-    try {
-      const ids = excessEmployees.map((e) => e.id);
-      const { error } = await supabase
-        .from("employees")
-        .update({ is_active: false })
-        .in("id", ids);
-
-      if (error) throw error;
-
-      toast.success(`${excessEmployees.length} pegawai berhasil dinonaktifkan`);
-      setShowEmployeeMismatchDialog(false);
-      setExcessEmployees([]);
-      
-      // Now proceed with payment
-      setShowConfirmDialog(true);
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      toast.error("Gagal menonaktifkan pegawai: " + errorMessage);
-    } finally {
-      setIsDeactivating(false);
-    }
-  };
-
   const handleInitiatePayment = async () => {
-    // First validate employee count
-    const isValid = await validateEmployeeCount();
-    if (isValid) {
-      setShowConfirmDialog(true);
-    }
+    setShowConfirmDialog(true);
   };
 
   const handleSubmitPayment = async () => {
@@ -213,20 +134,6 @@ export function ManualPaymentFlow({
 
     setIsSubmitting(true);
     try {
-      // Double-check employee count before finalizing
-      const { count } = await supabase
-        .from("employees")
-        .select("id", { count: "exact", head: true })
-        .eq("tenant_id", tenantId)
-        .eq("is_active", true);
-
-      if ((count || 0) > employeeCount) {
-        toast.error(`Masih ada ${(count || 0) - employeeCount} pegawai aktif melebihi kuota. Sesuaikan terlebih dahulu.`);
-        setShowConfirmDialog(false);
-        setIsSubmitting(false);
-        return;
-      }
-
       const { total } = calculateTotal();
       const uniqueCode = generateUniqueCode();
       const finalAmount = total + uniqueCode;
@@ -250,35 +157,13 @@ export function ManualPaymentFlow({
         net_amount: finalAmount,
         invoice_number: invoiceNumber,
         status: "PENDING",
-        payment_method_type: "manual_transfer",
+        payment_method_type: "MANUAL_TRANSFER",
         due_date: format(addMonths(new Date(), 0), "yyyy-MM-dd"),
         metadata: { unique_code: uniqueCode },
         notes: `Angka unik: ${uniqueCode}`,
       });
 
       if (invoiceError) throw invoiceError;
-
-      const endDate = format(addMonths(new Date(), pkg.duration_months), "yyyy-MM-dd");
-
-      if (subscriptionId) {
-        await supabase
-          .from("subscriptions")
-          .update({
-            status: "active",
-            max_employees: employeeCount,
-            start_date: format(new Date(), "yyyy-MM-dd"),
-            end_date: endDate,
-          })
-          .eq("id", subscriptionId);
-      } else {
-        await supabase.from("subscriptions").insert({
-          tenant_id: tenantId,
-          status: "active",
-          max_employees: employeeCount,
-          start_date: format(new Date(), "yyyy-MM-dd"),
-          end_date: endDate,
-        });
-      }
 
       const { data: billingSettings } = await supabase
         .from("system_settings")
@@ -309,7 +194,7 @@ export function ManualPaymentFlow({
         bankInfo,
       });
 
-      toast.success("Langganan berhasil diaktifkan! Silakan transfer sesuai nominal.");
+      toast.success("Invoice pembayaran berhasil dibuat. Langganan aktif setelah pembayaran tervalidasi.");
     } catch (error: unknown) {
       console.error("Error creating payment:", error);
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
@@ -344,10 +229,10 @@ export function ManualPaymentFlow({
             </div>
             <div>
               <CardTitle className="text-green-700 dark:text-green-400">
-                Langganan Berhasil Diaktifkan!
+                Invoice Pembayaran Berhasil Dibuat!
               </CardTitle>
               <CardDescription>
-                Silakan transfer sesuai nominal berikut untuk konfirmasi pembayaran
+                Silakan transfer sesuai nominal berikut untuk proses verifikasi pembayaran
               </CardDescription>
             </div>
           </div>
@@ -417,8 +302,8 @@ export function ManualPaymentFlow({
                 <p className="font-medium mb-1">Penting:</p>
                 <ul className="list-disc list-inside space-y-0.5">
                   <li>Transfer harus sesuai nominal <strong>persis</strong> (termasuk angka unik)</li>
-                  <li>Layanan sudah aktif, validasi pembayaran dilakukan admin</li>
-                  <li>Jika pembayaran tidak valid, akan ada notifikasi lanjutan</li>
+                  <li>Langganan akan aktif setelah pembayaran diverifikasi admin</li>
+                  <li>Jika pembayaran tidak valid, Anda akan menerima notifikasi lanjutan</li>
                 </ul>
               </div>
             </div>
@@ -444,22 +329,6 @@ export function ManualPaymentFlow({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Employee count warning */}
-          {currentEmployeeCount > employeeCount && (
-            <div className="p-4 rounded-lg bg-destructive/10 border border-destructive/30">
-              <div className="flex items-start gap-3">
-                <AlertTriangle className="h-5 w-5 text-destructive mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="font-semibold text-destructive text-sm">Peringatan: Kelebihan Pegawai!</p>
-                  <p className="text-xs text-destructive/80 mt-1">
-                    Anda memiliki <strong>{currentEmployeeCount}</strong> pegawai aktif, tetapi hanya membayar untuk <strong>{employeeCount}</strong>.
-                    Saat konfirmasi pembayaran, <strong>{currentEmployeeCount - employeeCount}</strong> pegawai terbaru akan otomatis dinonaktifkan.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
           {/* Package Selection */}
           <div className="space-y-2">
             <Label>Paket Langganan</Label>
@@ -488,7 +357,7 @@ export function ManualPaymentFlow({
               onChange={(e) => setEmployeeCount(parseInt(e.target.value) || 1)}
             />
             <p className="text-xs text-muted-foreground">
-              Harga per pegawai: {pkg ? formatCurrency(pkg.base_price_per_month) : "-"}/bulan
+              Digunakan untuk perhitungan billing invoice. Harga per pegawai: {pkg ? formatCurrency(pkg.base_price_per_month) : "-"}/bulan
               {currentEmployeeCount > 0 && ` • Pegawai aktif saat ini: ${currentEmployeeCount}`}
             </p>
           </div>
@@ -531,44 +400,6 @@ export function ManualPaymentFlow({
         </CardContent>
       </Card>
 
-      {/* Employee Mismatch Dialog */}
-      <AlertDialog open={showEmployeeMismatchDialog} onOpenChange={setShowEmployeeMismatchDialog}>
-        <AlertDialogContent className="max-w-lg">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2 text-destructive">
-              <UserMinus className="h-5 w-5" />
-              Kelebihan Pegawai Aktif
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              Anda membayar untuk <strong>{employeeCount}</strong> pegawai, tetapi memiliki <strong>{employeeCount + excessEmployees.length}</strong> pegawai aktif.
-              Pegawai berikut (yang paling baru ditambahkan) akan dinonaktifkan:
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="max-h-48 overflow-y-auto space-y-2 my-2">
-            {excessEmployees.map((emp) => (
-              <div key={emp.id} className="flex items-center justify-between p-2 rounded-lg bg-destructive/5 border border-destructive/20">
-                <span className="text-sm font-medium">{emp.name}</span>
-                <Badge variant="destructive" className="text-xs">Akan Dinonaktifkan</Badge>
-              </div>
-            ))}
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isDeactivating}>Batal</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={handleDeactivateExcessEmployees}
-              disabled={isDeactivating}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {isDeactivating ? (
-                <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Memproses...</>
-              ) : (
-                `Nonaktifkan ${excessEmployees.length} Pegawai & Lanjutkan`
-              )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
       {/* Confirm Dialog */}
       <Dialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
         <DialogContent>
@@ -589,7 +420,7 @@ export function ManualPaymentFlow({
               <span className="font-semibold">{pkg?.duration_months} bulan</span>
             </div>
             <div className="flex justify-between text-sm">
-              <span>Pegawai</span>
+              <span>Pegawai (Billing)</span>
               <span className="font-semibold">{employeeCount}</span>
             </div>
             <Separator />

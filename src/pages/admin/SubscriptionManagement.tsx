@@ -29,9 +29,12 @@ import {
   Building2,
   CheckCircle2,
   Clock,
+  Flame,
+  AlertTriangle,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
-import { format } from "date-fns";
+import { addDays, format } from "date-fns";
 import { id } from "date-fns/locale";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
@@ -45,12 +48,21 @@ import {
 } from "@/components/ui/pagination";
 
 type SubscriptionStatus = "trial" | "active" | "expired" | "cancelled";
+type StreakPolicyStatus = "tracking" | "near_suspension" | "suspended" | "invoiced" | "unknown";
+
+interface StreakSnapshot {
+  tenant_id: string;
+  streak_count: number;
+  status: string;
+  reached_target: boolean | null;
+  reached_target_at: string | null;
+  grace_period_end: string | null;
+}
 
 interface Subscription {
   id: string;
   tenant_id: string;
   status: string | null;
-  max_employees: number | null;
   start_date: string | null;
   end_date: string | null;
   created_at: string | null;
@@ -60,6 +72,9 @@ interface Subscription {
     organization_type: string | null;
   };
   employees_count?: number;
+  streak?: StreakSnapshot | null;
+  streak_policy_status?: StreakPolicyStatus;
+  recommended_status?: SubscriptionStatus;
 }
 
 const statusLabels: Record<SubscriptionStatus, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
@@ -74,6 +89,96 @@ const DEFAULT_SUBSCRIPTION_STATUS: SubscriptionStatus = "trial";
 const isSubscriptionStatus = (status: string | null | undefined): status is SubscriptionStatus =>
   status === "trial" || status === "active" || status === "expired" || status === "cancelled";
 
+const streakPolicyLabels: Record<StreakPolicyStatus, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
+  tracking: { label: "Tracking", variant: "outline" },
+  near_suspension: { label: "Near Suspension", variant: "secondary" },
+  suspended: { label: "Suspended", variant: "destructive" },
+  invoiced: { label: "Invoiced", variant: "default" },
+  unknown: { label: "Belum Ada Data", variant: "outline" },
+};
+
+const getNumericSettingValue = (raw: unknown, fallback: number) => {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && "value" in raw) {
+    const nested = (raw as Record<string, unknown>).value;
+    return getNumericSettingValue(nested, fallback);
+  }
+
+  return fallback;
+};
+
+const getEffectiveGraceEndDate = (
+  streak: StreakSnapshot | null | undefined,
+  graceDays: number
+) => {
+  if (!streak) return null;
+
+  if (streak.reached_target_at) {
+    const reachedAt = new Date(streak.reached_target_at);
+    reachedAt.setHours(0, 0, 0, 0);
+    return addDays(reachedAt, Math.max(0, graceDays));
+  }
+
+  if (streak.grace_period_end) {
+    return new Date(`${streak.grace_period_end}T00:00:00`);
+  }
+
+  return null;
+};
+
+const getStreakPolicyStatus = (
+  streak: StreakSnapshot | null | undefined,
+  threshold: number,
+  graceDays: number
+): StreakPolicyStatus => {
+  if (!streak) return "unknown";
+  if (streak.status === "invoiced") return "invoiced";
+
+  const reachedTarget = streak.streak_count >= Math.max(1, threshold);
+  if (!reachedTarget) return "tracking";
+
+  const graceEnd = getEffectiveGraceEndDate(streak, graceDays);
+  if (!graceEnd) return "near_suspension";
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  return graceEnd < today ? "suspended" : "near_suspension";
+};
+
+const getRecommendedStatusFromPolicy = (
+  currentStatus: SubscriptionStatus,
+  policyStatus: StreakPolicyStatus
+): SubscriptionStatus => {
+  if (currentStatus === "cancelled") return "cancelled";
+  if (policyStatus === "suspended") return "expired";
+  if (policyStatus === "invoiced") return "active";
+  return currentStatus;
+};
+
+const getPolicyEndDateLabel = (subscription: Subscription, graceDays: number) => {
+  const policyStatus = subscription.streak_policy_status || "unknown";
+
+  if (policyStatus === "tracking" || policyStatus === "unknown") {
+    return "Belum dimulai";
+  }
+
+  const effectiveGraceEnd = getEffectiveGraceEndDate(subscription.streak, graceDays);
+  if (effectiveGraceEnd) {
+    return format(effectiveGraceEnd, "d MMM yyyy", { locale: id });
+  }
+
+  if (subscription.end_date) {
+    return format(new Date(subscription.end_date), "d MMM yyyy", { locale: id });
+  }
+
+  return "-";
+};
+
 export default function SubscriptionManagement() {
   const PAGE_SIZE = 20;
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
@@ -82,6 +187,9 @@ export default function SubscriptionManagement() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
+  const [policyThreshold, setPolicyThreshold] = useState(30);
+  const [policyGraceDays, setPolicyGraceDays] = useState(7);
+  const [isSyncingPolicy, setIsSyncingPolicy] = useState(false);
   const [stats, setStats] = useState({
     total: 0,
     trial: 0,
@@ -93,6 +201,10 @@ export default function SubscriptionManagement() {
   const fetchSubscriptions = useCallback(async () => {
     try {
       setIsLoading(true);
+      const { error: syncPolicyError } = await supabase.rpc("sync_streak_subscription_status", {});
+      if (syncPolicyError) {
+        reportError(syncPolicyError, "admin.subscriptions.sync_policy_status_pre_fetch");
+      }
       let tenantIds: string[] | null = null;
       if (searchQuery.trim()) {
         const escaped = searchQuery.trim().replace(/[%_]/g, "\\$&");
@@ -130,26 +242,82 @@ export default function SubscriptionManagement() {
       if (error) throw error;
       setTotalCount(count || 0);
 
-      // Fetch employee counts
-      const subsWithCounts = await Promise.all(
-        (data || []).map(async (sub: Subscription) => {
-          const { count, error: countError } = await supabase
-            .from("employees")
-            .select("*", { count: "exact", head: true })
-            .eq("tenant_id", sub.tenant_id);
+      const tenantIdsInPage = [...new Set((data || []).map((sub) => sub.tenant_id))];
 
-          if (countError) {
-            reportError(countError, "admin.subscriptions.fetch_employee_count", {
-              subscription_id: sub.id,
-              tenant_id: sub.tenant_id,
-            });
-          }
+      const [
+        subsWithCounts,
+        streakRes,
+        settingsRes,
+      ] = await Promise.all([
+        Promise.all(
+          (data || []).map(async (sub: Subscription) => {
+            const { count, error: countError } = await supabase
+              .from("employees")
+              .select("*", { count: "exact", head: true })
+              .eq("tenant_id", sub.tenant_id);
 
-          return { ...sub, employees_count: countError ? 0 : count || 0 };
-        })
+            if (countError) {
+              reportError(countError, "admin.subscriptions.fetch_employee_count", {
+                subscription_id: sub.id,
+                tenant_id: sub.tenant_id,
+              });
+            }
+
+            return { ...sub, employees_count: countError ? 0 : count || 0 };
+          })
+        ),
+        tenantIdsInPage.length > 0
+          ? supabase
+              .from("stability_streaks")
+              .select("tenant_id, streak_count, status, reached_target, reached_target_at, grace_period_end")
+              .in("tenant_id", tenantIdsInPage)
+          : Promise.resolve({ data: [], error: null }),
+        supabase
+          .from("system_settings")
+          .select("key, value")
+          .in("key", ["streak_threshold", "streak_grace_period_days"]),
+      ]);
+
+      let effectiveThreshold = policyThreshold;
+      let effectiveGraceDays = policyGraceDays;
+
+      if (streakRes.error) {
+        reportError(streakRes.error, "admin.subscriptions.fetch_streaks", {
+          tenant_ids_count: tenantIdsInPage.length,
+        });
+      }
+
+      if (settingsRes.error) {
+        reportError(settingsRes.error, "admin.subscriptions.fetch_streak_settings");
+      } else if (settingsRes.data) {
+        const thresholdRaw = settingsRes.data.find((item) => item.key === "streak_threshold")?.value;
+        const graceRaw = settingsRes.data.find((item) => item.key === "streak_grace_period_days")?.value;
+        effectiveThreshold = Math.max(1, Math.floor(getNumericSettingValue(thresholdRaw, 30)));
+        effectiveGraceDays = Math.max(0, Math.floor(getNumericSettingValue(graceRaw, 7)));
+        setPolicyThreshold(effectiveThreshold);
+        setPolicyGraceDays(effectiveGraceDays);
+      }
+
+      const streakByTenant = new Map(
+        (streakRes.data || []).map((item) => [item.tenant_id, item as StreakSnapshot])
       );
 
-      setSubscriptions(subsWithCounts);
+      const subscriptionsWithPolicy = subsWithCounts.map((sub) => {
+        const normalizedStatus = isSubscriptionStatus(sub.status)
+          ? sub.status
+          : DEFAULT_SUBSCRIPTION_STATUS;
+        const streak = streakByTenant.get(sub.tenant_id) || null;
+        const policyStatus = getStreakPolicyStatus(streak, effectiveThreshold, effectiveGraceDays);
+        const recommendedStatus = getRecommendedStatusFromPolicy(normalizedStatus, policyStatus);
+        return {
+          ...sub,
+          streak,
+          streak_policy_status: policyStatus,
+          recommended_status: recommendedStatus,
+        };
+      });
+
+      setSubscriptions(subscriptionsWithPolicy);
 
       // Calculate stats (global, not affected by pagination)
       const { count: total } = await supabase
@@ -183,7 +351,7 @@ export default function SubscriptionManagement() {
     } finally {
       setIsLoading(false);
     }
-  }, [currentPage, searchQuery, statusFilter]);
+  }, [currentPage, searchQuery, statusFilter, policyThreshold, policyGraceDays]);
 
   useEffect(() => {
     void fetchSubscriptions();
@@ -193,7 +361,11 @@ export default function SubscriptionManagement() {
     setCurrentPage(1);
   }, [searchQuery, statusFilter]);
 
-  const updateSubscriptionStatus = async (subId: string, newStatus: string) => {
+  const updateSubscriptionStatus = async (
+    subId: string,
+    newStatus: string,
+    options?: { silentSuccess?: boolean; silentError?: boolean }
+  ) => {
     try {
       const { data, error } = await supabase
         .from("subscriptions")
@@ -207,14 +379,79 @@ export default function SubscriptionManagement() {
         throw new Error("Status tidak berubah karena data tidak ditemukan atau akses ditolak");
       }
 
-      toast.success("Status langganan berhasil diperbarui");
+      if (!options?.silentSuccess) {
+        toast.success("Status langganan berhasil diperbarui");
+      }
       await fetchSubscriptions();
     } catch (error) {
       const errorRef = reportError(error, "admin.subscriptions.update_status", {
         subscription_id: subId,
         next_status: newStatus,
       });
-      toast.error(appendErrorReference("Gagal memperbarui status", errorRef));
+      if (!options?.silentError) {
+        toast.error(appendErrorReference("Gagal memperbarui status", errorRef));
+      }
+    }
+  };
+
+  const syncWithStreakPolicy = async () => {
+    const syncTargets = subscriptions.filter((sub) => {
+      const currentStatus = isSubscriptionStatus(sub.status)
+        ? sub.status
+        : DEFAULT_SUBSCRIPTION_STATUS;
+      return sub.recommended_status && sub.recommended_status !== currentStatus;
+    });
+
+    if (syncTargets.length === 0) {
+      toast.info("Semua data langganan pada halaman ini sudah sesuai kebijakan streak");
+      return;
+    }
+
+    setIsSyncingPolicy(true);
+    try {
+      const results = await Promise.allSettled(
+        syncTargets.map(async (sub) => {
+          const targetStatus = sub.recommended_status || DEFAULT_SUBSCRIPTION_STATUS;
+          const { data, error } = await supabase
+            .from("subscriptions")
+            .update({ status: targetStatus })
+            .eq("id", sub.id)
+            .select("id")
+            .maybeSingle();
+
+          if (error || !data?.id) {
+            throw error || new Error("Update tidak berhasil");
+          }
+
+          return sub.id;
+        })
+      );
+
+      const successCount = results.filter((result) => result.status === "fulfilled").length;
+      const failedCount = results.length - successCount;
+
+      if (failedCount === 0) {
+        toast.success(`Sinkronisasi kebijakan streak berhasil (${successCount} data)`);
+      } else {
+        results.forEach((result, index) => {
+          if (result.status === "rejected") {
+            reportError(result.reason, "admin.subscriptions.sync_streak_policy", {
+              subscription_id: syncTargets[index]?.id,
+              tenant_id: syncTargets[index]?.tenant_id,
+            });
+          }
+        });
+        toast.error(`Sinkronisasi selesai dengan sebagian gagal`, {
+          description: `${successCount}/${results.length} data berhasil disinkronkan`,
+        });
+      }
+
+      await fetchSubscriptions();
+    } catch (error) {
+      const errorRef = reportError(error, "admin.subscriptions.sync_streak_policy_fatal");
+      toast.error(appendErrorReference("Gagal sinkronisasi kebijakan streak", errorRef));
+    } finally {
+      setIsSyncingPolicy(false);
     }
   };
 
@@ -296,12 +533,28 @@ export default function SubscriptionManagement() {
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div>
                 <CardTitle>Daftar Langganan</CardTitle>
-                <CardDescription>Kelola status dan detail langganan organisasi</CardDescription>
+                <CardDescription>
+                  Kelola status dan detail langganan organisasi. Kebijakan streak aktif: target {policyThreshold} hari, grace period {policyGraceDays} hari.
+                </CardDescription>
               </div>
-              <Button variant="outline">
-                <Download className="h-4 w-4 mr-2" />
-                Export
-              </Button>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => void syncWithStreakPolicy()}
+                  disabled={isSyncingPolicy || isLoading}
+                >
+                  {isSyncingPolicy ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Flame className="h-4 w-4 mr-2" />
+                  )}
+                  Sinkron Kebijakan Streak
+                </Button>
+                <Button variant="outline">
+                  <Download className="h-4 w-4 mr-2" />
+                  Export
+                </Button>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
@@ -341,8 +594,8 @@ export default function SubscriptionManagement() {
                     <TableRow>
                       <TableHead>Organisasi</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Kebijakan Streak</TableHead>
                       <TableHead className="text-center">Pegawai</TableHead>
-                      <TableHead className="text-center">Maks. Pegawai</TableHead>
                       <TableHead>Mulai</TableHead>
                       <TableHead>Berakhir</TableHead>
                       <TableHead className="text-right">Aksi</TableHead>
@@ -373,38 +626,59 @@ export default function SubscriptionManagement() {
                                 {statusLabels[normalizedStatus].label}
                               </Badge>
                             </TableCell>
+                            <TableCell>
+                              <div className="space-y-1">
+                                <Badge variant={streakPolicyLabels[sub.streak_policy_status || "unknown"].variant}>
+                                  {streakPolicyLabels[sub.streak_policy_status || "unknown"].label}
+                                </Badge>
+                                {sub.recommended_status && sub.recommended_status !== normalizedStatus && (
+                                  <div className="text-xs text-amber-700 dark:text-amber-400 flex items-center gap-1">
+                                    <AlertTriangle className="h-3 w-3" />
+                                    Saran: {statusLabels[sub.recommended_status].label}
+                                  </div>
+                                )}
+                              </div>
+                            </TableCell>
                             <TableCell className="text-center">
                               <div className="flex items-center justify-center gap-1">
                                 <Users className="h-4 w-4 text-muted-foreground" />
                                 {sub.employees_count}
                               </div>
                             </TableCell>
-                            <TableCell className="text-center">{sub.max_employees || 2}</TableCell>
                             <TableCell>
                               {sub.start_date
                                 ? format(new Date(sub.start_date), "d MMM yyyy", { locale: id })
                                 : "-"}
                             </TableCell>
                             <TableCell>
-                              {sub.end_date
-                                ? format(new Date(sub.end_date), "d MMM yyyy", { locale: id })
-                                : "-"}
+                              {getPolicyEndDateLabel(sub, policyGraceDays)}
                             </TableCell>
                             <TableCell className="text-right">
-                              <Select
-                                value={normalizedStatus}
-                                onValueChange={(value) => updateSubscriptionStatus(sub.id, value)}
-                              >
-                                <SelectTrigger className="w-[120px]">
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="trial">Trial</SelectItem>
-                                  <SelectItem value="active">Aktif</SelectItem>
-                                  <SelectItem value="expired">Expired</SelectItem>
-                                  <SelectItem value="cancelled">Dibatalkan</SelectItem>
-                                </SelectContent>
-                              </Select>
+                              <div className="flex justify-end gap-2">
+                                <Select
+                                  value={normalizedStatus}
+                                  onValueChange={(value) => void updateSubscriptionStatus(sub.id, value)}
+                                >
+                                  <SelectTrigger className="w-[120px]">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="trial">Trial</SelectItem>
+                                    <SelectItem value="active">Aktif</SelectItem>
+                                    <SelectItem value="expired">Expired</SelectItem>
+                                    <SelectItem value="cancelled">Dibatalkan</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                {sub.recommended_status && sub.recommended_status !== normalizedStatus && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => void updateSubscriptionStatus(sub.id, sub.recommended_status as string)}
+                                  >
+                                    Terapkan
+                                  </Button>
+                                )}
+                              </div>
                             </TableCell>
                           </TableRow>
                         );

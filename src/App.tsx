@@ -49,6 +49,7 @@ const OrgEmployeeInvitations = lazy(() => import("./pages/org/OrgEmployeeInvitat
 const OrgLandingSettings = lazy(() => import("./pages/org/OrgLandingSettings"));
 const EmployeeLogin = lazy(() => import("./pages/employee/EmployeeLogin"));
 const EmployeeDashboardNew = lazy(() => import("./pages/employee/EmployeeDashboardNew"));
+const EmployeeDashboardReadonly = lazy(() => import("./pages/dashboard/EmployeeDashboardReadonly"));
 const EmployeeProfile = lazy(() => import("./pages/employee/EmployeeProfile"));
 const EmployeeHelp = lazy(() => import("./pages/employee/EmployeeHelp"));
 const OrgLogin = lazy(() => import("./pages/org/OrgLogin"));
@@ -96,6 +97,7 @@ const RecapReport = lazy(() => import("./pages/admin/reports/RecapReport"));
 const DatabaseManagement = lazy(() => import("./pages/admin/DatabaseManagement"));
 const TrialSettings = lazy(() => import("./pages/admin/TrialSettings"));
 const SupabaseSettings = lazy(() => import("./pages/admin/SupabaseSettings"));
+const CronJobsInfo = lazy(() => import("./pages/admin/CronJobsInfo"));
 
 const RouteLoadingFallback = () => (
   <div className="min-h-screen bg-background flex items-center justify-center">
@@ -120,15 +122,15 @@ const App = () => (
               <Route path="/auth" element={<Auth />} />
               <Route path="/auth/forgot-password" element={<ForgotPassword />} />
               <Route path="/auth/reset-password" element={<ResetPassword />} />
-              <Route path="/dashboard" element={<Navigate to="/employee/dashboard" replace />} />
-              <Route path="/dashboard/profile" element={<Navigate to="/employee/dashboard?tab=profile" replace />} />
-              <Route path="/dashboard/help" element={<Navigate to="/employee/dashboard?tab=help" replace />} />
-              <Route path="/dashboard/attendance-history" element={<Navigate to="/employee/dashboard?tab=history" replace />} />
-              <Route path="/dashboard/leave-requests" element={<Navigate to="/employee/dashboard?tab=requests" replace />} />
-              <Route path="/dashboard/notifications" element={<Navigate to="/employee/dashboard?tab=notifications" replace />} />
-              <Route path="/notifications" element={<Navigate to="/employee/dashboard?tab=notifications" replace />} />
-              <Route path="/leave-requests" element={<Navigate to="/employee/dashboard?tab=requests" replace />} />
-              <Route path="/attendance-history" element={<Navigate to="/employee/dashboard?tab=history" replace />} />
+              <Route path="/dashboard" element={<EmployeeDashboardReadonly />} />
+              <Route path="/dashboard/profile" element={<Navigate to="/dashboard?tab=profile" replace />} />
+              <Route path="/dashboard/help" element={<Navigate to="/dashboard?tab=help" replace />} />
+              <Route path="/dashboard/attendance-history" element={<Navigate to="/dashboard?tab=history" replace />} />
+              <Route path="/dashboard/leave-requests" element={<Navigate to="/dashboard?tab=requests" replace />} />
+              <Route path="/dashboard/notifications" element={<Navigate to="/dashboard?tab=notifications" replace />} />
+              <Route path="/notifications" element={<Navigate to="/dashboard?tab=notifications" replace />} />
+              <Route path="/leave-requests" element={<Navigate to="/dashboard?tab=requests" replace />} />
+              <Route path="/attendance-history" element={<Navigate to="/dashboard?tab=history" replace />} />
           
           {/* Super Admin Routes */}
           <Route path="/admin/login" element={<SuperAdminLogin />} />
@@ -161,6 +163,7 @@ const App = () => (
           <Route path="/admin/manual-payments" element={<ManualPaymentsManagement />} />
           <Route path="/admin/trial-settings" element={<TrialSettings />} />
           <Route path="/admin/supabase-settings" element={<SupabaseSettings />} />
+          <Route path="/admin/cron-jobs" element={<CronJobsInfo />} />
           <Route path="/admin/attendance-security" element={<AttendanceSecuritySettings />} />
           <Route path="/admin/billing" element={<BillingDashboard />} />
           <Route path="/admin/feedback" element={<FeedbackManagement />} />

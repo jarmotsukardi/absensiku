@@ -49,7 +49,7 @@ const formatCurrency = (amount: number) => {
 
 export function ManualPaymentVerification() {
   const [searchQuery, setSearchQuery] = useState("");
-  const { invoices, isLoading, verifyPayment, refetch } = useInvoices({ status: "AWAITING_VERIFICATION" });
+  const { invoices, isLoading, refetch } = useInvoices({ status: "AWAITING_VERIFICATION" });
   
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [showVerifyDialog, setShowVerifyDialog] = useState(false);
@@ -117,9 +117,9 @@ export function ManualPaymentVerification() {
           .from("subscriptions")
           .select("*")
           .eq("tenant_id", selectedInvoice.tenant_id)
-          .order("end_date", { ascending: false })
+          .order("updated_at", { ascending: false })
           .limit(1)
-          .single();
+          .maybeSingle();
 
         // Calculate new subscription dates
         let startDate = new Date();
@@ -130,37 +130,74 @@ export function ManualPaymentVerification() {
         const endDate = new Date(startDate);
         endDate.setMonth(endDate.getMonth() + (selectedInvoice.package_duration_months || 1));
 
-        // Update or create subscription
-        const { error: subError } = await supabase
-          .from("subscriptions")
-          .upsert({
-            tenant_id: selectedInvoice.tenant_id,
-            status: "active",
-            max_employees: selectedInvoice.employee_count,
-            start_date: startDate.toISOString().split("T")[0],
-            end_date: endDate.toISOString().split("T")[0],
-            updated_at: new Date().toISOString(),
-          }, {
-            onConflict: "tenant_id",
-          });
-
-        if (subError) {
-          console.error("Subscription update error:", subError);
+        // Update latest subscription row if exists, otherwise create a new one.
+        if (currentSub?.id) {
+          const { error: subUpdateError } = await supabase
+            .from("subscriptions")
+            .update({
+              status: "active",
+              start_date: startDate.toISOString().split("T")[0],
+              end_date: endDate.toISOString().split("T")[0],
+              last_invoice_id: selectedInvoice.id,
+              grace_period_end: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", currentSub.id);
+          if (subUpdateError) {
+            console.error("Subscription update error:", subUpdateError);
+          }
+        } else {
+          const { error: subInsertError } = await supabase
+            .from("subscriptions")
+            .insert({
+              tenant_id: selectedInvoice.tenant_id,
+              status: "active",
+              start_date: startDate.toISOString().split("T")[0],
+              end_date: endDate.toISOString().split("T")[0],
+              last_invoice_id: selectedInvoice.id,
+              grace_period_end: null,
+              updated_at: new Date().toISOString(),
+            });
+          if (subInsertError) {
+            console.error("Subscription insert error:", subInsertError);
+          }
         }
 
         // Record in financial ledger (no Xendit fee for manual)
-        await supabase.from("financial_ledger").insert({
-          invoice_id: selectedInvoice.id,
-          tenant_id: selectedInvoice.tenant_id,
-          transaction_type: "PAYMENT",
-          gross_amount: selectedInvoice.gross_amount,
-          xendit_fee: 0, // No fee for manual transfer
-          vat_amount: selectedInvoice.vat_amount,
-          net_amount: selectedInvoice.gross_amount - selectedInvoice.vat_amount,
-          payment_source: "MANUAL",
-          transaction_date: new Date().toISOString().split("T")[0],
-          description: `Manual payment for ${selectedInvoice.invoice_number}`,
+        const { data: existingLedger, error: existingLedgerError } = await supabase
+          .from("financial_ledger")
+          .select("id")
+          .eq("invoice_id", selectedInvoice.id)
+          .limit(1)
+          .maybeSingle();
+        if (existingLedgerError) {
+          console.error("Failed to check existing financial ledger row:", existingLedgerError);
+        } else if (!existingLedger) {
+          const { error: ledgerInsertError } = await supabase.from("financial_ledger").insert({
+            invoice_id: selectedInvoice.id,
+            tenant_id: selectedInvoice.tenant_id,
+            transaction_type: "PAYMENT",
+            gross_amount: selectedInvoice.gross_amount,
+            xendit_fee: 0,
+            vat_amount: selectedInvoice.vat_amount,
+            net_amount: selectedInvoice.gross_amount - selectedInvoice.vat_amount,
+            payment_source: "MANUAL",
+            payment_method: selectedInvoice.payment_method_type,
+            transaction_date: new Date().toISOString().split("T")[0],
+            notes: `Manual payment for ${selectedInvoice.invoice_number}`,
+          });
+          if (ledgerInsertError) {
+            console.error("Failed to insert financial ledger row:", ledgerInsertError);
+          }
+        }
+
+        const { error: streakSyncError } = await supabase.rpc("mark_streak_invoiced", {
+          p_tenant_id: selectedInvoice.tenant_id,
+          p_invoice_id: selectedInvoice.id,
         });
+        if (streakSyncError) {
+          console.error("Failed to sync streak invoiced state:", streakSyncError);
+        }
       }
 
       toast.success(approved ? "Pembayaran berhasil diverifikasi" : "Pembayaran ditolak");

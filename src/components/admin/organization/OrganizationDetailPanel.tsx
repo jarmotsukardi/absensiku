@@ -205,8 +205,8 @@ export function OrganizationDetailPanel({ orgId, onClose }: OrganizationDetailPa
                     </Badge>
                   </div>
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Max Pegawai</span>
-                    <span>{subscription.max_employees || "∞"}</span>
+                    <span className="text-muted-foreground">Kebijakan Akses</span>
+                    <span>Streak Monitoring</span>
                   </div>
                   {subscription.end_date && (
                     <div className="flex items-center justify-between text-sm">

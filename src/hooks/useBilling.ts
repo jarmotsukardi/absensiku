@@ -233,6 +233,24 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
 
   const verifyPayment = async (invoiceId: string, approved: boolean, rejectionReason?: string): Promise<boolean> => {
     try {
+      const { data: invoice, error: invoiceError } = await supabase
+        .from("invoices")
+        .select(`
+          id,
+          tenant_id,
+          invoice_number,
+          package_duration_months,
+          gross_amount,
+          vat_amount,
+          net_amount,
+          xendit_fee,
+          payment_method_type
+        `)
+        .eq("id", invoiceId)
+        .single();
+
+      if (invoiceError) throw invoiceError;
+
       const { data: { user } } = await supabase.auth.getUser();
       
       const updates: any = {
@@ -254,6 +272,98 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
         .eq("id", invoiceId);
 
       if (error) throw error;
+
+      if (approved) {
+        const { data: currentSub, error: currentSubError } = await supabase
+          .from("subscriptions")
+          .select("*")
+          .eq("tenant_id", invoice.tenant_id)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (currentSubError) {
+          console.error("Failed to fetch current subscription:", currentSubError);
+        }
+
+        let startDate = new Date();
+        if (currentSub?.end_date && new Date(currentSub.end_date) > startDate) {
+          startDate = new Date(currentSub.end_date);
+        }
+
+        const endDate = new Date(startDate);
+        endDate.setMonth(endDate.getMonth() + (invoice.package_duration_months || 1));
+
+        if (currentSub?.id) {
+          const { error: subError } = await supabase
+            .from("subscriptions")
+            .update({
+              status: "active",
+              start_date: startDate.toISOString().split("T")[0],
+              end_date: endDate.toISOString().split("T")[0],
+              last_invoice_id: invoice.id,
+              grace_period_end: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", currentSub.id);
+          if (subError) {
+            console.error("Failed to update subscription:", subError);
+          }
+        } else {
+          const { error: subInsertError } = await supabase
+            .from("subscriptions")
+            .insert({
+              tenant_id: invoice.tenant_id,
+              status: "active",
+              start_date: startDate.toISOString().split("T")[0],
+              end_date: endDate.toISOString().split("T")[0],
+              last_invoice_id: invoice.id,
+              grace_period_end: null,
+              updated_at: new Date().toISOString(),
+            });
+          if (subInsertError) {
+            console.error("Failed to create subscription:", subInsertError);
+          }
+        }
+
+        const { data: existingLedger, error: ledgerCheckError } = await supabase
+          .from("financial_ledger")
+          .select("id")
+          .eq("invoice_id", invoiceId)
+          .limit(1)
+          .maybeSingle();
+
+        if (ledgerCheckError) {
+          console.error("Failed to check financial ledger:", ledgerCheckError);
+        } else if (!existingLedger) {
+          const paymentSource = invoice.payment_method_type === "XENDIT" ? "XENDIT" : "MANUAL";
+          const { error: ledgerError } = await supabase
+            .from("financial_ledger")
+            .insert({
+              invoice_id: invoice.id,
+              tenant_id: invoice.tenant_id,
+              transaction_type: "PAYMENT",
+              gross_amount: invoice.gross_amount,
+              xendit_fee: invoice.xendit_fee ?? 0,
+              vat_amount: invoice.vat_amount,
+              net_amount: invoice.net_amount,
+              payment_source: paymentSource,
+              payment_method: invoice.payment_method_type,
+              transaction_date: new Date().toISOString().split("T")[0],
+              notes: `Payment for ${invoice.invoice_number}`,
+            });
+          if (ledgerError) {
+            console.error("Failed to insert financial ledger:", ledgerError);
+          }
+        }
+
+        const { error: streakSyncError } = await supabase.rpc("mark_streak_invoiced", {
+          p_tenant_id: invoice.tenant_id,
+          p_invoice_id: invoice.id,
+        });
+        if (streakSyncError) {
+          console.error("Failed to sync streak invoiced state:", streakSyncError);
+        }
+      }
       
       toast.success(approved ? "Pembayaran diverifikasi" : "Pembayaran ditolak");
       await fetchInvoices();

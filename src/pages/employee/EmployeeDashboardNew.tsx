@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User, Session } from "@supabase/supabase-js";
+import type { Tables } from "@/integrations/supabase/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -38,14 +39,14 @@ import { OrganizationSelector } from "@/components/employee/OrganizationSelector
 import { EmployeeSidebar } from "@/components/employee/EmployeeSidebar";
 import { SmartAppBanner } from "@/components/common/SmartAppBanner";
 import { EmployeeFloatingWhatsApp } from "@/components/employee/EmployeeFloatingWhatsApp";
+import EmployeeNewsArticles from "@/pages/employee/EmployeeNewsArticles";
+import EmployeeAnnouncements from "@/pages/employee/EmployeeAnnouncements";
 import DOMPurify from "dompurify";
 
 // Lazy load DeviceResetDialog di level modul untuk mencegah flicker
 const LazyDeviceResetDialog = React.lazy(() => 
   import("@/components/employee/DeviceResetDialog").then(m => ({ default: m.DeviceResetDialog }))
 );
-const EmployeeNewsArticlesLazy = React.lazy(() => import("@/pages/employee/EmployeeNewsArticles"));
-const EmployeeAnnouncementsLazy = React.lazy(() => import("@/pages/employee/EmployeeAnnouncements"));
 const EmployeeActivationPageLazy = React.lazy(() => import("@/components/employee/EmployeeActivationPage").then(m => ({ default: m.EmployeeActivationPage })));
 import { BillingActivationOverlay } from "@/components/employee/BillingActivationOverlay";
 import {
@@ -93,6 +94,8 @@ interface EmployeeData {
   office_id?: string;
   user_id?: string;
   android_id?: string;
+  last_login_device_id?: string | null;
+  last_login_at?: string | null;
   work_unit_id?: string;
   allow_flexible_attendance?: boolean;
   flexible_attendance_limit?: number | null;
@@ -106,6 +109,10 @@ interface TenantInfo {
   logo_url?: string;
   organization_type?: string;
   timezone: string;
+  billing_mode?: string | null;
+  whatsapp?: string | null;
+  pic_whatsapp?: string | null;
+  pic_name?: string | null;
 }
 
 interface AttendanceRecord {
@@ -128,6 +135,17 @@ interface NewsItem {
   content: string;
   image_url: string | null;
   created_at: string;
+}
+
+type LeaveRequestRow = Tables<"leave_requests">;
+type WfhRequestRow = Tables<"wfh_requests">;
+type OvertimeSettingsRow = Tables<"overtime_settings">;
+type FaqRow = Tables<"faqs">;
+
+interface WorkHourRow {
+  day_of_week: number;
+  time_in: string;
+  time_out: string;
 }
 
 type EmployeeTab = "home" | "history" | "requests" | "help" | "profile" | "news" | "articles" | "announcements" | "notifications" | "activation";
@@ -162,7 +180,11 @@ const getTodayDateString = (timezone: string): string => {
   }
 };
 
-export default function EmployeeDashboardNew() {
+interface EmployeeDashboardNewProps {
+  readOnlyMode?: boolean;
+}
+
+export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeDashboardNewProps = {}) {
   const navigate = useNavigate();
   const location = useLocation();
   
@@ -223,8 +245,9 @@ export default function EmployeeDashboardNew() {
 
   // State untuk user tanpa employee record (registrasi mandiri) dan multi-organisasi
   const [hasNoEmployee, setHasNoEmployee] = useState(false);
-  const [multipleEmployees, setMultipleEmployees] = useState<any[]>([]);
+  const [multipleEmployees, setMultipleEmployees] = useState<EmployeeData[]>([]);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
+  const dashboardBasePath = readOnlyMode ? "/dashboard" : "/employee/dashboard";
 
   const navigateToTab = useCallback((tab: EmployeeTab) => {
     setActiveTab(tab);
@@ -237,19 +260,19 @@ export default function EmployeeDashboardNew() {
     const nextSearch = params.toString();
     navigate(
       {
-        pathname: "/employee/dashboard",
+        pathname: dashboardBasePath,
         search: nextSearch ? `?${nextSearch}` : "",
       },
       { replace: true }
     );
-  }, [location.search, navigate]);
+  }, [dashboardBasePath, location.search, navigate]);
 
   // Leave request hook
   const { createLeaveRequest, isSubmitting: isSubmittingLeave } = useLeaveRequests(employee?.id || null);
 
   // Handler for leave request from form
   const handleLeaveRequest = async (data: {
-    leave_type: any;
+    leave_type: string;
     start_date: string;
     end_date: string;
     reason: string;
@@ -326,6 +349,8 @@ export default function EmployeeDashboardNew() {
       fetchData();
       fetchUnreadNotificationCount();
     }
+    // fetchData intentionally not in deps to keep one-time initial fetch behavior tied to user readiness.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   // Fetch unread notification count
@@ -458,6 +483,8 @@ export default function EmployeeDashboardNew() {
   useEffect(() => {
     if (!offlineSyncStats.lastSyncAt || offlineSyncStats.syncedCount <= 0) return;
     fetchData();
+    // fetchData intentionally omitted to avoid cascade refetch loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [offlineSyncStats.lastSyncAt, offlineSyncStats.syncedCount]);
 
   // Terapkan metadata absensi (shift/flexible) setelah record berhasil sinkron ke server.
@@ -503,6 +530,8 @@ export default function EmployeeDashboardNew() {
     };
 
     applyMetadata();
+    // fetchData intentionally omitted to avoid recursive refresh while metadata pending.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingAttendanceMeta, todayAttendance?.id, todayAttendance?.date]);
 
   // Get current device ID menggunakan utility tunggal
@@ -639,7 +668,7 @@ export default function EmployeeDashboardNew() {
       // Pilih employee berdasarkan selectedEmployeeId atau default ke yang pertama
       let empData = allEmpData[0];
       if (selectedEmployeeId) {
-        const found = allEmpData.find((e: any) => e.id === selectedEmployeeId);
+        const found = allEmpData.find((e: EmployeeData) => e.id === selectedEmployeeId);
         if (found) empData = found;
       }
       
@@ -647,7 +676,7 @@ export default function EmployeeDashboardNew() {
         setSelectedEmployeeId(empData.id);
       }
 
-      setEmployee(empData as any);
+      setEmployee(empData as EmployeeData);
 
       // Check attendance eligibility (no DB call needed)
       if (!empData.user_id) {
@@ -678,8 +707,8 @@ export default function EmployeeDashboardNew() {
         // 2. Update device ID (fire-and-forget style, tapi masih await untuk error handling)
         (() => {
           const currentDeviceId = getCurrentDeviceId();
-          if ((empData as any).last_login_device_id && 
-              (empData as any).last_login_device_id !== currentDeviceId) {
+            if (empData.last_login_device_id && 
+                empData.last_login_device_id !== currentDeviceId) {
             return supabase
               .from("employees")
               .update({
@@ -711,7 +740,7 @@ export default function EmployeeDashboardNew() {
       if (tenantData) {
         setTenantInfo(tenantData);
         setTimezone(tenantData.timezone || "Asia/Jakarta");
-        setBillingMode((tenantData as any).billing_mode || "centralized");
+        setBillingMode(tenantData.billing_mode || "centralized");
       }
 
       const scalabilityValue = scalabilityResult?.data?.value as { tier?: string } | null;
@@ -893,9 +922,9 @@ export default function EmployeeDashboardNew() {
         
         if (!validateLocationSecurityOrNotify(position)) return;
         setCurrentLocation({ lat, lng, timestamp: position.timestamp });
-      } catch (error: any) {
+      } catch (error: unknown) {
         toast.error("Gagal Mendapatkan Lokasi", {
-          description: error.message || "Aktifkan GPS dan coba lagi",
+          description: error instanceof Error ? error.message : "Aktifkan GPS dan coba lagi",
         });
         return;
       }
@@ -963,7 +992,7 @@ export default function EmployeeDashboardNew() {
         ? { ...office, radius_meters: Math.max(office.radius_meters || 100, 9999999) }
         : office;
 
-      const result = await saveCheckInOffline(lat, lng, officeForCheckIn as any);
+      const result = await saveCheckInOffline(lat, lng, officeForCheckIn);
       if (!result.success) {
         toast.error("Gagal Absen Masuk", {
           description: result.message || "Terjadi kesalahan",
@@ -991,10 +1020,10 @@ export default function EmployeeDashboardNew() {
       toast.success(`Absen Masuk Tersimpan${statusText}`, {
         description: result.message || `Lokasi: ${lat.toFixed(4)}, ${lng.toFixed(4)}`,
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Check-in error:", error);
       toast.error("Gagal Absen Masuk", {
-        description: error.message || "Terjadi kesalahan",
+        description: error instanceof Error ? error.message : "Terjadi kesalahan",
       });
     }
   };
@@ -1031,7 +1060,7 @@ export default function EmployeeDashboardNew() {
       const lng = position.coords.longitude;
       setCurrentLocation({ lat, lng, timestamp: position.timestamp });
 
-      const result = await saveCheckOutOffline(lat, lng, office as any);
+      const result = await saveCheckOutOffline(lat, lng, office);
       if (!result.success) {
         toast.error("Gagal Absen Pulang", {
           description: result.message || "Terjadi kesalahan",
@@ -1042,11 +1071,11 @@ export default function EmployeeDashboardNew() {
       toast.success("Absen Pulang Tersimpan", {
         description: result.message || `Lokasi: ${lat.toFixed(4)}, ${lng.toFixed(4)}`,
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Check-out error:", error);
 
       toast.error("Gagal Absen Pulang", {
-        description: error.message || "Terjadi kesalahan",
+        description: error instanceof Error ? error.message : "Terjadi kesalahan",
       });
     }
   };
@@ -1134,8 +1163,11 @@ export default function EmployeeDashboardNew() {
     );
   }
 
-  // Blokir browser desktop jika diaktifkan
-  if (securityCheck.securityResult.isBlocked) {
+  // Ikuti pengaturan keamanan dari /admin/attendance-security.
+  // readOnlyMode (/dashboard) tetap tidak memblokir akses.
+  const isSecurityBlocked = !readOnlyMode && securityCheck.securityResult.isBlocked;
+
+  if (isSecurityBlocked) {
     return (
       <DesktopBlockedMessage 
         organizationName={tenantInfo?.name}
@@ -1192,11 +1224,11 @@ export default function EmployeeDashboardNew() {
         }}
         tenantLogoUrl={tenantInfo?.logo_url || null}
         tenantId={employee?.tenant_id || null}
-        tenantWhatsapp={(tenantInfo as any)?.whatsapp || null}
+        tenantWhatsapp={tenantInfo?.whatsapp || null}
         tenantName={tenantInfo?.name}
         billingMode={billingMode}
-        picWhatsapp={(tenantInfo as any)?.pic_whatsapp || null}
-        picName={(tenantInfo as any)?.pic_name || null}
+        picWhatsapp={tenantInfo?.pic_whatsapp || null}
+        picName={tenantInfo?.pic_name || null}
       />
 
       {/* Billing Activation Overlay - blocks access if individual billing and unpaid */}
@@ -1211,39 +1243,43 @@ export default function EmployeeDashboardNew() {
       {/* Smart App Banner */}
       <SmartAppBanner appName={tenantInfo?.name || "AbsensiKu"} />
       <EmployeeFloatingWhatsApp tenantId={employee?.tenant_id} />
-      {/* Checkout Confirm Dialog */}
-      <CheckoutConfirmDialog
-        isOpen={showCheckoutConfirm}
-        onClose={() => setShowCheckoutConfirm(false)}
-        onConfirm={confirmCheckout}
-        isLoading={isSubmitting && pendingState.type === 'check_out'}
-      />
+      {!readOnlyMode && (
+        <>
+          {/* Checkout Confirm Dialog */}
+          <CheckoutConfirmDialog
+            isOpen={showCheckoutConfirm}
+            onClose={() => setShowCheckoutConfirm(false)}
+            onConfirm={confirmCheckout}
+            isLoading={isSubmitting && pendingState.type === 'check_out'}
+          />
 
-      {/* Device Registration Dialog */}
-      <DeviceRegistrationDialog
-        isOpen={showDeviceRegistration}
-        onClose={() => setShowDeviceRegistration(false)}
-        onConfirm={handleDeviceRegistration}
-        currentDeviceId={deviceBinding.currentAndroidId || ""}
-      />
+          {/* Device Registration Dialog */}
+          <DeviceRegistrationDialog
+            isOpen={showDeviceRegistration}
+            onClose={() => setShowDeviceRegistration(false)}
+            onConfirm={handleDeviceRegistration}
+            currentDeviceId={deviceBinding.currentAndroidId || ""}
+          />
 
-      {/* Shift Selection Dialog */}
-      <ShiftSelectionDialog
-        isOpen={showShiftSelection}
-        onClose={() => setShowShiftSelection(false)}
-        onSelectShift={handleShiftSelection}
-        missedShift={workShifts.needsShiftConfirmation().missedShift}
-        availableShifts={workShifts.needsShiftConfirmation().availableShifts}
-        isLoading={isSubmitting}
-      />
+          {/* Shift Selection Dialog */}
+          <ShiftSelectionDialog
+            isOpen={showShiftSelection}
+            onClose={() => setShowShiftSelection(false)}
+            onSelectShift={handleShiftSelection}
+            missedShift={workShifts.needsShiftConfirmation().missedShift}
+            availableShifts={workShifts.needsShiftConfirmation().availableShifts}
+            isLoading={isSubmitting}
+          />
 
-      {/* Flexible Attendance Dialog */}
-      <FlexibleAttendanceDialog
-        isOpen={showFlexibleAttendance}
-        onClose={() => setShowFlexibleAttendance(false)}
-        onConfirm={handleFlexibleAttendanceConfirm}
-        isLoading={isSubmitting}
-      />
+          {/* Flexible Attendance Dialog */}
+          <FlexibleAttendanceDialog
+            isOpen={showFlexibleAttendance}
+            onClose={() => setShowFlexibleAttendance(false)}
+            onConfirm={handleFlexibleAttendanceConfirm}
+            isLoading={isSubmitting}
+          />
+        </>
+      )}
 
       {/* Google Maps Overlay */}
       {showMapOverlay && mapOverlayCoords && (
@@ -1471,9 +1507,7 @@ export default function EmployeeDashboardNew() {
                   </div>
                 )}
 
-                {/* Action Buttons */}
-                {/* Action Buttons - Dengan validasi ketat untuk disable state */}
-                {(() => {
+                {!readOnlyMode && (() => {
                   // Hitung kondisi disable di luar JSX untuk clarity
                   const hasCheckedIn = !!(todayAttendance?.check_in_time);
                   const hasCheckedOut = !!(todayAttendance?.check_out_time);
@@ -1533,6 +1567,12 @@ export default function EmployeeDashboardNew() {
                     </div>
                   );
                 })()}
+
+                {readOnlyMode && (
+                  <div className="p-3 rounded-lg bg-muted/50 text-sm text-muted-foreground text-center">
+                    Mode tampilan: aktivitas absensi dinonaktifkan di halaman ini.
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -1554,21 +1594,15 @@ export default function EmployeeDashboardNew() {
         )}
 
         {activeTab === "news" && (
-          <React.Suspense fallback={<div className="p-4"><Skeleton className="h-40 w-full" /></div>}>
-            <EmployeeNewsArticlesLazy onBack={() => navigateToTab("home")} contentType="news" />
-          </React.Suspense>
+          <EmployeeNewsArticles onBack={() => navigateToTab("home")} contentType="news" />
         )}
 
         {activeTab === "articles" && (
-          <React.Suspense fallback={<div className="p-4"><Skeleton className="h-40 w-full" /></div>}>
-            <EmployeeNewsArticlesLazy onBack={() => navigateToTab("home")} contentType="articles" />
-          </React.Suspense>
+          <EmployeeNewsArticles onBack={() => navigateToTab("home")} contentType="articles" />
         )}
 
         {activeTab === "announcements" && (
-          <React.Suspense fallback={<div className="p-4"><Skeleton className="h-40 w-full" /></div>}>
-            <EmployeeAnnouncementsLazy tenantId={employee?.tenant_id} onBack={() => navigateToTab("home")} />
-          </React.Suspense>
+          <EmployeeAnnouncements tenantId={employee?.tenant_id} onBack={() => navigateToTab("home")} />
         )}
 
         {activeTab === "notifications" && (
@@ -1648,7 +1682,7 @@ export default function EmployeeDashboardNew() {
 }
 
 // Helper function untuk menentukan status kehadiran (kategori utama)
-const getStatus = (record: any): string => {
+const getStatus = (record: Pick<AttendanceRecord, "status" | "check_in_time">): string => {
   const status = record.status;
   const hasCheckIn = !!record.check_in_time;
 
@@ -1664,7 +1698,10 @@ const getStatus = (record: any): string => {
 };
 
 // Helper function untuk menentukan keterangan kehadiran (detail) dengan jam kerja
-const getKeterangan = (record: any, workHoursData?: any[]): string => {
+const getKeterangan = (
+  record: Pick<AttendanceRecord, "status" | "check_in_time" | "check_out_time" | "date">,
+  workHoursData?: WorkHourRow[]
+): string => {
   const status = record.status;
   const hasCheckIn = !!record.check_in_time;
   const hasCheckOut = !!record.check_out_time;
@@ -1770,7 +1807,7 @@ function HistoryTab({ employeeId, timezone, tenantId }: { employeeId?: string; t
 
 // Inline Weekly Attendance View
 function WeeklyAttendanceView({ employeeId }: { employeeId: string | null }) {
-  const [records, setRecords] = useState<any[]>([]);
+  const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [weekOffset, setWeekOffset] = useState(0);
   
@@ -1804,6 +1841,8 @@ function WeeklyAttendanceView({ employeeId }: { employeeId: string | null }) {
     };
     
     fetchWeekData();
+    // start/end derived from weekOffset; dependency on weekOffset is sufficient.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employeeId, weekOffset]);
   
   const stats = {
@@ -1900,14 +1939,16 @@ function WeeklyAttendanceView({ employeeId }: { employeeId: string | null }) {
 
 // Legacy filter code removed - now using weekly pagination
 const LegacyHistoryTab = ({ employeeId, timezone, tenantId }: { employeeId?: string; timezone: string; tenantId?: string }) => {
-  const [records, setRecords] = useState<any[]>([]);
-  const [workHoursData, setWorkHoursData] = useState<any[]>([]);
+  const [records, setRecords] = useState<AttendanceRecord[]>([]);
+  const [workHoursData, setWorkHoursData] = useState<WorkHourRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [filter, setFilter] = useState({ month: new Date().getMonth() + 1, year: new Date().getFullYear() });
 
   useEffect(() => {
     if (employeeId) fetchHistory();
     if (tenantId) fetchWorkHours();
+    // fetchHistory/fetchWorkHours intentionally omitted; they depend on local filters that already drive this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employeeId, tenantId, filter]);
 
   const fetchHistory = async () => {
@@ -2023,8 +2064,8 @@ const LegacyHistoryTab = ({ employeeId, timezone, tenantId }: { employeeId?: str
 
 // Requests Tab Component
 function RequestsTab({ employeeId, tenantId }: { employeeId?: string; tenantId?: string }) {
-  const [requests, setRequests] = useState<any[]>([]);
-  const [wfhRequests, setWfhRequests] = useState<any[]>([]);
+  const [requests, setRequests] = useState<LeaveRequestRow[]>([]);
+  const [wfhRequests, setWfhRequests] = useState<WfhRequestRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeRequestType, setActiveRequestType] = useState<"leave" | "wfh" | "flexible" | "overtime">("leave");
   const [wfhDialogOpen, setWfhDialogOpen] = useState(false);
@@ -2032,7 +2073,7 @@ function RequestsTab({ employeeId, tenantId }: { employeeId?: string; tenantId?:
   const [wfhReason, setWfhReason] = useState("");
   const [isSubmittingWfh, setIsSubmittingWfh] = useState(false);
   const [refreshFlexible, setRefreshFlexible] = useState(0);
-  const [overtimeSettings, setOvertimeSettings] = useState<any>(null);
+  const [overtimeSettings, setOvertimeSettings] = useState<OvertimeSettingsRow | null>(null);
 
   // Fetch overtime settings
   useEffect(() => {
@@ -2053,7 +2094,7 @@ function RequestsTab({ employeeId, tenantId }: { employeeId?: string; tenantId?:
 
   // Handler for leave request from form
   const handleLeaveRequest = async (data: {
-    leave_type: any;
+    leave_type: string;
     start_date: string;
     end_date: string;
     reason: string;
@@ -2071,6 +2112,8 @@ function RequestsTab({ employeeId, tenantId }: { employeeId?: string; tenantId?:
       fetchRequests();
       fetchWfhRequests();
     }
+    // fetchRequests/fetchWfhRequests intentionally omitted to avoid unnecessary recreation.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employeeId]);
 
   const fetchRequests = async () => {
@@ -2149,8 +2192,10 @@ function RequestsTab({ employeeId, tenantId }: { employeeId?: string; tenantId?:
       setSelectedWfhDates([]);
       setWfhReason("");
       fetchWfhRequests();
-    } catch (error: any) {
-      toast.error("Gagal mengirim pengajuan WFH", { description: error.message });
+    } catch (error: unknown) {
+      toast.error("Gagal mengirim pengajuan WFH", {
+        description: error instanceof Error ? error.message : "Terjadi kesalahan",
+      });
     } finally {
       setIsSubmittingWfh(false);
     }
@@ -2475,12 +2520,14 @@ function RequestsTab({ employeeId, tenantId }: { employeeId?: string; tenantId?:
 
 // Help Tab Component  
 function HelpTab({ tenantId }: { tenantId?: string }) {
-  const [faqs, setFaqs] = useState<any[]>([]);
+  const [faqs, setFaqs] = useState<FaqRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
     fetchFAQs();
+    // fetchFAQs intentionally omitted; only tenant change should trigger reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tenantId]);
 
   const fetchFAQs = async () => {
@@ -2577,7 +2624,7 @@ function HelpTab({ tenantId }: { tenantId?: string }) {
                   </button>
                   {expandedId === faq.id && (
                     <div className="p-3 pt-0 text-sm text-muted-foreground border-t border-border bg-muted/30">
-                      {faq.answer}
+                      {faq.answer || "Jawaban belum tersedia."}
                     </div>
                   )}
                 </div>
@@ -2651,10 +2698,13 @@ const ProfileTab = React.memo(function ProfileTab({ employee, onLogout, deviceBi
     );
   }
 
+  const primaryIdentityField = employee.nip
+    ? { label: "NIP", value: employee.nip }
+    : { label: "NIK", value: employee.nik || "-" };
+
   const profileFields = [
     { label: "Nama Lengkap", value: employee.name },
-    { label: "NIP", value: employee.nip || "-" },
-    { label: "NIK", value: employee.nik },
+    primaryIdentityField,
     { label: "Email", value: employee.email },
     { label: "No. Telepon / WhatsApp", value: employee.phone || employee.whatsapp || "-" },
     { label: "Jenis Kelamin", value: employee.gender === "laki-laki" ? "Laki-laki" : employee.gender === "perempuan" ? "Perempuan" : (employee.gender || "-") },

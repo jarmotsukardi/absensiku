@@ -4222,6 +4222,10 @@ export type Database = {
         Args: { new_tenant_id: string; template_tenant_id?: string }
         Returns: undefined
       }
+      create_pending_streak_invoice: {
+        Args: { p_grace_days?: number; p_tenant_id: string }
+        Returns: string
+      }
       create_next_month_partition: { Args: never; Returns: undefined }
       generate_invoice_number: { Args: never; Returns: string }
       generate_overtime_request_number: {
@@ -4293,6 +4297,10 @@ export type Database = {
         Returns: boolean
       }
       is_super_admin: { Args: { _user_id: string }; Returns: boolean }
+      mark_streak_invoiced: {
+        Args: { p_invoice_id?: string | null; p_tenant_id: string }
+        Returns: undefined
+      }
       log_critical_error: {
         Args: {
           p_action: string
@@ -4351,6 +4359,10 @@ export type Database = {
         }[]
       }
       refresh_monthly_attendance_stats: { Args: never; Returns: undefined }
+      sync_streak_subscription_status: {
+        Args: { p_tenant_id?: string | null }
+        Returns: Json
+      }
       update_expired_leave_requests: { Args: never; Returns: undefined }
       update_tenant_streak: {
         Args: { p_tenant_id: string }

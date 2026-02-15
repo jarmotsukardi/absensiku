@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -13,7 +13,7 @@ import DOMPurify from "dompurify";
 interface ContentItem {
   id: string;
   title: string;
-  content: string;
+  content?: string;
   excerpt?: string | null;
   image_url?: string | null;
   category?: string | null;
@@ -26,19 +26,27 @@ interface EmployeeNewsArticlesProps {
   contentType?: "news" | "articles" | "all";
 }
 
+const CONTENT_CACHE_TTL_MS = 5 * 60 * 1000;
+const contentCache = new Map<string, { ts: number; items: ContentItem[] }>();
+
 export default function EmployeeNewsArticles({ onBack, contentType = "all" }: EmployeeNewsArticlesProps) {
   const [items, setItems] = useState<ContentItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedItem, setSelectedItem] = useState<ContentItem | null>(null);
+  const [isDetailLoading, setIsDetailLoading] = useState(false);
   const itemsPerPage = 10;
 
-  useEffect(() => {
-    fetchContent();
-  }, [contentType]);
+  const fetchContent = useCallback(async () => {
+    const cacheKey = `news-articles:${contentType}`;
+    const cached = contentCache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < CONTENT_CACHE_TTL_MS) {
+      setItems(cached.items);
+      setIsLoading(false);
+      return;
+    }
 
-  const fetchContent = async () => {
     setIsLoading(true);
     try {
       const { data: settingsData } = await supabase
@@ -46,8 +54,14 @@ export default function EmployeeNewsArticles({ onBack, contentType = "all" }: Em
         .select("key, value")
         .in("key", ["news_settings", "articles_settings"]);
 
-      const newsEnabled = (settingsData?.find(s => s.key === "news_settings")?.value as any)?.is_enabled !== false;
-      const articlesEnabled = (settingsData?.find(s => s.key === "articles_settings")?.value as any)?.is_enabled !== false;
+      const newsRaw = settingsData?.find((s) => s.key === "news_settings")?.value;
+      const articleRaw = settingsData?.find((s) => s.key === "articles_settings")?.value;
+      const newsEnabled = typeof newsRaw === "object" && newsRaw !== null && "is_enabled" in newsRaw
+        ? (newsRaw as { is_enabled?: boolean }).is_enabled !== false
+        : true;
+      const articlesEnabled = typeof articleRaw === "object" && articleRaw !== null && "is_enabled" in articleRaw
+        ? (articleRaw as { is_enabled?: boolean }).is_enabled !== false
+        : true;
 
       const allItems: ContentItem[] = [];
 
@@ -55,9 +69,10 @@ export default function EmployeeNewsArticles({ onBack, contentType = "all" }: Em
       // Kategori "berita" => tab Berita, kategori lain => tab Artikel.
       const { data: articlesData } = await supabase
         .from("articles")
-        .select("id, title, content, excerpt, image_url, category, created_at")
+        .select("id, title, excerpt, image_url, category, created_at")
         .eq("is_published", true)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .limit(200);
 
       const publishedArticles = articlesData || [];
 
@@ -88,14 +103,20 @@ export default function EmployeeNewsArticles({ onBack, contentType = "all" }: Em
 
       allItems.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
       setItems(allItems);
+      contentCache.set(cacheKey, { ts: Date.now(), items: allItems });
     } catch (error) {
       console.error("Error fetching content:", error);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [contentType]);
 
-  const stripHtml = (html: string) => {
+  useEffect(() => {
+    fetchContent();
+  }, [fetchContent]);
+
+  const stripHtml = (html?: string | null) => {
+    if (!html) return "";
     const tmp = document.createElement("DIV");
     tmp.innerHTML = html;
     return tmp.textContent || tmp.innerText || "";
@@ -103,7 +124,7 @@ export default function EmployeeNewsArticles({ onBack, contentType = "all" }: Em
 
   const filtered = items.filter(item =>
     !searchQuery || item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    stripHtml(item.content).toLowerCase().includes(searchQuery.toLowerCase())
+    stripHtml(item.excerpt).toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const totalPages = Math.ceil(filtered.length / itemsPerPage);
@@ -116,6 +137,31 @@ export default function EmployeeNewsArticles({ onBack, contentType = "all" }: Em
     : contentType === "articles" 
     ? "Artikel informatif dari platform" 
     : "Informasi terbaru dari platform";
+
+  const openDetail = async (item: ContentItem) => {
+    setSelectedItem(item);
+    if (item.content) return;
+    setIsDetailLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("articles")
+        .select("content")
+        .eq("id", item.id)
+        .maybeSingle();
+      if (error) throw error;
+      const content = data?.content || "";
+      setSelectedItem((prev) => (prev && prev.id === item.id ? { ...prev, content } : prev));
+      setItems((prev) => prev.map((it) => (it.id === item.id ? { ...it, content } : it)));
+    } catch (error) {
+      console.error("Error fetching article detail:", error);
+    } finally {
+      setIsDetailLoading(false);
+    }
+  };
+
+  const relatedItems = selectedItem
+    ? items.filter((item) => item.id !== selectedItem.id).slice(0, 4)
+    : [];
 
   if (selectedItem) {
     return (
@@ -135,16 +181,59 @@ export default function EmployeeNewsArticles({ onBack, contentType = "all" }: Em
             {format(new Date(selectedItem.created_at), "dd MMMM yyyy", { locale: idLocale })}
           </p>
         </div>
-        <div
-          className="prose prose-sm max-w-none"
-          dangerouslySetInnerHTML={{
-            __html: DOMPurify.sanitize(selectedItem.content, {
-              ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'u', 'h1', 'h2', 'h3', 'ul', 'ol', 'li', 'a', 'img'],
-              ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'target', 'rel'],
-              ALLOW_DATA_ATTR: false,
-            }),
-          }}
-        />
+        {isDetailLoading ? (
+          <Skeleton className="h-40 w-full" />
+        ) : (
+          <div
+            className="prose prose-sm max-w-none"
+            dangerouslySetInnerHTML={{
+              __html: DOMPurify.sanitize(selectedItem.content || selectedItem.excerpt || "<p>Konten tidak tersedia.</p>", {
+                ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'u', 'h1', 'h2', 'h3', 'ul', 'ol', 'li', 'a', 'img'],
+                ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'target', 'rel'],
+                ALLOW_DATA_ATTR: false,
+              }),
+            }}
+          />
+        )}
+
+        {relatedItems.length > 0 && (
+          <div className="mt-8 border-t pt-5">
+            <div className="mb-3">
+              <h3 className="text-sm font-semibold tracking-wide uppercase text-muted-foreground">
+                {selectedItem.source === "news" ? "Berita Lainnya" : "Artikel Lainnya"}
+              </h3>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {relatedItems.map((item) => (
+                <Card
+                  key={item.id}
+                  className="group cursor-pointer border-border/70 transition-all hover:-translate-y-0.5 hover:shadow-md"
+                  onClick={() => openDetail(item)}
+                >
+                  <CardContent className="p-3">
+                    <div className="flex gap-3">
+                      {item.image_url && (
+                        <div className="h-14 w-14 overflow-hidden rounded-md bg-muted flex-shrink-0">
+                          <img
+                            src={item.image_url}
+                            alt={item.title}
+                            className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                          />
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <p className="line-clamp-2 text-sm font-medium leading-snug">{item.title}</p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {format(new Date(item.created_at), "dd MMM yyyy", { locale: idLocale })}
+                        </p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -187,7 +276,7 @@ export default function EmployeeNewsArticles({ onBack, contentType = "all" }: Em
       ) : (
         <div className="space-y-3">
           {paginated.map(item => (
-            <Card key={item.id} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => setSelectedItem(item)}>
+            <Card key={item.id} className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => openDetail(item)}>
               <CardContent className="p-4 flex gap-4">
                 {item.image_url && (
                   <div className="w-20 h-20 rounded-lg overflow-hidden flex-shrink-0 bg-muted">
@@ -202,7 +291,7 @@ export default function EmployeeNewsArticles({ onBack, contentType = "all" }: Em
                   </div>
                   <h3 className="font-medium text-sm line-clamp-2">{item.title}</h3>
                   <p className="text-xs text-muted-foreground mt-1 line-clamp-1">
-                    {item.excerpt || stripHtml(item.content).substring(0, 100)}
+                    {item.excerpt || "Klik untuk membaca detail konten"}
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
                     {format(new Date(item.created_at), "dd MMM yyyy", { locale: idLocale })}

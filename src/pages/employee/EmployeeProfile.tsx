@@ -1,7 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User, Session } from "@supabase/supabase-js";
+import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -74,13 +75,7 @@ export default function EmployeeProfile() {
     return () => subscription.unsubscribe();
   }, [navigate]);
 
-  useEffect(() => {
-    if (user) {
-      fetchEmployeeData();
-    }
-  }, [user]);
-
-  const fetchEmployeeData = async () => {
+  const fetchEmployeeData = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from("employees")
@@ -89,13 +84,19 @@ export default function EmployeeProfile() {
         .maybeSingle();
 
       if (error) throw error;
-      setEmployee(data as any);
+      setEmployee((data as EmployeeData | null) ?? null);
     } catch (error) {
       console.error("Error fetching employee:", error);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (user) {
+      void fetchEmployeeData();
+    }
+  }, [fetchEmployeeData, user]);
 
   const handleChangePassword = async () => {
     if (newPassword !== confirmPassword) {
@@ -122,9 +123,9 @@ export default function EmployeeProfile() {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast.error("Gagal mengubah password", {
-        description: error.message,
+        description: error instanceof Error ? error.message : "Terjadi kesalahan",
       });
     } finally {
       setIsChangingPassword(false);
@@ -139,7 +140,11 @@ export default function EmployeeProfile() {
     );
   }
 
-  const InfoRow = ({ icon: Icon, label, value }: { icon: any; label: string; value?: string | null }) => (
+  const primaryIdentity = employee?.nip
+    ? { label: "NIP", value: employee.nip }
+    : { label: "NIK", value: employee?.nik };
+
+  const InfoRow = ({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value?: string | null }) => (
     <div className="flex items-start gap-3 py-3">
       <div className="w-10 h-10 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
         <Icon className="w-5 h-5 text-muted-foreground" />
@@ -199,9 +204,7 @@ export default function EmployeeProfile() {
             <CardDescription>Data diri yang terdaftar di sistem</CardDescription>
           </CardHeader>
           <CardContent className="space-y-1">
-            <InfoRow icon={UserIcon} label="NIK" value={employee?.nik} />
-            <Separator />
-            <InfoRow icon={UserIcon} label="NIP" value={employee?.nip} />
+            <InfoRow icon={UserIcon} label={primaryIdentity.label} value={primaryIdentity.value} />
             <Separator />
             <InfoRow icon={Mail} label="Email" value={employee?.email} />
             <Separator />
@@ -220,15 +223,15 @@ export default function EmployeeProfile() {
             <CardDescription>Data pekerjaan dan penempatan</CardDescription>
           </CardHeader>
           <CardContent className="space-y-1">
-            <InfoRow icon={Building2} label="OPD / Instansi" value={(employee?.opd as any)?.name} />
+            <InfoRow icon={Building2} label="OPD / Instansi" value={employee?.opd?.name} />
             <Separator />
-            <InfoRow icon={Building2} label="Unit Kerja" value={(employee?.work_unit as any)?.name} />
+            <InfoRow icon={Building2} label="Unit Kerja" value={employee?.work_unit?.name} />
             <Separator />
             <InfoRow icon={Briefcase} label="Jabatan" value={employee?.position} />
             <Separator />
             <InfoRow icon={Briefcase} label="Golongan" value={employee?.golongan} />
             <Separator />
-            <InfoRow icon={MapPin} label="Lokasi Kerja" value={(employee?.offices as any)?.name} />
+            <InfoRow icon={MapPin} label="Lokasi Kerja" value={employee?.offices?.name} />
           </CardContent>
         </Card>
 

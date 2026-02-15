@@ -19,7 +19,6 @@ interface PricingPlan {
   period: string;
   features: string[];
   is_popular: boolean;
-  max_employees: number;
 }
 
 interface PricingSectionSettings {
@@ -29,9 +28,9 @@ interface PricingSectionSettings {
 }
 
 const defaultPlans: PricingPlan[] = [
-  { id: "1", name: "Akses", description: "Coba fitur lengkap untuk tim kecil", price: 0, period: "", features: ["Maksimal 5 - 50 pegawai", "Semua fitur absensi GPS", "Laporan dasar", "Audit trail", "Dukungan email"], is_popular: false, max_employees: 50 },
-  { id: "2", name: "Profesional", description: "Untuk instansi dan perusahaan", price: 3500, period: "/pegawai/bulan", features: ["Pegawai tidak terbatas", "Multi OPD & kantor", "Laporan lengkap", "Audit trail lengkap", "Alur persetujuan multi-level", "Dukungan prioritas", "API akses"], is_popular: true, max_employees: 0 },
-  { id: "3", name: "Enterprise", description: "Solusi custom untuk kebutuhan khusus", price: 0, period: "", features: ["Semua fitur Profesional", "On-premise deployment", "Integrasi custom", "SLA khusus", "Account manager dedicated", "Training & onboarding"], is_popular: false, max_employees: 0 },
+  { id: "1", name: "Akses", description: "Coba fitur lengkap untuk tim kecil", price: 0, period: "", features: ["Aktivasi berbasis streak monitoring", "Semua fitur absensi GPS", "Laporan dasar", "Audit trail", "Dukungan email"], is_popular: false },
+  { id: "2", name: "Profesional", description: "Untuk instansi dan perusahaan", price: 3500, period: "/pegawai/bulan", features: ["Aktivasi berbasis streak monitoring", "Multi OPD & kantor", "Laporan lengkap", "Audit trail lengkap", "Alur persetujuan multi-level", "Dukungan prioritas", "API akses"], is_popular: true },
+  { id: "3", name: "Enterprise", description: "Solusi custom untuk kebutuhan khusus", price: 0, period: "", features: ["Semua fitur Profesional", "On-premise deployment", "Integrasi custom", "SLA khusus", "Account manager dedicated", "Training & onboarding"], is_popular: false },
 ];
 
 const defaultSectionSettings: PricingSectionSettings = {
@@ -53,8 +52,7 @@ export function PricingSettings() {
     price: 0, 
     period: "bulan", 
     features: "", 
-    is_popular: false, 
-    max_employees: 10 
+    is_popular: false,
   });
 
   useEffect(() => { 
@@ -139,7 +137,7 @@ export function PricingSettings() {
 
   const handleAdd = () => { 
     setEditingPlan(null); 
-    setFormData({ name: "", description: "", price: 0, period: "bulan", features: "", is_popular: false, max_employees: 10 }); 
+    setFormData({ name: "", description: "", price: 0, period: "bulan", features: "", is_popular: false });
     setIsDialogOpen(true); 
   };
 
@@ -151,8 +149,7 @@ export function PricingSettings() {
       price: p.price, 
       period: p.period, 
       features: p.features.join("\n"), 
-      is_popular: p.is_popular, 
-      max_employees: p.max_employees 
+      is_popular: p.is_popular,
     }); 
     setIsDialogOpen(true); 
   };
@@ -314,14 +311,10 @@ export function PricingSettings() {
                 <Input type="number" value={formData.price} onChange={e => setFormData({...formData, price: parseInt(e.target.value) || 0})} placeholder="99000" />
               </div>
             </div>
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4 md:grid-cols-1">
               <div className="space-y-2">
                 <Label>Periode</Label>
                 <Input value={formData.period} onChange={e => setFormData({...formData, period: e.target.value})} placeholder="/bulan, /pegawai/bulan" />
-              </div>
-              <div className="space-y-2">
-                <Label>Maks Pegawai</Label>
-                <Input type="number" value={formData.max_employees} onChange={e => setFormData({...formData, max_employees: parseInt(e.target.value) || 0})} placeholder="0 = unlimited" />
               </div>
             </div>
             <div className="space-y-2">

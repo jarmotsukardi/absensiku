@@ -20,7 +20,11 @@
     "users:restore": "node scripts/restore-users-from-export.mjs",
     "streak:summary": "bash scripts/streak-monitoring-fixture.sh summary",
     "streak:seed-sample": "bash scripts/streak-monitoring-fixture.sh seed-sample",
-    "streak:restore": "bash scripts/streak-monitoring-fixture.sh restore"
+    "streak:restore": "bash scripts/streak-monitoring-fixture.sh restore",
+    "streak:test-manual": "bash scripts/streak-manual-regression.sh",
+    "streak:test-manual:keep": "bash scripts/streak-manual-regression.sh --keep-data",
+    "streak:test-grace-expired": "bash scripts/streak-grace-expiry-regression.sh",
+    "streak:test-grace-expired:keep": "bash scripts/streak-grace-expiry-regression.sh --keep-data"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

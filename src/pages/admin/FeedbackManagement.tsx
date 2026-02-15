@@ -97,19 +97,6 @@ export default function FeedbackManagement() {
   // Stats
   const [stats, setStats] = useState({ total: 0, avgRating: 0, openBugs: 0 });
 
-  useEffect(() => {
-    void fetchFeedbackSettings();
-    void fetchAccessRole();
-  }, []);
-
-  useEffect(() => {
-    void fetchFeedbacks();
-  }, [fetchFeedbacks]);
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [activeTab, filterRating, filterType, searchQuery]);
-
   const fetchAccessRole = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -254,6 +241,19 @@ export default function FeedbackManagement() {
       setIsLoading(false);
     }
   }, [activeTab, currentPage, filterRating, filterType, searchQuery]);
+
+  useEffect(() => {
+    void fetchFeedbackSettings();
+    void fetchAccessRole();
+  }, []);
+
+  useEffect(() => {
+    void fetchFeedbacks();
+  }, [fetchFeedbacks]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeTab, filterRating, filterType, searchQuery]);
 
   const handleResolve = async () => {
     if (!selectedFeedback) return;

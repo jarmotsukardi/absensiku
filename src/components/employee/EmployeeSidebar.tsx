@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ComponentType } from "react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -44,6 +44,8 @@ interface EmployeeSidebarProps {
   picWhatsapp?: string | null;
   picName?: string | null;
 }
+
+type MenuIcon = ComponentType<{ className?: string }>;
 
 export function EmployeeSidebar({
   open,
@@ -199,7 +201,7 @@ export function EmployeeSidebar({
     },
     {
       id: "contact",
-      icon: WhatsAppIcon as any,
+      icon: WhatsAppIcon as MenuIcon,
       label: "Hubungi Admin Organisasi",
       onClick: handleContactAdmin,
     },

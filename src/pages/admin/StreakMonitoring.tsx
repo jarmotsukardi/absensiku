@@ -34,6 +34,163 @@ interface PaymentLog {
   tenants?: { name: string } | null;
 }
 
+interface WorkflowStep {
+  id: string;
+  title: string;
+  trigger: string;
+  systemAction: string;
+  dataState: string;
+  result: string;
+}
+
+interface StreakGlossaryItem {
+  term: string;
+  description: string;
+  reference: string;
+}
+
+const STREAK_WORKFLOW_STEPS: WorkflowStep[] = [
+  {
+    id: "capture-activity",
+    title: "Aktivitas Harian Tercatat",
+    trigger: "Pegawai melakukan aktivitas absensi pada hari kerja tenant.",
+    systemAction:
+      "Sistem mencatat aktivitas, lalu menyiapkan evaluasi streak tenant pada hari tersebut.",
+    dataState:
+      "Data absensi tersimpan, lalu evaluasi streak mengacu ke status kerja + kalender tenant/libur nasional.",
+    result: "Hari tersebut dihitung valid untuk mempertahankan/menambah streak.",
+  },
+  {
+    id: "streak-evaluation-and-threshold",
+    title: "Evaluasi Streak dan Ambang Billing",
+    trigger: "Trigger absensi memanggil SQL `update_tenant_streak(tenant_id)`.",
+    systemAction:
+      "Fungsi mengecualikan weekend + libur nasional + libur organisasi, lalu menghitung streak terhadap `streak_threshold`.",
+    dataState:
+      "Tabel `stability_streaks` diupdate (`streak_count`, `status`, `reached_target`, `grace_period_end`).",
+    result: "Streak naik/reset; saat threshold tercapai tenant masuk fase `ready_for_invoicing`.",
+  },
+  {
+    id: "auto-invoice",
+    title: "Invoice Otomatis Dibuat",
+    trigger: "Tenant masuk fase `ready_for_invoicing` dan belum punya invoice terbuka.",
+    systemAction:
+      "Fungsi `create_pending_streak_invoice()` membuat invoice `PENDING` (manual transfer) berdasar jumlah pegawai aktif + tarif billing.",
+    dataState:
+      "Tabel `invoices` bertambah, `subscriptions.last_invoice_id` diperbarui ke invoice terbaru.",
+    result: "Tagihan resmi tersedia untuk proses pembayaran.",
+  },
+  {
+    id: "grace-notification",
+    title: "Notifikasi Grace Period Bertahap",
+    trigger: "Cron `billing-grace-notifier-10m` berjalan setiap 10 menit.",
+    systemAction:
+      "Edge Function `billing-grace-notifier` mengambil tenant grace period + invoice pending, lalu mengirim reminder email/WhatsApp sesuai fase.",
+    dataState:
+      "Tabel `billing_notification_logs` diisi (`SENT/FAILED`) dengan metadata reason bertahap (`GRACE_PERIOD_ENTERED`, `GRACE_PERIOD_REMINDER`, `GRACE_PERIOD_LAST_DAY`, `GRACE_PERIOD_EXPIRED`) + anti-duplicate per channel/reason.",
+    result: "Tenant menerima pengingat awal, berkala, hari terakhir, dan pasca grace berakhir hingga invoice diselesaikan.",
+  },
+  {
+    id: "payment-channel-routing",
+    title: "Routing Kanal Pembayaran",
+    trigger: "Tenant membuka invoice dan memilih kanal pembayaran.",
+    systemAction:
+      "Jika Xendit aktif: invoice online diproses via `create-xendit-invoice` + webhook. Jika Xendit belum aktif: tenant bayar manual transfer dan upload bukti.",
+    dataState:
+      "Invoice tetap terpusat di `invoices`, dengan `payment_method_type` sesuai kanal (XENDIT / MANUAL_TRANSFER).",
+    result: "Satu alur data invoice tetap konsisten meskipun kanal pembayaran berbeda.",
+  },
+  {
+    id: "payment-verification",
+    title: "Verifikasi Pembayaran",
+    trigger: "Pembayaran masuk dari webhook Xendit atau verifikasi admin billing untuk transfer manual.",
+    systemAction:
+      "Sistem mengubah invoice menjadi `PAID` (atau status gagal), mencatat event pembayaran, dan menyiapkan sinkron langganan.",
+    dataState:
+      "Update pada `invoices`, `payment_logs` (Xendit), dan/atau `manual_payments` (manual transfer).",
+    result: "Status pembayaran menjadi final dan siap dieksekusi ke aktivasi tenant.",
+  },
+  {
+    id: "post-payment-sync",
+    title: "Sinkron Pasca Pembayaran",
+    trigger: "Invoice tervalidasi `PAID`.",
+    systemAction:
+      "Sistem mengaktifkan/perpanjang subscription, catat transaksi di `financial_ledger`, dan panggil `mark_streak_invoiced()`.",
+    dataState:
+      "Streak menjadi `invoiced`, `subscriptions.status=active`, `grace_period_end` dibersihkan.",
+    result: "Tenant keluar dari risiko suspend dan kembali normal.",
+  },
+  {
+    id: "grace-expiry-control",
+    title: "Kontrol Grace Period Berakhir",
+    trigger: "Cron `streak-subscription-sync-daily` (harian) atau sinkron manual dari halaman subscription dijalankan.",
+    systemAction:
+      "Fungsi `sync_streak_subscription_status()` menandai subscription `expired` untuk tenant yang belum `invoiced`.",
+    dataState:
+      "Tabel `subscriptions.status` berubah ke `expired` bila melewati tenggat, sementara invoice tetap `PENDING/AWAITING_VERIFICATION` sampai dibayar.",
+    result: "Akses tenant terkunci sampai pembayaran diselesaikan.",
+  },
+  {
+    id: "grace-unpaid-regression-test",
+    title: "Uji Regresi: Tidak Bayar Sampai Grace Berakhir",
+    trigger: "Tim ops menjalankan `npm run streak:test-grace-expired` saat validasi kebijakan billing.",
+    systemAction:
+      "Script menyiapkan tenant grace expired + invoice pending, menjalankan dry-run notifier, lalu mengeksekusi `sync_streak_subscription_status()` untuk verifikasi enforcement.",
+    dataState:
+      "Hasil uji mengembalikan `trace_id` test dan `trace_id` notifier; assertion utama: `invoice_still_unpaid=true`, `subscription_expired_after_sync=true`, `notifier_reason_expired=true`.",
+    result: "Kebijakan suspend otomatis + reminder email/WhatsApp terverifikasi end-to-end sebelum dipakai operasional.",
+  },
+  {
+    id: "monitoring-and-recovery",
+    title: "Monitoring dan Recovery",
+    trigger: "Super admin memantau `Streak Monitoring`, `Billing`, dan `Informasi Cron`.",
+    systemAction:
+      "Admin memantau health jadwal cron, log notifikasi billing, dan status pembayaran untuk percepatan recovery tenant.",
+    dataState:
+      "Data status tenant bergerak antar fase secara audit-able.",
+    result: "Siklus streak -> billing -> payment -> pemulihan berjalan end-to-end.",
+  },
+];
+
+const STREAK_GLOSSARY: StreakGlossaryItem[] = [
+  { term: "Stability Streak", description: "Hitungan hari kerja berurutan saat tenant aktif menggunakan sistem absensi.", reference: "Table: `stability_streaks.streak_count`" },
+  { term: "Streak Threshold", description: "Batas minimal streak sebelum tenant masuk fase billing streak.", reference: "Setting: `system_settings.key=streak_threshold`" },
+  { term: "Grace Period", description: "Masa tenggang setelah target tercapai sebelum tenant dinyatakan expired/suspend.", reference: "Setting: `streak_grace_period_days`, field `grace_period_end`" },
+  { term: "Grace Notifier Cron", description: "Cron pengingat invoice grace period yang mengirim email + WhatsApp otomatis.", reference: "Job: `billing-grace-notifier-10m` -> Edge Function `billing-grace-notifier`" },
+  { term: "Grace Notification Reason", description: "Kode fase notifikasi yang dicatat untuk menghindari duplikasi dan menandai konteks pengingat.", reference: "Metadata: `billing_notification_logs.metadata.reason`" },
+  { term: "GRACE_PERIOD_ENTERED", description: "Notifikasi awal ketika tenant masuk fase grace period.", reference: "Reason: `GRACE_PERIOD_ENTERED`" },
+  { term: "GRACE_PERIOD_REMINDER", description: "Pengingat berkala selama grace period berjalan dan belum dibayar.", reference: "Reason: `GRACE_PERIOD_REMINDER`" },
+  { term: "GRACE_PERIOD_LAST_DAY", description: "Pengingat khusus pada hari terakhir grace period.", reference: "Reason: `GRACE_PERIOD_LAST_DAY`" },
+  { term: "GRACE_PERIOD_EXPIRED", description: "Pengingat setelah grace period lewat sebelum/selama enforcement suspend.", reference: "Reason: `GRACE_PERIOD_EXPIRED`" },
+  { term: "Reminder Interval", description: "Jeda pengiriman ulang reminder berkala agar tidak spam.", reference: "Env: `BILLING_NOTIFIER_REMINDER_HOURS`" },
+  { term: "Retry Cooldown", description: "Jeda retry jika pengiriman notifikasi gagal atau baru saja dicoba.", reference: "Env: `BILLING_NOTIFIER_RETRY_MINUTES`" },
+  { term: "Notifier Trace ID", description: "ID jejak error/log dari eksekusi Edge Function notifier.", reference: "Response: `billing-grace-notifier.trace_id`" },
+  { term: "Tracking", description: "Status streak normal ketika tenant belum mencapai target.", reference: "Status: `stability_streaks.status=tracking`" },
+  { term: "Ready for Invoicing", description: "Status saat target streak tercapai dan siap ditagih.", reference: "Status: `stability_streaks.status=ready_for_invoicing`" },
+  { term: "Invoiced", description: "Status streak setelah pembayaran tervalidasi; tenant dianggap telah menyelesaikan kewajiban streak billing.", reference: "Status: `stability_streaks.status=invoiced`" },
+  { term: "Suspended (Operasional)", description: "Kondisi operasional tenant ketika grace period habis tanpa pembayaran valid.", reference: "Derived UI: `reached_target && !invoiced && grace expired`" },
+  { term: "Auto Invoice Streak", description: "Invoice otomatis yang dibuat sistem saat tenant mencapai target streak.", reference: "Function: `create_pending_streak_invoice()`" },
+  { term: "Invoice Pending", description: "Tagihan sudah dibuat tetapi belum lunas/diverifikasi.", reference: "Table: `invoices.status=PENDING/AWAITING_VERIFICATION`" },
+  { term: "Invoice Paid", description: "Tagihan telah dibayar dan tervalidasi.", reference: "Table: `invoices.status=PAID`" },
+  { term: "Manual Transfer", description: "Pembayaran via transfer bank yang butuh verifikasi admin.", reference: "Field: `invoices.payment_method_type=MANUAL_TRANSFER`" },
+  { term: "Xendit Payment", description: "Pembayaran online melalui payment gateway Xendit.", reference: "Edge Function: `create-xendit-invoice`, `xendit-webhook`" },
+  { term: "Fallback Manual Billing", description: "Mode saat Xendit belum aktif: invoice tetap dibuat, pembayaran dilakukan via transfer manual.", reference: "Flow: `invoices` + `manual_payments` + verifikasi admin billing" },
+  { term: "Payment Verification", description: "Tahap validasi pembayaran oleh sistem/webhook/admin sebelum aktivasi final.", reference: "UI Billing + Edge/Webhook flow" },
+  { term: "Financial Ledger", description: "Catatan transaksi keuangan final setelah pembayaran sukses.", reference: "Table: `financial_ledger`" },
+  { term: "Subscription Active", description: "Status langganan tenant aktif dan dapat mengakses fitur sesuai kebijakan.", reference: "Table: `subscriptions.status=active`" },
+  { term: "Subscription Expired", description: "Status langganan tenant berakhir karena melewati grace tanpa pembayaran.", reference: "Table: `subscriptions.status=expired`" },
+  { term: "Last Invoice ID", description: "Referensi invoice terakhir yang terkait status subscription tenant.", reference: "Field: `subscriptions.last_invoice_id`" },
+  { term: "Sync Subscription Status", description: "Fungsi sinkronisasi untuk mengeksekusi kebijakan expiry berbasis streak + grace.", reference: "Function: `sync_streak_subscription_status()`" },
+  { term: "Policy Sync Cron", description: "Jadwal enforcement otomatis untuk mengecek grace period harian.", reference: "Job: `streak-subscription-sync-daily`" },
+  { term: "Mark Streak Invoiced", description: "Fungsi sinkron final pasca pembayaran untuk menutup siklus streak.", reference: "Function: `mark_streak_invoiced()`" },
+  { term: "Hari Kerja Valid", description: "Hari kerja yang diperhitungkan untuk streak setelah mengecualikan weekend/libur.", reference: "Logic: `update_tenant_streak()`" },
+  { term: "Libur Nasional", description: "Hari libur nasional yang tidak memutus streak.", reference: "Table: `national_holidays`" },
+  { term: "Libur Organisasi", description: "Hari libur khusus tenant yang tidak memutus streak.", reference: "Table: `work_holidays`" },
+  { term: "Near Suspension", description: "Tenant sudah target tercapai namun belum bayar dan masih dalam grace.", reference: "Derived UI: `reached_target && !invoiced && !grace expired`" },
+  { term: "Payment Logs", description: "Riwayat aktivitas pembayaran untuk audit dan monitoring tindak lanjut.", reference: "Tab: `Payment Logs` pada halaman ini" },
+  { term: "Regression Test Unpaid Grace", description: "Skenario uji otomatis untuk memastikan tenant non-bayar benar-benar masuk `expired` setelah grace berakhir.", reference: "Script: `npm run streak:test-grace-expired`" },
+];
+
 export default function StreakMonitoring() {
   const [streaks, setStreaks] = useState<StreakItem[]>([]);
   const [payments, setPayments] = useState<PaymentLog[]>([]);
@@ -41,6 +198,7 @@ export default function StreakMonitoring() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState("active");
   const [streakThreshold, setStreakThreshold] = useState(30);
+  const [glossaryQuery, setGlossaryQuery] = useState("");
 
   useEffect(() => {
     fetchStreaks();
@@ -140,6 +298,15 @@ export default function StreakMonitoring() {
   };
 
   const safeThreshold = streakThreshold > 0 ? streakThreshold : 30;
+  const filteredGlossary = STREAK_GLOSSARY.filter((item) => {
+    if (!glossaryQuery.trim()) return true;
+    const q = glossaryQuery.toLowerCase();
+    return (
+      item.term.toLowerCase().includes(q) ||
+      item.description.toLowerCase().includes(q) ||
+      item.reference.toLowerCase().includes(q)
+    );
+  });
 
   const renderTable = (data: StreakItem[]) => (
     data.length === 0 ? (
@@ -281,8 +448,8 @@ export default function StreakMonitoring() {
             <CardHeader>
               <CardTitle>Payment Logs</CardTitle>
               <p className="text-sm text-muted-foreground">
-                Riwayat pembayaran manual dari seluruh tenant. Status: pending (menunggu verifikasi),
-                approved (terverifikasi), rejected (ditolak).
+                Riwayat pembayaran manual dari seluruh tenant. Untuk kanal Xendit, jejak event pembayaran
+                dan webhook dipantau pada modul Billing & Payment.
               </p>
             </CardHeader>
             <CardContent>
@@ -324,6 +491,82 @@ export default function StreakMonitoring() {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <div className="mt-8 grid gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Workflow Mekanisme Streak Hingga Pembayaran</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Alur kerja backend dan operasional dari aktivitas absensi tenant sampai status pembayaran final.
+              Setiap tahap di bawah menunjukkan pemicu, proses sistem, perubahan data, dan hasil bisnisnya.
+              Mekanisme ini diselaraskan dengan cron scheduler terbaru di <span className="font-mono">/admin/cron-jobs</span>.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {STREAK_WORKFLOW_STEPS.map((step, index) => (
+              <div key={step.id} className="rounded-lg border p-4">
+                <div className="mb-3 flex items-center gap-2">
+                  <Badge variant="outline" className="font-mono">
+                    Tahap {index + 1}
+                  </Badge>
+                  <h4 className="font-semibold">{step.title}</h4>
+                </div>
+                <div className="grid gap-2 text-sm">
+                  <p><span className="font-medium">Pemicu:</span> {step.trigger}</p>
+                  <p><span className="font-medium">Aksi Sistem:</span> {step.systemAction}</p>
+                  <p><span className="font-medium">Perubahan Data:</span> {step.dataState}</p>
+                  <p><span className="font-medium">Hasil:</span> {step.result}</p>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Glosarium Lengkap Streak, Billing, dan Payment</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Daftar istilah teknis yang dipakai di modul streak monitoring beserta referensi tabel/fungsi sumber datanya.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="relative w-full sm:w-[360px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                value={glossaryQuery}
+                onChange={(e) => setGlossaryQuery(e.target.value)}
+                placeholder="Cari istilah, deskripsi, atau referensi..."
+                className="pl-10"
+              />
+            </div>
+
+            {filteredGlossary.length === 0 ? (
+              <p className="py-8 text-center text-muted-foreground">Istilah tidak ditemukan.</p>
+            ) : (
+              <div className="rounded-md border overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[240px]">Istilah</TableHead>
+                      <TableHead>Deskripsi</TableHead>
+                      <TableHead className="w-[280px]">Referensi Data/Fungsi</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredGlossary.map((item) => (
+                      <TableRow key={item.term}>
+                        <TableCell className="font-medium">{item.term}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{item.description}</TableCell>
+                        <TableCell className="text-sm font-mono text-muted-foreground">{item.reference}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
     </SuperAdminLayout>
   );
 }

@@ -510,6 +510,97 @@ Lokasi backup:
 
 ---
 
+## 📩 Notifikasi Invoice Grace Period (Email + WhatsApp)
+
+Sistem sekarang menyediakan Edge Function `billing-grace-notifier` untuk mengirim notifikasi tagihan saat tenant masuk fase grace period streak billing.
+
+### Mekanisme
+
+- Sumber data tenant: `stability_streaks` status `ready_for_invoicing` atau `grace_period`.
+- Invoice yang diproses: invoice `PENDING/AWAITING_VERIFICATION` per tenant (prioritas invoice streak).
+- Channel yang dipakai:
+  - Email: setting `system_settings.key = email_gateway`
+  - WhatsApp: setting `system_settings.key = whatsapp_gateway`
+- Tahap notifikasi:
+  - `GRACE_PERIOD_ENTERED`: kirim awal saat tenant masuk grace period.
+  - `GRACE_PERIOD_REMINDER`: pengingat periodik selama grace period belum dibayar.
+  - `GRACE_PERIOD_LAST_DAY`: pengingat khusus hari terakhir grace period.
+  - `GRACE_PERIOD_EXPIRED`: pengingat saat grace sudah lewat namun status belum tersinkron.
+- Anti duplikat:
+  - `ENTERED`, `LAST_DAY`, `EXPIRED` hanya dikirim sekali per channel per invoice.
+  - `REMINDER` dikirim berkala berdasarkan interval (`BILLING_NOTIFIER_REMINDER_HOURS`).
+
+### Secret yang dibutuhkan
+
+Tambahkan secret Edge Function:
+
+```bash
+supabase secrets set BILLING_NOTIFIER_SECRET=isi_secret_acak
+```
+
+`BILLING_NOTIFIER_SECRET` dipakai lewat header `x-cron-secret`.
+Opsional: `BILLING_NOTIFIER_RETRY_MINUTES` (default `60`) untuk jeda retry agar log gagal tidak spam.
+Opsional: `BILLING_NOTIFIER_REMINDER_HOURS` (default `24`) untuk interval kirim ulang reminder.
+
+### Jalankan manual (dry-run)
+
+```bash
+curl -X POST "https://<PROJECT_REF>.supabase.co/functions/v1/billing-grace-notifier" \
+  -H "Content-Type: application/json" \
+  -H "x-cron-secret: <BILLING_NOTIFIER_SECRET>" \
+  -d '{"dry_run": true, "limit": 100}'
+```
+
+### Jalankan manual (kirim real)
+
+```bash
+curl -X POST "https://<PROJECT_REF>.supabase.co/functions/v1/billing-grace-notifier" \
+  -H "Content-Type: application/json" \
+  -H "x-cron-secret: <BILLING_NOTIFIER_SECRET>" \
+  -d '{"dry_run": false, "limit": 100}'
+```
+
+Respon menyertakan `trace_id` untuk pelacakan error.
+
+### Uji regresi: tidak bayar sampai grace berakhir
+
+```bash
+npm run streak:test-grace-expired
+```
+
+Script ini akan:
+- menyiapkan tenant uji dengan `grace_period_end` yang sudah lewat,
+- membuat invoice `PENDING`,
+- (opsional) memanggil `billing-grace-notifier` mode dry-run untuk cek reason reminder,
+- mengeksekusi `sync_streak_subscription_status`,
+- memverifikasi subscription menjadi `expired`.
+
+---
+
+## ⏱️ Halaman Informasi Cron
+
+Halaman baru untuk monitoring seluruh task cron:
+
+- Route: `/admin/cron-jobs`
+- Isi:
+  - Registry semua cron task sistem (attendance, maintenance, billing).
+  - Status schedule aktif dari `pg_cron`.
+  - Riwayat run dari `cron.job_run_details`.
+  - Log internal dari tabel `cron_job_logs`.
+  - Tombol **Sinkron Jadwal** (RPC `ensure_system_cron_jobs`).
+
+Cron task standar yang dikumpulkan:
+
+- `attendance-ingest-worker`
+- `cleanup-gps-daily`
+- `analyze-partitions-daily`
+- `cleanup-audit-logs-weekly`
+- `create-next-month-partition-monthly`
+- `streak-subscription-sync-daily`
+- `billing-grace-notifier-10m`
+
+---
+
 ## 🤖 Multi-Model Orchestration (Tetap)
 
 Workflow ini memecah task besar menjadi subtask independen, lalu mengeksekusi subtask tersebut secara paralel dengan model berbeda.

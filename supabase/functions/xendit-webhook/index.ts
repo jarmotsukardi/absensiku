@@ -135,9 +135,9 @@ serve(async (req) => {
         .from("subscriptions")
         .select("*")
         .eq("tenant_id", invoice.tenant_id)
-        .order("end_date", { ascending: false })
+        .order("updated_at", { ascending: false })
         .limit(1)
-        .single();
+        .maybeSingle();
 
       // Calculate new subscription dates
       let startDate = new Date();
@@ -148,35 +148,69 @@ serve(async (req) => {
       const endDate = new Date(startDate);
       endDate.setMonth(endDate.getMonth() + (invoice.package_duration_months || 1));
 
-      // Create or update subscription
-      const { error: subError } = await supabase.from("subscriptions").upsert({
-        tenant_id: invoice.tenant_id,
-        status: "active",
-        max_employees: invoice.employee_count,
-        start_date: startDate.toISOString().split("T")[0],
-        end_date: endDate.toISOString().split("T")[0],
-        updated_at: new Date().toISOString(),
-      }, {
-        onConflict: "tenant_id",
-      });
-
-      if (subError) {
-        logTraceError(traceId, "Failed to update subscription", subError);
+      // Update latest subscription row if exists, otherwise create a new one.
+      if (currentSub?.id) {
+        const { error: subError } = await supabase.from("subscriptions").update({
+          status: "active",
+          start_date: startDate.toISOString().split("T")[0],
+          end_date: endDate.toISOString().split("T")[0],
+          last_invoice_id: invoice.id,
+          grace_period_end: null,
+          updated_at: new Date().toISOString(),
+        }).eq("id", currentSub.id);
+        if (subError) {
+          logTraceError(traceId, "Failed to update subscription", subError);
+        }
+      } else {
+        const { error: subInsertError } = await supabase.from("subscriptions").insert({
+          tenant_id: invoice.tenant_id,
+          status: "active",
+          start_date: startDate.toISOString().split("T")[0],
+          end_date: endDate.toISOString().split("T")[0],
+          last_invoice_id: invoice.id,
+          grace_period_end: null,
+          updated_at: new Date().toISOString(),
+        });
+        if (subInsertError) {
+          logTraceError(traceId, "Failed to create subscription", subInsertError);
+        }
       }
 
-      // Record in financial ledger
-      await supabase.from("financial_ledger").insert({
-        invoice_id: invoice.id,
-        tenant_id: invoice.tenant_id,
-        transaction_type: "PAYMENT",
-        gross_amount: invoice.gross_amount,
-        xendit_fee: invoice.xendit_fee,
-        vat_amount: invoice.vat_amount,
-        net_amount: invoice.net_amount,
-        payment_source: "XENDIT",
-        transaction_date: new Date().toISOString().split("T")[0],
-        description: `Payment for ${invoice.invoice_number}`,
+      // Record in financial ledger if it does not exist yet for this invoice.
+      const { data: existingLedger, error: existingLedgerError } = await supabase
+        .from("financial_ledger")
+        .select("id")
+        .eq("invoice_id", invoice.id)
+        .limit(1)
+        .maybeSingle();
+      if (existingLedgerError) {
+        logTraceError(traceId, "Failed to check financial ledger", existingLedgerError);
+      } else if (!existingLedger) {
+        const { error: ledgerError } = await supabase.from("financial_ledger").insert({
+          invoice_id: invoice.id,
+          tenant_id: invoice.tenant_id,
+          transaction_type: "PAYMENT",
+          gross_amount: invoice.gross_amount,
+          xendit_fee: invoice.xendit_fee,
+          vat_amount: invoice.vat_amount,
+          net_amount: invoice.net_amount,
+          payment_source: "XENDIT",
+          payment_method: invoice.payment_method_type,
+          transaction_date: new Date().toISOString().split("T")[0],
+          notes: `Payment for ${invoice.invoice_number}`,
+        });
+        if (ledgerError) {
+          logTraceError(traceId, "Failed to insert financial ledger", ledgerError);
+        }
+      }
+
+      const { error: streakSyncError } = await supabase.rpc("mark_streak_invoiced", {
+        p_tenant_id: invoice.tenant_id,
+        p_invoice_id: invoice.id,
       });
+      if (streakSyncError) {
+        logTraceError(traceId, "Failed to sync streak invoiced state", streakSyncError);
+      }
 
       // Log subscription extension
       await supabase.from("payment_logs").insert({

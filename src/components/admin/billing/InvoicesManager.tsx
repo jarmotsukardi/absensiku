@@ -69,7 +69,7 @@ const statusLabels: Record<string, string> = {
 export function InvoicesManager() {
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
-  const { invoices, isLoading, verifyPayment, refetch } = useInvoices(
+  const { invoices, isLoading, verifyPayment } = useInvoices(
     statusFilter !== "all" ? { status: statusFilter } : undefined
   );
 

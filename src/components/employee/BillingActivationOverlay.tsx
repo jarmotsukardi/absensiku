@@ -39,22 +39,25 @@ export function BillingActivationOverlay({ tenantId, employeeId, billingMode }: 
       // In a full implementation, you'd check per-employee payment status
       if (subscription?.status === "active" && subscription?.end_date) {
         const endDate = new Date(subscription.end_date);
-        setHasPaid(endDate > new Date());
-      } else {
-        // Check streak status - if reached target and within grace period, still accessible
-        const { data: streak } = await supabase
-          .from("stability_streaks")
-          .select("status, reached_target, grace_period_end")
-          .eq("tenant_id", tenantId)
-          .maybeSingle();
-
-        if (streak?.status === "tracking" || !streak?.reached_target) {
-          setHasPaid(true); // Still in free/tracking period
-        } else if (streak?.grace_period_end) {
-          setHasPaid(new Date(streak.grace_period_end) > new Date());
-        } else {
-          setHasPaid(false);
+        if (endDate > new Date()) {
+          setHasPaid(true);
+          return;
         }
+      }
+
+      // Check streak status - if reached target and within grace period, still accessible
+      const { data: streak } = await supabase
+        .from("stability_streaks")
+        .select("status, reached_target, grace_period_end")
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+
+      if (streak?.status === "tracking" || !streak?.reached_target) {
+        setHasPaid(true); // Still in free/tracking period
+      } else if (streak?.grace_period_end) {
+        setHasPaid(new Date(streak.grace_period_end) > new Date());
+      } else {
+        setHasPaid(false);
       }
     } catch (error) {
       console.error("Error checking payment:", error);

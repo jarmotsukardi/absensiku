@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,11 +9,21 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
-import { Bell, Plus, Send, Trash2, Users, Filter } from "lucide-react";
+import { Bell, Plus, Send, Trash2, Search, Loader2, RefreshCw } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import { id as localeId } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { SearchableSelect } from "@/components/ui/searchable-select";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
 interface Notification {
   id: string;
@@ -25,35 +35,103 @@ interface Notification {
   created_at: string;
 }
 
+interface TenantOption {
+  id: string;
+  name: string;
+}
+
 export default function NotificationManagement() {
+  const PAGE_SIZE = 20;
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [tenants, setTenants] = useState<TenantOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterType, setFilterType] = useState<string>("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
   
   // Form state
   const [title, setTitle] = useState("");
   const [message, setMessage] = useState("");
   const [type, setType] = useState<string>("info");
-  const [targetType, setTargetType] = useState<string>("all");
+  const [targetType, setTargetType] = useState<string>("all_admin");
+  const [selectedTenantId, setSelectedTenantId] = useState<string>("");
 
-  useEffect(() => {
-    fetchNotifications();
+  const requiresTenantTarget = targetType === "org_admin" || targetType === "org_employee";
+  const selectedTenantName = tenants.find((tenant) => tenant.id === selectedTenantId)?.name || "";
+
+  const fetchNotifications = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      let query = supabase
+        .from("notifications")
+        .select("*", { count: "exact" })
+        .order("created_at", { ascending: false })
+        .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
+
+      if (filterType !== "all") {
+        query = query.eq("type", filterType);
+      }
+
+      if (searchQuery.trim()) {
+        const escaped = searchQuery.trim().replace(/[%_]/g, "\\$&");
+        query = query.or(`title.ilike.%${escaped}%,message.ilike.%${escaped}%`);
+      }
+
+      const { data, error, count } = await query;
+      if (error) throw error;
+
+      setNotifications((data || []) as Notification[]);
+      setTotalCount(count || 0);
+    } catch (error) {
+      const errorRef = reportError(error, "admin.notifications.fetch", {
+        filter_type: filterType,
+        page: currentPage,
+      });
+      toast.error(appendErrorReference("Gagal memuat notifikasi", errorRef));
+      setNotifications([]);
+      setTotalCount(0);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [currentPage, filterType, searchQuery]);
+
+  const fetchTenants = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from("tenants")
+        .select("id, name")
+        .eq("is_active", true)
+        .order("name");
+
+      if (error) throw error;
+      setTenants((data || []) as TenantOption[]);
+    } catch (error) {
+      const errorRef = reportError(error, "admin.notifications.fetch_tenants");
+      toast.error(appendErrorReference("Gagal memuat daftar organisasi", errorRef));
+      setTenants([]);
+    }
   }, []);
 
-  const fetchNotifications = async () => {
-    setIsLoading(true);
-    const { data, error } = await supabase
-      .from('notifications')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(100);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filterType]);
 
-    if (!error && data) {
-      setNotifications(data);
+  useEffect(() => {
+    void fetchNotifications();
+  }, [fetchNotifications]);
+
+  useEffect(() => {
+    void fetchTenants();
+  }, [fetchTenants]);
+
+  useEffect(() => {
+    if (!requiresTenantTarget) {
+      setSelectedTenantId("");
     }
-    setIsLoading(false);
-  };
+  }, [requiresTenantTarget]);
 
   const sendBroadcastNotification = async () => {
     if (!title || !message) {
@@ -61,16 +139,27 @@ export default function NotificationManagement() {
       return;
     }
 
+    if (requiresTenantTarget && !selectedTenantId) {
+      toast.error("Pilih organisasi terlebih dahulu");
+      return;
+    }
+
     setIsSending(true);
     
     try {
       // Get all users based on target
-      let query = supabase.from('user_roles').select('user_id');
+      let query = supabase.from("user_roles").select("user_id");
       
-      if (targetType === 'admin') {
-        query = query.in('role', ['super_admin', 'admin_instansi']);
-      } else if (targetType === 'employee') {
-        query = query.eq('role', 'pegawai');
+      if (targetType === "all_admin") {
+        query = query.in("role", ["super_admin", "admin_instansi"]);
+      } else if (targetType === "org_admin") {
+        query = query
+          .eq("tenant_id", selectedTenantId)
+          .eq("role", "admin_instansi");
+      } else if (targetType === "org_employee") {
+        query = query
+          .eq("tenant_id", selectedTenantId)
+          .in("role", ["pegawai", "atasan"]);
       }
       
       const { data: users, error: usersError } = await query;
@@ -83,7 +172,16 @@ export default function NotificationManagement() {
       }
 
       // Create notifications for all users
-      const uniqueUserIds = [...new Set(users.map(u => u.user_id))];
+      const uniqueUserIds = Array.from(
+        new Set((users || []).map((u) => u.user_id).filter(Boolean))
+      ) as string[];
+
+      if (uniqueUserIds.length === 0) {
+        toast.error("Tidak ada user valid untuk menerima notifikasi");
+        setIsSending(false);
+        return;
+      }
+
       const notificationsToInsert = uniqueUserIds.map(userId => ({
         user_id: userId,
         title,
@@ -98,31 +196,47 @@ export default function NotificationManagement() {
 
       if (insertError) throw insertError;
 
-      toast.success(`Notifikasi berhasil dikirim ke ${uniqueUserIds.length} user`);
+      const targetLabel =
+        targetType === "all_admin"
+          ? "seluruh admin"
+          : targetType === "org_admin"
+            ? `admin organisasi ${selectedTenantName || "terpilih"}`
+            : `pegawai organisasi ${selectedTenantName || "terpilih"}`;
+      toast.success(`Notifikasi berhasil dikirim ke ${uniqueUserIds.length} user (${targetLabel})`);
       setIsDialogOpen(false);
       setTitle("");
       setMessage("");
       setType("info");
-      fetchNotifications();
+      setTargetType("all_admin");
+      setSelectedTenantId("");
+      await fetchNotifications();
     } catch (error) {
-      console.error('Error sending notification:', error);
-      toast.error("Gagal mengirim notifikasi");
+      const errorRef = reportError(error, "admin.notifications.send", {
+        target_type: targetType,
+        tenant_id: selectedTenantId || null,
+      });
+      toast.error(appendErrorReference("Gagal mengirim notifikasi", errorRef));
     } finally {
       setIsSending(false);
     }
   };
 
   const deleteNotification = async (id: string) => {
-    const { error } = await supabase
-      .from('notifications')
-      .delete()
-      .eq('id', id);
-
-    if (!error) {
+    try {
+      const { error } = await supabase
+        .from("notifications")
+        .delete()
+        .eq("id", id);
+      if (error) throw error;
       toast.success("Notifikasi berhasil dihapus");
-      setNotifications(prev => prev.filter(n => n.id !== id));
-    } else {
-      toast.error("Gagal menghapus notifikasi");
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+      setTotalCount((prev) => Math.max(0, prev - 1));
+      if (notifications.length === 1 && currentPage > 1) {
+        setCurrentPage((prev) => prev - 1);
+      }
+    } catch (error) {
+      const errorRef = reportError(error, "admin.notifications.delete", { notification_id: id });
+      toast.error(appendErrorReference("Gagal menghapus notifikasi", errorRef));
     }
   };
 
@@ -139,6 +253,8 @@ export default function NotificationManagement() {
     }
   };
 
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+
   return (
     <SuperAdminLayout
       title="Manajemen Notifikasi"
@@ -154,7 +270,7 @@ export default function NotificationManagement() {
                   <Bell className="h-5 w-5 text-primary" />
                 </div>
                 <div>
-                  <p className="text-2xl font-bold">{notifications.length}</p>
+                  <p className="text-2xl font-bold">{totalCount}</p>
                   <p className="text-sm text-muted-foreground">Total Notifikasi</p>
                 </div>
               </div>
@@ -214,12 +330,28 @@ export default function NotificationManagement() {
                           <SelectValue placeholder="Pilih target" />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="all">Semua User</SelectItem>
-                          <SelectItem value="admin">Admin Saja</SelectItem>
-                          <SelectItem value="employee">Pegawai Saja</SelectItem>
+                          <SelectItem value="all_admin">Seluruh Admin</SelectItem>
+                          <SelectItem value="org_admin">Admin Organisasi (pilih organisasi)</SelectItem>
+                          <SelectItem value="org_employee">Pegawai Suatu Organisasi</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
+                    {requiresTenantTarget && (
+                      <div className="space-y-2">
+                        <Label>Nama Organisasi</Label>
+                        <SearchableSelect
+                          value={selectedTenantId}
+                          onValueChange={setSelectedTenantId}
+                          options={tenants.map((tenant) => ({
+                            value: tenant.id,
+                            label: tenant.name,
+                          }))}
+                          placeholder="Pilih nama organisasi"
+                          searchPlaceholder="Cari nama organisasi..."
+                          emptyMessage="Organisasi tidak ditemukan."
+                        />
+                      </div>
+                    )}
                     <div className="space-y-2">
                       <Label>Tipe Notifikasi</Label>
                       <Select value={type} onValueChange={setType}>
@@ -256,7 +388,7 @@ export default function NotificationManagement() {
                     <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
                       Batal
                     </Button>
-                    <Button onClick={sendBroadcastNotification} disabled={isSending}>
+                    <Button onClick={sendBroadcastNotification} disabled={isSending || (requiresTenantTarget && !selectedTenantId)}>
                       <Send className="h-4 w-4 mr-2" />
                       {isSending ? "Mengirim..." : "Kirim"}
                     </Button>
@@ -266,6 +398,37 @@ export default function NotificationManagement() {
             </CardContent>
           </Card>
         </div>
+
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex flex-col sm:flex-row gap-4">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="Cari judul/pesan notifikasi..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+              <Select value={filterType} onValueChange={setFilterType}>
+                <SelectTrigger className="w-full sm:w-[160px]">
+                  <SelectValue placeholder="Filter tipe" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Semua</SelectItem>
+                  <SelectItem value="info">Info</SelectItem>
+                  <SelectItem value="success">Sukses</SelectItem>
+                  <SelectItem value="warning">Peringatan</SelectItem>
+                  <SelectItem value="error">Error</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button variant="outline" size="icon" onClick={() => void fetchNotifications()}>
+                <RefreshCw className="h-4 w-4" />
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Notifications Table */}
         <Card>
@@ -295,7 +458,7 @@ export default function NotificationManagement() {
                   <TableRow>
                     <TableCell colSpan={6} className="text-center py-8">
                       <div className="flex items-center justify-center gap-2">
-                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-primary"></div>
+                        <Loader2 className="h-5 w-5 animate-spin text-primary" />
                         Memuat...
                       </div>
                     </TableCell>
@@ -342,6 +505,50 @@ export default function NotificationManagement() {
                 )}
               </TableBody>
             </Table>
+            {totalPages > 1 && (
+              <div className="mt-4">
+                <Pagination>
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (currentPage > 1) setCurrentPage((prev) => prev - 1);
+                        }}
+                        className={currentPage <= 1 ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1)
+                      .filter((page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1)
+                      .map((page) => (
+                        <PaginationItem key={page}>
+                          <PaginationLink
+                            href="#"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setCurrentPage(page);
+                            }}
+                            isActive={currentPage === page}
+                          >
+                            {page}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (currentPage < totalPages) setCurrentPage((prev) => prev + 1);
+                        }}
+                        className={currentPage >= totalPages ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate, Link, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -33,27 +33,7 @@ const Auth = () => {
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>();
 
-  useEffect(() => {
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      if (session?.user) {
-        setTimeout(() => {
-          checkUserRoleAndRedirect(session.user.id);
-        }, 0);
-      }
-    });
-
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        checkUserRoleAndRedirect(session.user.id);
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, [navigate]);
-
-  const checkUserRoleAndRedirect = async (userId: string) => {
+  const checkUserRoleAndRedirect = useCallback(async (userId: string) => {
     try {
       const { data: roles } = await supabase.from("user_roles").select("role").eq("user_id", userId);
 
@@ -79,17 +59,37 @@ const Auth = () => {
           navigate("/org", { replace: true });
           return;
         } else {
-          // Pegawai - redirect ke dashboard
-          navigate("/employee/dashboard", { replace: true });
+          // Pegawai/umum - redirect ke dashboard desktop (tanpa absensi)
+          navigate("/dashboard", { replace: true });
         }
       } else {
-        // User tanpa role khusus - kemungkinan pegawai biasa
-        navigate("/employee/dashboard", { replace: true });
+        // User tanpa role khusus - default ke dashboard desktop
+        navigate("/dashboard", { replace: true });
       }
     } catch (error) {
-      navigate("/employee/dashboard", { replace: true });
+      navigate("/dashboard", { replace: true });
     }
-  };
+  }, [navigate, toast]);
+
+  useEffect(() => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session?.user) {
+        setTimeout(() => {
+          checkUserRoleAndRedirect(session.user.id);
+        }, 0);
+      }
+    });
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        checkUserRoleAndRedirect(session.user.id);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [checkUserRoleAndRedirect]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();

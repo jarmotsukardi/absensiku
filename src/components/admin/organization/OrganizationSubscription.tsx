@@ -3,7 +3,6 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -15,7 +14,6 @@ import {
 import { 
   CreditCard, 
   Calendar, 
-  Users, 
   TrendingUp,
   CheckCircle2,
   Clock,
@@ -31,7 +29,6 @@ interface Subscription {
   id: string;
   tenant_id: string;
   status: string | null;
-  max_employees: number | null;
   start_date: string | null;
   end_date: string | null;
 }
@@ -41,21 +38,12 @@ interface OrganizationSubscriptionProps {
   organizationName: string;
 }
 
-const plans = [
-  { id: "starter", name: "Starter", employees: 10, price: 250000 },
-  { id: "basic", name: "Basic", employees: 50, price: 500000 },
-  { id: "professional", name: "Professional", employees: 200, price: 1500000 },
-  { id: "enterprise", name: "Enterprise", employees: 1000, price: 5000000 },
-  { id: "unlimited", name: "Unlimited", employees: 99999, price: 10000000 },
-];
-
 export function OrganizationSubscription({ tenantId, organizationName }: OrganizationSubscriptionProps) {
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState({
     status: "trial",
-    max_employees: 2,
     duration: "1_month",
   });
 
@@ -73,7 +61,6 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
         setSubscription(data);
         setFormData({
           status: data.status || "trial",
-          max_employees: data.max_employees || 2,
           duration: "1_month",
         });
       }
@@ -111,7 +98,6 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
 
       const updateData = {
         status: formData.status as "trial" | "active" | "expired" | "cancelled",
-        max_employees: formData.max_employees,
         start_date: now.toISOString().split("T")[0],
         end_date: endDate.toISOString().split("T")[0],
       };
@@ -152,14 +138,6 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
     }
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat("id-ID", {
-      style: "currency",
-      currency: "IDR",
-      minimumFractionDigits: 0,
-    }).format(amount);
-  };
-
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
@@ -189,10 +167,10 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
               </div>
             </div>
             <div className="flex items-center gap-3 p-4 rounded-lg border">
-              <Users className="h-5 w-5 text-blue-500" />
+              <TrendingUp className="h-5 w-5 text-blue-500" />
               <div>
-                <p className="text-sm text-muted-foreground">Maks. Pegawai</p>
-                <p className="font-semibold">{subscription?.max_employees || 2}</p>
+                <p className="text-sm text-muted-foreground">Kebijakan Akses</p>
+                <p className="font-semibold">Streak Monitoring</p>
               </div>
             </div>
             <div className="flex items-center gap-3 p-4 rounded-lg border">
@@ -228,7 +206,7 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
           <CardDescription>Ubah paket atau perpanjang langganan</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
               <Label>Status Langganan</Label>
               <Select
@@ -247,16 +225,6 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Maksimal Pegawai</Label>
-              <Input
-                type="number"
-                value={formData.max_employees}
-                onChange={(e) =>
-                  setFormData({ ...formData, max_employees: parseInt(e.target.value) || 2 })
-                }
-              />
-            </div>
-            <div className="space-y-2">
               <Label>Durasi</Label>
               <Select
                 value={formData.duration}
@@ -272,32 +240,6 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
                   <SelectItem value="1_year">1 Tahun</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
-          </div>
-
-          <div>
-            <Label className="mb-3 block">Pilih Paket</Label>
-            <div className="grid gap-3 md:grid-cols-5">
-              {plans.map((plan) => (
-                <Card
-                  key={plan.id}
-                  className={`cursor-pointer transition-all ${
-                    formData.max_employees === plan.employees
-                      ? "border-primary ring-2 ring-primary/20"
-                      : "hover:border-primary/50"
-                  }`}
-                  onClick={() => setFormData({ ...formData, max_employees: plan.employees })}
-                >
-                  <CardContent className="pt-4 text-center">
-                    <h4 className="font-semibold">{plan.name}</h4>
-                    <p className="text-2xl font-bold text-primary mt-1">
-                      {plan.employees === 99999 ? "∞" : plan.employees}
-                    </p>
-                    <p className="text-xs text-muted-foreground">pegawai</p>
-                    <p className="text-sm font-medium mt-2">{formatCurrency(plan.price)}/bln</p>
-                  </CardContent>
-                </Card>
-              ))}
             </div>
           </div>
 

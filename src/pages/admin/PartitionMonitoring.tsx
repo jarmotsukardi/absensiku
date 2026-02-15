@@ -1,14 +1,16 @@
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
+import { useNavigate } from "react-router-dom";
 import {
   Database,
   HardDrive,
@@ -20,7 +22,8 @@ import {
   Clock,
   BarChart3,
   Loader2,
-  Play
+  Play,
+  BookOpen
 } from "lucide-react";
 
 interface PartitionStat {
@@ -48,12 +51,167 @@ interface PartitionCreationLog {
   end_date: string;
 }
 
+interface GlossaryItem {
+  term: string;
+  description: string;
+  category: "Konsep" | "Aksi" | "Ukuran" | "Log" | "Keandalan";
+}
+
+type MaintenanceAction = 'all' | 'cleanup_gps' | 'create_partition' | 'analyze' | 'cleanup_audit';
+
+const actionLabels: Record<MaintenanceAction, string> = {
+  all: 'Semua maintenance',
+  cleanup_gps: 'Cleanup GPS',
+  create_partition: 'Buat partisi',
+  analyze: 'VACUUM ANALYZE',
+  cleanup_audit: 'Cleanup audit log',
+};
+
+const extractFunctionErrorMessage = async (error: unknown): Promise<string> => {
+  const fallback = typeof error === "object" && error !== null && "message" in error && typeof (error as { message?: unknown }).message === "string"
+    ? ((error as { message: string }).message || "Terjadi kesalahan")
+    : "Terjadi kesalahan tidak dikenal";
+
+  const maybeContext = (error as { context?: Response })?.context;
+  if (!maybeContext) return fallback;
+
+  let detailed = fallback;
+  try {
+    const raw = await maybeContext.clone().text();
+    if (raw) {
+      try {
+        const json = JSON.parse(raw) as { error?: string; message?: string; trace_id?: string };
+        const errMsg = json.error || json.message;
+        if (errMsg) detailed = `${fallback} - ${errMsg}`;
+        if (json.trace_id) detailed = `${detailed} [trace: ${json.trace_id}]`;
+      } catch {
+        detailed = `${fallback} - ${raw}`;
+      }
+    }
+  } catch {
+    // ignore read-body errors and use fallback
+  }
+
+  if (maybeContext.status === 401 || maybeContext.status === 403) {
+    return `${detailed} (Sesi login tidak valid/kedaluwarsa. Silakan login ulang.)`;
+  }
+
+  return `${detailed} [HTTP ${maybeContext.status}]`;
+};
+
+const isJwtAuthError = (message?: string | null) =>
+  Boolean(message) && /(invalid jwt|jwt expired|token.*expired|invalid token|401)/i.test(message);
+
+const ensureValidFunctionAccessToken = async (): Promise<string> => {
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError) {
+    throw new Error(`Gagal memeriksa sesi login: ${sessionError.message}`);
+  }
+
+  const currentSession = sessionData.session;
+  if (!currentSession?.access_token) {
+    throw new Error("Sesi login tidak ditemukan. Silakan login ulang.");
+  }
+
+  let accessToken = currentSession.access_token;
+
+  const validateToken = async (token: string) => {
+    const { data: userData, error: userError } = await supabase.auth.getUser(token);
+    return { isValid: Boolean(userData.user && !userError), errorMessage: userError?.message };
+  };
+
+  // 1) Validasi token ke Auth server (bukan hanya baca dari local storage)
+  const firstValidation = await validateToken(accessToken);
+  if (firstValidation.isValid) {
+    return accessToken;
+  }
+
+  // 2) Jika invalid/expired, coba refresh session sekali
+  const { data: refreshedData, error: refreshError } = await supabase.auth.refreshSession();
+  if (refreshError || !refreshedData.session?.access_token) {
+    if (isJwtAuthError(firstValidation.errorMessage)) {
+      await supabase.auth.signOut();
+      throw new Error("Sesi login tidak valid/kedaluwarsa. Silakan login ulang.");
+    }
+    throw new Error(refreshError?.message || "Sesi login kedaluwarsa. Silakan login ulang lalu coba lagi.");
+  }
+
+  accessToken = refreshedData.session.access_token;
+
+  // 3) Validasi ulang token hasil refresh
+  const secondValidation = await validateToken(accessToken);
+  if (!secondValidation.isValid) {
+    await supabase.auth.signOut();
+    throw new Error("Sesi login tidak valid/kedaluwarsa. Silakan login ulang.");
+  }
+
+  return accessToken;
+};
+
+const PARTITION_GLOSSARY: GlossaryItem[] = [
+  { term: "Partitioned Table", description: "Tabel induk yang datanya dipecah menjadi beberapa partisi agar query lebih cepat dan maintenance lebih ringan.", category: "Konsep" },
+  { term: "Partisi Bulanan", description: "Pemisahan data absensi per bulan (contoh: attendance_records_p2026_02) untuk mengurangi beban scan data.", category: "Konsep" },
+  { term: "Partition Pruning", description: "Optimasi database yang hanya membaca partisi relevan sesuai filter tanggal.", category: "Konsep" },
+  { term: "Parent Table", description: "Tabel utama (attendance_records_partitioned) tempat semua partisi ditautkan.", category: "Konsep" },
+  { term: "Buat Partisi", description: "Aksi membuat partisi bulan berikutnya agar insert absensi tidak gagal saat pergantian bulan.", category: "Aksi" },
+  { term: "Cleanup GPS", description: "Aksi menghapus kolom/jejak lokasi lama (di atas batas retensi) agar ukuran tabel tetap terkendali.", category: "Aksi" },
+  { term: "VACUUM ANALYZE", description: "Perintah optimasi untuk merapikan storage dan memperbarui statistik query planner.", category: "Aksi" },
+  { term: "Cleanup Audit Log", description: "Aksi pembersihan log audit lama sesuai retensi untuk menekan pertumbuhan data historis.", category: "Aksi" },
+  { term: "Jalankan Semua", description: "Menjalankan seluruh aksi maintenance berurutan: cleanup GPS, create partition, analyze, cleanup audit.", category: "Aksi" },
+  { term: "Row Count", description: "Jumlah baris data pada suatu partisi.", category: "Ukuran" },
+  { term: "Table Size", description: "Ukuran fisik data utama tabel (tanpa index).", category: "Ukuran" },
+  { term: "Index Size", description: "Ukuran total seluruh index pada partisi.", category: "Ukuran" },
+  { term: "Total Size", description: "Akumulasi ukuran tabel + index + overhead storage.", category: "Ukuran" },
+  { term: "Date Range", description: "Rentang tanggal yang dicakup oleh sebuah partisi.", category: "Ukuran" },
+  { term: "Cleanup Log", description: "Riwayat eksekusi cleanup GPS beserta total record yang dibersihkan.", category: "Log" },
+  { term: "Partition Creation Log", description: "Riwayat partisi yang berhasil dibuat otomatis/manual.", category: "Log" },
+  { term: "Cutoff Date", description: "Batas tanggal untuk menentukan data lama yang akan dibersihkan.", category: "Log" },
+  { term: "Edge Function", description: "Fungsi backend Supabase yang mengeksekusi maintenance terjadwal/ manual.", category: "Keandalan" },
+  { term: "RPC (Remote Procedure Call)", description: "Pemanggilan fungsi SQL di database dari aplikasi (mis. get_partition_stats).", category: "Keandalan" },
+  { term: "Cron Job", description: "Jadwal otomatis yang mengeksekusi maintenance tanpa intervensi manual.", category: "Keandalan" },
+  { term: "Warning Partial", description: "Status ketika sebagian langkah maintenance berhasil, tetapi ada langkah yang gagal.", category: "Keandalan" },
+];
+
 const PartitionMonitoring = () => {
+  const navigate = useNavigate();
   const [partitionStats, setPartitionStats] = useState<PartitionStat[]>([]);
   const [cleanupLogs, setCleanupLogs] = useState<CleanupLog[]>([]);
   const [partitionLogs, setPartitionLogs] = useState<PartitionCreationLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRunningMaintenance, setIsRunningMaintenance] = useState(false);
+  const [glossaryQuery, setGlossaryQuery] = useState("");
+
+  const filteredGlossary = useMemo(() => {
+    if (!glossaryQuery.trim()) return PARTITION_GLOSSARY;
+    const q = glossaryQuery.toLowerCase();
+    return PARTITION_GLOSSARY.filter((item) =>
+      item.term.toLowerCase().includes(q) || item.description.toLowerCase().includes(q) || item.category.toLowerCase().includes(q)
+    );
+  }, [glossaryQuery]);
+
+  const runMaintenanceViaRpc = async (action: Exclude<MaintenanceAction, "all">) => {
+    if (action === "cleanup_gps") {
+      const { data, error } = await supabase.rpc("cleanup_gps_data_partitioned");
+      if (error) throw new Error(`RPC cleanup_gps_data_partitioned gagal: ${error.message}`);
+      return { success: true, data };
+    }
+
+    if (action === "create_partition") {
+      const { error } = await supabase.rpc("create_next_month_partition");
+      if (error) throw new Error(`RPC create_next_month_partition gagal: ${error.message}`);
+      return { success: true, data: { success: true, message: "Next month partition ensured" } };
+    }
+
+    if (action === "analyze") {
+      const { data, error } = await supabase.rpc("analyze_attendance_partitions");
+      if (error) throw new Error(`RPC analyze_attendance_partitions gagal: ${error.message}`);
+      return { success: true, data };
+    }
+
+    const { data, error } = await supabase.rpc("cleanup_old_audit_logs");
+    if (error) throw new Error(`RPC cleanup_old_audit_logs gagal: ${error.message}`);
+    return { success: true, data };
+  };
 
   const fetchData = async () => {
     setIsLoading(true);
@@ -99,32 +257,135 @@ const PartitionMonitoring = () => {
     fetchData();
   }, []);
 
-  const runMaintenance = async (action: 'all' | 'cleanup_gps' | 'create_partition' | 'analyze' | 'cleanup_audit') => {
+  const runSingleMaintenance = async (action: Exclude<MaintenanceAction, 'all'>) => {
+    const accessToken = await ensureValidFunctionAccessToken();
+    const { data, error } = await supabase.functions.invoke('partition-maintenance', {
+      body: { action },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (error) {
+      const detailed = await extractFunctionErrorMessage(error);
+      if (isJwtAuthError(detailed)) {
+        // Fallback ke jalur RPC agar tetap bisa maintenance saat gateway function menolak JWT.
+        const rpcResult = await runMaintenanceViaRpc(action);
+        return {
+          success: rpcResult.success,
+          data: rpcResult.data,
+          errorMessage: null,
+        };
+      }
+      throw new Error(detailed);
+    }
+
+    const success = data?.success !== false;
+    return {
+      success,
+      data,
+      errorMessage: success ? null : 'Selesai dengan warning',
+    };
+  };
+
+  const runMaintenance = async (action: MaintenanceAction) => {
+    const forceReauth = async () => {
+      try {
+        await supabase.auth.signOut({ scope: "local" });
+      } catch {
+        // ignore sign out errors
+      }
+
+      // Bersihkan token Supabase yang mungkin stale di browser
+      if (typeof window !== "undefined") {
+        const keysToClear: string[] = [];
+        for (let i = 0; i < localStorage.length; i += 1) {
+          const key = localStorage.key(i);
+          if (!key) continue;
+          if (key.startsWith("sb-") || key.includes("supabase.auth")) {
+            keysToClear.push(key);
+          }
+        }
+        keysToClear.forEach((key) => localStorage.removeItem(key));
+      }
+
+      navigate("/admin/login", { replace: true });
+    };
+
     setIsRunningMaintenance(true);
     try {
-      const { data, error } = await supabase.functions.invoke('partition-maintenance', {
-        body: { action }
-      });
+      if (action === 'all') {
+        const steps: Array<Exclude<MaintenanceAction, 'all'>> = [
+          'cleanup_gps',
+          'create_partition',
+          'analyze',
+          'cleanup_audit',
+        ];
 
-      if (error) throw error;
+        let successCount = 0;
+        const failedSteps: string[] = [];
+        let authInvalid = false;
 
-      const actionLabels: Record<string, string> = {
-        all: 'Semua maintenance',
-        cleanup_gps: 'Cleanup GPS',
-        create_partition: 'Buat partisi',
-        analyze: 'VACUUM ANALYZE',
-        cleanup_audit: 'Cleanup audit log'
-      };
+        for (const step of steps) {
+          try {
+            const result = await runSingleMaintenance(step);
+            if (result.success) {
+              successCount += 1;
+            } else {
+              failedSteps.push(actionLabels[step]);
+            }
+          } catch (stepError) {
+            const stepMessage = stepError instanceof Error ? stepError.message : 'Terjadi kesalahan';
+            failedSteps.push(`${actionLabels[step]} (${stepMessage})`);
 
-      toast.success(`${actionLabels[action]} berhasil dijalankan`, {
-        description: data.success ? 'Proses selesai tanpa error' : 'Selesai dengan beberapa warning'
-      });
+            if (isJwtAuthError(stepMessage)) {
+              authInvalid = true;
+              break;
+            }
+          }
+        }
+
+        if (authInvalid) {
+          toast.error("Sesi login tidak valid/kedaluwarsa", {
+            description: "Anda akan diarahkan ke halaman login untuk autentikasi ulang.",
+          });
+          await forceReauth();
+          return;
+        }
+
+        if (failedSteps.length === 0) {
+          toast.success(`${actionLabels[action]} berhasil dijalankan`, {
+            description: `${successCount}/${steps.length} aksi selesai tanpa error`
+          });
+        } else {
+          toast.error(`${actionLabels[action]} selesai dengan sebagian gagal`, {
+            description: `${successCount}/${steps.length} aksi berhasil. Gagal: ${failedSteps.join('; ')}`
+          });
+        }
+      } else {
+        const result = await runSingleMaintenance(action);
+        if (result.success) {
+          toast.success(`${actionLabels[action]} berhasil dijalankan`, {
+            description: 'Proses selesai tanpa error'
+          });
+        } else {
+          toast.error(`${actionLabels[action]} selesai dengan warning`, {
+            description: result.errorMessage || 'Periksa log maintenance'
+          });
+        }
+      }
 
       // Refresh data
       await fetchData();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Terjadi kesalahan";
       console.error('Maintenance error:', error);
+
+      if (isJwtAuthError(message)) {
+        await forceReauth();
+        return;
+      }
+
       toast.error('Gagal menjalankan maintenance', {
         description: message
       });
@@ -432,6 +693,61 @@ const PartitionMonitoring = () => {
             </CardContent>
           </Card>
         </div>
+
+      {/* Glossary */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <BookOpen className="h-5 w-5" />
+            Glosarium Monitoring Partisi
+          </CardTitle>
+          <CardDescription>
+            Penjelasan istilah teknis dan operasional agar proses monitoring serta maintenance lebih mudah dipahami.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="relative max-w-md">
+            <Input
+              value={glossaryQuery}
+              onChange={(e) => setGlossaryQuery(e.target.value)}
+              placeholder="Cari istilah glosarium..."
+              className="pl-9"
+            />
+            <BookOpen className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          </div>
+
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[220px]">Istilah</TableHead>
+                  <TableHead className="w-[130px]">Kategori</TableHead>
+                  <TableHead>Penjelasan</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredGlossary.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={3} className="text-center py-6 text-muted-foreground">
+                      Istilah tidak ditemukan.
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filteredGlossary.map((item) => (
+                    <TableRow key={item.term}>
+                      <TableCell className="font-medium">{item.term}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{item.category}</Badge>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{item.description}</TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
       </div>
     </SuperAdminLayout>
   );

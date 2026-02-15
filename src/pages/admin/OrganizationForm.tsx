@@ -172,7 +172,6 @@ export default function OrganizationForm() {
           await supabase.from("subscriptions").insert({
             tenant_id: newTenant.id,
             status: "trial",
-            max_employees: 2,
           });
         }
 

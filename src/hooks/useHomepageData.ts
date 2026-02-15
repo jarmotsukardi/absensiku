@@ -81,7 +81,6 @@ interface PricingPlan {
   period: string;
   features: string[];
   is_popular: boolean;
-  max_employees: number;
 }
 
 interface PricingSectionSettings {

@@ -14,18 +14,18 @@ interface PricingSectionProps {
 const defaultPlans: PricingPlan[] = [
   {
     id: "1", name: "Akses", price: 0, period: "", description: "Coba fitur lengkap untuk tim kecil",
-    features: ["Maksimal 5 - 50 pegawai", "Semua fitur absensi GPS", "Laporan dasar", "Audit trail", "Dukungan email"],
-    is_popular: false, max_employees: 50,
+    features: ["Aktivasi berbasis streak monitoring", "Semua fitur absensi GPS", "Laporan dasar", "Audit trail", "Dukungan email"],
+    is_popular: false,
   },
   {
     id: "2", name: "Profesional", price: 3500, period: "/pegawai/bulan", description: "Untuk instansi dan perusahaan",
     features: ["Pegawai tidak terbatas", "Multi OPD & kantor", "Laporan lengkap", "Audit trail lengkap", "Alur persetujuan multi-level", "Dukungan prioritas", "API akses"],
-    is_popular: true, max_employees: 0,
+    is_popular: true,
   },
   {
     id: "3", name: "Enterprise", price: 0, period: "", description: "Solusi custom untuk kebutuhan khusus",
     features: ["Semua fitur Profesional", "On-premise deployment", "Integrasi custom", "SLA khusus", "Account manager dedicated", "Training & onboarding"],
-    is_popular: false, max_employees: 0,
+    is_popular: false,
   },
 ];
 
