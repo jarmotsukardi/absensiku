@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,38 +11,62 @@ import { Plus, Pencil, Trash2, Search, FolderTree } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
 type OPD = Tables<"opd">;
 
 export default function OPDManagement() {
+  const PAGE_SIZE = 20;
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingOpd, setEditingOpd] = useState<OPD | null>(null);
   const [formData, setFormData] = useState({ code: "", name: "" });
 
-  const fetchOPD = async () => {
+  const fetchOPD = useCallback(async () => {
     try {
       setIsLoading(true);
-      const { data, error } = await supabase
+      let query = supabase
         .from("opd")
-        .select("*")
-        .order("name");
+        .select("*", { count: "exact" })
+        .order("name")
+        .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
+
+      if (searchTerm.trim()) {
+        const escaped = searchTerm.trim().replace(/[%_]/g, "\\$&");
+        query = query.or(`name.ilike.%${escaped}%,code.ilike.%${escaped}%`);
+      }
+
+      const { data, error, count } = await query;
 
       if (error) throw error;
       setOpdList(data || []);
+      setTotalCount(count || 0);
     } catch (error) {
       console.error("Error fetching OPD:", error);
       toast.error("Gagal memuat data OPD");
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [currentPage, searchTerm]);
 
   useEffect(() => {
-    fetchOPD();
-  }, []);
+    void fetchOPD();
+  }, [fetchOPD]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -83,7 +107,7 @@ export default function OPDManagement() {
       setIsDialogOpen(false);
       setEditingOpd(null);
       setFormData({ code: "", name: "" });
-      fetchOPD();
+      void fetchOPD();
     } catch (error) {
       console.error("Error saving OPD:", error);
       toast.error("Gagal menyimpan OPD");
@@ -103,18 +127,14 @@ export default function OPDManagement() {
       const { error } = await supabase.from("opd").delete().eq("id", id);
       if (error) throw error;
       toast.success("OPD berhasil dihapus");
-      fetchOPD();
+      void fetchOPD();
     } catch (error) {
       console.error("Error deleting OPD:", error);
       toast.error("Gagal menghapus OPD");
     }
   };
 
-  const filteredOPD = opdList.filter(
-    (opd) =>
-      opd.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      opd.code.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   return (
     <SuperAdminLayout>
@@ -181,7 +201,7 @@ export default function OPDManagement() {
               Daftar OPD
             </CardTitle>
             <CardDescription>
-              Total {filteredOPD.length} OPD terdaftar
+              Total {totalCount} OPD terdaftar
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -215,16 +235,16 @@ export default function OPDManagement() {
                         Memuat data...
                       </TableCell>
                     </TableRow>
-                  ) : filteredOPD.length === 0 ? (
+                  ) : opdList.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={5} className="text-center py-8">
                         Tidak ada data OPD
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredOPD.map((opd, index) => (
+                    opdList.map((opd, index) => (
                       <TableRow key={opd.id}>
-                        <TableCell>{index + 1}</TableCell>
+                        <TableCell>{(currentPage - 1) * PAGE_SIZE + index + 1}</TableCell>
                         <TableCell className="font-medium">{opd.code}</TableCell>
                         <TableCell>{opd.name}</TableCell>
                         <TableCell>
@@ -256,6 +276,50 @@ export default function OPDManagement() {
                 </TableBody>
               </Table>
             </div>
+            {totalPages > 1 && (
+              <div className="mt-4">
+                <Pagination>
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (currentPage > 1) setCurrentPage((prev) => prev - 1);
+                        }}
+                        className={currentPage <= 1 ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1)
+                      .filter((page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1)
+                      .map((page) => (
+                        <PaginationItem key={page}>
+                          <PaginationLink
+                            href="#"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setCurrentPage(page);
+                            }}
+                            isActive={currentPage === page}
+                          >
+                            {page}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (currentPage < totalPages) setCurrentPage((prev) => prev + 1);
+                        }}
+                        className={currentPage >= totalPages ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

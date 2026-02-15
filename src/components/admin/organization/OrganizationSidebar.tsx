@@ -333,16 +333,6 @@ export function OrganizationSidebar({ organizationName = "Organisasi", organizat
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
-              tooltip="Bantuan"
-              onClick={() => window.open("https://docs.absensiku.id", "_blank")}
-              className="text-sidebar-foreground/70 hover:text-sidebar-foreground"
-            >
-              <HelpCircle className="h-4 w-4" />
-              <span>Bantuan</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
               tooltip="Keluar"
               onClick={handleLogout}
               className="text-red-400 hover:text-red-300 hover:bg-red-500/10"

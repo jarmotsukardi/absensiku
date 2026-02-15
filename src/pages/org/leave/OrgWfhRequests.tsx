@@ -5,6 +5,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Home, CheckCircle2, XCircle, Clock, Loader2 } from "lucide-react";
@@ -26,6 +34,7 @@ type WfhRequest = Tables<"wfh_requests"> & {
 };
 
 export default function OrgWfhRequests() {
+  const PAGE_SIZE = 20;
   const [requests, setRequests] = useState<WfhRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
@@ -34,6 +43,8 @@ export default function OrgWfhRequests() {
   const [selectedRequest, setSelectedRequest] = useState<string | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data.user));
@@ -67,15 +78,19 @@ export default function OrgWfhRequests() {
       return;
     }
 
-    const { data, error } = await supabase
+    const { data, error, count } = await supabase
       .from("wfh_requests")
-      .select("*, employees!wfh_requests_employee_id_fkey(name, nip, opd(name, code))")
+      .select("*, employees!wfh_requests_employee_id_fkey(name, nip, opd(name, code))", { count: "exact" })
       .in("employee_id", employeeIds)
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
     
-    if (!error) setRequests((data || []) as WfhRequest[]);
+    if (!error) {
+      setRequests((data || []) as WfhRequest[]);
+      setTotalCount(count || 0);
+    }
     setIsLoading(false);
-  }, [tenantId]);
+  }, [currentPage, tenantId]);
 
   useEffect(() => {
     if (tenantId === undefined) return;
@@ -127,6 +142,7 @@ export default function OrgWfhRequests() {
     const { icon: Icon, label, class: cls } = map[status] || map.menunggu;
     return <Badge className={cls}><Icon className="w-3 h-3 mr-1" />{label}</Badge>;
   };
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   return (
     <OrganizationLayout>
@@ -139,7 +155,7 @@ export default function OrgWfhRequests() {
         <Card>
           <CardHeader>
             <CardTitle>Daftar Pengajuan</CardTitle>
-            <CardDescription>Pengajuan WFH dari pegawai</CardDescription>
+            <CardDescription>Total {totalCount} pengajuan WFH</CardDescription>
           </CardHeader>
           <CardContent>
             <Table>
@@ -186,6 +202,50 @@ export default function OrgWfhRequests() {
                 )}
               </TableBody>
             </Table>
+            {totalPages > 1 && (
+              <div className="mt-4">
+                <Pagination>
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (currentPage > 1) setCurrentPage((prev) => prev - 1);
+                        }}
+                        className={currentPage <= 1 ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1)
+                      .filter((page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1)
+                      .map((page) => (
+                        <PaginationItem key={page}>
+                          <PaginationLink
+                            href="#"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setCurrentPage(page);
+                            }}
+                            isActive={currentPage === page}
+                          >
+                            {page}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (currentPage < totalPages) setCurrentPage((prev) => prev + 1);
+                        }}
+                        className={currentPage >= totalPages ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

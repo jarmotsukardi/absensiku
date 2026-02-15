@@ -112,11 +112,6 @@ export default function OrgEmployeeInvitations() {
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  useEffect(() => {
-    if (!tenantId) return;
-    void fetchInvitations();
-  }, [tenantId, fetchInvitations]);
-
   const fetchTenantAndData = async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -207,6 +202,11 @@ export default function OrgEmployeeInvitations() {
       setIsLoading(false);
     }
   }, [tenantId, currentPage, filterStatus, filterOpdId, debouncedSearchTerm]);
+
+  useEffect(() => {
+    if (!tenantId) return;
+    void fetchInvitations();
+  }, [tenantId, fetchInvitations]);
 
   const generateInvitationCode = () => {
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";

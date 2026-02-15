@@ -1,8 +1,9 @@
- import { useState, useEffect, useCallback } from "react";
- import { supabase } from "@/integrations/supabase/client";
- import { toast } from "sonner";
+import { useState, useEffect, useCallback } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
+import type { TablesUpdate } from "@/integrations/supabase/types";
  
- export interface OvertimeRequest {
+export interface OvertimeRequest {
    id: string;
    employee_id: string;
    tenant_id: string;
@@ -24,7 +25,7 @@
    dates?: OvertimeRequestDate[];
  }
  
- export interface OvertimeRequestDate {
+export interface OvertimeRequestDate {
    id: string;
    overtime_request_id: string;
    date: string;
@@ -37,7 +38,7 @@
    notes: string | null;
  }
  
- export interface OvertimeSettings {
+export interface OvertimeSettings {
    id: string;
    tenant_id: string;
    is_enabled: boolean;
@@ -54,7 +55,12 @@
    notes: string | null;
  }
  
- export function useOvertimeSettings(tenantId?: string) {
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return "Terjadi kesalahan";
+};
+
+export function useOvertimeSettings(tenantId?: string) {
    const [settings, setSettings] = useState<OvertimeSettings | null>(null);
    const [isLoading, setIsLoading] = useState(true);
  
@@ -102,8 +108,8 @@
        toast.success("Pengaturan lembur berhasil disimpan");
        await fetchSettings();
        return true;
-     } catch (error: any) {
-       toast.error("Gagal menyimpan: " + error.message);
+     } catch (error: unknown) {
+       toast.error("Gagal menyimpan: " + getErrorMessage(error));
        return false;
      }
    };
@@ -111,13 +117,17 @@
    return { settings, isLoading, saveSettings, refetch: fetchSettings };
  }
  
- export function useOvertimeRequests(filters?: { 
+export function useOvertimeRequests(filters?: { 
    tenantId?: string; 
    employeeId?: string; 
    status?: string;
+   page?: number;
+   pageSize?: number;
+   searchQuery?: string;
  }) {
    const [requests, setRequests] = useState<OvertimeRequest[]>([]);
    const [isLoading, setIsLoading] = useState(true);
+   const [totalCount, setTotalCount] = useState(0);
  
    const fetchRequests = useCallback(async () => {
      try {
@@ -127,7 +137,7 @@
            *,
            employee:employees!overtime_requests_employee_id_fkey(id, name, nik),
            dates:overtime_request_dates(*)
-         `)
+         `, { count: "exact" })
          .order("created_at", { ascending: false });
  
        if (filters?.tenantId) {
@@ -139,16 +149,43 @@
        if (filters?.status) {
          query = query.eq("status", filters.status);
        }
- 
-       const { data, error } = await query;
+       if (filters?.searchQuery?.trim()) {
+         const escaped = filters.searchQuery.trim().replace(/[%_]/g, "\\$&");
+         const employeeQuery = supabase
+           .from("employees")
+           .select("id")
+           .or(`name.ilike.%${escaped}%,nik.ilike.%${escaped}%`);
+
+         if (filters?.tenantId) {
+           employeeQuery.eq("tenant_id", filters.tenantId);
+         }
+
+         const { data: employeeMatches, error: employeeError } = await employeeQuery;
+         if (employeeError) throw employeeError;
+
+         const employeeIds = (employeeMatches || []).map((employee) => employee.id);
+         if (employeeIds.length > 0) {
+           query = query.or(`request_number.ilike.%${escaped}%,employee_id.in.(${employeeIds.join(",")})`);
+         } else {
+           query = query.ilike("request_number", `%${escaped}%`);
+         }
+       }
+       if (filters?.page && filters?.pageSize) {
+         const from = (filters.page - 1) * filters.pageSize;
+         const to = from + filters.pageSize - 1;
+         query = query.range(from, to);
+       }
+
+       const { data, error, count } = await query;
        if (error) throw error;
        setRequests((data || []) as OvertimeRequest[]);
+       setTotalCount(count || 0);
      } catch (error) {
        console.error("Error fetching overtime requests:", error);
      } finally {
        setIsLoading(false);
      }
-   }, [filters?.tenantId, filters?.employeeId, filters?.status]);
+   }, [filters?.employeeId, filters?.page, filters?.pageSize, filters?.searchQuery, filters?.status, filters?.tenantId]);
  
    useEffect(() => {
      fetchRequests();
@@ -207,8 +244,8 @@
        toast.success("Pengajuan lembur berhasil dibuat");
        await fetchRequests();
        return true;
-     } catch (error: any) {
-       toast.error("Gagal mengajukan lembur: " + error.message);
+     } catch (error: unknown) {
+       toast.error("Gagal mengajukan lembur: " + getErrorMessage(error));
        return false;
      }
    };
@@ -220,7 +257,7 @@
      rejectionReason?: string
    ): Promise<boolean> => {
      try {
-       const updates: any = {
+       const updates: TablesUpdate<"overtime_requests"> = {
          status: approved ? "approved" : "rejected",
          approved_by: approverId,
          approved_at: new Date().toISOString(),
@@ -241,8 +278,8 @@
        toast.success(approved ? "Lembur disetujui" : "Lembur ditolak");
        await fetchRequests();
        return true;
-     } catch (error: any) {
-       toast.error("Gagal memproses: " + error.message);
+     } catch (error: unknown) {
+       toast.error("Gagal memproses: " + getErrorMessage(error));
        return false;
      }
    };
@@ -262,8 +299,8 @@
        toast.success("Pengajuan lembur dibatalkan");
        await fetchRequests();
        return true;
-     } catch (error: any) {
-       toast.error("Gagal membatalkan: " + error.message);
+     } catch (error: unknown) {
+       toast.error("Gagal membatalkan: " + getErrorMessage(error));
        return false;
      }
    };
@@ -271,6 +308,7 @@
    return { 
      requests, 
      isLoading, 
+     totalCount,
      createRequest, 
      approveRequest, 
      cancelRequest,

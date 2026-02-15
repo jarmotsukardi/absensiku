@@ -37,6 +37,14 @@ import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
  
  const statusConfig: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
    pending: { label: "Menunggu", variant: "secondary" },
@@ -46,6 +54,7 @@ import { resolveOrgTenantId } from "@/lib/orgTenantContext";
  };
  
 export default function OrgOvertimeRequests() {
+  const PAGE_SIZE = 20;
   const [employee, setEmployee] = useState<{ id: string } | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [isTenantReady, setIsTenantReady] = useState(false);
@@ -83,25 +92,39 @@ export default function OrgOvertimeRequests() {
   const [selectedRequest, setSelectedRequest] = useState<OvertimeRequest | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [pendingPage, setPendingPage] = useState(1);
+  const [allPage, setAllPage] = useState(1);
 
-  const { requests: pendingRequests, isLoading: loadingPending, approveRequest } =
-    useOvertimeRequests({ tenantId: tenantId || undefined, status: "pending" });
-  const { requests: allRequests, isLoading: loadingAll } = useOvertimeRequests({
+  useEffect(() => {
+    setPendingPage(1);
+    setAllPage(1);
+  }, [searchQuery]);
+
+  const {
+    requests: pendingRequests,
+    isLoading: loadingPending,
+    totalCount: pendingTotalCount,
+    approveRequest,
+  } = useOvertimeRequests({
     tenantId: tenantId || undefined,
+    status: "pending",
+    page: pendingPage,
+    pageSize: PAGE_SIZE,
+    searchQuery,
+  });
+  const { requests: allRequests, isLoading: loadingAll, totalCount: allTotalCount } = useOvertimeRequests({
+    tenantId: tenantId || undefined,
+    page: allPage,
+    pageSize: PAGE_SIZE,
+    searchQuery,
   });
 
   const displayRequests = activeTab === "pending" ? pendingRequests : allRequests;
   const isLoading = !isTenantReady || (activeTab === "pending" ? loadingPending : loadingAll);
-
-  const filteredRequests = displayRequests.filter((req) => {
-    if (!searchQuery) return true;
-    const query = searchQuery.toLowerCase();
-    return (
-      req.request_number.toLowerCase().includes(query) ||
-      req.employee?.name?.toLowerCase().includes(query) ||
-      req.employee?.nik?.toLowerCase().includes(query)
-    );
-  });
+  const totalRows = activeTab === "pending" ? pendingTotalCount : allTotalCount;
+  const activePage = activeTab === "pending" ? pendingPage : allPage;
+  const setActivePage = activeTab === "pending" ? setPendingPage : setAllPage;
+  const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
 
   const handleApprove = async (approved: boolean) => {
     if (!selectedRequest || !employee?.id) return;
@@ -137,9 +160,9 @@ export default function OrgOvertimeRequests() {
              <TabsList>
                <TabsTrigger value="pending" className="relative">
                  Menunggu
-                 {pendingRequests.length > 0 && (
+                 {pendingTotalCount > 0 && (
                    <Badge className="ml-2 h-5 w-5 p-0 justify-center">
-                     {pendingRequests.length}
+                     {pendingTotalCount}
                    </Badge>
                  )}
                </TabsTrigger>
@@ -156,10 +179,13 @@ export default function OrgOvertimeRequests() {
                />
              </div>
            </div>
+           <div className="text-sm text-muted-foreground mt-2">
+             Total {totalRows} pengajuan
+           </div>
  
            <TabsContent value="pending" className="mt-4">
              <RequestsTable 
-               requests={filteredRequests}
+               requests={displayRequests}
                isLoading={isLoading}
                onSelect={setSelectedRequest}
                showActions
@@ -168,11 +194,55 @@ export default function OrgOvertimeRequests() {
  
            <TabsContent value="all" className="mt-4">
              <RequestsTable 
-               requests={filteredRequests}
+               requests={displayRequests}
                isLoading={isLoading}
                onSelect={setSelectedRequest}
              />
            </TabsContent>
+           {totalPages > 1 && (
+             <div className="mt-4">
+               <Pagination>
+                 <PaginationContent>
+                   <PaginationItem>
+                     <PaginationPrevious
+                       href="#"
+                       onClick={(e) => {
+                         e.preventDefault();
+                         if (activePage > 1) setActivePage((prev) => prev - 1);
+                       }}
+                       className={activePage <= 1 ? "pointer-events-none opacity-50" : ""}
+                     />
+                   </PaginationItem>
+                   {Array.from({ length: totalPages }, (_, i) => i + 1)
+                     .filter((page) => page === 1 || page === totalPages || Math.abs(page - activePage) <= 1)
+                     .map((page) => (
+                       <PaginationItem key={page}>
+                         <PaginationLink
+                           href="#"
+                           onClick={(e) => {
+                             e.preventDefault();
+                             setActivePage(page);
+                           }}
+                           isActive={activePage === page}
+                         >
+                           {page}
+                         </PaginationLink>
+                       </PaginationItem>
+                     ))}
+                   <PaginationItem>
+                     <PaginationNext
+                       href="#"
+                       onClick={(e) => {
+                         e.preventDefault();
+                         if (activePage < totalPages) setActivePage((prev) => prev + 1);
+                       }}
+                       className={activePage >= totalPages ? "pointer-events-none opacity-50" : ""}
+                     />
+                   </PaginationItem>
+                 </PaginationContent>
+               </Pagination>
+             </div>
+           )}
          </Tabs>
  
          {/* Detail & Approval Dialog */}

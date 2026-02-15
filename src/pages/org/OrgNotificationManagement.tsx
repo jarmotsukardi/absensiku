@@ -18,6 +18,14 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
 interface Notification {
   id: string;
@@ -38,6 +46,7 @@ interface Employee {
 }
 
 export default function OrgNotificationManagement() {
+  const PAGE_SIZE = 20;
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -46,6 +55,8 @@ export default function OrgNotificationManagement() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<string>("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
   
   // Form state
   const [title, setTitle] = useState("");
@@ -75,12 +86,22 @@ export default function OrgNotificationManagement() {
     }
     const userNameMap = new Map(empData.map(e => [e.user_id, e.name]));
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('notifications')
-      .select('*')
+      .select('*', { count: "exact" })
       .in('user_id', userIds)
       .order('created_at', { ascending: false })
-      .limit(200);
+      .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
+
+    if (filterType !== "all") {
+      query = query.eq("type", filterType);
+    }
+    if (searchQuery.trim()) {
+      const escaped = searchQuery.trim().replace(/[%_]/g, "\\$&");
+      query = query.or(`title.ilike.%${escaped}%,message.ilike.%${escaped}%`);
+    }
+
+    const { data, error, count } = await query;
 
     if (!error && data) {
       const enriched = data.map(n => ({
@@ -88,6 +109,7 @@ export default function OrgNotificationManagement() {
         employee_name: userNameMap.get(n.user_id) || "Unknown"
       }));
       setNotifications(enriched);
+      setTotalCount(count || 0);
       return;
     }
 
@@ -97,7 +119,7 @@ export default function OrgNotificationManagement() {
       toast.error(appendErrorReference("Gagal memuat notifikasi organisasi", errorRef));
       setNotifications([]);
     }
-  }, []);
+  }, [currentPage, filterType, searchQuery]);
 
   const fetchEmployees = useCallback(async (tid: string) => {
     const { data, error } = await supabase
@@ -125,10 +147,7 @@ export default function OrgNotificationManagement() {
       const resolvedTenantId = await resolveOrgTenantId();
       if (resolvedTenantId) {
         setTenantId(resolvedTenantId);
-        await Promise.all([
-          fetchNotifications(resolvedTenantId),
-          fetchEmployees(resolvedTenantId),
-        ]);
+        await fetchEmployees(resolvedTenantId);
       } else {
         setTenantId(null);
         setEmployees([]);
@@ -143,11 +162,20 @@ export default function OrgNotificationManagement() {
     } finally {
       setIsLoading(false);
     }
-  }, [fetchEmployees, fetchNotifications]);
+  }, [fetchEmployees]);
 
   useEffect(() => {
     void fetchTenantAndData();
   }, [fetchTenantAndData]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filterType]);
+
+  useEffect(() => {
+    if (!tenantId) return;
+    void fetchNotifications(tenantId);
+  }, [fetchNotifications, tenantId]);
 
   const sendNotification = async () => {
     if (!title || !message) {
@@ -265,19 +293,12 @@ export default function OrgNotificationManagement() {
     }
   };
 
-  const filteredNotifications = notifications.filter(n => {
-    const matchesSearch = n.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         n.message.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         n.employee_name?.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesType = filterType === "all" || n.type === filterType;
-    return matchesSearch && matchesType;
-  });
-
   const stats = {
-    total: notifications.length,
+    total: totalCount,
     read: notifications.filter(n => n.is_read).length,
     unread: notifications.filter(n => !n.is_read).length,
   };
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   if (isLoading) {
     return (
@@ -561,7 +582,7 @@ export default function OrgNotificationManagement() {
                         </div>
                       </TableCell>
                     </TableRow>
-                  ) : filteredNotifications.length === 0 ? (
+                  ) : notifications.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                         <Bell className="h-8 w-8 mx-auto mb-2 opacity-50" />
@@ -569,7 +590,7 @@ export default function OrgNotificationManagement() {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredNotifications.map((notification) => (
+                    notifications.map((notification) => (
                       <TableRow key={notification.id}>
                         <TableCell>
                           <p className="font-medium text-sm">{notification.employee_name}</p>
@@ -616,6 +637,50 @@ export default function OrgNotificationManagement() {
                 </TableBody>
               </Table>
             </div>
+            {totalPages > 1 && (
+              <div className="mt-4">
+                <Pagination>
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (currentPage > 1) setCurrentPage((prev) => prev - 1);
+                        }}
+                        className={currentPage <= 1 ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1)
+                      .filter((page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1)
+                      .map((page) => (
+                        <PaginationItem key={page}>
+                          <PaginationLink
+                            href="#"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setCurrentPage(page);
+                            }}
+                            isActive={currentPage === page}
+                          >
+                            {page}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (currentPage < totalPages) setCurrentPage((prev) => prev + 1);
+                        }}
+                        className={currentPage >= totalPages ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

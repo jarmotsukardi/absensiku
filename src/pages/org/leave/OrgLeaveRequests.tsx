@@ -7,6 +7,14 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { Search, ClipboardList, Check, X, AlertTriangle, Clock } from "lucide-react";
 import { toast } from "sonner";
 import { format, differenceInDays, isBefore, startOfDay } from "date-fns";
@@ -24,12 +32,15 @@ type LeaveRequest = Tables<"leave_requests"> & {
 };
 
 export default function OrgLeaveRequests() {
+  const PAGE_SIZE = 20;
   const [requests, setRequests] = useState<LeaveRequest[]>([]);
   const [expiredRequests, setExpiredRequests] = useState<LeaveRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("menunggu");
   const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
 
   useEffect(() => {
     const initTenant = async () => {
@@ -72,16 +83,18 @@ export default function OrgLeaveRequests() {
 
       let query = supabase
         .from("leave_requests")
-        .select("*, employees!leave_requests_employee_id_fkey(name, nip, opd(code))")
+        .select("*, employees!leave_requests_employee_id_fkey(name, nip, opd(code))", { count: "exact" })
         .in("employee_id", employeeIds)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
 
       if (statusFilter !== "all") {
         query = query.eq("status", statusFilter as RequestStatus);
       }
 
-      const { data, error } = await query;
+      const { data, error, count } = await query;
       if (error) throw error;
+      setTotalCount(count || 0);
       
       // Separate expired ones
       const expired = (data || []).filter(
@@ -95,7 +108,7 @@ export default function OrgLeaveRequests() {
     } finally {
       setIsLoading(false);
     }
-  }, [statusFilter, tenantId]);
+  }, [currentPage, statusFilter, tenantId]);
 
   useEffect(() => {
     if (tenantId === undefined) return;
@@ -105,6 +118,10 @@ export default function OrgLeaveRequests() {
     }
     void fetchData();
   }, [fetchData, tenantId]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter]);
 
   const handleApprove = async (id: string) => {
     try {
@@ -181,6 +198,7 @@ export default function OrgLeaveRequests() {
     (req.employees?.name || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
     req.reason.toLowerCase().includes(searchTerm.toLowerCase())
   );
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   return (
     <OrganizationLayout>
@@ -196,7 +214,7 @@ export default function OrgLeaveRequests() {
         <Card>
           <CardHeader>
             <CardTitle>Daftar Permohonan</CardTitle>
-            <CardDescription>Total {filteredRequests.length} permohonan</CardDescription>
+            <CardDescription>Total {totalCount} permohonan</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex flex-wrap gap-4 mb-4">
@@ -282,6 +300,50 @@ export default function OrgLeaveRequests() {
                 )}
               </TableBody>
             </Table>
+            {totalPages > 1 && (
+              <div className="mt-4">
+                <Pagination>
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (currentPage > 1) setCurrentPage((prev) => prev - 1);
+                        }}
+                        className={currentPage <= 1 ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1)
+                      .filter((page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1)
+                      .map((page) => (
+                        <PaginationItem key={page}>
+                          <PaginationLink
+                            href="#"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setCurrentPage(page);
+                            }}
+                            isActive={currentPage === page}
+                          >
+                            {page}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (currentPage < totalPages) setCurrentPage((prev) => prev + 1);
+                        }}
+                        className={currentPage >= totalPages ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

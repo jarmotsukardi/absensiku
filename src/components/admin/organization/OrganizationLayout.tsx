@@ -6,6 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { withTimeout } from "@/lib/attendanceResilience";
+import { FloatingWhatsApp } from "@/components/common/FloatingWhatsApp";
 
 interface OrganizationLayoutProps {
   children: React.ReactNode;
@@ -180,6 +181,12 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
           <div className="p-6">{children}</div>
         </main>
       </div>
+      <FloatingWhatsApp
+        settingKey="floating_whatsapp_org_admin"
+        fallbackSettingKeys={["floating_whatsapp", "floating_whatsapp_public"]}
+        panelTitle="Dukungan Admin"
+        panelSubtitle="Layanan pelanggan & bantuan teknis"
+      />
     </SidebarProvider>
   );
 }

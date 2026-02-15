@@ -1,125 +1,217 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { HelpCircle, Search, MessageSquare, ExternalLink, BookOpen, Users, Clock, FileText, Shield, Smartphone } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { toast } from "sonner";
+import {
+  HelpCircle,
+  Search,
+  MessageSquare,
+  ExternalLink,
+  BookOpen,
+  Clock,
+  FileText,
+  Shield,
+  Smartphone,
+  Loader2,
+} from "lucide-react";
 
 interface FAQ {
   id: string;
   category: string;
   question: string;
   answer: string;
+  sort_order?: number | null;
+}
+
+interface GeneralSettingsValue {
+  supportEmail?: string;
+  supportPhone?: string;
 }
 
 const DUMMY_FAQS: FAQ[] = [
-  // Umum
   {
     id: "1",
     category: "Umum",
     question: "Bagaimana cara login ke aplikasi absensi?",
-    answer: "Untuk login, buka aplikasi atau website absensi, masukkan email dan password yang telah didaftarkan oleh admin organisasi Anda. Jika belum memiliki akun, hubungi admin untuk mendapatkan kode undangan.",
+    answer:
+      "Untuk login, buka aplikasi atau website absensi, masukkan email dan password yang telah didaftarkan oleh admin organisasi Anda.",
   },
   {
     id: "2",
-    category: "Umum",
-    question: "Apa yang harus dilakukan jika lupa password?",
-    answer: "Klik tombol 'Lupa Password' di halaman login, masukkan email Anda, dan ikuti instruksi reset password yang dikirim ke email. Pastikan email yang dimasukkan adalah email yang terdaftar di sistem.",
+    category: "Absensi",
+    question: "Mengapa absensi saya gagal karena lokasi tidak valid?",
+    answer:
+      "Absensi hanya bisa dilakukan dalam radius yang ditentukan. Pastikan GPS aktif dan Anda berada di lokasi yang benar.",
   },
   {
     id: "3",
-    category: "Umum",
-    question: "Bagaimana cara mengundang pegawai baru?",
-    answer: "Masuk ke menu Pengaturan > Undangan Pegawai, klik tombol 'Undang Pegawai Baru', isi data pegawai (nama, email, NIK), lalu kirim undangan. Pegawai akan menerima email berisi kode undangan untuk registrasi.",
+    category: "Izin & Cuti",
+    question: "Bagaimana cara mengajukan cuti?",
+    answer:
+      "Buka menu Izin/Cuti, pilih jenis cuti, tentukan tanggal, isi alasan, lalu kirim permohonan untuk persetujuan.",
   },
-  // Absensi
   {
     id: "4",
-    category: "Absensi",
-    question: "Mengapa absensi saya gagal karena lokasi tidak valid?",
-    answer: "Absensi hanya bisa dilakukan dalam radius yang ditentukan dari lokasi kantor. Pastikan GPS aktif dan Anda berada di lokasi yang benar. Jika tetap gagal, hubungi admin untuk memeriksa pengaturan radius lokasi.",
+    category: "Perangkat",
+    question: "Mengapa perangkat saya tidak bisa digunakan untuk absensi?",
+    answer:
+      "Akun terikat ke satu perangkat untuk keamanan. Jika ganti perangkat, hubungi admin untuk reset Device ID.",
   },
   {
     id: "5",
-    category: "Absensi",
-    question: "Bagaimana jika saya lupa melakukan absensi pulang?",
-    answer: "Hubungi admin organisasi untuk melakukan koreksi absensi. Admin dapat menambahkan catatan atau menyesuaikan data absensi Anda melalui menu koreksi absensi.",
-  },
-  {
-    id: "6",
-    category: "Absensi",
-    question: "Apakah bisa absensi dari rumah (WFH)?",
-    answer: "Bisa, jika organisasi Anda mengaktifkan fitur WFH. Ajukan permohonan WFH terlebih dahulu dan tunggu persetujuan atasan. Setelah disetujui, Anda bisa absensi dari lokasi WFH yang telah ditentukan.",
-  },
-  // Izin & Cuti
-  {
-    id: "7",
-    category: "Izin & Cuti",
-    question: "Bagaimana cara mengajukan cuti?",
-    answer: "Buka menu Izin/Cuti di aplikasi, pilih jenis cuti, tentukan tanggal mulai dan selesai, isi alasan, lalu kirim permohonan. Permohonan akan diteruskan ke atasan untuk persetujuan.",
-  },
-  {
-    id: "8",
-    category: "Izin & Cuti",
-    question: "Berapa lama waktu persetujuan permohonan cuti?",
-    answer: "Permohonan cuti akan otomatis ditolak jika tidak ditanggapi dalam 3 hari kerja. Pastikan untuk mengajukan cuti jauh-jauh hari agar atasan memiliki waktu untuk memproses.",
-  },
-  {
-    id: "9",
-    category: "Izin & Cuti",
-    question: "Jenis cuti apa saja yang tersedia?",
-    answer: "Tersedia beberapa jenis: Cuti Tahunan, Cuti Penting (menikah, keluarga meninggal), Cuti Sakit (dengan surat dokter), Izin, dan Dinas Luar. Setiap jenis memiliki kuota dan ketentuan berbeda.",
-  },
-  // Perangkat
-  {
-    id: "10",
-    category: "Perangkat",
-    question: "Mengapa perangkat saya tidak bisa digunakan untuk absensi?",
-    answer: "Setiap akun terikat dengan satu perangkat untuk keamanan. Jika Anda mengganti HP atau perlu reset perangkat, hubungi admin untuk melakukan reset Device ID.",
-  },
-  {
-    id: "11",
-    category: "Perangkat",
-    question: "Bagaimana jika GPS tidak akurat?",
-    answer: "Pastikan GPS/Location Services aktif, beri izin lokasi ke aplikasi, dan tunggu beberapa saat agar GPS mendapat sinyal akurat. Hindari berada di dalam gedung tertutup saat absensi.",
-  },
-  // Keamanan
-  {
-    id: "12",
     category: "Keamanan",
     question: "Apakah data absensi saya aman?",
-    answer: "Ya, data Anda disimpan dengan enkripsi dan hanya dapat diakses oleh Anda dan admin yang berwenang. Kami menerapkan standar keamanan tinggi untuk melindungi privasi pengguna.",
+    answer:
+      "Data disimpan dengan enkripsi dan hanya dapat diakses oleh pihak berwenang sesuai hak akses.",
   },
 ];
 
-const CATEGORIES = [
-  { name: "Umum", icon: BookOpen },
-  { name: "Absensi", icon: Clock },
-  { name: "Izin & Cuti", icon: FileText },
-  { name: "Perangkat", icon: Smartphone },
-  { name: "Keamanan", icon: Shield },
-];
+const CATEGORY_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  Umum: BookOpen,
+  Absensi: Clock,
+  "Izin & Cuti": FileText,
+  Perangkat: Smartphone,
+  Keamanan: Shield,
+};
 
 export default function OrgHelp() {
+  const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [faqs, setFaqs] = useState<FAQ[]>([]);
+  const [supportEmail, setSupportEmail] = useState("support@absensi.app");
+  const [supportPhone, setSupportPhone] = useState("6281234567890");
 
-  const filteredFaqs = DUMMY_FAQS.filter((faq) => {
-    const matchesSearch = 
-      faq.question.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      faq.answer.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesCategory = !selectedCategory || faq.category === selectedCategory;
-    return matchesSearch && matchesCategory;
-  });
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const { data: authData } = await supabase.auth.getUser();
+        const userId = authData.user?.id;
 
-  const groupedFaqs = filteredFaqs.reduce((acc, faq) => {
-    if (!acc[faq.category]) {
-      acc[faq.category] = [];
-    }
-    acc[faq.category].push(faq);
-    return acc;
-  }, {} as Record<string, FAQ[]>);
+        if (!userId) {
+          setFaqs(DUMMY_FAQS);
+          return;
+        }
+
+        const [roleRes, generalRes] = await Promise.all([
+          supabase
+            .from("user_roles")
+            .select("tenant_id")
+            .eq("user_id", userId)
+            .maybeSingle(),
+          supabase.from("system_settings").select("value").eq("key", "general_settings").maybeSingle(),
+        ]);
+
+        if (generalRes.data?.value && typeof generalRes.data.value === "object") {
+          const v = generalRes.data.value as unknown as GeneralSettingsValue;
+          if (typeof v.supportEmail === "string" && v.supportEmail.trim()) {
+            setSupportEmail(v.supportEmail.trim());
+          }
+          if (typeof v.supportPhone === "string" && v.supportPhone.trim()) {
+            setSupportPhone(v.supportPhone.trim());
+          }
+        }
+
+        const tenantId = roleRes.data?.tenant_id;
+        if (!tenantId) {
+          setFaqs(DUMMY_FAQS);
+          return;
+        }
+
+        const { data: tenantFaqs, error: tenantErr } = await supabase
+          .from("faqs")
+          .select("id, category, question, answer, sort_order")
+          .eq("tenant_id", tenantId)
+          .eq("is_active", true)
+          .order("sort_order", { ascending: true, nullsFirst: false });
+
+        if (tenantErr) throw tenantErr;
+
+        let finalFaqs: FAQ[] = (tenantFaqs || []).map((f) => ({
+          id: f.id,
+          category: f.category || "Umum",
+          question: f.question,
+          answer: f.answer,
+          sort_order: f.sort_order,
+        }));
+
+        if (finalFaqs.length === 0) {
+          const { data: globalFaqs, error: globalErr } = await supabase
+            .from("faqs")
+            .select("id, category, question, answer, sort_order")
+            .is("tenant_id", null)
+            .eq("is_active", true)
+            .order("sort_order", { ascending: true, nullsFirst: false });
+
+          if (globalErr) throw globalErr;
+          finalFaqs = (globalFaqs || []).map((f) => ({
+            id: f.id,
+            category: f.category || "Umum",
+            question: f.question,
+            answer: f.answer,
+            sort_order: f.sort_order,
+          }));
+        }
+
+        setFaqs(finalFaqs.length > 0 ? finalFaqs : DUMMY_FAQS);
+      } catch (error) {
+        const errorRef = reportError(error, "org.help.load_data");
+        toast.error(appendErrorReference("Gagal memuat pusat bantuan", errorRef));
+        setFaqs(DUMMY_FAQS);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    void loadData();
+  }, []);
+
+  const categories = useMemo(() => {
+    const uniq = Array.from(new Set(faqs.map((f) => f.category))).filter(Boolean);
+    return uniq.length > 0 ? uniq : ["Umum", "Absensi", "Izin & Cuti", "Perangkat", "Keamanan"];
+  }, [faqs]);
+
+  const filteredFaqs = useMemo(
+    () =>
+      faqs.filter((faq) => {
+        const q = searchQuery.trim().toLowerCase();
+        const matchesSearch =
+          !q || faq.question.toLowerCase().includes(q) || faq.answer.toLowerCase().includes(q);
+        const matchesCategory = !selectedCategory || faq.category === selectedCategory;
+        return matchesSearch && matchesCategory;
+      }),
+    [faqs, searchQuery, selectedCategory]
+  );
+
+  const groupedFaqs = useMemo(
+    () =>
+      filteredFaqs.reduce((acc, faq) => {
+        if (!acc[faq.category]) acc[faq.category] = [];
+        acc[faq.category].push(faq);
+        return acc;
+      }, {} as Record<string, FAQ[]>),
+    [filteredFaqs]
+  );
+
+  const waPhone = supportPhone.replace(/[^0-9]/g, "");
+  const waLink = waPhone
+    ? `https://wa.me/${waPhone.startsWith("0") ? `62${waPhone.slice(1)}` : waPhone}`
+    : "";
+
+  if (isLoading) {
+    return (
+      <OrganizationLayout>
+        <div className="flex items-center justify-center h-64">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      </OrganizationLayout>
+    );
+  }
 
   return (
     <OrganizationLayout>
@@ -129,10 +221,11 @@ export default function OrgHelp() {
             <HelpCircle className="h-6 w-6" />
             Pusat Bantuan
           </h1>
-          <p className="text-muted-foreground">Temukan jawaban untuk pertanyaan umum seputar aplikasi absensi</p>
+          <p className="text-muted-foreground">
+            Temukan jawaban untuk pertanyaan umum seputar aplikasi absensi
+          </p>
         </div>
 
-        {/* Search */}
         <Card>
           <CardContent className="pt-6">
             <div className="relative">
@@ -147,7 +240,6 @@ export default function OrgHelp() {
           </CardContent>
         </Card>
 
-        {/* Category Pills */}
         <div className="flex flex-wrap gap-2">
           <Button
             variant={selectedCategory === null ? "default" : "outline"}
@@ -156,24 +248,23 @@ export default function OrgHelp() {
           >
             Semua
           </Button>
-          {CATEGORIES.map((cat) => {
-            const Icon = cat.icon;
+          {categories.map((cat) => {
+            const Icon = CATEGORY_ICONS[cat] || HelpCircle;
             return (
               <Button
-                key={cat.name}
-                variant={selectedCategory === cat.name ? "default" : "outline"}
+                key={cat}
+                variant={selectedCategory === cat ? "default" : "outline"}
                 size="sm"
-                onClick={() => setSelectedCategory(cat.name)}
+                onClick={() => setSelectedCategory(cat)}
                 className="flex items-center gap-1"
               >
                 <Icon className="h-3 w-3" />
-                {cat.name}
+                {cat}
               </Button>
             );
           })}
         </div>
 
-        {/* FAQ List */}
         {Object.keys(groupedFaqs).length === 0 ? (
           <Card>
             <CardContent className="py-12 text-center">
@@ -182,39 +273,32 @@ export default function OrgHelp() {
             </CardContent>
           </Card>
         ) : (
-          Object.entries(groupedFaqs).map(([category, faqs]) => (
-            <Card key={category}>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2 text-lg">
-                  {CATEGORIES.find(c => c.name === category)?.icon && 
-                    (() => {
-                      const Icon = CATEGORIES.find(c => c.name === category)!.icon;
-                      return <Icon className="h-5 w-5" />;
-                    })()
-                  }
-                  {category}
-                </CardTitle>
-                <CardDescription>{faqs.length} pertanyaan</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Accordion type="single" collapsible className="w-full">
-                  {faqs.map((faq) => (
-                    <AccordionItem key={faq.id} value={faq.id}>
-                      <AccordionTrigger className="text-left">
-                        {faq.question}
-                      </AccordionTrigger>
-                      <AccordionContent className="text-muted-foreground">
-                        {faq.answer}
-                      </AccordionContent>
-                    </AccordionItem>
-                  ))}
-                </Accordion>
-              </CardContent>
-            </Card>
-          ))
+          Object.entries(groupedFaqs).map(([category, items]) => {
+            const Icon = CATEGORY_ICONS[category] || HelpCircle;
+            return (
+              <Card key={category}>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-lg">
+                    <Icon className="h-5 w-5" />
+                    {category}
+                  </CardTitle>
+                  <CardDescription>{items.length} pertanyaan</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Accordion type="single" collapsible className="w-full">
+                    {items.map((faq) => (
+                      <AccordionItem key={faq.id} value={faq.id}>
+                        <AccordionTrigger className="text-left">{faq.question}</AccordionTrigger>
+                        <AccordionContent className="text-muted-foreground">{faq.answer}</AccordionContent>
+                      </AccordionItem>
+                    ))}
+                  </Accordion>
+                </CardContent>
+              </Card>
+            );
+          })
         )}
 
-        {/* Contact Support */}
         <Card className="border-primary/30 bg-primary/5">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -226,11 +310,11 @@ export default function OrgHelp() {
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-3">
-            <Button variant="outline" onClick={() => window.open("mailto:support@absensi.app", "_blank")}>
+            <Button variant="outline" onClick={() => window.open(`mailto:${supportEmail}`, "_blank")}>
               <MessageSquare className="h-4 w-4 mr-2" />
               Kirim Email
             </Button>
-            <Button variant="outline" onClick={() => window.open("https://wa.me/6281234567890", "_blank")}>
+            <Button variant="outline" onClick={() => waLink && window.open(waLink, "_blank")} disabled={!waLink}>
               <ExternalLink className="h-4 w-4 mr-2" />
               WhatsApp Support
             </Button>

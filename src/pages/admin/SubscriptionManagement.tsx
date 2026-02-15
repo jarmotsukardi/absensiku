@@ -35,6 +35,14 @@ import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
 type SubscriptionStatus = "trial" | "active" | "expired" | "cancelled";
 
@@ -67,10 +75,13 @@ const isSubscriptionStatus = (status: string | null | undefined): status is Subs
   status === "trial" || status === "active" || status === "expired" || status === "cancelled";
 
 export default function SubscriptionManagement() {
+  const PAGE_SIZE = 20;
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
   const [stats, setStats] = useState({
     total: 0,
     trial: 0,
@@ -82,21 +93,42 @@ export default function SubscriptionManagement() {
   const fetchSubscriptions = useCallback(async () => {
     try {
       setIsLoading(true);
+      let tenantIds: string[] | null = null;
+      if (searchQuery.trim()) {
+        const escaped = searchQuery.trim().replace(/[%_]/g, "\\$&");
+        const { data: tenantRows, error: tenantSearchError } = await supabase
+          .from("tenants")
+          .select("id")
+          .or(`name.ilike.%${escaped}%,code.ilike.%${escaped}%`);
+        if (tenantSearchError) throw tenantSearchError;
+        tenantIds = (tenantRows || []).map((t) => t.id);
+        if (tenantIds.length === 0) {
+          setSubscriptions([]);
+          setTotalCount(0);
+          setIsLoading(false);
+          return;
+        }
+      }
 
       let query = supabase
         .from("subscriptions")
         .select(`
           *,
           tenant:tenants(name, code, organization_type)
-        `)
-        .order("created_at", { ascending: false });
+        `, { count: "exact" })
+        .order("created_at", { ascending: false })
+        .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
 
       if (statusFilter !== "all") {
         query = query.eq("status", statusFilter as SubscriptionStatus);
       }
+      if (tenantIds) {
+        query = query.in("tenant_id", tenantIds);
+      }
 
-      const { data, error } = await query;
+      const { data, error, count } = await query;
       if (error) throw error;
+      setTotalCount(count || 0);
 
       // Fetch employee counts
       const subsWithCounts = await Promise.all(
@@ -119,14 +151,29 @@ export default function SubscriptionManagement() {
 
       setSubscriptions(subsWithCounts);
 
-      // Calculate stats
-      const allSubs = subsWithCounts;
+      // Calculate stats (global, not affected by pagination)
+      const { count: total } = await supabase
+        .from("subscriptions")
+        .select("id", { count: "exact", head: true });
+      const { count: trial } = await supabase
+        .from("subscriptions")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "trial");
+      const { count: active } = await supabase
+        .from("subscriptions")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "active");
+      const { count: expired } = await supabase
+        .from("subscriptions")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "expired");
+
       setStats({
-        total: allSubs.length,
-        trial: allSubs.filter((s) => s.status === "trial").length,
-        active: allSubs.filter((s) => s.status === "active").length,
-        expired: allSubs.filter((s) => s.status === "expired").length,
-        totalRevenue: allSubs.filter((s) => s.status === "active").length * 500000,
+        total: total || 0,
+        trial: trial || 0,
+        active: active || 0,
+        expired: expired || 0,
+        totalRevenue: (active || 0) * 500000,
       });
     } catch (error) {
       const errorRef = reportError(error, "admin.subscriptions.fetch", {
@@ -136,11 +183,15 @@ export default function SubscriptionManagement() {
     } finally {
       setIsLoading(false);
     }
-  }, [statusFilter]);
+  }, [currentPage, searchQuery, statusFilter]);
 
   useEffect(() => {
     void fetchSubscriptions();
   }, [fetchSubscriptions]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, statusFilter]);
 
   const updateSubscriptionStatus = async (subId: string, newStatus: string) => {
     try {
@@ -167,12 +218,7 @@ export default function SubscriptionManagement() {
     }
   };
 
-  const filteredSubscriptions = subscriptions.filter((sub) => {
-    const tenantName = sub.tenant?.name?.toLowerCase() || "";
-    const tenantCode = sub.tenant?.code?.toLowerCase() || "";
-    const query = searchQuery.toLowerCase();
-    return tenantName.includes(query) || tenantCode.includes(query);
-  });
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat("id-ID", {
@@ -303,14 +349,14 @@ export default function SubscriptionManagement() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredSubscriptions.length === 0 ? (
+                    {subscriptions.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                           Tidak ada data langganan
                         </TableCell>
                       </TableRow>
                     ) : (
-                      filteredSubscriptions.map((sub) => {
+                      subscriptions.map((sub) => {
                         const normalizedStatus = isSubscriptionStatus(sub.status)
                           ? sub.status
                           : DEFAULT_SUBSCRIPTION_STATUS;
@@ -366,6 +412,50 @@ export default function SubscriptionManagement() {
                     )}
                   </TableBody>
                 </Table>
+              </div>
+            )}
+            {totalPages > 1 && (
+              <div className="mt-4">
+                <Pagination>
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (currentPage > 1) setCurrentPage((prev) => prev - 1);
+                        }}
+                        className={currentPage <= 1 ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1)
+                      .filter((page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1)
+                      .map((page) => (
+                        <PaginationItem key={page}>
+                          <PaginationLink
+                            href="#"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setCurrentPage(page);
+                            }}
+                            isActive={currentPage === page}
+                          >
+                            {page}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (currentPage < totalPages) setCurrentPage((prev) => prev + 1);
+                        }}
+                        className={currentPage >= totalPages ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
               </div>
             )}
           </CardContent>

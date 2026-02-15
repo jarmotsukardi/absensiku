@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,6 +17,14 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
 interface FeedbackItem {
   id: string;
@@ -66,6 +74,7 @@ const normalizeFeedbackSettings = (raw: unknown): FeedbackBugSettings => {
 };
 
 export default function FeedbackManagement() {
+  const PAGE_SIZE = 20;
   const [feedbacks, setFeedbacks] = useState<FeedbackItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("all");
@@ -82,15 +91,24 @@ export default function FeedbackManagement() {
   });
   const [isSavingFeedbackSetting, setIsSavingFeedbackSetting] = useState(false);
   const [isSuperAdminUser, setIsSuperAdminUser] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
 
   // Stats
   const [stats, setStats] = useState({ total: 0, avgRating: 0, openBugs: 0 });
 
   useEffect(() => {
-    fetchFeedbacks();
-    fetchFeedbackSettings();
-    fetchAccessRole();
+    void fetchFeedbackSettings();
+    void fetchAccessRole();
   }, []);
+
+  useEffect(() => {
+    void fetchFeedbacks();
+  }, [fetchFeedbacks]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeTab, filterRating, filterType, searchQuery]);
 
   const fetchAccessRole = async () => {
     try {
@@ -189,16 +207,35 @@ export default function FeedbackManagement() {
     }
   };
 
-  const fetchFeedbacks = async () => {
+  const fetchFeedbacks = useCallback(async () => {
     setIsLoading(true);
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("feedback_reports")
-        .select("*, tenants(name)")
+        .select("*, tenants(name)", { count: "exact" })
         .order("created_at", { ascending: false })
-        .limit(500);
+        .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
+
+      if (activeTab === "admin") {
+        query = query.eq("reporter_role", "admin_organisasi");
+      } else if (activeTab === "pegawai") {
+        query = query.eq("reporter_role", "pegawai");
+      }
+      if (filterRating !== "all") {
+        query = query.eq("rating", Number(filterRating));
+      }
+      if (filterType !== "all") {
+        query = query.eq("feedback_type", filterType);
+      }
+      if (searchQuery.trim()) {
+        const escaped = searchQuery.trim().replace(/[%_]/g, "\\$&");
+        query = query.or(`message.ilike.%${escaped}%,reporter_name.ilike.%${escaped}%`);
+      }
+
+      const { data, error, count } = await query;
 
       if (error) throw error;
+      setTotalCount(count || 0);
 
       const items = (data || []) as FeedbackItem[];
       setFeedbacks(items);
@@ -216,7 +253,7 @@ export default function FeedbackManagement() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [activeTab, currentPage, filterRating, filterType, searchQuery]);
 
   const handleResolve = async () => {
     if (!selectedFeedback) return;
@@ -247,36 +284,70 @@ export default function FeedbackManagement() {
     }
   };
 
-  const exportCsv = () => {
-    const filtered = getFilteredData();
-    const headers = ["Tanggal", "Organisasi", "Nama", "Role", "Tipe", "Rating", "Pesan", "OS", "Browser", "Status"];
-    const rows = filtered.map(f => [
-      format(new Date(f.created_at), "yyyy-MM-dd HH:mm"),
-      f.tenants?.name || "-",
-      f.reporter_name || "-",
-      f.reporter_role,
-      f.feedback_type,
-      f.rating?.toString() || "-",
-      `"${f.message.replace(/"/g, '""')}"`,
-      f.os_info || "-",
-      f.browser_info || "-",
-      f.status,
-    ]);
+  const fetchAllFilteredFeedbacks = async (): Promise<FeedbackItem[]> => {
+    let query = supabase
+      .from("feedback_reports")
+      .select("*, tenants(name)")
+      .order("created_at", { ascending: false });
 
-    const csv = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `feedback_${format(new Date(), "yyyyMMdd")}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    if (activeTab === "admin") {
+      query = query.eq("reporter_role", "admin_organisasi");
+    } else if (activeTab === "pegawai") {
+      query = query.eq("reporter_role", "pegawai");
+    }
+    if (filterRating !== "all") {
+      query = query.eq("rating", Number(filterRating));
+    }
+    if (filterType !== "all") {
+      query = query.eq("feedback_type", filterType);
+    }
+    if (searchQuery.trim()) {
+      const escaped = searchQuery.trim().replace(/[%_]/g, "\\$&");
+      query = query.or(`message.ilike.%${escaped}%,reporter_name.ilike.%${escaped}%`);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return (data || []) as FeedbackItem[];
   };
 
-  const printPdf = () => {
-    const filtered = getFilteredData();
-    const rowsHtml = filtered
-      .map((f, index) => {
+  const exportCsv = async () => {
+    try {
+      const filtered = await fetchAllFilteredFeedbacks();
+      const headers = ["Tanggal", "Organisasi", "Nama", "Role", "Tipe", "Rating", "Pesan", "OS", "Browser", "Status"];
+      const rows = filtered.map(f => [
+        format(new Date(f.created_at), "yyyy-MM-dd HH:mm"),
+        f.tenants?.name || "-",
+        f.reporter_name || "-",
+        f.reporter_role,
+        f.feedback_type,
+        f.rating?.toString() || "-",
+        `"${f.message.replace(/"/g, '""')}"`,
+        f.os_info || "-",
+        f.browser_info || "-",
+        f.status,
+      ]);
+
+      const csv = [headers.join(","), ...rows.map(r => r.join(","))].join("\n");
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `feedback_${format(new Date(), "yyyyMMdd")}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      const errorRef = createErrorRef("feedback-export");
+      console.error(`[${errorRef}] Error exporting feedback CSV:`, error);
+      toast.error(`Gagal export CSV. Ref: ${errorRef}`);
+    }
+  };
+
+  const printPdf = async () => {
+    try {
+      const filtered = await fetchAllFilteredFeedbacks();
+      const rowsHtml = filtered
+        .map((f, index) => {
         const createdAt = format(new Date(f.created_at), "dd MMM yyyy HH:mm", { locale: idLocale });
         const organization = escapeHtml(f.tenants?.name || "-");
         const reporterName = escapeHtml(f.reporter_name || "-");
@@ -299,10 +370,10 @@ export default function FeedbackManagement() {
             <td>${message}</td>
           </tr>
         `;
-      })
-      .join("");
+        })
+        .join("");
 
-    const html = `
+      const html = `
       <!doctype html>
       <html>
         <head>
@@ -351,27 +422,23 @@ export default function FeedbackManagement() {
       </html>
     `;
 
-    const printWindow = window.open("", "_blank", "width=1200,height=800");
-    if (!printWindow) {
-      toast.error("Gagal membuka jendela print. Izinkan popup browser.");
-      return;
+      const printWindow = window.open("", "_blank", "width=1200,height=800");
+      if (!printWindow) {
+        toast.error("Gagal membuka jendela print. Izinkan popup browser.");
+        return;
+      }
+      printWindow.document.write(html);
+      printWindow.document.close();
+      printWindow.focus();
+      printWindow.print();
+    } catch (error) {
+      const errorRef = createErrorRef("feedback-print");
+      console.error(`[${errorRef}] Error printing feedback PDF:`, error);
+      toast.error(`Gagal print PDF. Ref: ${errorRef}`);
     }
-    printWindow.document.write(html);
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
   };
 
-  const getFilteredData = () => {
-    return feedbacks.filter(f => {
-      if (activeTab === "admin" && f.reporter_role !== "admin_organisasi") return false;
-      if (activeTab === "pegawai" && f.reporter_role !== "pegawai") return false;
-      if (filterRating !== "all" && f.rating?.toString() !== filterRating) return false;
-      if (filterType !== "all" && f.feedback_type !== filterType) return false;
-      if (searchQuery && !f.message.toLowerCase().includes(searchQuery.toLowerCase()) && !f.reporter_name?.toLowerCase().includes(searchQuery.toLowerCase())) return false;
-      return true;
-    });
-  };
+  const getFilteredData = () => feedbacks;
 
   const renderStars = (rating: number | null) => {
     if (!rating) return <span className="text-xs text-muted-foreground">-</span>;
@@ -385,6 +452,7 @@ export default function FeedbackManagement() {
   };
 
   const filtered = getFilteredData();
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   return (
     <SuperAdminLayout title="Feedback & Bug Report" subtitle="Kelola feedback dan laporan bug dari pengguna">
@@ -540,6 +608,50 @@ export default function FeedbackManagement() {
                   ))}
                 </TableBody>
               </Table>
+            </div>
+          )}
+          {totalPages > 1 && (
+            <div className="mt-4">
+              <Pagination>
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        if (currentPage > 1) setCurrentPage((prev) => prev - 1);
+                      }}
+                      className={currentPage <= 1 ? "pointer-events-none opacity-50" : ""}
+                    />
+                  </PaginationItem>
+                  {Array.from({ length: totalPages }, (_, i) => i + 1)
+                    .filter((page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1)
+                    .map((page) => (
+                      <PaginationItem key={page}>
+                        <PaginationLink
+                          href="#"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setCurrentPage(page);
+                          }}
+                          isActive={currentPage === page}
+                        >
+                          {page}
+                        </PaginationLink>
+                      </PaginationItem>
+                    ))}
+                  <PaginationItem>
+                    <PaginationNext
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        if (currentPage < totalPages) setCurrentPage((prev) => prev + 1);
+                      }}
+                      className={currentPage >= totalPages ? "pointer-events-none opacity-50" : ""}
+                    />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
             </div>
           )}
         </CardContent>

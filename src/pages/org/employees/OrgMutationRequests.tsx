@@ -16,6 +16,15 @@ import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { AdminMutationForm } from "@/components/org/AdminMutationForm";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
+import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 
 type MutationRequestRow = Tables<"mutation_requests">;
 type MutationStatus = Enums<"request_status">;
@@ -60,10 +69,14 @@ interface MutationRequest {
 }
 
 export default function OrgMutationRequests() {
+  const PAGE_SIZE = 20;
   const [requests, setRequests] = useState<MutationRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("menunggu");
+  const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
   const [selectedRequest, setSelectedRequest] = useState<MutationRequest | null>(null);
   const [showDetailDialog, setShowDetailDialog] = useState(false);
   const [showRejectDialog, setShowRejectDialog] = useState(false);
@@ -75,6 +88,18 @@ export default function OrgMutationRequests() {
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>("");
   const [selectedEmployee, setSelectedEmployee] = useState<EmployeeOption | null>(null);
+
+  useEffect(() => {
+    const initTenant = async () => {
+      try {
+        const resolved = await resolveOrgTenantId();
+        setTenantId(resolved);
+      } catch {
+        setTenantId(null);
+      }
+    };
+    void initTenant();
+  }, []);
 
   const fetchEmployees = useCallback(async () => {
     try {
@@ -117,49 +142,61 @@ export default function OrgMutationRequests() {
   const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
+      if (!tenantId) {
+        setRequests([]);
+        setTotalCount(0);
+        return;
+      }
+
+      const employeeIds = await getTenantEmployeeIds(tenantId);
+      if (employeeIds.length === 0) {
+        setRequests([]);
+        setTotalCount(0);
+        return;
+      }
+
       let query = supabase
         .from("mutation_requests")
-        .select("*")
-        .order("created_at", { ascending: false });
+        .select("*, employees!mutation_requests_employee_id_fkey(id, name, nip, opd(name))", { count: "exact" })
+        .in("employee_id", employeeIds)
+        .order("created_at", { ascending: false })
+        .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
 
       if (statusFilter !== "all") {
         query = query.eq("status", statusFilter as MutationStatus);
       }
 
-      const { data, error } = await query;
+      const { data, error, count } = await query;
       if (error) throw error;
-      
-      // Fetch employee data separately
-      const requestsWithEmployees = await Promise.all(
-        (data || []).map(async (req: MutationRequestRow) => {
-          const { data: empData } = await supabase
-            .from("employees")
-            .select("id, name, nip, opd(name)")
-            .eq("id", req.employee_id)
-            .single();
-          
-          return {
-            ...req,
-            requested_changes: toJsonRecord(req.requested_changes),
-            original_data: toJsonRecord(req.original_data),
-            employees: empData || { id: "", name: "-", nip: "-", opd: null },
-          } as MutationRequest;
-        })
-      );
-      
+
+      const requestsWithEmployees = (data || []).map((req: MutationRequestRow & {
+        employees?: MutationRequest["employees"] | null;
+      }) => ({
+        ...req,
+        requested_changes: toJsonRecord(req.requested_changes),
+        original_data: toJsonRecord(req.original_data),
+        employees: req.employees || { id: "", name: "-", nip: "-", opd: null },
+      })) as MutationRequest[];
+
       setRequests(requestsWithEmployees);
+      setTotalCount(count || 0);
     } catch (error) {
       console.error("Error fetching data:", error);
       toast.error("Gagal memuat data");
     } finally {
       setIsLoading(false);
     }
-  }, [statusFilter]);
+  }, [currentPage, statusFilter, tenantId]);
 
   useEffect(() => {
+    if (tenantId === undefined) return;
     void fetchData();
     void fetchEmployees();
-  }, [fetchData, fetchEmployees]);
+  }, [fetchData, fetchEmployees, tenantId]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter]);
 
   const handleApprove = async (request: MutationRequest) => {
     setIsProcessing(true);
@@ -317,6 +354,7 @@ export default function OrgMutationRequests() {
       (req.employees?.nip || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
       req.reason.toLowerCase().includes(searchTerm.toLowerCase())
   );
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   return (
     <OrganizationLayout>
@@ -332,7 +370,7 @@ export default function OrgMutationRequests() {
         <Card>
           <CardHeader>
             <CardTitle>Daftar Permohonan</CardTitle>
-            <CardDescription>Total {filteredRequests.length} permohonan</CardDescription>
+            <CardDescription>Total {totalCount} permohonan</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex flex-wrap gap-4 mb-4">
@@ -418,6 +456,50 @@ export default function OrgMutationRequests() {
                     ))}
                   </TableBody>
                 </Table>
+              </div>
+            )}
+            {totalPages > 1 && (
+              <div className="mt-4">
+                <Pagination>
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (currentPage > 1) setCurrentPage((prev) => prev - 1);
+                        }}
+                        className={currentPage <= 1 ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1)
+                      .filter((page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1)
+                      .map((page) => (
+                        <PaginationItem key={page}>
+                          <PaginationLink
+                            href="#"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setCurrentPage(page);
+                            }}
+                            isActive={currentPage === page}
+                          >
+                            {page}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (currentPage < totalPages) setCurrentPage((prev) => prev + 1);
+                        }}
+                        className={currentPage >= totalPages ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
               </div>
             )}
           </CardContent>

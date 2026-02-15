@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { MessageCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,15 @@ interface FloatingWhatsAppSettings {
   animation_effect?: AnimationEffect;
 }
 
+interface FloatingWhatsAppProps {
+  settingKey?: string;
+  fallbackSettingKeys?: string[];
+  panelTitle?: string;
+  panelSubtitle?: string;
+}
+
+const defaultFallbackSettingKeys = ["floating_whatsapp"];
+
 const animationClasses: Record<AnimationEffect, string> = {
   pulse: "animate-wa-pulse",
   glow: "animate-wa-glow",
@@ -25,30 +34,57 @@ const animationClasses: Record<AnimationEffect, string> = {
   ripple: "",
 };
 
-export function FloatingWhatsApp() {
+const defaultSettings: FloatingWhatsAppSettings = {
+  enabled: false,
+  phone_number: "",
+  default_message: "Halo, saya tertarik dengan AbsensiKu",
+  welcome_text: "Halo! Ada yang bisa kami bantu?",
+  position: "bottom-right",
+  show_on_mobile: true,
+  show_on_desktop: true,
+  animation_effect: "pulse",
+};
+
+export function FloatingWhatsApp({
+  settingKey = "floating_whatsapp_public",
+  fallbackSettingKeys = defaultFallbackSettingKeys,
+  panelTitle = "Tim Support",
+  panelSubtitle = "Biasanya merespon dalam 1 jam",
+}: FloatingWhatsAppProps = {}) {
   const [settings, setSettings] = useState<FloatingWhatsAppSettings | null>(null);
   const [isOpen, setIsOpen] = useState(false);
 
-  useEffect(() => {
-    fetchSettings();
-  }, []);
-
-  const fetchSettings = async () => {
+  const fetchSettings = useCallback(async () => {
     try {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "floating_whatsapp")
-        .maybeSingle();
+      const keysToTry = [settingKey, ...fallbackSettingKeys];
 
-      if (data?.value) {
-        const settingsData = data.value as unknown as FloatingWhatsAppSettings;
-        setSettings(settingsData);
+      for (const key of keysToTry) {
+        const { data } = await supabase
+          .from("system_settings")
+          .select("value")
+          .eq("key", key)
+          .maybeSingle();
+
+        if (data?.value) {
+          const settingsData = {
+            ...defaultSettings,
+            ...(data.value as Record<string, unknown>),
+          } as FloatingWhatsAppSettings;
+          setSettings(settingsData);
+          return;
+        }
       }
+
+      setSettings(defaultSettings);
     } catch (error) {
       console.error("Error fetching floating WhatsApp settings:", error);
+      setSettings(defaultSettings);
     }
-  };
+  }, [settingKey, fallbackSettingKeys]);
+
+  useEffect(() => {
+    void fetchSettings();
+  }, [fetchSettings]);
 
   if (!settings?.enabled || !settings?.phone_number) return null;
 
@@ -85,8 +121,8 @@ export function FloatingWhatsApp() {
                 <MessageCircle className="w-5 h-5 text-success-foreground" />
               </div>
               <div>
-                <p className="font-semibold text-sm">Tim Support</p>
-                <p className="text-xs text-muted-foreground">Biasanya merespon dalam 1 jam</p>
+                <p className="font-semibold text-sm">{panelTitle}</p>
+                <p className="text-xs text-muted-foreground">{panelSubtitle}</p>
               </div>
             </div>
             <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setIsOpen(false)}>

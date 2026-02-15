@@ -10,6 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { 
   Globe, 
   Link as LinkIcon, 
@@ -80,7 +81,8 @@ export default function OrgLandingSettings() {
         setApkPemda(pemdaData.value as unknown as APKInfo);
       }
     } catch (error) {
-      console.error("Error fetching global apps:", error);
+      const errorRef = reportError(error, "org.landing_settings.fetch_global_apks");
+      toast.error(appendErrorReference("Gagal memuat data aplikasi global", errorRef));
     }
   };
 
@@ -95,7 +97,10 @@ export default function OrgLandingSettings() {
         .eq("user_id", user.id)
         .maybeSingle();
 
-      if (!roleData?.tenant_id) return;
+      if (!roleData?.tenant_id) {
+        toast.error("Tenant organisasi tidak ditemukan");
+        return;
+      }
 
       const { data, error } = await supabase
         .from("tenants")
@@ -114,8 +119,8 @@ export default function OrgLandingSettings() {
         logo_url: data.logo_url || "",
       });
     } catch (error) {
-      console.error("Error fetching tenant:", error);
-      toast.error("Gagal memuat data");
+      const errorRef = reportError(error, "org.landing_settings.fetch_tenant");
+      toast.error(appendErrorReference("Gagal memuat data tenant", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -133,10 +138,12 @@ export default function OrgLandingSettings() {
 
       if (error) throw error;
       toast.success("Pengaturan berhasil disimpan");
-      fetchTenant();
+      void fetchTenant();
     } catch (error) {
-      console.error("Error saving settings:", error);
-      toast.error("Gagal menyimpan pengaturan");
+      const errorRef = reportError(error, "org.landing_settings.save", {
+        tenant_id: tenant.id,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan", errorRef));
     } finally {
       setIsSaving(false);
     }
@@ -149,7 +156,8 @@ export default function OrgLandingSettings() {
 
   // Logo upload removed - using URL input instead
 
-  const landingUrl = tenant ? `${window.location.origin}/landing/${tenant.code?.toLowerCase()}` : "";
+  const landingCode = tenant?.code?.toLowerCase() || "";
+  const landingUrl = landingCode ? `${window.location.origin}/landing/${landingCode}` : "";
   const loginUrl = `${window.location.origin}/employee/login`;
 
   if (isLoading) {
@@ -220,17 +228,23 @@ export default function OrgLandingSettings() {
                   <div className="space-y-2">
                     <Label>Link Landing Page</Label>
                     <div className="flex gap-2">
-                      <Input value={landingUrl} readOnly className="flex-1 font-mono text-sm" />
-                      <Button variant="outline" size="icon" onClick={() => copyLink(landingUrl)}>
+                      <Input value={landingUrl || "-"} readOnly className="flex-1 font-mono text-sm" />
+                      <Button variant="outline" size="icon" onClick={() => copyLink(landingUrl)} disabled={!landingUrl}>
                         <Copy className="h-4 w-4" />
                       </Button>
-                      <Button variant="outline" size="icon" onClick={() => window.open(landingUrl, "_blank")}>
+                      <Button variant="outline" size="icon" onClick={() => window.open(landingUrl, "_blank")} disabled={!landingUrl}>
                         <ExternalLink className="h-4 w-4" />
                       </Button>
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      Halaman publik organisasi dengan informasi unduh aplikasi
-                    </p>
+                    {landingUrl ? (
+                      <p className="text-xs text-muted-foreground">
+                        Halaman publik organisasi dengan informasi unduh aplikasi
+                      </p>
+                    ) : (
+                      <p className="text-xs text-amber-600">
+                        Kode organisasi belum tersedia, link landing page belum dapat dibuat.
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -443,11 +457,11 @@ export default function OrgLandingSettings() {
                         Lihat tampilan halaman landing organisasi Anda
                       </p>
                       <div className="flex gap-2">
-                        <Button variant="outline" onClick={() => window.open(landingUrl, "_blank")}>
+                        <Button variant="outline" onClick={() => window.open(landingUrl, "_blank")} disabled={!landingUrl}>
                           <ExternalLink className="h-4 w-4 mr-2" />
                           Buka Landing Page
                         </Button>
-                        <Button variant="ghost" onClick={() => copyLink(landingUrl)}>
+                        <Button variant="ghost" onClick={() => copyLink(landingUrl)} disabled={!landingUrl}>
                           <Copy className="h-4 w-4 mr-2" />
                           Salin Link
                         </Button>

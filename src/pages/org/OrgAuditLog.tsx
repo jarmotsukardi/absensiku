@@ -9,6 +9,8 @@ import { Pagination, PaginationContent, PaginationItem, PaginationLink, Paginati
 import { supabase } from "@/integrations/supabase/client";
 import type { Json } from "@/integrations/supabase/types";
 import { formatToTimezone } from "@/lib/timezone";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { toast } from "sonner";
 import { History, Search, Filter, Plus, Pencil, Trash2, User, Calendar, Loader2, RefreshCw } from "lucide-react";
 
 interface AuditLog {
@@ -59,10 +61,22 @@ export default function OrgAuditLog() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("");
   const [actionFilter, setActionFilter] = useState<string>("all");
   const [tableFilter, setTableFilter] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery.trim());
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [actionFilter, tableFilter, debouncedSearchQuery]);
 
   const fetchLogs = useCallback(async () => {
     setIsLoading(true);
@@ -70,28 +84,48 @@ export default function OrgAuditLog() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      // Get tenant_id
-      const { data: employee } = await supabase
-        .from("employees")
+      // Get tenant_id from role (lebih konsisten untuk akun admin organisasi)
+      const { data: roleData, error: roleError } = await supabase
+        .from("user_roles")
         .select("tenant_id")
         .eq("user_id", user.id)
+        .eq("role", "admin_instansi")
         .maybeSingle();
 
-      if (!employee?.tenant_id) return;
+      if (roleError) throw roleError;
+      if (!roleData?.tenant_id) {
+        toast.error("Tenant organisasi tidak ditemukan");
+        setLogs([]);
+        setTotalCount(0);
+        return;
+      }
 
-      // Get count
-      const { count } = await supabase
+      const escapedSearch = debouncedSearchQuery.replace(/[%_]/g, "");
+
+      let countQuery = supabase
         .from("audit_logs")
         .select("*", { count: "exact", head: true })
-        .eq("tenant_id", employee.tenant_id);
+        .eq("tenant_id", roleData.tenant_id);
+
+      if (actionFilter !== "all") {
+        countQuery = countQuery.eq("action", actionFilter);
+      }
+      if (tableFilter !== "all") {
+        countQuery = countQuery.eq("table_name", tableFilter);
+      }
+      if (escapedSearch) {
+        countQuery = countQuery.ilike("table_name", `%${escapedSearch}%`);
+      }
+
+      const { count, error: countError } = await countQuery;
+      if (countError) throw countError;
 
       setTotalCount(count || 0);
 
-      // Get paginated logs
       const from = (currentPage - 1) * ITEMS_PER_PAGE;
       const to = from + ITEMS_PER_PAGE - 1;
 
-      const { data, error } = await supabase
+      let dataQuery = supabase
         .from("audit_logs")
         .select(`
           id,
@@ -103,18 +137,36 @@ export default function OrgAuditLog() {
           created_at,
           employee:employee_id(name)
         `)
-        .eq("tenant_id", employee.tenant_id)
+        .eq("tenant_id", roleData.tenant_id);
+
+      if (actionFilter !== "all") {
+        dataQuery = dataQuery.eq("action", actionFilter);
+      }
+      if (tableFilter !== "all") {
+        dataQuery = dataQuery.eq("table_name", tableFilter);
+      }
+      if (escapedSearch) {
+        dataQuery = dataQuery.ilike("table_name", `%${escapedSearch}%`);
+      }
+
+      const { data, error } = await dataQuery
         .order("created_at", { ascending: false })
         .range(from, to);
 
       if (error) throw error;
       setLogs(data || []);
     } catch (error) {
-      console.error("Error fetching audit logs:", error);
+      const errorRef = reportError(error, "org.audit_log.fetch", {
+        page: currentPage,
+        action_filter: actionFilter,
+        table_filter: tableFilter,
+        search: debouncedSearchQuery,
+      });
+      toast.error(appendErrorReference("Gagal memuat log aktivitas", errorRef));
     } finally {
       setIsLoading(false);
     }
-  }, [currentPage]);
+  }, [currentPage, actionFilter, tableFilter, debouncedSearchQuery]);
 
   useEffect(() => {
     void fetchLogs();
@@ -122,7 +174,7 @@ export default function OrgAuditLog() {
 
   const filteredLogs = logs.filter((log) => {
     const matchesSearch = 
-      log.employee?.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      log.employee?.name?.toLowerCase().includes(debouncedSearchQuery.toLowerCase()) ||
       tableLabels[log.table_name]?.toLowerCase().includes(searchQuery.toLowerCase()) ||
       log.table_name.toLowerCase().includes(searchQuery.toLowerCase());
     
