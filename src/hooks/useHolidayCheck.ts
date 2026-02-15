@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { toWorkDayOfWeek } from "@/lib/workday";
 
 interface HolidayInfo {
   isHoliday: boolean;
@@ -26,16 +27,25 @@ export function useHolidayCheck(tenantId: string | null, date?: Date) {
     const month = checkDate.getMonth() + 1;
     const day = checkDate.getDate().toString().padStart(2, "0");
     const dateStr = checkDate.toISOString().split("T")[0];
-    const dayOfWeek = checkDate.getDay(); // 0 = Sunday, 6 = Saturday
+    const dayOfWeek = toWorkDayOfWeek(checkDate); // 1 = Monday, 7 = Sunday
 
     try {
       setIsLoading(true);
 
-      // Check if weekend (Saturday or Sunday)
-      if (dayOfWeek === 0 || dayOfWeek === 6) {
+      // Check apakah hari ini termasuk hari kerja tenant
+      const { data: workHourToday } = await supabase
+        .from("work_hours")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("day_of_week", dayOfWeek)
+        .eq("is_active", true)
+        .limit(1)
+        .maybeSingle();
+
+      if (!workHourToday) {
         setHolidayInfo({
           isHoliday: true,
-          holidayName: dayOfWeek === 0 ? "Hari Minggu" : "Hari Sabtu",
+          holidayName: "Bukan hari kerja",
           holidaySource: null,
         });
         setIsLoading(false);

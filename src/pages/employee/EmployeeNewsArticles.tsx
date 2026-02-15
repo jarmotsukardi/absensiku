@@ -51,39 +51,39 @@ export default function EmployeeNewsArticles({ onBack, contentType = "all" }: Em
 
       const allItems: ContentItem[] = [];
 
-      // Fetch ONLY global news (not org-specific) - removes org news connection
-      if ((contentType === "news" || contentType === "all") && newsEnabled) {
-        const { data: newsData } = await supabase
-          .from("news")
-          .select("id, title, content, image_url, created_at")
-          .eq("is_published", true)
-          .eq("is_global", true)
-          .order("created_at", { ascending: false });
+      // Sumber tunggal konten editorial: table `articles`.
+      // Kategori "berita" => tab Berita, kategori lain => tab Artikel.
+      const { data: articlesData } = await supabase
+        .from("articles")
+        .select("id, title, content, excerpt, image_url, category, created_at")
+        .eq("is_published", true)
+        .order("created_at", { ascending: false });
 
-        if (newsData) {
-          allItems.push(...newsData.map(n => ({
-            ...n,
-            source: "news" as const,
-            excerpt: null,
-            category: "Berita",
-          })));
-        }
+      const publishedArticles = articlesData || [];
+
+      if ((contentType === "news" || contentType === "all") && newsEnabled) {
+        const newsItems = publishedArticles.filter((item) => {
+          const normalizedCategory = (item.category || "").toLowerCase().trim();
+          return normalizedCategory === "berita";
+        });
+
+        allItems.push(...newsItems.map((item) => ({
+          ...item,
+          source: "news" as const,
+          category: item.category || "Berita",
+        })));
       }
 
-      // Fetch published articles
       if ((contentType === "articles" || contentType === "all") && articlesEnabled) {
-        const { data: articlesData } = await supabase
-          .from("articles")
-          .select("id, title, content, excerpt, image_url, category, created_at")
-          .eq("is_published", true)
-          .order("created_at", { ascending: false });
+        const articleItems = publishedArticles.filter((item) => {
+          const normalizedCategory = (item.category || "").toLowerCase().trim();
+          return normalizedCategory !== "berita";
+        });
 
-        if (articlesData) {
-          allItems.push(...articlesData.map(a => ({
-            ...a,
-            source: "article" as const,
-          })));
-        }
+        allItems.push(...articleItems.map((item) => ({
+          ...item,
+          source: "article" as const,
+        })));
       }
 
       allItems.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());

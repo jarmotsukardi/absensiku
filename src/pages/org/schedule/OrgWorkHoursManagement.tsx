@@ -45,6 +45,7 @@ const daysOfWeek = [
 export default function OrgWorkHoursManagement() {
   const [workHours, setWorkHours] = useState<WorkHour[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isApplyingTemplate, setIsApplyingTemplate] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState({
@@ -65,6 +66,21 @@ export default function OrgWorkHoursManagement() {
   useEffect(() => {
     fetchData();
   }, []);
+
+  const getCurrentTenantId = async (): Promise<string | null> => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return null;
+
+    const { data: roleData, error: roleError } = await supabase
+      .from("user_roles")
+      .select("tenant_id")
+      .eq("user_id", user.id)
+      .eq("role", "admin_instansi")
+      .maybeSingle();
+
+    if (roleError) throw roleError;
+    return roleData?.tenant_id || null;
+  };
 
   const fetchData = async () => {
     try {
@@ -91,14 +107,11 @@ export default function OrgWorkHoursManagement() {
     }
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data: roleData } = await supabase
-        .from("user_roles")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .single();
+      const tenantId = await getCurrentTenantId();
+      if (!tenantId) {
+        toast.error("Tenant tidak ditemukan untuk akun ini");
+        return;
+      }
 
       if (isEditing) {
         const { error } = await supabase
@@ -116,7 +129,7 @@ export default function OrgWorkHoursManagement() {
         const { error } = await supabase
           .from("work_hours")
           .insert({
-            tenant_id: roleData?.tenant_id,
+            tenant_id: tenantId,
             institution_type: formData.institution_type,
             day_of_week: formData.day_of_week,
             time_in: formData.time_in,
@@ -139,6 +152,78 @@ export default function OrgWorkHoursManagement() {
     } catch (error) {
       console.error("Error saving work hour:", error);
       toast.error("Gagal menyimpan jam kerja");
+    }
+  };
+
+  const applyWorkDayTemplate = async (days: number[], label: string) => {
+    setIsApplyingTemplate(true);
+    try {
+      const tenantId = await getCurrentTenantId();
+      if (!tenantId) {
+        toast.error("Tenant tidak ditemukan untuk akun ini");
+        return;
+      }
+
+      const targetInstitution = filterInstitution === "all" ? formData.institution_type : filterInstitution;
+      const { data: existingRows, error: existingError } = await supabase
+        .from("work_hours")
+        .select("id, day_of_week, is_active")
+        .eq("tenant_id", tenantId)
+        .eq("institution_type", targetInstitution);
+      if (existingError) throw existingError;
+
+      const existingMap = new Map((existingRows || []).map((row) => [row.day_of_week, row] as const));
+      let affectedRows = 0;
+      const selectedDays = new Set(days);
+
+      for (const day of days) {
+        const existing = existingMap.get(day);
+        if (existing) {
+          const { error } = await supabase
+            .from("work_hours")
+            .update({
+              time_in: "08:00",
+              time_out: "17:00",
+              is_active: true,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", existing.id);
+          if (error) throw error;
+        } else {
+          const { error } = await supabase
+            .from("work_hours")
+            .insert({
+              tenant_id: tenantId,
+              institution_type: targetInstitution,
+              day_of_week: day,
+              time_in: "08:00",
+              time_out: "17:00",
+              is_active: true,
+            });
+          if (error) throw error;
+        }
+        affectedRows += 1;
+      }
+
+      for (const existing of existingRows || []) {
+        if (selectedDays.has(existing.day_of_week) || !existing.is_active) continue;
+        const { error } = await supabase
+          .from("work_hours")
+          .update({
+            is_active: false,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", existing.id);
+        if (error) throw error;
+      }
+
+      toast.success(`${label} diterapkan untuk ${getInstitutionLabel(targetInstitution)} (${affectedRows} hari aktif).`);
+      fetchData();
+    } catch (error) {
+      console.error("Error applying workday template:", error);
+      toast.error("Gagal menerapkan template hari kerja");
+    } finally {
+      setIsApplyingTemplate(false);
     }
   };
 
@@ -315,6 +400,26 @@ export default function OrgWorkHoursManagement() {
               <Button variant="outline" size="icon" onClick={resetFilters}>
                 <RotateCcw className="h-4 w-4" />
               </Button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 mb-4">
+              <Button
+                variant="secondary"
+                disabled={isApplyingTemplate}
+                onClick={() => void applyWorkDayTemplate([1, 2, 3, 4, 5], "Template Senin-Jumat")}
+              >
+                {isApplyingTemplate ? "Memproses..." : "Template Senin-Jumat"}
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={isApplyingTemplate}
+                onClick={() => void applyWorkDayTemplate([1, 2, 3, 4, 5, 6, 7], "Template Senin-Minggu")}
+              >
+                {isApplyingTemplate ? "Memproses..." : "Template Senin-Minggu"}
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Template diterapkan ke jenis instansi pada filter saat ini. Jika filter `Semua Instansi`, default ke `Pemerintahan`.
+              </p>
             </div>
 
             <Table>

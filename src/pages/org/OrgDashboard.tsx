@@ -27,6 +27,8 @@ import { OrganizationLayout } from "@/components/admin/organization/Organization
 import { OverdueRequestsOverlay } from "@/components/org/OverdueRequestsOverlay";
 import { StabilityStreakWidget } from "@/components/dashboard/StabilityStreakWidget";
 import { FloatingBugReport } from "@/components/common/FloatingBugReport";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface SubscriptionInfo {
   id: string;
@@ -51,9 +53,12 @@ interface ApkInfo {
   updated_at: string;
 }
 
+const DASHBOARD_FETCH_TIMEOUT_MS = 15000;
+
 export default function OrgDashboard() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const queryTenantId = searchParams.get("tenant_id");
   const [isLoading, setIsLoading] = useState(true);
   const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -69,8 +74,13 @@ export default function OrgDashboard() {
   const [apkInfo, setApkInfo] = useState<ApkInfo | null>(null);
 
   const fetchDashboardData = useCallback(async () => {
+    let resolvedTenantIdForLog: string | null = null;
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user } } = await withTimeout(
+        Promise.resolve(supabase.auth.getUser()),
+        DASHBOARD_FETCH_TIMEOUT_MS,
+        "Timeout verifikasi sesi dashboard organisasi"
+      );
       
       if (!user) {
         navigate("/org/login");
@@ -78,16 +88,23 @@ export default function OrgDashboard() {
       }
 
       // Resolve tenant context from roles and optional query param.
-      const { data: roleRows } = await supabase
-        .from("user_roles")
-        .select("role, tenant_id")
-        .eq("user_id", user.id)
-        .in("role", ["admin_instansi", "super_admin"]);
+      const { data: roleRows, error: roleRowsError } = await withTimeout(
+        Promise.resolve(
+          supabase
+            .from("user_roles")
+            .select("role, tenant_id")
+            .eq("user_id", user.id)
+            .in("role", ["admin_instansi", "super_admin"])
+        ),
+        DASHBOARD_FETCH_TIMEOUT_MS,
+        "Timeout membaca role pengguna organisasi"
+      );
+      if (roleRowsError) throw roleRowsError;
 
       const adminRole = roleRows?.find((r) => r.role === "admin_instansi" && r.tenant_id);
       const isSuperAdmin = roleRows?.some((r) => r.role === "super_admin");
-      const queryTenantId = searchParams.get("tenant_id");
       const resolvedTenantId = adminRole?.tenant_id || (isSuperAdmin ? queryTenantId : null);
+      resolvedTenantIdForLog = resolvedTenantId;
 
       if (!resolvedTenantId) {
         if (isSuperAdmin) {
@@ -103,11 +120,18 @@ export default function OrgDashboard() {
       setTenantId(resolvedTenantId);
 
       // Fetch subscription
-      const { data: subData } = await supabase
-        .from("subscriptions")
-        .select("*")
-        .eq("tenant_id", resolvedTenantId)
-        .maybeSingle();
+      const { data: subData, error: subError } = await withTimeout(
+        Promise.resolve(
+          supabase
+            .from("subscriptions")
+            .select("*")
+            .eq("tenant_id", resolvedTenantId)
+            .maybeSingle()
+        ),
+        DASHBOARD_FETCH_TIMEOUT_MS,
+        "Timeout membaca data langganan organisasi"
+      );
+      if (subError) throw subError;
 
       if (subData) {
         setSubscription(subData);
@@ -115,19 +139,33 @@ export default function OrgDashboard() {
 
       // Fetch display name (tenant name for super admin context, otherwise employee name).
       if (isSuperAdmin && queryTenantId) {
-        const { data: tenantData } = await supabase
-          .from("tenants")
-          .select("name")
-          .eq("id", queryTenantId)
-          .maybeSingle();
+        const { data: tenantData, error: tenantDataError } = await withTimeout(
+          Promise.resolve(
+            supabase
+              .from("tenants")
+              .select("name")
+              .eq("id", queryTenantId)
+              .maybeSingle()
+          ),
+          DASHBOARD_FETCH_TIMEOUT_MS,
+          "Timeout membaca tenant dashboard organisasi"
+        );
+        if (tenantDataError) throw tenantDataError;
         setUserName(tenantData?.name || "Admin Organisasi");
       } else {
-        const { data: empData } = await supabase
-          .from("employees")
-          .select("name")
-          .eq("user_id", user.id)
-          .eq("tenant_id", resolvedTenantId)
-          .maybeSingle();
+        const { data: empData, error: empDataError } = await withTimeout(
+          Promise.resolve(
+            supabase
+              .from("employees")
+              .select("name")
+              .eq("user_id", user.id)
+              .eq("tenant_id", resolvedTenantId)
+              .maybeSingle()
+          ),
+          DASHBOARD_FETCH_TIMEOUT_MS,
+          "Timeout membaca profil admin organisasi"
+        );
+        if (empDataError) throw empDataError;
         if (empData?.name) {
           setUserName(empData.name);
         }
@@ -135,53 +173,84 @@ export default function OrgDashboard() {
 
       // Fetch stats
       const today = new Date().toISOString().split('T')[0];
-      const { data: officeRows } = await supabase
-        .from("offices")
-        .select("id")
-        .eq("tenant_id", resolvedTenantId);
+      const { data: officeRows, error: officeRowsError } = await withTimeout(
+        Promise.resolve(
+          supabase
+            .from("offices")
+            .select("id")
+            .eq("tenant_id", resolvedTenantId)
+        ),
+        DASHBOARD_FETCH_TIMEOUT_MS,
+        "Timeout membaca daftar kantor organisasi"
+      );
+      if (officeRowsError) throw officeRowsError;
       const officeIds = (officeRows || []).map((row) => row.id);
       const attendancePromise = officeIds.length > 0
         ? supabase
           .from("attendance_records_partitioned")
-          .select("id", { count: "exact" })
+          .select("id", { count: "exact", head: true })
           .in("office_id", officeIds)
           .eq("date", today)
-        : Promise.resolve({ count: 0 as number | null });
+        : Promise.resolve({ count: 0 as number | null, error: null });
 
-      const [employeesRes, officesRes, attendanceRes, leavesRes, wfhRes, invitationsRes, apkSettings] = await Promise.all([
-        supabase
-          .from("employees")
-          .select("id", { count: "exact" })
-          .eq("tenant_id", resolvedTenantId)
-          .eq("is_active", true),
-        supabase
-          .from("offices")
-          .select("id", { count: "exact" })
-          .eq("tenant_id", resolvedTenantId)
-          .eq("is_active", true),
-        attendancePromise,
-        supabase
-          .from("leave_requests")
-          .select("id", { count: "exact" })
-          .eq("tenant_id", resolvedTenantId)
-          .eq("status", "menunggu"),
-        supabase
-          .from("wfh_requests")
-          .select("id", { count: "exact" })
-          .eq("tenant_id", resolvedTenantId)
-          .eq("status", "pending"),
-        supabase
-          .from("employee_invitations")
-          .select("id", { count: "exact" })
-          .eq("tenant_id", resolvedTenantId)
-          .eq("status", "pending")
-          .lt("expires_at", new Date().toISOString()),
-        supabase
-          .from("system_settings")
-          .select("value")
-          .eq("key", "apk_settings")
-          .maybeSingle(),
-      ]);
+      const [employeesRes, officesRes, attendanceRes, leavesRes, wfhRes, invitationsRes, apkSettings] = await withTimeout(
+        Promise.all([
+          supabase
+            .from("employees")
+            .select("id", { count: "exact", head: true })
+            .eq("tenant_id", resolvedTenantId)
+            .eq("is_active", true),
+          supabase
+            .from("offices")
+            .select("id", { count: "exact", head: true })
+            .eq("tenant_id", resolvedTenantId)
+            .eq("is_active", true),
+          attendancePromise,
+          supabase
+            .from("leave_requests")
+            .select("id", { count: "exact", head: true })
+            .eq("tenant_id", resolvedTenantId)
+            .eq("status", "menunggu"),
+          supabase
+            .from("wfh_requests")
+            .select("id", { count: "exact", head: true })
+            .eq("tenant_id", resolvedTenantId)
+            .eq("status", "pending"),
+          supabase
+            .from("employee_invitations")
+            .select("id", { count: "exact", head: true })
+            .eq("tenant_id", resolvedTenantId)
+            .eq("status", "pending")
+            .lt("expires_at", new Date().toISOString()),
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "apk_settings")
+            .maybeSingle(),
+        ]),
+        DASHBOARD_FETCH_TIMEOUT_MS,
+        "Timeout memuat statistik dashboard organisasi"
+      );
+
+      if (
+        employeesRes.error ||
+        officesRes.error ||
+        attendanceRes.error ||
+        leavesRes.error ||
+        wfhRes.error ||
+        invitationsRes.error ||
+        apkSettings.error
+      ) {
+        throw (
+          employeesRes.error ||
+          officesRes.error ||
+          attendanceRes.error ||
+          leavesRes.error ||
+          wfhRes.error ||
+          invitationsRes.error ||
+          apkSettings.error
+        );
+      }
 
       setStats({
         totalEmployees: employeesRes.count || 0,
@@ -205,12 +274,14 @@ export default function OrgDashboard() {
       }
 
     } catch (error) {
-      console.error("Error fetching dashboard:", error);
-      toast.error("Gagal memuat data dashboard");
+      const errorRef = reportError(error, "org.dashboard.fetch", {
+        tenant_id: resolvedTenantIdForLog ?? queryTenantId ?? null,
+      });
+      toast.error(appendErrorReference("Gagal memuat data dashboard", errorRef));
     } finally {
       setIsLoading(false);
     }
-  }, [navigate, searchParams]);
+  }, [navigate, queryTenantId]);
 
   useEffect(() => {
     void fetchDashboardData();

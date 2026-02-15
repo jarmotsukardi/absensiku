@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { BarChart3, Download } from "lucide-react";
+import { BarChart3, Download, Printer } from "lucide-react";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 
@@ -36,6 +36,14 @@ interface RecapData {
   tugas_luar: number;
   wfh: number;
 }
+
+const escapeHtml = (value: string): string =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 
 export default function OrgRecapReport() {
   const [recap, setRecap] = useState<RecapData[]>([]);
@@ -162,6 +170,102 @@ export default function OrgRecapReport() {
     toast.success("Export berhasil");
   };
 
+  const handlePrintPdf = () => {
+    if (recap.length === 0) {
+      toast.error("Tidak ada data untuk dicetak");
+      return;
+    }
+
+    const periodLabel = `${months[month - 1]} ${year}`;
+    const printedAt = new Date().toLocaleString("id-ID");
+    const rowsHtml = recap
+      .map(
+        (r, i) => `
+          <tr>
+            <td>${i + 1}</td>
+            <td>${escapeHtml(r.nip || "-")}</td>
+            <td>${escapeHtml(r.employee_name || "-")}</td>
+            <td>${escapeHtml(r.opd_code || "-")}</td>
+            <td>${r.hadir}</td>
+            <td>${r.terlambat}</td>
+            <td>${r.pulang_cepat}</td>
+            <td>${r.terlambat_pulang_cepat}</td>
+            <td>${r.tidak_hadir}</td>
+            <td>${r.izin}</td>
+            <td>${r.cuti}</td>
+            <td>${r.sakit}</td>
+            <td>${r.tugas_luar}</td>
+            <td>${r.wfh}</td>
+          </tr>
+        `
+      )
+      .join("");
+
+    const printWindow = window.open("", "_blank", "width=1200,height=800");
+    if (!printWindow) {
+      toast.error("Popup diblokir browser. Izinkan popup untuk cetak PDF.");
+      return;
+    }
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8" />
+          <title>Rekapitulasi Absensi</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 24px; color: #111; }
+            h1 { margin: 0 0 8px; font-size: 20px; }
+            .meta { margin: 0 0 16px; font-size: 12px; color: #444; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
+            th { background: #f3f4f6; }
+            .center { text-align: center; }
+            .footer { margin-top: 12px; font-size: 11px; color: #666; }
+            @media print {
+              body { margin: 12mm; }
+              h1 { font-size: 18px; }
+            }
+          </style>
+        </head>
+        <body>
+          <h1>Rekapitulasi Absensi Pegawai</h1>
+          <p class="meta">Periode: ${escapeHtml(periodLabel)} | Total: ${recap.length} pegawai | Dicetak: ${escapeHtml(printedAt)}</p>
+          <table>
+            <thead>
+              <tr>
+                <th>No</th>
+                <th>NIP</th>
+                <th>Nama</th>
+                <th>OPD</th>
+                <th class="center">Hadir</th>
+                <th class="center">Telat</th>
+                <th class="center">P. Cepat</th>
+                <th class="center">Telat+PC</th>
+                <th class="center">Alpa</th>
+                <th class="center">Izin</th>
+                <th class="center">Cuti</th>
+                <th class="center">Sakit</th>
+                <th class="center">Dinas</th>
+                <th class="center">WFH</th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+          <p class="footer">Sumber: AbsensiKu /org/reports/recap</p>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+
+    const printAction = () => {
+      printWindow.focus();
+      printWindow.print();
+    };
+    printWindow.onload = printAction;
+    setTimeout(printAction, 250);
+  };
+
   const months = [
     "Januari", "Februari", "Maret", "April", "Mei", "Juni",
     "Juli", "Agustus", "September", "Oktober", "November", "Desember"
@@ -178,9 +282,14 @@ export default function OrgRecapReport() {
             </h1>
             <p className="text-muted-foreground">Rekap bulanan kehadiran pegawai</p>
           </div>
-          <Button variant="outline" onClick={handleExport} disabled={recap.length === 0}>
-            <Download className="mr-2 h-4 w-4" /> Export CSV
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={handlePrintPdf} disabled={recap.length === 0}>
+              <Printer className="mr-2 h-4 w-4" /> Print PDF
+            </Button>
+            <Button variant="outline" onClick={handleExport} disabled={recap.length === 0}>
+              <Download className="mr-2 h-4 w-4" /> Export CSV
+            </Button>
+          </div>
         </div>
 
         <Card>

@@ -129,6 +129,8 @@ interface NewsItem {
   created_at: string;
 }
 
+type EmployeeTab = "home" | "history" | "requests" | "help" | "profile" | "news" | "articles" | "announcements" | "notifications" | "activation";
+
 // Pending state type untuk optimistic UI
 type PendingStatus = 'idle' | 'pending' | 'buffered' | 'jitter' | 'processing' | 'success' | 'error' | 'circuit_open';
 interface PendingState {
@@ -183,7 +185,7 @@ export default function EmployeeDashboardNew() {
   const [news, setNews] = useState<NewsItem[]>([]);
   const [newsLoading, setNewsLoading] = useState(true); // State loading terpisah untuk news
   const newsRef = React.useRef<NewsItem[]>([]); // Ref untuk mencegah flicker saat data sama
-  const [activeTab, setActiveTab] = useState<"home" | "history" | "requests" | "help" | "profile" | "news" | "articles" | "announcements" | "notifications" | "activation">("home");
+  const [activeTab, setActiveTab] = useState<EmployeeTab>("home");
   const [billingMode, setBillingMode] = useState<string | null>(null);
   const [timezone, setTimezone] = useState("Asia/Jakarta");
   const [tenantInfo, setTenantInfo] = useState<TenantInfo | null>(null);
@@ -196,7 +198,6 @@ export default function EmployeeDashboardNew() {
   const [showDeviceRegistration, setShowDeviceRegistration] = useState(false);
   const [showShiftSelection, setShowShiftSelection] = useState(false);
   const [showFlexibleAttendance, setShowFlexibleAttendance] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   
   // Map overlay state
@@ -223,6 +224,24 @@ export default function EmployeeDashboardNew() {
   const [hasNoEmployee, setHasNoEmployee] = useState(false);
   const [multipleEmployees, setMultipleEmployees] = useState<any[]>([]);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
+
+  const navigateToTab = useCallback((tab: EmployeeTab) => {
+    setActiveTab(tab);
+    const params = new URLSearchParams(location.search);
+    if (tab === "home") {
+      params.delete("tab");
+    } else {
+      params.set("tab", tab);
+    }
+    const nextSearch = params.toString();
+    navigate(
+      {
+        pathname: "/employee/dashboard",
+        search: nextSearch ? `?${nextSearch}` : "",
+      },
+      { replace: true }
+    );
+  }, [location.search, navigate]);
 
   // Leave request hook
   const { createLeaveRequest, isSubmitting: isSubmittingLeave } = useLeaveRequests(employee?.id || null);
@@ -360,7 +379,7 @@ export default function EmployeeDashboardNew() {
   // Sinkronkan tab dari query param, contoh: /employee/dashboard?tab=activation
   useEffect(() => {
     const tab = new URLSearchParams(location.search).get("tab");
-    const allowedTabs = new Set([
+    const allowedTabs = new Set<EmployeeTab>([
       "home",
       "history",
       "requests",
@@ -373,9 +392,11 @@ export default function EmployeeDashboardNew() {
       "activation",
     ]);
 
-    if (tab && allowedTabs.has(tab)) {
-      setActiveTab(tab as typeof activeTab);
+    if (tab && allowedTabs.has(tab as EmployeeTab)) {
+      setActiveTab(tab as EmployeeTab);
+      return;
     }
+    setActiveTab("home");
   }, [location.search]);
 
   // Sinkronisasi state absensi dari offline-first hook ke UI dashboard ini
@@ -521,14 +542,6 @@ export default function EmployeeDashboardNew() {
       const month = today.getMonth() + 1;
       const day = today.getDate().toString().padStart(2, "0");
       const dateStr = today.toISOString().split("T")[0];
-      const dayOfWeek = today.getDay(); // 0 = Sunday, 6 = Saturday
-
-      // Cek weekend
-      if (dayOfWeek === 0 || dayOfWeek === 6) {
-        const dayName = dayOfWeek === 0 ? "Hari Minggu" : "Hari Sabtu";
-        setWorkDayError(`Hari ini adalah ${dayName}. Absensi tidak tersedia.`);
-        return;
-      }
 
       // Cek libur nasional
       const { data: nationalHoliday } = await supabase
@@ -1155,12 +1168,9 @@ export default function EmployeeDashboardNew() {
       <EmployeeSidebar
         open={showSidebar}
         onClose={() => setShowSidebar(false)}
+        activeTab={activeTab}
         onNavigateTab={(tab) => {
-          if (tab === "notifications") {
-            setShowNotifications(true);
-          } else {
-            setActiveTab(tab as any);
-          }
+          navigateToTab(tab as EmployeeTab);
         }}
         tenantWhatsapp={(tenantInfo as any)?.whatsapp || null}
         tenantName={tenantInfo?.name}
@@ -1212,17 +1222,6 @@ export default function EmployeeDashboardNew() {
         onClose={() => setShowFlexibleAttendance(false)}
         onConfirm={handleFlexibleAttendanceConfirm}
         isLoading={isSubmitting}
-      />
-
-      {/* Employee Notifications Overlay */}
-      <EmployeeNotifications
-        open={showNotifications}
-        onOpenChange={(open) => {
-          setShowNotifications(open);
-          if (!open) {
-            fetchUnreadNotificationCount();
-          }
-        }}
       />
 
       {/* Google Maps Overlay */}
@@ -1311,7 +1310,7 @@ export default function EmployeeDashboardNew() {
               variant="ghost"
               size="icon"
               className={`text-primary-foreground relative ${unreadNotificationCount > 0 ? 'animate-pulse' : ''}`}
-              onClick={() => setShowNotifications(true)}
+              onClick={() => navigateToTab("notifications")}
             >
               <Bell className={`w-5 h-5 ${unreadNotificationCount > 0 ? 'animate-[wiggle_1s_ease-in-out_infinite]' : ''}`} />
               {unreadNotificationCount > 0 && (
@@ -1535,24 +1534,32 @@ export default function EmployeeDashboardNew() {
 
         {activeTab === "news" && (
           <React.Suspense fallback={<div className="p-4"><Skeleton className="h-40 w-full" /></div>}>
-            <EmployeeNewsArticlesLazy onBack={() => setActiveTab("home")} contentType="news" />
+            <EmployeeNewsArticlesLazy onBack={() => navigateToTab("home")} contentType="news" />
           </React.Suspense>
         )}
 
         {activeTab === "articles" && (
           <React.Suspense fallback={<div className="p-4"><Skeleton className="h-40 w-full" /></div>}>
-            <EmployeeNewsArticlesLazy onBack={() => setActiveTab("home")} contentType="articles" />
+            <EmployeeNewsArticlesLazy onBack={() => navigateToTab("home")} contentType="articles" />
           </React.Suspense>
         )}
 
         {activeTab === "announcements" && (
           <React.Suspense fallback={<div className="p-4"><Skeleton className="h-40 w-full" /></div>}>
-            <EmployeeAnnouncementsLazy tenantId={employee?.tenant_id} onBack={() => setActiveTab("home")} />
+            <EmployeeAnnouncementsLazy tenantId={employee?.tenant_id} onBack={() => navigateToTab("home")} />
           </React.Suspense>
         )}
 
         {activeTab === "notifications" && (
-          <EmployeeNotifications open={true} onOpenChange={(open) => { if (!open) setActiveTab("home"); }} />
+          <EmployeeNotifications
+            open={true}
+            onOpenChange={(open) => {
+              if (!open) {
+                fetchUnreadNotificationCount();
+                navigateToTab("home");
+              }
+            }}
+          />
         )}
 
         {activeTab === "activation" && employee?.tenant_id && (
@@ -1560,7 +1567,7 @@ export default function EmployeeDashboardNew() {
             <EmployeeActivationPageLazy
               tenantId={employee.tenant_id}
               employeeId={employee.id}
-              onBack={() => setActiveTab("home")}
+              onBack={() => navigateToTab("home")}
             />
           </React.Suspense>
         )}
@@ -1607,7 +1614,7 @@ export default function EmployeeDashboardNew() {
                   ? "text-primary"
                   : "text-muted-foreground hover:text-foreground"
               }`}
-              onClick={() => setActiveTab(item.id as any)}
+              onClick={() => navigateToTab(item.id as EmployeeTab)}
             >
               <item.icon className="w-5 h-5" />
               <span className="text-xs">{item.label}</span>

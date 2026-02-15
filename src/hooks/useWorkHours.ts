@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { toWorkDayOfWeek } from "@/lib/workday";
 
 interface WorkHoursInfo {
   time_in: string;
@@ -14,10 +15,8 @@ const timeToMinutes = (timeStr: string): number => {
   return hours * 60 + minutes;
 };
 
-// Get day of week dari date (0 = Sunday, 1 = Monday, dst)
-const getDayOfWeek = (dateStr: string): number => {
-  return new Date(dateStr).getDay();
-};
+// Get day of week dari date dalam format DB (1=Monday ... 7=Sunday)
+const getDayOfWeek = (dateStr: string): number => toWorkDayOfWeek(dateStr);
 
 export interface AttendanceKeterangan {
   status: string; // Hadir, Izin, Cuti, Sakit, Tugas Luar, Tidak Hadir

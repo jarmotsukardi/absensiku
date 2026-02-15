@@ -9,9 +9,10 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, Pencil, Trash2, AlertTriangle, RotateCcw } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, AlertTriangle, RotateCcw, Bell } from "lucide-react";
 import { toast } from "sonner";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
+import { Switch } from "@/components/ui/switch";
 
 interface AbsenceLimit {
   id: string;
@@ -32,11 +33,13 @@ export default function OrgAbsenceLimitsManagement() {
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [sendingRuleId, setSendingRuleId] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     id: "",
     max_days: 3,
     warning_type: "",
     description: "",
+    is_active: true,
   });
 
   // Pagination
@@ -64,6 +67,21 @@ export default function OrgAbsenceLimitsManagement() {
     }
   };
 
+  const getTenantId = async (): Promise<string | null> => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return null;
+
+    const { data: roleData, error: roleError } = await supabase
+      .from("user_roles")
+      .select("tenant_id")
+      .eq("user_id", user.id)
+      .eq("role", "admin_instansi")
+      .maybeSingle();
+
+    if (roleError) throw roleError;
+    return roleData?.tenant_id || null;
+  };
+
   const handleSubmit = async () => {
     if (!formData.warning_type) {
       toast.error("Jenis teguran harus diisi");
@@ -87,6 +105,7 @@ export default function OrgAbsenceLimitsManagement() {
             max_days: formData.max_days,
             warning_type: formData.warning_type,
             description: formData.description || null,
+            is_active: formData.is_active,
           })
           .eq("id", formData.id);
         if (error) throw error;
@@ -99,7 +118,7 @@ export default function OrgAbsenceLimitsManagement() {
             max_days: formData.max_days,
             warning_type: formData.warning_type,
             description: formData.description || null,
-            is_active: true,
+            is_active: formData.is_active,
           });
         if (error) throw error;
         toast.success("Batas absen berhasil ditambahkan");
@@ -120,6 +139,7 @@ export default function OrgAbsenceLimitsManagement() {
       max_days: 3,
       warning_type: "",
       description: "",
+      is_active: true,
     });
     setIsEditing(false);
   };
@@ -130,9 +150,131 @@ export default function OrgAbsenceLimitsManagement() {
       max_days: limit.max_days,
       warning_type: limit.warning_type,
       description: limit.description || "",
+      is_active: !!limit.is_active,
     });
     setIsEditing(true);
     setIsDialogOpen(true);
+  };
+
+  const toggleRuleStatus = async (limit: AbsenceLimit, nextValue: boolean) => {
+    try {
+      const { error } = await supabase
+        .from("absence_limits")
+        .update({
+          is_active: nextValue,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", limit.id);
+
+      if (error) throw error;
+      setLimits((prev) => prev.map((row) => (row.id === limit.id ? { ...row, is_active: nextValue } : row)));
+      toast.success(`Aturan ${nextValue ? "diaktifkan" : "dinonaktifkan"}.`);
+    } catch (error) {
+      console.error("Error toggling absence limit:", error);
+      toast.error("Gagal mengubah status aturan");
+    }
+  };
+
+  const notifyEmployeesByRule = async (limit: AbsenceLimit) => {
+    if (!limit.is_active) {
+      toast.error("Aturan ini nonaktif. Aktifkan terlebih dahulu.");
+      return;
+    }
+
+    setSendingRuleId(limit.id);
+    try {
+      const tenantId = await getTenantId();
+      if (!tenantId) {
+        toast.error("Tenant tidak ditemukan.");
+        return;
+      }
+
+      const { data: employees, error: employeesError } = await supabase
+        .from("employees")
+        .select("id, user_id, name")
+        .eq("tenant_id", tenantId)
+        .eq("is_active", true)
+        .not("user_id", "is", null);
+      if (employeesError) throw employeesError;
+
+      if (!employees || employees.length === 0) {
+        toast.info("Tidak ada pegawai aktif yang bisa dinotifikasi.");
+        return;
+      }
+
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = now.getMonth() + 1;
+      const period = `${year}-${String(month).padStart(2, "0")}`;
+      const startDate = `${period}-01`;
+      const endDate = now.toISOString().split("T")[0];
+      const employeeIds = employees.map((emp) => emp.id);
+
+      const { data: absentRows, error: absentError } = await supabase
+        .from("attendance_records_partitioned")
+        .select("employee_id, date, status")
+        .in("employee_id", employeeIds)
+        .gte("date", startDate)
+        .lte("date", endDate)
+        .eq("status", "tidak_hadir");
+      if (absentError) throw absentError;
+
+      const absenceCount = new Map<string, number>();
+      for (const row of absentRows || []) {
+        const current = absenceCount.get(row.employee_id) || 0;
+        absenceCount.set(row.employee_id, current + 1);
+      }
+
+      const candidateEmployees = employees.filter((emp) => (absenceCount.get(emp.id) || 0) >= limit.max_days);
+      if (candidateEmployees.length === 0) {
+        toast.info(`Belum ada pegawai mencapai batas ${limit.max_days} hari tidak hadir.`);
+        return;
+      }
+
+      const targetUserIds = candidateEmployees.map((emp) => emp.user_id).filter(Boolean) as string[];
+      const { data: existingNotifs, error: notifError } = await supabase
+        .from("notifications")
+        .select("user_id")
+        .in("user_id", targetUserIds)
+        .eq("type", "warning")
+        .contains("metadata", {
+          absence_limit_rule_id: limit.id,
+          period,
+        });
+      if (notifError) throw notifError;
+
+      const existingUserSet = new Set((existingNotifs || []).map((n) => n.user_id));
+      const inserts = candidateEmployees
+        .filter((emp) => !!emp.user_id && !existingUserSet.has(emp.user_id as string))
+        .map((emp) => {
+          const days = absenceCount.get(emp.id) || 0;
+          return {
+            user_id: emp.user_id as string,
+            title: "Peringatan Batas Absen",
+            message: `Anda tercatat tidak hadir ${days} hari pada periode ${period}. Tindakan: ${limit.warning_type}.`,
+            type: "warning",
+            metadata: {
+              source: "absence_limits",
+              absence_limit_rule_id: limit.id,
+              period,
+              absent_days: days,
+              warning_type: limit.warning_type,
+            },
+          };
+        });
+
+      if (inserts.length > 0) {
+        const { error: insertError } = await supabase.from("notifications").insert(inserts);
+        if (insertError) throw insertError;
+      }
+
+      toast.success(`Notifikasi terkirim: ${inserts.length} pegawai (aturan: ${limit.warning_type}).`);
+    } catch (error) {
+      console.error("Error sending absence warning notifications:", error);
+      toast.error("Gagal mengirim notifikasi aturan");
+    } finally {
+      setSendingRuleId(null);
+    }
   };
 
   const handleDelete = async (id: string) => {
@@ -216,6 +358,16 @@ export default function OrgAbsenceLimitsManagement() {
                     placeholder="Contoh: Teguran Lisan"
                   />
                 </div>
+                <div className="flex items-center justify-between rounded-md border p-3">
+                  <div className="space-y-0.5">
+                    <Label>Aktifkan Aturan</Label>
+                    <p className="text-xs text-muted-foreground">Hanya aturan aktif yang dipakai untuk notifikasi.</p>
+                  </div>
+                  <Switch
+                    checked={formData.is_active}
+                    onCheckedChange={(checked) => setFormData({ ...formData, is_active: checked })}
+                  />
+                </div>
                 <div className="grid gap-2">
                   <Label>Keterangan (opsional)</Label>
                   <Textarea
@@ -293,11 +445,26 @@ export default function OrgAbsenceLimitsManagement() {
                         {limit.description || "-"}
                       </TableCell>
                       <TableCell>
-                        <Badge variant={limit.is_active ? "default" : "secondary"}>
-                          {limit.is_active ? "Aktif" : "Nonaktif"}
-                        </Badge>
+                        <div className="flex items-center gap-2">
+                          <Switch
+                            checked={!!limit.is_active}
+                            onCheckedChange={(checked) => void toggleRuleStatus(limit, checked)}
+                          />
+                          <Badge variant={limit.is_active ? "default" : "secondary"}>
+                            {limit.is_active ? "Aktif" : "Nonaktif"}
+                          </Badge>
+                        </div>
                       </TableCell>
                       <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          disabled={!limit.is_active || sendingRuleId === limit.id}
+                          onClick={() => void notifyEmployeesByRule(limit)}
+                          title="Kirim notifikasi ke pegawai sesuai aturan ini"
+                        >
+                          <Bell className="h-4 w-4" />
+                        </Button>
                         <Button variant="ghost" size="icon" onClick={() => handleEdit(limit)}>
                           <Pencil className="h-4 w-4" />
                         </Button>

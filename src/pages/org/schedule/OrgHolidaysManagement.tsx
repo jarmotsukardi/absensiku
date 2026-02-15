@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Plus, Search, Pencil, Trash2, Calendar as CalendarIcon, RotateCcw, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
-import { Calendar } from "@/components/ui/calendar";
+import { Calendar as DateCalendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
@@ -381,7 +381,7 @@ export default function OrgHolidaysManagement() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
-              <Calendar className="h-6 w-6" />
+              <CalendarIcon className="h-6 w-6" />
               Data Libur Kerja
             </h1>
             <p className="text-muted-foreground">Kelola hari libur kerja per jenis instansi</p>
@@ -478,7 +478,7 @@ export default function OrgHolidaysManagement() {
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-0" align="start">
-                      <Calendar
+                      <DateCalendar
                         mode="multiple"
                         selected={formData.dates
                           ? formData.dates.split(",").map((d) => {

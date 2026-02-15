@@ -37,7 +37,6 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { RichTextEditor } from "@/components/editor/RichTextEditor";
-import { ImageUploader } from "@/components/common/ImageUploader";
 import { NewsThumbnailPreview } from "@/components/common/NewsThumbnailPreview";
 
 interface NewsItem {
@@ -46,7 +45,7 @@ interface NewsItem {
   content: string;
   image_url?: string;
   is_published: boolean;
-  is_global: boolean;
+  is_pinned: boolean;
   created_at: string;
   tenant_id?: string;
 }
@@ -71,6 +70,7 @@ export default function OrgNewsManagement() {
     content: "",
     image_url: "",
     is_published: true,
+    is_pinned: false,
   });
   
   // Delete dialog
@@ -81,9 +81,10 @@ export default function OrgNewsManagement() {
     setIsLoading(true);
     try {
       const { data, error } = await supabase
-        .from("news")
+        .from("announcements")
         .select("*")
         .eq("tenant_id", tid)
+        .order("is_pinned", { ascending: false })
         .order("created_at", { ascending: false });
 
       if (error) throw error;
@@ -129,32 +130,33 @@ export default function OrgNewsManagement() {
     try {
       if (isEditing && editingId) {
         const { error } = await supabase
-          .from("news")
+          .from("announcements")
           .update({
             title: formData.title,
             content: formData.content,
             image_url: formData.image_url || null,
             is_published: formData.is_published,
+            is_pinned: formData.is_pinned,
             updated_at: new Date().toISOString(),
           })
           .eq("id", editingId);
 
         if (error) throw error;
-        toast.success("Berita berhasil diperbarui");
+        toast.success("Pengumuman berhasil diperbarui");
       } else {
         const { error } = await supabase
-          .from("news")
+          .from("announcements")
           .insert({
             title: formData.title,
             content: formData.content,
             image_url: formData.image_url || null,
             is_published: formData.is_published,
-            is_global: false,
+            is_pinned: formData.is_pinned,
             tenant_id: tenantId,
           });
 
         if (error) throw error;
-        toast.success("Berita berhasil ditambahkan");
+        toast.success("Pengumuman berhasil ditambahkan");
       }
 
       setIsFormOpen(false);
@@ -162,7 +164,7 @@ export default function OrgNewsManagement() {
       if (tenantId) fetchNews(tenantId);
     } catch (error) {
       console.error("Error saving news:", error);
-      toast.error("Gagal menyimpan berita");
+      toast.error("Gagal menyimpan pengumuman");
     }
   };
 
@@ -172,6 +174,7 @@ export default function OrgNewsManagement() {
       content: item.content,
       image_url: item.image_url || "",
       is_published: item.is_published,
+      is_pinned: item.is_pinned,
     });
     setEditingId(item.id);
     setIsEditing(true);
@@ -183,30 +186,30 @@ export default function OrgNewsManagement() {
 
     try {
       const { error } = await supabase
-        .from("news")
+        .from("announcements")
         .delete()
         .eq("id", deletingId);
 
       if (error) throw error;
-      toast.success("Berita berhasil dihapus");
+      toast.success("Pengumuman berhasil dihapus");
       setDeleteDialogOpen(false);
       setDeletingId(null);
       if (tenantId) fetchNews(tenantId);
     } catch (error) {
       console.error("Error deleting news:", error);
-      toast.error("Gagal menghapus berita");
+      toast.error("Gagal menghapus pengumuman");
     }
   };
 
   const togglePublish = async (id: string, currentStatus: boolean) => {
     try {
       const { error } = await supabase
-        .from("news")
+        .from("announcements")
         .update({ is_published: !currentStatus })
         .eq("id", id);
 
       if (error) throw error;
-      toast.success(currentStatus ? "Berita disembunyikan" : "Berita dipublikasikan");
+      toast.success(currentStatus ? "Pengumuman disembunyikan" : "Pengumuman dipublikasikan");
       if (tenantId) fetchNews(tenantId);
     } catch (error) {
       toast.error("Gagal mengubah status");
@@ -219,6 +222,7 @@ export default function OrgNewsManagement() {
       content: "",
       image_url: "",
       is_published: true,
+      is_pinned: false,
     });
     setIsEditing(false);
     setEditingId(null);
@@ -275,21 +279,21 @@ export default function OrgNewsManagement() {
             <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>
-                  {isEditing ? "Edit Berita" : "Tambah Berita Baru"}
+                  {isEditing ? "Edit Pengumuman" : "Tambah Pengumuman Baru"}
                 </DialogTitle>
               </DialogHeader>
               <div className="space-y-4 py-4">
                 <div className="space-y-2">
-                  <Label>Judul Berita</Label>
+                  <Label>Judul Pengumuman</Label>
                   <Input
-                    placeholder="Masukkan judul berita"
+                    placeholder="Masukkan judul pengumuman"
                     value={formData.title}
                     onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <Label>URL Cover Berita (opsional)</Label>
+                  <Label>URL Cover Pengumuman (opsional)</Label>
                   <Input
                     placeholder="https://example.com/cover-image.jpg"
                     value={formData.image_url || ""}
@@ -307,7 +311,7 @@ export default function OrgNewsManagement() {
                   <RichTextEditor
                     value={formData.content}
                     onChange={(value) => setFormData({ ...formData, content: value })}
-                    placeholder="Tulis konten berita..."
+                    placeholder="Tulis konten pengumuman..."
                   />
                 </div>
 
@@ -318,6 +322,13 @@ export default function OrgNewsManagement() {
                   />
                   <Label>Publikasikan langsung</Label>
                 </div>
+                <div className="flex items-center gap-2">
+                  <Switch
+                    checked={formData.is_pinned}
+                    onCheckedChange={(checked) => setFormData({ ...formData, is_pinned: checked })}
+                  />
+                  <Label>Sematkan di atas daftar</Label>
+                </div>
                 <div className="flex justify-end gap-2 pt-4">
                   <Button variant="outline" onClick={() => {
                     setIsFormOpen(false);
@@ -326,7 +337,7 @@ export default function OrgNewsManagement() {
                     Batal
                   </Button>
                   <Button onClick={handleSubmit}>
-                    {isEditing ? "Simpan Perubahan" : "Tambah Berita"}
+                    {isEditing ? "Simpan Perubahan" : "Tambah Pengumuman"}
                   </Button>
                 </div>
               </div>
@@ -341,7 +352,7 @@ export default function OrgNewsManagement() {
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Cari berita..."
+                  placeholder="Cari pengumuman..."
                   className="pl-9"
                   value={searchQuery}
                   onChange={(e) => {
@@ -377,10 +388,10 @@ export default function OrgNewsManagement() {
           </CardContent>
         </Card>
 
-        {/* News Table */}
+        {/* Announcements Table */}
         <Card>
           <CardHeader>
-            <CardTitle>Daftar Berita ({filteredNews.length})</CardTitle>
+            <CardTitle>Daftar Pengumuman ({filteredNews.length})</CardTitle>
           </CardHeader>
           <CardContent>
             {isLoading ? (
@@ -390,8 +401,8 @@ export default function OrgNewsManagement() {
             ) : paginatedNews.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
                 {searchQuery || filterStatus !== "all" 
-                  ? "Tidak ada berita yang sesuai filter"
-                  : "Belum ada berita. Klik tombol 'Tambah Berita' untuk membuat."}
+                  ? "Tidak ada pengumuman yang sesuai filter"
+                  : "Belum ada pengumuman. Klik tombol 'Tambah Pengumuman' untuk membuat."}
               </div>
             ) : (
               <>
@@ -502,9 +513,9 @@ export default function OrgNewsManagement() {
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Hapus Berita?</AlertDialogTitle>
+            <AlertDialogTitle>Hapus Pengumuman?</AlertDialogTitle>
             <AlertDialogDescription>
-              Tindakan ini tidak dapat dibatalkan. Berita akan dihapus secara permanen.
+              Tindakan ini tidak dapat dibatalkan. Pengumuman akan dihapus secara permanen.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

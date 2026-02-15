@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,12 +7,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Calendar, Search, Download, RotateCcw, Flag } from "lucide-react";
+import { Search, Download, RotateCcw, Flag } from "lucide-react";
 import { toast } from "sonner";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface NationalHoliday {
   id: string;
@@ -22,11 +24,130 @@ interface NationalHoliday {
   is_active: boolean;
 }
 
+interface SourceHoliday {
+  date: string;
+  name: string;
+}
+
+interface LiburDenoApiItem {
+  date: string;
+  name: string;
+}
+
+interface NagerHolidayApiItem {
+  date: string;
+  localName?: string;
+  name?: string;
+  global?: boolean;
+}
+
 const currentYear = new Date().getFullYear();
 const years = Array.from({ length: 5 }, (_, i) => currentYear - 2 + i);
 
+const normalizeDayValues = (values: string[]): string[] =>
+  Array.from(
+    new Set(
+      values
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+        .map((value) => value.padStart(2, "0"))
+        .filter((value) => /^\d{2}$/.test(value))
+    )
+  ).sort((a, b) => Number(a) - Number(b));
+
+const parseDayValues = (dates: string | null | undefined): string[] => {
+  if (!dates) return [];
+  return normalizeDayValues(dates.split(","));
+};
+
+const parseIsoDateParts = (dateValue: string): { year: number; month: number; day: string } | null => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateValue);
+  if (!match) return null;
+  return {
+    year: Number(match[1]),
+    month: Number(match[2]),
+    day: match[3],
+  };
+};
+
+const buildDefaultHolidays = (year: number): SourceHoliday[] => [
+  { date: `${year}-01-01`, name: "Tahun Baru Masehi" },
+  { date: `${year}-02-08`, name: "Isra Mi'raj Nabi Muhammad SAW" },
+  { date: `${year}-03-29`, name: "Hari Suci Nyepi" },
+  { date: `${year}-03-31`, name: "Idul Fitri" },
+  { date: `${year}-04-01`, name: "Idul Fitri" },
+  { date: `${year}-04-18`, name: "Wafat Isa Almasih" },
+  { date: `${year}-05-01`, name: "Hari Buruh Internasional" },
+  { date: `${year}-05-12`, name: "Hari Raya Waisak" },
+  { date: `${year}-05-29`, name: "Kenaikan Isa Almasih" },
+  { date: `${year}-06-01`, name: "Hari Lahir Pancasila" },
+  { date: `${year}-06-07`, name: "Idul Adha" },
+  { date: `${year}-06-27`, name: "Tahun Baru Islam" },
+  { date: `${year}-08-17`, name: "Hari Kemerdekaan RI" },
+  { date: `${year}-09-05`, name: "Maulid Nabi Muhammad SAW" },
+  { date: `${year}-12-25`, name: "Hari Natal" },
+];
+
+const fetchExternalHolidays = async (year: number): Promise<{ holidays: SourceHoliday[]; sourceLabel: string }> => {
+  // Source 1: libur.deno.dev (primary)
+  try {
+    const response = await fetch(`https://libur.deno.dev/api?year=${year}`);
+    if (response.ok) {
+      const apiData: unknown = await response.json();
+      if (Array.isArray(apiData)) {
+        const denoItems = (apiData as LiburDenoApiItem[])
+          .filter((item) => typeof item?.date === "string" && typeof item?.name === "string");
+        if (denoItems.length > 0) {
+          return {
+            holidays: denoItems.map((item) => ({
+              date: item.date,
+              name: item.name || "Libur Nasional",
+            })),
+            sourceLabel: "libur.deno.dev",
+          };
+        }
+      }
+    }
+  } catch {
+    // continue to next source
+  }
+
+  // Source 2: Nager public holidays (fallback)
+  try {
+    const response = await fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/ID`);
+    if (response.ok) {
+      const apiData: unknown = await response.json();
+      if (Array.isArray(apiData)) {
+        const nagerItems = (apiData as NagerHolidayApiItem[])
+          .filter((item) => typeof item?.date === "string")
+          .filter((item) => item.global !== false);
+        if (nagerItems.length > 0) {
+          return {
+            holidays: nagerItems.map((item) => ({
+              date: item.date,
+              name: item.localName || item.name || "Libur Nasional",
+            })),
+            sourceLabel: "API fallback internasional",
+          };
+        }
+      }
+    }
+  } catch {
+    // continue to default source
+  }
+
+  // Source 3: local default seed
+  return {
+    holidays: buildDefaultHolidays(year),
+    sourceLabel: "default lokal",
+  };
+};
+
 export default function OrgNationalHolidaysManagement() {
+  const [searchParams] = useSearchParams();
+  const queryTenantId = searchParams.get("tenant_id");
   const [holidays, setHolidays] = useState<NationalHoliday[]>([]);
+  const [fallbackPreviewHolidays, setFallbackPreviewHolidays] = useState<NationalHoliday[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isPulling, setIsPulling] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -34,44 +155,67 @@ export default function OrgNationalHolidaysManagement() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
 
-  useEffect(() => {
-    fetchHolidays();
-  }, []);
-
-  const fetchHolidays = async () => {
+  const fetchHolidays = useCallback(async () => {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("national_holidays")
         .select("*")
         .order("date", { ascending: true });
+      if (filterYear !== "all") {
+        query = query.eq("year", parseInt(filterYear));
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
       setHolidays((data as NationalHoliday[]) || []);
     } catch (error) {
-      console.error("Error fetching holidays:", error);
-      toast.error("Gagal memuat data libur nasional");
+      const errorRef = reportError(error, "org.national_holidays.fetch", {
+        year: filterYear,
+      });
+      toast.error(appendErrorReference("Gagal memuat data libur nasional", errorRef));
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [filterYear]);
+
+  useEffect(() => {
+    void fetchHolidays();
+  }, [fetchHolidays]);
 
   const pullFromNational = async () => {
     setIsPulling(true);
+    setFallbackPreviewHolidays([]);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const { data: roleData } = await supabase
+      const { data: roles, error: roleError } = await supabase
         .from("user_roles")
-        .select("tenant_id")
+        .select("role, tenant_id")
         .eq("user_id", user.id)
-        .maybeSingle();
+        .in("role", ["admin_instansi", "super_admin"]);
 
-      if (!roleData?.tenant_id) return;
+      if (roleError) throw roleError;
+      const adminRole = roles?.find((r) => r.role === "admin_instansi" && r.tenant_id);
+      const isSuperAdmin = roles?.some((r) => r.role === "super_admin");
+      const tenantId = adminRole?.tenant_id || (isSuperAdmin ? queryTenantId : null);
+      if (!tenantId) {
+        toast.error("Tenant organisasi tidak ditemukan. Buka halaman ini dari menu organisasi.");
+        return;
+      }
 
+      if (filterYear === "all") {
+        toast.info("Pilih tahun spesifik sebelum menarik ke kalender organisasi.");
+        return;
+      }
       const selectedYearNum = parseInt(filterYear);
+      if (!Number.isFinite(selectedYearNum)) {
+        toast.error("Tahun tidak valid.");
+        return;
+      }
       
-      // Get national holidays for selected year
+      // Get national holidays for selected year from DB first
       const { data: nationalData, error: nationalError } = await supabase
         .from("national_holidays")
         .select("*")
@@ -80,19 +224,82 @@ export default function OrgNationalHolidaysManagement() {
 
       if (nationalError) throw nationalError;
 
-      if (!nationalData || nationalData.length === 0) {
-        toast.info(`Tidak ada data libur nasional untuk tahun ${selectedYearNum}`);
-        setIsPulling(false);
+      let sourceHolidays: SourceHoliday[] = ((nationalData as NationalHoliday[] | null) || [])
+        .filter((row) => typeof row.date === "string")
+        .map((row) => ({
+          date: row.date,
+          name: row.name || "Libur Nasional",
+        }));
+      let sourceLabel = "database nasional";
+
+      // Fallback: if source table empty, use public holiday API
+      if (sourceHolidays.length === 0) {
+        const external = await fetchExternalHolidays(selectedYearNum);
+        sourceHolidays = external.holidays;
+        sourceLabel = external.sourceLabel;
+      }
+
+      if (sourceHolidays.length === 0) {
+        toast.info(`Tidak ada data libur nasional untuk tahun ${selectedYearNum}.`);
         return;
+      }
+
+      if (sourceLabel !== "database nasional") {
+        setFallbackPreviewHolidays(
+          sourceHolidays.map((item) => ({
+            id: `preview-${selectedYearNum}-${item.date}`,
+            name: item.name,
+            date: item.date,
+            year: selectedYearNum,
+            description: `Sumber ${sourceLabel}`,
+            is_active: true,
+          }))
+        );
+      }
+
+      // Jika sumber dari API, coba simpan ke tabel master agar daftar nasional ikut terisi.
+      if (sourceLabel !== "database nasional") {
+        try {
+          const existingDateSet = new Set(
+            (((nationalData as NationalHoliday[] | null) || []).map((row) => row.date)).filter(Boolean)
+          );
+          const toInsert = sourceHolidays.filter((item) => !existingDateSet.has(item.date));
+          if (toInsert.length > 0) {
+            const insertPayload = toInsert.map((item) => ({
+              date: item.date,
+              name: item.name,
+              description: "Libur Nasional (sumber API)",
+              year: selectedYearNum,
+              is_active: true,
+            }));
+            const { error: insertMasterError } = await supabase
+              .from("national_holidays")
+              .insert(insertPayload);
+            if (insertMasterError) throw insertMasterError;
+          }
+          await fetchHolidays();
+        } catch (masterSyncError) {
+          const masterSyncRef = reportError(masterSyncError, "org.national_holidays.pull_master_sync", {
+            year: selectedYearNum,
+          });
+          toast.info(
+            appendErrorReference(
+              "Sinkron ke kalender organisasi berhasil, tetapi daftar master nasional ditampilkan sebagai preview.",
+              masterSyncRef
+            )
+          );
+        }
       }
 
       // Convert national holidays to work_holidays format
       const holidaysByMonth: Record<number, string[]> = {};
+      const sourceHolidayDates = sourceHolidays.map((item) => item.date);
       
-      nationalData.forEach((holiday: NationalHoliday) => {
-        const date = new Date(holiday.date);
-        const month = date.getMonth() + 1;
-        const day = date.getDate().toString().padStart(2, "0");
+      sourceHolidayDates.forEach((dateValue) => {
+        const parsed = parseIsoDateParts(dateValue);
+        if (!parsed || parsed.year !== selectedYearNum) return;
+        const month = parsed.month;
+        const day = parsed.day;
         
         if (!holidaysByMonth[month]) {
           holidaysByMonth[month] = [];
@@ -100,30 +307,84 @@ export default function OrgNationalHolidaysManagement() {
         holidaysByMonth[month].push(day);
       });
 
-      // Insert into work_holidays
-      for (const [month, dates] of Object.entries(holidaysByMonth)) {
-        const { error: insertError } = await supabase
-          .from("work_holidays")
-          .upsert({
-            tenant_id: roleData.tenant_id,
-            year: selectedYearNum,
-            month: parseInt(month),
-            dates: dates.join(","),
-            description: "Libur Nasional (ditarik dari kalender nasional)",
-            institution_type: "pemerintahan",
-          }, {
-            onConflict: "tenant_id,year,month,institution_type",
-          });
+      const { data: institutionTypeRows, error: institutionTypeError } = await supabase
+        .from("work_hours")
+        .select("institution_type")
+        .eq("tenant_id", tenantId)
+        .eq("is_active", true);
+      if (institutionTypeError) throw institutionTypeError;
 
-        if (insertError) {
-          console.error("Insert error:", insertError);
+      const institutionTypes = Array.from(
+        new Set((institutionTypeRows || []).map((row) => row.institution_type).filter(Boolean))
+      );
+      if (institutionTypes.length === 0) {
+        institutionTypes.push("pemerintahan");
+      }
+
+      const { data: existingRows, error: existingRowsError } = await supabase
+        .from("work_holidays")
+        .select("id, month, institution_type, dates, description")
+        .eq("tenant_id", tenantId)
+        .eq("year", selectedYearNum);
+      if (existingRowsError) throw existingRowsError;
+
+      const existingMap = new Map(
+        (existingRows || []).map((row) => [`${row.institution_type}-${row.month}`, row] as const)
+      );
+
+      let insertedCount = 0;
+      let updatedCount = 0;
+      const syncDescription = "Libur Nasional (sinkron dari kalender nasional)";
+
+      for (const institutionType of institutionTypes) {
+        for (const [month, rawDates] of Object.entries(holidaysByMonth)) {
+          const monthNum = parseInt(month);
+          const incomingDays = normalizeDayValues(rawDates);
+          const key = `${institutionType}-${monthNum}`;
+          const existing = existingMap.get(key);
+
+          if (!existing) {
+            const { error: insertError } = await supabase.from("work_holidays").insert({
+              tenant_id: tenantId,
+              institution_type: institutionType,
+              year: selectedYearNum,
+              month: monthNum,
+              dates: incomingDays.join(","),
+              description: syncDescription,
+            });
+            if (insertError) throw insertError;
+            insertedCount += 1;
+            continue;
+          }
+
+          const mergedDays = normalizeDayValues([...parseDayValues(existing.dates), ...incomingDays]);
+          const mergedDates = mergedDays.join(",");
+          if (mergedDates === parseDayValues(existing.dates).join(",")) {
+            continue;
+          }
+
+          const { error: updateError } = await supabase
+            .from("work_holidays")
+            .update({
+              dates: mergedDates,
+              description: existing.description || syncDescription,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", existing.id);
+          if (updateError) throw updateError;
+          updatedCount += 1;
         }
       }
 
-      toast.success(`Berhasil menarik ${nationalData.length} libur nasional tahun ${selectedYearNum}`);
+      toast.success(
+        `Sinkron selesai (${sourceLabel}): ${sourceHolidayDates.length} hari sumber, ${insertedCount} baris baru, ${updatedCount} baris diperbarui.`
+      );
     } catch (error) {
-      console.error("Error pulling holidays:", error);
-      toast.error("Gagal menarik data libur nasional");
+      const errorRef = reportError(error, "org.national_holidays.pull", {
+        year: filterYear,
+        tenant_id: queryTenantId,
+      });
+      toast.error(appendErrorReference("Gagal menarik data libur nasional", errorRef));
     } finally {
       setIsPulling(false);
     }
@@ -135,7 +396,18 @@ export default function OrgNationalHolidaysManagement() {
     setCurrentPage(1);
   };
 
-  const filteredHolidays = holidays.filter((holiday) => {
+  const mergedMap = new Map<string, NationalHoliday>();
+  holidays.forEach((holiday) => {
+    mergedMap.set(holiday.date, holiday);
+  });
+  fallbackPreviewHolidays.forEach((holiday) => {
+    if (!mergedMap.has(holiday.date)) {
+      mergedMap.set(holiday.date, holiday);
+    }
+  });
+  const displayHolidays = Array.from(mergedMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+
+  const filteredHolidays = displayHolidays.filter((holiday) => {
     const matchesSearch = holiday.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       holiday.description?.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesYear = filterYear === "all" || holiday.year === parseInt(filterYear);

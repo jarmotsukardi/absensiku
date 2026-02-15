@@ -41,3 +41,17 @@ Instruksi tetap untuk agent coding di repo ini.
   - apa yang diubah
   - hasil validasi
   - risiko tersisa
+
+## Mekanisme Tetap Kecepatan (Lovable-like)
+- Gunakan mode kerja cepat sebagai default di setiap task:
+  - eksekusi langsung (bukan proposal panjang), kecuali user meminta brainstorming.
+  - pecah pekerjaan menjadi batch kecil yang independen (1-5 file per batch).
+  - jalankan pembacaan konteks dan validasi secara paralel jika aman.
+- Prioritas workflow:
+  1. scan konteks paralel (`rg`, baca file relevan, cek log, cek git status)
+  2. implementasi bertahap per batch
+  3. validasi paralel (`autofix` -> lint -> test -> build sesuai relevansi)
+  4. laporkan hasil + risiko tersisa secara ringkas
+- Waktu respons teknis:
+  - hindari blocking yang tidak perlu; lanjutkan eksekusi selama tidak melanggar aturan keamanan.
+  - jika ada error, sertakan referensi (`log id`/`trace_id`) agar triase cepat.

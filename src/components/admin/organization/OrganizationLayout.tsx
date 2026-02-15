@@ -4,6 +4,8 @@ import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { OrganizationSidebar } from "./OrganizationSidebar";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface OrganizationLayoutProps {
   children: React.ReactNode;
@@ -14,15 +16,22 @@ interface TenantInfo {
   organization_type: string;
 }
 
+const ACCESS_CHECK_TIMEOUT_MS = 12000;
+
 export function OrganizationLayout({ children }: OrganizationLayoutProps) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const queryTenantId = searchParams.get("tenant_id");
   const [isLoading, setIsLoading] = useState(true);
   const [tenant, setTenant] = useState<TenantInfo | null>(null);
 
   const checkAccess = useCallback(async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user } } = await withTimeout(
+        Promise.resolve(supabase.auth.getUser()),
+        ACCESS_CHECK_TIMEOUT_MS,
+        "Timeout verifikasi sesi organisasi"
+      );
       
       if (!user) {
         // Tidak ada session - redirect ke login tanpa pesan error
@@ -31,24 +40,36 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
       }
 
       // Check user roles
-      const { data: roles } = await supabase
-        .from("user_roles")
-        .select("role, tenant_id")
-        .eq("user_id", user.id);
+      const { data: roles, error: rolesError } = await withTimeout(
+        Promise.resolve(
+          supabase
+            .from("user_roles")
+            .select("role, tenant_id")
+            .eq("user_id", user.id)
+        ),
+        ACCESS_CHECK_TIMEOUT_MS,
+        "Timeout membaca role organisasi"
+      );
+      if (rolesError) throw rolesError;
 
       const isSuperAdmin = roles?.some((r) => r.role === "super_admin");
       const adminInstansiRole = roles?.find((r) => r.role === "admin_instansi" && r.tenant_id);
       const isPegawai = roles?.some((r) => r.role === "pegawai");
-      const queryTenantId = searchParams.get("tenant_id");
-
       const resolvedTenantId = adminInstansiRole?.tenant_id || (isSuperAdmin ? queryTenantId : null);
       if (resolvedTenantId) {
         // Fetch tenant info
-        const { data: tenantData } = await supabase
-          .from("tenants")
-          .select("name, organization_type")
-          .eq("id", resolvedTenantId)
-          .maybeSingle();
+        const { data: tenantData, error: tenantError } = await withTimeout(
+          Promise.resolve(
+            supabase
+              .from("tenants")
+              .select("name, organization_type")
+              .eq("id", resolvedTenantId)
+              .maybeSingle()
+          ),
+          ACCESS_CHECK_TIMEOUT_MS,
+          "Timeout membaca profil tenant organisasi"
+        );
+        if (tenantError) throw tenantError;
 
         if (tenantData) {
           setTenant({
@@ -77,13 +98,15 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
         navigate("/employee/dashboard", { replace: true });
       }
     } catch (error) {
-      console.error("Error checking access:", error);
-      toast.error("Gagal memverifikasi akses");
+      const errorRef = reportError(error, "org.layout.check_access", {
+        tenant_id: queryTenantId,
+      });
+      toast.error(appendErrorReference("Gagal memverifikasi akses", errorRef));
       navigate("/org/login", { replace: true });
     } finally {
       setIsLoading(false);
     }
-  }, [navigate, searchParams]);
+  }, [navigate, queryTenantId]);
 
   useEffect(() => {
     void checkAccess();

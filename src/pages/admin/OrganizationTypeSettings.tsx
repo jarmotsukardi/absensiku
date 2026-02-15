@@ -58,13 +58,13 @@ const EMPLOYEE_FIELDS = [
 ];
 
 const DAYS = [
-  { value: 0, label: "Min" },
   { value: 1, label: "Sen" },
   { value: 2, label: "Sel" },
   { value: 3, label: "Rab" },
   { value: 4, label: "Kam" },
   { value: 5, label: "Jum" },
   { value: 6, label: "Sab" },
+  { value: 7, label: "Min" },
 ];
 
 const defaultSettings: OrgTypeSettings = {
@@ -104,6 +104,14 @@ export default function OrganizationTypeSettings() {
           grouped[row.organization_type] = { ...defaultSettings };
         }
         const settingKey = row.setting_key as keyof OrgTypeSettings;
+        if (settingKey === "work_schedule") {
+          const schedule = row.setting_value as OrgTypeSettings["work_schedule"];
+          grouped[row.organization_type][settingKey] = {
+            ...schedule,
+            work_days: (schedule?.work_days || []).map((day) => (day === 0 ? 7 : day)),
+          } as OrgTypeSettings[typeof settingKey];
+          return;
+        }
         grouped[row.organization_type][settingKey] = row.setting_value as OrgTypeSettings[typeof settingKey];
       });
 

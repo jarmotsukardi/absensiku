@@ -1,12 +1,13 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { ForgotPasswordDialog } from "@/components/auth/ForgotPasswordDialog";
 import {
   Home,
+  History,
+  HelpCircle,
+  User as UserIcon,
   Newspaper,
   FileText,
   Megaphone,
@@ -32,6 +33,7 @@ interface EmployeeSidebarProps {
   open: boolean;
   onClose: () => void;
   onNavigateTab?: (tab: string) => void;
+  activeTab?: string;
   tenantWhatsapp?: string | null;
   tenantName?: string | null;
   billingMode?: string | null;
@@ -39,8 +41,17 @@ interface EmployeeSidebarProps {
   picName?: string | null;
 }
 
-export function EmployeeSidebar({ open, onClose, onNavigateTab, tenantWhatsapp, tenantName, billingMode, picWhatsapp, picName }: EmployeeSidebarProps) {
-  const navigate = useNavigate();
+export function EmployeeSidebar({
+  open,
+  onClose,
+  onNavigateTab,
+  activeTab,
+  tenantWhatsapp,
+  tenantName,
+  billingMode,
+  picWhatsapp,
+  picName,
+}: EmployeeSidebarProps) {
   const [darkMode, setDarkMode] = useState(false);
   const [expandedMenu, setExpandedMenu] = useState<string | null>(null);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
@@ -74,27 +85,47 @@ export function EmployeeSidebar({ open, onClose, onNavigateTab, tenantWhatsapp, 
     onClose();
   };
 
-  const menuItems = [
+  const mainMenuItems = [
     {
-      id: "dashboard",
+      id: "home",
       icon: Home,
-      label: "Dashboard",
-      onClick: () => {
-        onNavigateTab?.("home");
-        onClose();
-      },
+      label: "Beranda",
     },
+    {
+      id: "history",
+      icon: History,
+      label: "Riwayat",
+    },
+    {
+      id: "requests",
+      icon: FileText,
+      label: "Pengajuan",
+    },
+    {
+      id: "help",
+      icon: HelpCircle,
+      label: "Bantuan",
+    },
+    {
+      id: "profile",
+      icon: UserIcon,
+      label: "Profil",
+    },
+  ] as const;
+
+  const utilityMenuItems = [
     {
       id: "informasi",
       icon: Newspaper,
       label: "Informasi",
       children: [
-        { label: "Artikel", icon: BookOpen, onClick: () => { onNavigateTab?.("articles"); onClose(); } },
-        { label: "Pengumuman", icon: Megaphone, onClick: () => { onNavigateTab?.("announcements"); onClose(); } },
+        { id: "news", label: "Berita", icon: Newspaper, onClick: () => { onNavigateTab?.("news"); onClose(); } },
+        { id: "articles", label: "Artikel", icon: BookOpen, onClick: () => { onNavigateTab?.("articles"); onClose(); } },
+        { id: "announcements", label: "Pengumuman", icon: Megaphone, onClick: () => { onNavigateTab?.("announcements"); onClose(); } },
       ],
     },
     {
-      id: "notifikasi",
+      id: "notifications",
       icon: Bell,
       label: "Notifikasi",
       onClick: () => {
@@ -102,30 +133,33 @@ export function EmployeeSidebar({ open, onClose, onNavigateTab, tenantWhatsapp, 
         onClose();
       },
     },
+    ...(billingMode === "individual"
+      ? [{
+          id: "activation",
+          icon: Zap,
+          label: "Aktivasi",
+          onClick: () => {
+            onNavigateTab?.("activation");
+            onClose();
+          },
+        }]
+      : []),
     {
       id: "settings",
       icon: Settings,
       label: "Pengaturan",
       children: [
-        { label: "Lupa / Ganti Password", icon: Key, onClick: () => { setShowForgotPassword(true); onClose(); } },
+        { id: "password", label: "Lupa / Ganti Password", icon: Key, onClick: () => { setShowForgotPassword(true); onClose(); } },
       ],
     },
-    ...(billingMode === "individual" ? [{
-      id: "activation",
-      icon: Zap,
-      label: "Aktivasi",
-      onClick: () => {
-        onNavigateTab?.("activation");
-        onClose();
-      },
-    }] : []),
     {
       id: "contact",
       icon: WhatsAppIcon as any,
       label: "Hubungi Admin Organisasi",
       onClick: handleContactAdmin,
     },
-  ];
+  ] as const;
+  const isInfoActive = activeTab === "news" || activeTab === "articles" || activeTab === "announcements";
 
   return (
     <>
@@ -151,7 +185,7 @@ export function EmployeeSidebar({ open, onClose, onNavigateTab, tenantWhatsapp, 
             </div>
             <div>
               <h2 className="font-bold text-foreground">AbsensiKu</h2>
-              <p className="text-xs text-muted-foreground">Menu Navigasi</p>
+              <p className="text-xs text-muted-foreground truncate">{tenantName || "Menu Navigasi"}</p>
             </div>
           </div>
           <Button variant="ghost" size="icon" onClick={onClose}>
@@ -161,10 +195,39 @@ export function EmployeeSidebar({ open, onClose, onNavigateTab, tenantWhatsapp, 
 
         {/* Menu Items */}
         <nav className="p-3 space-y-1 overflow-y-auto max-h-[calc(100vh-180px)]">
-          {menuItems.map((item) => (
+          {mainMenuItems.map((item) => (
             <div key={item.id}>
               <button
-                className="w-full flex items-center justify-between px-4 py-3 rounded-xl text-foreground/80 hover:bg-accent hover:text-accent-foreground transition-all duration-200"
+                className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 ${
+                  (item.id === "informasi" && isInfoActive) || (item.id !== "informasi" && activeTab === item.id)
+                    ? "bg-primary/10 text-primary"
+                    : "text-foreground/80 hover:bg-accent hover:text-accent-foreground"
+                }`}
+                onClick={() => {
+                  onNavigateTab?.(item.id);
+                  onClose();
+                }}
+              >
+                <div className="flex items-center gap-3">
+                  <item.icon className="w-5 h-5" />
+                  <span className="font-medium text-sm">{item.label}</span>
+                </div>
+              </button>
+            </div>
+          ))}
+
+          <div className="px-4 pt-3 pb-1 text-[11px] uppercase tracking-wide text-muted-foreground">
+            Utilitas
+          </div>
+
+          {utilityMenuItems.map((item) => (
+            <div key={item.id}>
+              <button
+                className={`w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all duration-200 ${
+                  activeTab === item.id
+                    ? "bg-primary/10 text-primary"
+                    : "text-foreground/80 hover:bg-accent hover:text-accent-foreground"
+                }`}
                 onClick={() => {
                   if (item.children) {
                     setExpandedMenu(expandedMenu === item.id ? null : item.id);
@@ -191,8 +254,12 @@ export function EmployeeSidebar({ open, onClose, onNavigateTab, tenantWhatsapp, 
                 <div className="ml-8 space-y-1 mt-1 animate-fade-in">
                   {item.children.map((child) => (
                     <button
-                      key={child.label}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-muted-foreground hover:bg-accent hover:text-accent-foreground transition-all duration-200 text-sm"
+                      key={child.id}
+                      className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all duration-200 text-sm ${
+                        activeTab === child.id
+                          ? "bg-primary/10 text-primary"
+                          : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                      }`}
                       onClick={child.onClick}
                     >
                       <child.icon className="w-4 h-4" />

@@ -9,12 +9,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious, PaginationEllipsis } from "@/components/ui/pagination";
-import { FileSpreadsheet, Download, Search } from "lucide-react";
+import { FileSpreadsheet, Download, Search, Printer } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import type { Tables } from "@/integrations/supabase/types";
 import { calculateKeterangan, type AttendanceKeterangan } from "@/hooks/useWorkHours";
+import { toWorkDayOfWeek } from "@/lib/workday";
 
 type OPD = Tables<"opd">;
 type AttendanceRecord = Tables<"attendance_records_partitioned">;
@@ -37,8 +38,8 @@ interface WorkHoursInfo {
   institution_type: string;
 }
 
-// Get day of week dari date
-const getDayOfWeek = (dateStr: string): number => new Date(dateStr).getDay();
+// Get day of week dari date dalam format DB (1=Monday ... 7=Sunday)
+const getDayOfWeek = (dateStr: string): number => toWorkDayOfWeek(dateStr);
 
 const getStatusBadge = (status: string) => {
   const variants: Record<string, { variant: "default" | "secondary" | "destructive" | "outline"; className: string }> = {
@@ -72,6 +73,14 @@ const getKeteranganBadge = (keterangan: string) => {
 
 const STATUS_OPTIONS = ["Hadir", "Izin", "Cuti", "Sakit", "Tugas Luar", "Tidak Hadir"];
 const KETERANGAN_OPTIONS = ["Hadir", "Telat", "Pulang Cepat", "Telat + Pulang Cepat", "Tidak Absen Pulang"];
+
+const escapeHtml = (value: string): string =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 
 export default function OrgAttendanceReport() {
   const [records, setRecords] = useState<AttendanceReportRecord[]>([]);
@@ -249,6 +258,92 @@ export default function OrgAttendanceReport() {
     toast.success("Export berhasil");
   };
 
+  const handlePrintPdf = () => {
+    if (filteredRecords.length === 0) {
+      toast.error("Tidak ada data untuk dicetak");
+      return;
+    }
+
+    const periodLabel = startDate && endDate ? `${startDate} s/d ${endDate}` : "Semua periode";
+    const printedAt = format(new Date(), "d MMMM yyyy HH:mm", { locale: id });
+    const rowsHtml = filteredRecords
+      .map((r, i) => {
+        const ket = getRecordKeterangan(r);
+        return `
+          <tr>
+            <td>${i + 1}</td>
+            <td>${escapeHtml(format(new Date(r.date), "d MMM yyyy", { locale: id }))}</td>
+            <td>${escapeHtml(r.employees?.nip || "-")}</td>
+            <td>${escapeHtml(r.employees?.name || "-")}</td>
+            <td>${escapeHtml(r.employees?.opd?.code || "-")}</td>
+            <td>${escapeHtml(r.check_in_time ? format(new Date(r.check_in_time), "HH:mm") : "-")}</td>
+            <td>${escapeHtml(r.check_out_time ? format(new Date(r.check_out_time), "HH:mm") : "-")}</td>
+            <td>${escapeHtml(ket.status)}</td>
+            <td>${escapeHtml(ket.keterangan)}</td>
+          </tr>
+        `;
+      })
+      .join("");
+
+    const printWindow = window.open("", "_blank", "width=1200,height=800");
+    if (!printWindow) {
+      toast.error("Popup diblokir browser. Izinkan popup untuk cetak PDF.");
+      return;
+    }
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <meta charset="UTF-8" />
+          <title>Laporan Absensi</title>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 24px; color: #111; }
+            h1 { margin: 0 0 8px; font-size: 20px; }
+            .meta { margin: 0 0 16px; font-size: 12px; color: #444; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; }
+            th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
+            th { background: #f3f4f6; }
+            .footer { margin-top: 12px; font-size: 11px; color: #666; }
+            @media print {
+              body { margin: 12mm; }
+              h1 { font-size: 18px; }
+            }
+          </style>
+        </head>
+        <body>
+          <h1>Laporan Absensi Pegawai</h1>
+          <p class="meta">Periode: ${escapeHtml(periodLabel)} | Total: ${filteredRecords.length} data | Dicetak: ${escapeHtml(printedAt)}</p>
+          <table>
+            <thead>
+              <tr>
+                <th>No</th>
+                <th>Tanggal</th>
+                <th>NIP</th>
+                <th>Nama</th>
+                <th>OPD</th>
+                <th>Masuk</th>
+                <th>Keluar</th>
+                <th>Status</th>
+                <th>Keterangan</th>
+              </tr>
+            </thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>
+          <p class="footer">Sumber: AbsensiKu /org/reports/attendance</p>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+
+    const printAction = () => {
+      printWindow.focus();
+      printWindow.print();
+    };
+    printWindow.onload = printAction;
+    setTimeout(printAction, 250);
+  };
+
   // Filter by search, status, and keterangan
   const filteredRecords = records.filter(r => {
     const matchSearch = (r.employees?.name || "").toLowerCase().includes(searchTerm.toLowerCase());
@@ -281,9 +376,14 @@ export default function OrgAttendanceReport() {
             </h1>
             <p className="text-muted-foreground">Laporan absensi pegawai berdasarkan jadwal jam kerja</p>
           </div>
-          <Button variant="outline" onClick={handleExport} disabled={filteredRecords.length === 0}>
-            <Download className="mr-2 h-4 w-4" /> Export CSV
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={handlePrintPdf} disabled={filteredRecords.length === 0}>
+              <Printer className="mr-2 h-4 w-4" /> Print PDF
+            </Button>
+            <Button variant="outline" onClick={handleExport} disabled={filteredRecords.length === 0}>
+              <Download className="mr-2 h-4 w-4" /> Export CSV
+            </Button>
+          </div>
         </div>
 
         <Card>
