@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,8 +18,6 @@ import {
   Check, 
   X, 
   Clock, 
-  ChevronLeft, 
-  ChevronRight,
   Link as LinkIcon,
   Pencil,
   Trash2,
@@ -31,6 +29,16 @@ import {
 } from "lucide-react";
 import { addDays, format } from "date-fns";
 import type { TablesInsert } from "@/integrations/supabase/types";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
 interface Invitation {
   id: string;
@@ -100,6 +108,7 @@ export default function OrgEmployeeInvitations() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [officeList, setOfficeList] = useState<Office[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     void fetchTenantAndData();
@@ -114,6 +123,7 @@ export default function OrgEmployeeInvitations() {
 
   const fetchTenantAndData = async () => {
     try {
+      setLoadError(null);
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
         setIsLoading(false);
@@ -150,8 +160,12 @@ export default function OrgEmployeeInvitations() {
         .order("name");
       setOfficeList(officeData || []);
     } catch (error) {
-      console.error("Error fetching data:", error);
-      toast.error("Gagal memuat data");
+      const errorRef = reportError(error, "org.invitations.fetch_tenant_and_data");
+      const message = appendErrorReference("Gagal memuat data undangan", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setOpdList([]);
+      setOfficeList([]);
     }
   };
 
@@ -159,6 +173,7 @@ export default function OrgEmployeeInvitations() {
     if (!tenantId) return;
     setIsLoading(true);
     try {
+      setLoadError(null);
       const from = (currentPage - 1) * ITEMS_PER_PAGE;
       const to = from + ITEMS_PER_PAGE - 1;
 
@@ -196,8 +211,17 @@ export default function OrgEmployeeInvitations() {
       setInvitations((data || []) as Invitation[]);
       setTotalInvitations(count || 0);
     } catch (error) {
-      console.error("Error fetching invitations:", error);
-      toast.error("Gagal memuat daftar undangan");
+      const errorRef = reportError(error, "org.invitations.fetch_list", {
+        tenant_id: tenantId,
+        page: currentPage,
+        filter_status: filterStatus,
+        filter_opd: filterOpdId,
+      });
+      const message = appendErrorReference("Gagal memuat daftar undangan", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setInvitations([]);
+      setTotalInvitations(0);
     } finally {
       setIsLoading(false);
     }
@@ -672,6 +696,12 @@ export default function OrgEmployeeInvitations() {
             <CardDescription>{totalInvitations} undangan</CardDescription>
           </CardHeader>
           <CardContent>
+            {loadError && (
+              <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                {loadError}
+              </div>
+            )}
+
             <div className="flex flex-col sm:flex-row gap-4 mb-4">
               <div className="relative flex-1 max-w-sm">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -793,40 +823,44 @@ export default function OrgEmployeeInvitations() {
                 <p className="text-sm text-muted-foreground">
                   Halaman {currentPage} dari {totalPages} • Menampilkan {invitations.length} dari {totalInvitations} data
                 </p>
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                    disabled={currentPage === 1}
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </Button>
-                  {visiblePageNumbers.map((page, idx) => {
-                    const prevPage = visiblePageNumbers[idx - 1];
-                    const showEllipsis = prevPage && page - prevPage > 1;
-                    return (
-                      <div key={page} className="flex items-center gap-1">
-                        {showEllipsis && <span className="px-2 text-muted-foreground">...</span>}
-                        <Button
-                          variant={page === currentPage ? "default" : "outline"}
-                          size="sm"
-                          onClick={() => setCurrentPage(page)}
-                        >
-                          {page}
-                        </Button>
-                      </div>
-                    );
-                  })}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                    disabled={currentPage === totalPages}
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
-                </div>
+                <Pagination>
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                        className={currentPage === 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                      />
+                    </PaginationItem>
+                    {visiblePageNumbers.map((page, idx) => {
+                      const prevPage = visiblePageNumbers[idx - 1];
+                      const showEllipsis = prevPage && page - prevPage > 1;
+                      return (
+                        <Fragment key={page}>
+                          {showEllipsis && (
+                            <PaginationItem>
+                              <PaginationEllipsis />
+                            </PaginationItem>
+                          )}
+                          <PaginationItem>
+                            <PaginationLink
+                              isActive={page === currentPage}
+                              onClick={() => setCurrentPage(page)}
+                              className="cursor-pointer"
+                            >
+                              {page}
+                            </PaginationLink>
+                          </PaginationItem>
+                        </Fragment>
+                      );
+                    })}
+                    <PaginationItem>
+                      <PaginationNext
+                        onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                        className={currentPage === totalPages ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
               </div>
             )}
           </CardContent>

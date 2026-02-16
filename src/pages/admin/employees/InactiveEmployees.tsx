@@ -9,6 +9,15 @@ import { Search, UserX, RotateCcw } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
 type Employee = Tables<"employees">;
 type OPD = Tables<"opd">;
@@ -19,10 +28,12 @@ export default function InactiveEmployees() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const fetchData = async () => {
     try {
       setIsLoading(true);
+      setLoadError(null);
       
       const { data, error } = await supabase
         .from("employees")
@@ -33,8 +44,11 @@ export default function InactiveEmployees() {
       if (error) throw error;
       setEmployees(data || []);
     } catch (error) {
-      console.error("Error fetching data:", error);
-      toast.error("Gagal memuat data");
+      const errorRef = reportError(error, "admin.inactive_employees.fetch_data");
+      const message = appendErrorReference("Gagal memuat data pegawai non-aktif", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setEmployees([]);
     } finally {
       setIsLoading(false);
     }
@@ -48,6 +62,7 @@ export default function InactiveEmployees() {
     if (!confirm("Yakin ingin mengaktifkan kembali pegawai ini?")) return;
 
     try {
+      setLoadError(null);
       const { error } = await supabase
         .from("employees")
         .update({ is_active: true })
@@ -57,8 +72,10 @@ export default function InactiveEmployees() {
       toast.success("Pegawai berhasil diaktifkan kembali");
       fetchData();
     } catch (error) {
-      console.error("Error reactivating employee:", error);
-      toast.error("Gagal mengaktifkan pegawai");
+      const errorRef = reportError(error, "admin.inactive_employees.reactivate", { employee_id: id });
+      const message = appendErrorReference("Gagal mengaktifkan pegawai", errorRef);
+      toast.error(message);
+      setLoadError(message);
     }
   };
 
@@ -71,6 +88,10 @@ export default function InactiveEmployees() {
   const paginatedEmployees = filteredEmployees.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE
+  );
+  const pageStart = Math.max(1, Math.min(currentPage - 1, totalPages - 2));
+  const visiblePages = Array.from({ length: Math.min(3, totalPages) }, (_, idx) => pageStart + idx).filter(
+    (page) => page <= totalPages
   );
 
   useEffect(() => {
@@ -86,6 +107,12 @@ export default function InactiveEmployees() {
             Daftar pegawai yang sudah tidak aktif
           </p>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>
@@ -167,25 +194,36 @@ export default function InactiveEmployees() {
             </div>
             {!isLoading && filteredEmployees.length > 0 && (
               <div className="mt-4 flex items-center justify-between">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
-                  disabled={currentPage === 1}
-                >
-                  Sebelumnya
-                </Button>
                 <span className="text-sm text-muted-foreground">
                   Halaman {currentPage} dari {totalPages}
                 </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
-                  disabled={currentPage === totalPages}
-                >
-                  Berikutnya
-                </Button>
+                <Pagination>
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                        className={currentPage === 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                      />
+                    </PaginationItem>
+                    {visiblePages.map((page) => (
+                      <PaginationItem key={page}>
+                        <PaginationLink
+                          isActive={page === currentPage}
+                          onClick={() => setCurrentPage(page)}
+                          className="cursor-pointer"
+                        >
+                          {page}
+                        </PaginationLink>
+                      </PaginationItem>
+                    ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                        className={currentPage === totalPages ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
               </div>
             )}
           </CardContent>

@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface SecuritySettings {
   // GPS Validation
@@ -38,6 +39,7 @@ interface SecuritySettings {
 export default function AttendanceSecuritySettings() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [settings, setSettings] = useState<SecuritySettings>({
     // GPS Validation
     require_realtime_location: true,
@@ -58,6 +60,7 @@ export default function AttendanceSecuritySettings() {
 
   const fetchSettings = async () => {
     try {
+      setLoadError(null);
       const { data, error } = await supabase
         .from("system_settings")
         .select("*")
@@ -84,7 +87,10 @@ export default function AttendanceSecuritySettings() {
         }));
       }
     } catch (error) {
-      console.error("Error fetching settings:", error);
+      const errorRef = reportError(error, "admin.attendance_security.fetch_settings");
+      const message = appendErrorReference("Gagal memuat pengaturan keamanan", errorRef);
+      toast.error(message);
+      setLoadError(message);
     } finally {
       setIsLoading(false);
     }
@@ -93,6 +99,7 @@ export default function AttendanceSecuritySettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
+      setLoadError(null);
       const { data: existing } = await supabase
         .from("system_settings")
         .select("id")
@@ -120,8 +127,14 @@ export default function AttendanceSecuritySettings() {
 
       toast.success("Pengaturan keamanan berhasil disimpan");
     } catch (error) {
-      console.error("Error saving settings:", error);
-      toast.error("Gagal menyimpan pengaturan");
+      const errorRef = reportError(error, "admin.attendance_security.save_settings", {
+        block_all_browsers: settings.block_all_browsers,
+        block_desktop_browser: settings.block_desktop_browser,
+        require_realtime_location: settings.require_realtime_location,
+      });
+      const message = appendErrorReference("Gagal menyimpan pengaturan keamanan", errorRef);
+      toast.error(message);
+      setLoadError(message);
     } finally {
       setIsSaving(false);
     }
@@ -168,6 +181,12 @@ export default function AttendanceSecuritySettings() {
             )}
           </Button>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Tabs defaultValue="gps" className="space-y-4">
           <TabsList className="grid w-full grid-cols-4">

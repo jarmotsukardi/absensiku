@@ -12,6 +12,8 @@ import { Button } from "@/components/ui/button";
 import { Bell, AlertCircle, CheckCircle2, Info, AlertTriangle } from "lucide-react";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
+import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface Notification {
   id: string;
@@ -30,23 +32,31 @@ export function PersistentNotificationDialog() {
   const [isOpen, setIsOpen] = useState(false);
 
   const fetchUnreadNotifications = useCallback(async (userId?: string) => {
-    let resolvedUserId = userId;
-    if (!resolvedUserId) {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      resolvedUserId = user.id;
-    }
+    let resolvedUserId = userId ?? null;
+    try {
+      if (!resolvedUserId) {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) return;
+        resolvedUserId = user.id;
+      }
 
-    const { data, error } = await supabase
-      .from("notifications")
-      .select("*")
-      .eq("user_id", resolvedUserId)
-      .eq("is_read", false)
-      .order("created_at", { ascending: true });
+      const { data, error } = await supabase
+        .from("notifications")
+        .select("*")
+        .eq("user_id", resolvedUserId)
+        .eq("is_read", false)
+        .order("created_at", { ascending: true });
 
-    if (!error && data && data.length > 0) {
-      setNotifications(data);
-      setIsOpen(true);
+      if (error) throw error;
+      if (data && data.length > 0) {
+        setNotifications(data);
+        setIsOpen(true);
+      }
+    } catch (error) {
+      const errorRef = reportError(error, "employee.persistent_notifications.fetch_unread", {
+        user_id: resolvedUserId,
+      });
+      toast.error(appendErrorReference("Gagal memuat notifikasi", errorRef));
     }
   }, []);
 
@@ -84,7 +94,11 @@ export function PersistentNotificationDialog() {
             setIsOpen(true);
           }
         )
-        .subscribe();
+        .subscribe((status) => {
+          if (status === "CHANNEL_ERROR") {
+            reportError(new Error("Realtime notifications channel error"), "employee.persistent_notifications.realtime_channel");
+          }
+        });
     };
 
     void init();
@@ -101,19 +115,27 @@ export function PersistentNotificationDialog() {
     const currentNotification = notifications[currentIndex];
     if (!currentNotification) return;
 
-    // Mark as read
-    await supabase
-      .from("notifications")
-      .update({ is_read: true })
-      .eq("id", currentNotification.id);
+    try {
+      // Mark as read
+      const { error } = await supabase
+        .from("notifications")
+        .update({ is_read: true })
+        .eq("id", currentNotification.id);
+      if (error) throw error;
 
-    // Move to next notification or close
-    if (currentIndex < notifications.length - 1) {
-      setCurrentIndex(prev => prev + 1);
-    } else {
-      setIsOpen(false);
-      setNotifications([]);
-      setCurrentIndex(0);
+      // Move to next notification or close
+      if (currentIndex < notifications.length - 1) {
+        setCurrentIndex(prev => prev + 1);
+      } else {
+        setIsOpen(false);
+        setNotifications([]);
+        setCurrentIndex(0);
+      }
+    } catch (error) {
+      const errorRef = reportError(error, "employee.persistent_notifications.acknowledge", {
+        notification_id: currentNotification.id,
+      });
+      toast.error(appendErrorReference("Gagal menandai notifikasi", errorRef));
     }
   };
 

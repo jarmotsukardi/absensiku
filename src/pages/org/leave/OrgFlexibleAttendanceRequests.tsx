@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 // Mapping ikon untuk jenis alasan
 const REASON_ICONS: Record<string, React.ElementType> = {
@@ -61,6 +62,7 @@ export default function OrgFlexibleAttendanceRequests() {
   const [statusFilter, setStatusFilter] = useState("menunggu");
   const [currentPage, setCurrentPage] = useState(1);
   const [tenantId, setTenantId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   
   // Dialog state
   const [selectedRequest, setSelectedRequest] = useState<FlexibleRequest | null>(null);
@@ -74,7 +76,12 @@ export default function OrgFlexibleAttendanceRequests() {
       try {
         const resolved = await resolveOrgTenantId();
         setTenantId(resolved);
+        setLoadError(null);
       } catch {
+        const errorRef = reportError(new Error("Tenant organisasi tidak dapat ditentukan"), "org.flexible_requests.resolve_tenant");
+        const message = appendErrorReference("Gagal menentukan tenant organisasi", errorRef);
+        toast.error(message);
+        setLoadError(message);
         setTenantId(null);
         setIsLoading(false);
       }
@@ -87,6 +94,7 @@ export default function OrgFlexibleAttendanceRequests() {
     
     setIsLoading(true);
     try {
+      setLoadError(null);
       let query = supabase
         .from("flexible_attendance_requests")
         .select(`
@@ -108,8 +116,14 @@ export default function OrgFlexibleAttendanceRequests() {
       if (error) throw error;
       setRequests((data || []) as FlexibleRequest[]);
     } catch (error: unknown) {
-      console.error("Error fetching data:", error);
-      toast.error("Gagal memuat data");
+      const errorRef = reportError(error, "org.flexible_requests.fetch_data", {
+        tenant_id: tenantId,
+        status_filter: statusFilter,
+      });
+      const message = appendErrorReference("Gagal memuat data permohonan", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setRequests([]);
     } finally {
       setIsLoading(false);
     }
@@ -164,8 +178,11 @@ export default function OrgFlexibleAttendanceRequests() {
       setSelectedRequest(null);
       fetchData();
     } catch (error: unknown) {
+      const errorRef = reportError(error, "org.flexible_requests.approve", {
+        request_id: selectedRequest.id,
+      });
       const errorMessage = error instanceof Error ? error.message : "Gagal menyetujui permohonan";
-      toast.error(errorMessage);
+      toast.error(appendErrorReference(errorMessage, errorRef));
     } finally {
       setIsProcessing(false);
     }
@@ -208,8 +225,11 @@ export default function OrgFlexibleAttendanceRequests() {
       setRejectionReason("");
       fetchData();
     } catch (error: unknown) {
+      const errorRef = reportError(error, "org.flexible_requests.reject", {
+        request_id: selectedRequest.id,
+      });
       const errorMessage = error instanceof Error ? error.message : "Gagal menolak permohonan";
-      toast.error(errorMessage);
+      toast.error(appendErrorReference(errorMessage, errorRef));
     } finally {
       setIsProcessing(false);
     }
@@ -267,6 +287,12 @@ export default function OrgFlexibleAttendanceRequests() {
             Kelola permohonan absensi khusus dari pegawai
           </p>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>

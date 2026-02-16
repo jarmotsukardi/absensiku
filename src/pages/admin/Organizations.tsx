@@ -52,6 +52,7 @@ import {
   FileStack,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
@@ -93,6 +94,7 @@ export default function Organizations() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [mainView, setMainView] = useState<"organizations" | "institution-types">("organizations");
   
   // Detail panel state
@@ -116,6 +118,7 @@ export default function Organizations() {
   }, []);
 
   const fetchOrganizations = async () => {
+    setLoadError(null);
     try {
       const { data, error } = await supabase
         .from("tenants")
@@ -125,7 +128,12 @@ export default function Organizations() {
       if (error) throw error;
       setOrganizations(data || []);
     } catch (error) {
-      console.error("Error fetching organizations:", error);
+      const errorRef = reportError(error, "admin.organizations.fetch");
+      const message = appendErrorReference("Gagal memuat daftar organisasi", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setOrganizations([]);
+      setFilteredOrgs([]);
     } finally {
       setIsLoading(false);
     }
@@ -171,6 +179,7 @@ export default function Organizations() {
   const handleSaveEdit = async () => {
     if (!editingOrg) return;
     setIsSaving(true);
+    setLoadError(null);
     
     try {
       const { error } = await supabase
@@ -187,10 +196,14 @@ export default function Organizations() {
       
       toast.success("Organisasi berhasil diperbarui");
       setIsEditOpen(false);
-      fetchOrganizations();
+      void fetchOrganizations();
     } catch (error) {
-      console.error("Error updating organization:", error);
-      toast.error("Gagal memperbarui organisasi");
+      const errorRef = reportError(error, "admin.organizations.update", {
+        tenant_id: editingOrg.id,
+      });
+      const message = appendErrorReference("Gagal memperbarui organisasi", errorRef);
+      toast.error(message);
+      setLoadError(message);
     } finally {
       setIsSaving(false);
     }
@@ -264,6 +277,11 @@ export default function Organizations() {
             </Tabs>
           </CardHeader>
           <CardContent>
+            {loadError && (
+              <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {loadError}
+              </div>
+            )}
             {isLoading ? (
               <div className="space-y-4">
                 {[1, 2, 3, 4, 5].map((i) => (

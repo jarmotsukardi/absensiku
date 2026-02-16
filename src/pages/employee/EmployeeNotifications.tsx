@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { Loader2, Bell, Search, Check, CheckCheck, ArrowLeft, Filter, Info, AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface Notification {
   id: string;
@@ -87,7 +88,8 @@ export function EmployeeNotifications({ open, onOpenChange }: EmployeeNotificati
       setNotifications(data || []);
       setFilteredNotifications(data || []);
     } catch (error) {
-      console.error("Error fetching notifications:", error);
+      const errorRef = reportError(error, "employee.notifications.fetch");
+      toast.error(appendErrorReference("Gagal memuat notifikasi", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -98,7 +100,8 @@ export function EmployeeNotifications({ open, onOpenChange }: EmployeeNotificati
       await supabase.from("notifications").update({ is_read: true }).eq("id", id);
       setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
     } catch (error) {
-      toast.error("Gagal menandai sebagai dibaca");
+      const errorRef = reportError(error, "employee.notifications.mark_read", { notification_id: id });
+      toast.error(appendErrorReference("Gagal menandai sebagai dibaca", errorRef));
     }
   };
 
@@ -116,7 +119,8 @@ export function EmployeeNotifications({ open, onOpenChange }: EmployeeNotificati
       setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
       toast.success("Semua notifikasi ditandai sebagai dibaca");
     } catch (error) {
-      toast.error("Gagal menandai semua sebagai dibaca");
+      const errorRef = reportError(error, "employee.notifications.mark_all_read");
+      toast.error(appendErrorReference("Gagal menandai semua sebagai dibaca", errorRef));
     }
   };
 

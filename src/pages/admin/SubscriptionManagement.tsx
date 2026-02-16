@@ -187,6 +187,7 @@ export default function SubscriptionManagement() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [policyThreshold, setPolicyThreshold] = useState(30);
   const [policyGraceDays, setPolicyGraceDays] = useState(7);
   const [isSyncingPolicy, setIsSyncingPolicy] = useState(false);
@@ -199,6 +200,7 @@ export default function SubscriptionManagement() {
   });
 
   const fetchSubscriptions = useCallback(async () => {
+    setLoadError(null);
     try {
       setIsLoading(true);
       const { error: syncPolicyError } = await supabase.rpc("sync_streak_subscription_status", {});
@@ -347,7 +349,18 @@ export default function SubscriptionManagement() {
       const errorRef = reportError(error, "admin.subscriptions.fetch", {
         status_filter: statusFilter,
       });
-      toast.error(appendErrorReference("Gagal memuat data langganan", errorRef));
+      const message = appendErrorReference("Gagal memuat data langganan", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setSubscriptions([]);
+      setTotalCount(0);
+      setStats({
+        total: 0,
+        trial: 0,
+        active: 0,
+        expired: 0,
+        totalRevenue: 0,
+      });
     } finally {
       setIsLoading(false);
     }
@@ -456,6 +469,14 @@ export default function SubscriptionManagement() {
   };
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const visiblePages =
+    totalPages <= 5
+      ? Array.from({ length: totalPages }, (_, i) => i + 1)
+      : currentPage <= 3
+        ? [1, 2, 3, 4, 5]
+        : currentPage >= totalPages - 2
+          ? [totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages]
+          : [currentPage - 2, currentPage - 1, currentPage, currentPage + 1, currentPage + 2];
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat("id-ID", {
@@ -558,6 +579,11 @@ export default function SubscriptionManagement() {
             </div>
           </CardHeader>
           <CardContent>
+            {loadError && (
+              <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {loadError}
+              </div>
+            )}
             <div className="flex flex-col sm:flex-row gap-4 mb-6">
               <div className="relative flex-1 max-w-sm">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -694,38 +720,29 @@ export default function SubscriptionManagement() {
                   <PaginationContent>
                     <PaginationItem>
                       <PaginationPrevious
-                        href="#"
-                        onClick={(e) => {
-                          e.preventDefault();
+                        onClick={() => {
                           if (currentPage > 1) setCurrentPage((prev) => prev - 1);
                         }}
-                        className={currentPage <= 1 ? "pointer-events-none opacity-50" : ""}
+                        className={currentPage <= 1 ? "pointer-events-none opacity-50 cursor-pointer" : "cursor-pointer"}
                       />
                     </PaginationItem>
-                    {Array.from({ length: totalPages }, (_, i) => i + 1)
-                      .filter((page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1)
-                      .map((page) => (
-                        <PaginationItem key={page}>
-                          <PaginationLink
-                            href="#"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              setCurrentPage(page);
-                            }}
-                            isActive={currentPage === page}
-                          >
-                            {page}
-                          </PaginationLink>
-                        </PaginationItem>
-                      ))}
+                    {visiblePages.map((page) => (
+                      <PaginationItem key={page}>
+                        <PaginationLink
+                          onClick={() => setCurrentPage(page)}
+                          isActive={currentPage === page}
+                          className="cursor-pointer"
+                        >
+                          {page}
+                        </PaginationLink>
+                      </PaginationItem>
+                    ))}
                     <PaginationItem>
                       <PaginationNext
-                        href="#"
-                        onClick={(e) => {
-                          e.preventDefault();
+                        onClick={() => {
                           if (currentPage < totalPages) setCurrentPage((prev) => prev + 1);
                         }}
-                        className={currentPage >= totalPages ? "pointer-events-none opacity-50" : ""}
+                        className={currentPage >= totalPages ? "pointer-events-none opacity-50 cursor-pointer" : "cursor-pointer"}
                       />
                     </PaginationItem>
                   </PaginationContent>

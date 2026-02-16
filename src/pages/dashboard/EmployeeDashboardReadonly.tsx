@@ -530,37 +530,55 @@ export default function EmployeeDashboardReadonly() {
     fetchHistoryByMonth();
   }, [activeTab, fetchHistoryByMonth]);
 
+  const panelClass =
+    "rounded-3xl border border-slate-200/70 bg-white/88 shadow-[0_20px_60px_-34px_rgba(15,23,42,0.55)] backdrop-blur";
+  const compactStatCardClass =
+    "rounded-3xl border border-slate-200/80 bg-white/90 shadow-[0_16px_50px_-34px_rgba(15,23,42,0.55)]";
+
   return (
-    <div className="relative min-h-screen overflow-x-hidden bg-[#f5f7fb] text-slate-900">
+    <div className="relative min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_12%_-5%,#fde68a_0%,transparent_26%),radial-gradient(circle_at_96%_0%,#bfdbfe_0%,transparent_32%),linear-gradient(180deg,#f8fafc_0%,#eef2ff_100%)] text-slate-900">
       <div className="pointer-events-none absolute inset-0 -z-10">
-        <div className="absolute left-[-120px] top-[-80px] h-[320px] w-[320px] rounded-full bg-[#c7dcff]/55 blur-3xl" />
-        <div className="absolute bottom-[-120px] right-[-80px] h-[360px] w-[360px] rounded-full bg-[#ffe7b3]/50 blur-3xl" />
+        <div className="absolute left-[-130px] top-[-96px] h-[340px] w-[340px] rounded-full bg-[#93c5fd]/35 blur-3xl" />
+        <div className="absolute bottom-[-120px] right-[-80px] h-[360px] w-[360px] rounded-full bg-[#fef08a]/35 blur-3xl" />
       </div>
       <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
-        <header className="rounded-[28px] border border-slate-200/80 bg-white/90 p-4 shadow-[0_20px_50px_-26px_rgba(15,23,42,0.5)] backdrop-blur sm:p-6">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <header className="relative overflow-hidden rounded-[32px] border border-slate-200/80 bg-white/88 p-4 shadow-[0_24px_70px_-36px_rgba(15,23,42,0.62)] backdrop-blur sm:p-6">
+          <div className="pointer-events-none absolute inset-0 opacity-70">
+            <div className="absolute -left-14 -top-16 h-44 w-44 rounded-full bg-sky-300/25 blur-3xl" />
+            <div className="absolute -right-10 -bottom-16 h-52 w-52 rounded-full bg-amber-300/20 blur-3xl" />
+          </div>
+
+          <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
-              <Avatar className="h-12 w-12 ring-2 ring-[#dce7ff]">
+              <Avatar className="h-14 w-14 ring-2 ring-sky-200/80 shadow-sm">
                 <AvatarImage src={tenant?.logo_url || undefined} alt={tenant?.name || "Org"} />
                 <AvatarFallback>{(tenant?.name || "ORG").slice(0, 2).toUpperCase()}</AvatarFallback>
               </Avatar>
               <div>
-                <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Portal Pegawai Desktop/Mobile</p>
-                <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{tenant?.name || "Dashboard Pegawai"}</h1>
+                <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Portal Pegawai Desktop / Mobile</p>
+                <h1 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-[28px]">{tenant?.name || "Dashboard Pegawai"}</h1>
                 <p className="text-sm text-slate-600">{employee?.name || "Pengguna"} • {employee?.position || "Pegawai"}</p>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Badge className="border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-50">
+                    Pending: {pendingRequests}
+                  </Badge>
+                  <Badge className="border border-red-200 bg-red-50 text-red-700 hover:bg-red-50">
+                    Notifikasi: {unreadCount}
+                  </Badge>
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Badge className="border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-50">
+              <Badge className="border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-50 shadow-sm">
                 <ShieldCheck className="mr-1 h-3.5 w-3.5" /> Mode Non-Absensi
               </Badge>
-              <Button variant="outline" onClick={logout}>
+              <Button variant="outline" className="border-slate-300 bg-white/95 hover:bg-amber-50 hover:border-amber-300" onClick={logout}>
                 <LogOut className="mr-2 h-4 w-4" /> Keluar
               </Button>
             </div>
           </div>
 
-          <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+          <div className="relative mt-5 flex gap-2 overflow-x-auto pb-1">
             {visibleTabs.map((tab) => {
               const Icon = tab.icon;
               const active = activeTab === tab.id;
@@ -568,8 +586,10 @@ export default function EmployeeDashboardReadonly() {
                 <button
                   key={tab.id}
                   onClick={() => setTab(tab.id)}
-                  className={`inline-flex min-w-max items-center gap-2 rounded-full px-4 py-2 text-sm transition ${
-                    active ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
+                  className={`inline-flex min-w-max items-center gap-2 rounded-full border px-4 py-2 text-sm transition ${
+                    active
+                      ? "border-slate-900 bg-slate-900 text-white shadow-[0_16px_30px_-20px_rgba(15,23,42,0.85)]"
+                      : "border-slate-200 bg-white text-slate-700 hover:border-amber-300 hover:bg-amber-50 hover:text-slate-900"
                   }`}
                 >
                   <Icon className="h-4 w-4" /> {tab.label}
@@ -586,8 +606,8 @@ export default function EmployeeDashboardReadonly() {
 
         <div className="mt-6 grid gap-6 lg:grid-cols-[250px_minmax(0,1fr)]">
           <aside className="hidden lg:block">
-            <div className="sticky top-4 rounded-3xl border border-slate-200/80 bg-white/90 p-3 shadow-[0_18px_40px_-28px_rgba(15,23,42,0.55)] backdrop-blur">
-              <p className="px-3 pb-2 pt-1 text-[11px] uppercase tracking-[0.2em] text-slate-500">Navigasi</p>
+            <div className="sticky top-4 rounded-3xl border border-sky-200/80 bg-gradient-to-b from-sky-100/95 via-blue-100/90 to-indigo-100/85 p-3 shadow-[0_24px_60px_-36px_rgba(37,99,235,0.45)] backdrop-blur">
+              <p className="px-3 pb-2 pt-1 text-[11px] uppercase tracking-[0.2em] text-sky-800/75">Navigasi</p>
               <div className="space-y-1.5">
                 {visibleTabs.map((tab) => {
                   const Icon = tab.icon;
@@ -598,8 +618,8 @@ export default function EmployeeDashboardReadonly() {
                       onClick={() => setTab(tab.id)}
                       className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm transition ${
                         active
-                          ? "bg-slate-900 text-white shadow-[0_10px_20px_-14px_rgba(15,23,42,0.7)]"
-                          : "text-slate-700 hover:bg-slate-100"
+                          ? "bg-white/90 text-sky-900 ring-1 ring-sky-200/80 shadow-[0_16px_30px_-22px_rgba(37,99,235,0.45)]"
+                          : "text-slate-700 hover:bg-white/70 hover:text-sky-900"
                       }`}
                     >
                       <Icon className="h-4 w-4" />
@@ -620,7 +640,7 @@ export default function EmployeeDashboardReadonly() {
           {isLoading ? (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {[1, 2, 3, 4].map((i) => (
-                <Card key={i} className="rounded-2xl border-slate-200/80 bg-white/90"><CardContent className="p-4"><Skeleton className="h-20 w-full" /></CardContent></Card>
+                <Card key={i} className={compactStatCardClass}><CardContent className="p-4"><Skeleton className="h-20 w-full" /></CardContent></Card>
               ))}
             </div>
           ) : null}
@@ -628,22 +648,22 @@ export default function EmployeeDashboardReadonly() {
           {!isLoading && activeTab === "home" && (
             <>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <Card className="rounded-2xl border-slate-200/80 bg-white/90 shadow-[0_10px_30px_-20px_rgba(15,23,42,0.45)]">
+                <Card className={compactStatCardClass}>
                   <CardHeader className="pb-2"><CardDescription>Status Hari Ini</CardDescription><CardTitle className="text-base">{todayAttendance?.status || "Belum ada data"}</CardTitle></CardHeader>
                   <CardContent className="text-sm text-slate-600">
                     <p>Masuk: {todayAttendance?.check_in_time || "-"}</p>
                     <p>Pulang: {todayAttendance?.check_out_time || "-"}</p>
                   </CardContent>
                 </Card>
-                <Card className="rounded-2xl border-slate-200/80 bg-white/90 shadow-[0_10px_30px_-20px_rgba(15,23,42,0.45)]">
+                <Card className={compactStatCardClass}>
                   <CardHeader className="pb-2"><CardDescription>Pengajuan Pending</CardDescription><CardTitle className="text-2xl">{pendingRequests}</CardTitle></CardHeader>
-                  <CardContent><Button variant="outline" size="sm" onClick={() => setTab("requests")}>Lihat Pengajuan</Button></CardContent>
+                  <CardContent><Button variant="outline" size="sm" className="hover:border-amber-300 hover:bg-amber-50" onClick={() => setTab("requests")}>Lihat Pengajuan</Button></CardContent>
                 </Card>
-                <Card className="rounded-2xl border-slate-200/80 bg-white/90 shadow-[0_10px_30px_-20px_rgba(15,23,42,0.45)]">
+                <Card className={compactStatCardClass}>
                   <CardHeader className="pb-2"><CardDescription>Notifikasi Belum Dibaca</CardDescription><CardTitle className="text-2xl">{unreadCount}</CardTitle></CardHeader>
-                  <CardContent><Button variant="outline" size="sm" onClick={() => setTab("notifications")}>Buka Notifikasi</Button></CardContent>
+                  <CardContent><Button variant="outline" size="sm" className="hover:border-amber-300 hover:bg-amber-50" onClick={() => setTab("notifications")}>Buka Notifikasi</Button></CardContent>
                 </Card>
-                <Card className="rounded-2xl border-slate-200/80 bg-white/90 shadow-[0_10px_30px_-20px_rgba(15,23,42,0.45)]">
+                <Card className={compactStatCardClass}>
                   <CardHeader className="pb-2"><CardDescription>Akses Absensi</CardDescription><CardTitle className="text-base">Aplikasi Mobile</CardTitle></CardHeader>
                   <CardContent className="text-sm text-slate-600">
                     Fitur absen hanya tersedia di <code>/employee/dashboard</code>.
@@ -651,7 +671,7 @@ export default function EmployeeDashboardReadonly() {
                 </Card>
               </div>
 
-              <Card className="rounded-2xl border-slate-200/80 bg-white/90 shadow-[0_10px_30px_-20px_rgba(15,23,42,0.45)]">
+              <Card className={panelClass}>
                 <CardHeader>
                   <CardTitle className="text-lg">Update Terbaru</CardTitle>
                   <CardDescription>Berita, artikel, dan pengumuman terbaru</CardDescription>
@@ -661,7 +681,7 @@ export default function EmployeeDashboardReadonly() {
                     <p className="text-sm text-slate-600">Belum ada update terbaru.</p>
                   ) : (
                     newsItems.map((n) => (
-                      <div key={`${n.source}-${n.id}`} className="flex items-start justify-between rounded-xl border border-slate-200 p-3">
+                      <div key={`${n.source}-${n.id}`} className="flex items-start justify-between rounded-2xl border border-slate-200/90 bg-white/90 p-3 shadow-sm transition hover:border-amber-300 hover:bg-amber-50/45">
                         <div>
                           <p className="font-medium">{n.title}</p>
                           <p className="text-xs text-slate-500">{format(new Date(n.created_at), "dd MMM yyyy HH:mm", { locale: localeId })}</p>
@@ -676,7 +696,7 @@ export default function EmployeeDashboardReadonly() {
           )}
 
           {!isLoading && activeTab === "history" && (
-            <Card className="rounded-2xl border-slate-200/80 bg-white/90 shadow-[0_10px_30px_-20px_rgba(15,23,42,0.45)]">
+            <Card className={panelClass}>
               <CardHeader>
                 <CardTitle>Riwayat Kehadiran</CardTitle>
                 <CardDescription>Riwayat absen per bulan</CardDescription>
@@ -717,7 +737,7 @@ export default function EmployeeDashboardReadonly() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <Button variant="outline" size="sm" onClick={fetchHistoryByMonth}>
+                  <Button variant="outline" size="sm" className="hover:border-amber-300 hover:bg-amber-50" onClick={fetchHistoryByMonth}>
                     Refresh
                   </Button>
                 </div>
@@ -732,7 +752,7 @@ export default function EmployeeDashboardReadonly() {
                   <p className="text-sm text-slate-600">Belum ada riwayat absensi pada bulan ini.</p>
                 ) : (
                   historyItems.map((item) => (
-                    <div key={item.id} className="grid grid-cols-4 gap-2 rounded-xl border border-slate-200 p-3 text-sm">
+                    <div key={item.id} className="grid grid-cols-4 gap-2 rounded-2xl border border-slate-200/90 bg-white/95 p-3 text-sm shadow-sm">
                       <div>{item.date}</div>
                       <div>{item.check_in_time || "-"}</div>
                       <div>{item.check_out_time || "-"}</div>
@@ -745,23 +765,23 @@ export default function EmployeeDashboardReadonly() {
           )}
 
           {!isLoading && activeTab === "requests" && (
-            <Card className="rounded-2xl border-slate-200/80 bg-white/90 shadow-[0_10px_30px_-20px_rgba(15,23,42,0.45)]">
+            <Card className={panelClass}>
               <CardHeader>
                 <CardTitle>Pengajuan</CardTitle>
                 <CardDescription>Izin/cuti, WFH, lembur, dan absen fleksibel. Semua pengajuan dapat dilakukan dari sini.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant={activeRequestType === "leave" ? "default" : "outline"} onClick={() => setActiveRequestType("leave")}>
+                  <Button size="sm" variant={activeRequestType === "leave" ? "default" : "outline"} className={activeRequestType === "leave" ? "" : "hover:border-amber-300 hover:bg-amber-50"} onClick={() => setActiveRequestType("leave")}>
                     <FileText className="mr-1 h-4 w-4" /> Cuti/Izin
                   </Button>
-                  <Button size="sm" variant={activeRequestType === "wfh" ? "default" : "outline"} onClick={() => setActiveRequestType("wfh")}>
+                  <Button size="sm" variant={activeRequestType === "wfh" ? "default" : "outline"} className={activeRequestType === "wfh" ? "" : "hover:border-amber-300 hover:bg-amber-50"} onClick={() => setActiveRequestType("wfh")}>
                     <HomeIcon className="mr-1 h-4 w-4" /> WFH
                   </Button>
-                  <Button size="sm" variant={activeRequestType === "overtime" ? "default" : "outline"} onClick={() => setActiveRequestType("overtime")}>
+                  <Button size="sm" variant={activeRequestType === "overtime" ? "default" : "outline"} className={activeRequestType === "overtime" ? "" : "hover:border-amber-300 hover:bg-amber-50"} onClick={() => setActiveRequestType("overtime")}>
                     <Timer className="mr-1 h-4 w-4" /> Lembur
                   </Button>
-                  <Button size="sm" variant={activeRequestType === "flexible" ? "default" : "outline"} onClick={() => setActiveRequestType("flexible")}>
+                  <Button size="sm" variant={activeRequestType === "flexible" ? "default" : "outline"} className={activeRequestType === "flexible" ? "" : "hover:border-amber-300 hover:bg-amber-50"} onClick={() => setActiveRequestType("flexible")}>
                     <MapPinOff className="mr-1 h-4 w-4" /> Absensi Khusus
                   </Button>
                 </div>
@@ -813,7 +833,7 @@ export default function EmployeeDashboardReadonly() {
           {!isLoading && activeTab === "announcements" && <EmployeeAnnouncements tenantId={employee?.tenant_id || undefined} onBack={() => setTab("home")} />}
 
           {!isLoading && activeTab === "notifications" && (
-            <Card className="rounded-2xl border-slate-200/80 bg-white/90 shadow-[0_10px_30px_-20px_rgba(15,23,42,0.45)]">
+            <Card className={panelClass}>
               <CardHeader>
                 <CardTitle>Notifikasi</CardTitle>
                 <CardDescription>Daftar notifikasi akun Anda</CardDescription>
@@ -823,7 +843,7 @@ export default function EmployeeDashboardReadonly() {
                   <p className="text-sm text-slate-600">Belum ada notifikasi.</p>
                 ) : (
                   notificationItems.map((n) => (
-                    <div key={n.id} className={`rounded-xl border p-3 ${n.is_read ? "border-slate-200" : "border-blue-300 bg-blue-50/70"}`}>
+                    <div key={n.id} className={`rounded-2xl border p-3 transition ${n.is_read ? "border-slate-200/90 bg-white/90" : "border-blue-300 bg-blue-50/70 shadow-sm"}`}>
                       <div className="flex items-start justify-between gap-3">
                         <div>
                           <p className="font-medium">{n.title}</p>
@@ -840,7 +860,7 @@ export default function EmployeeDashboardReadonly() {
           )}
 
           {!isLoading && activeTab === "help" && (
-            <Card className="rounded-2xl border-slate-200/80 bg-white/90 shadow-[0_10px_30px_-20px_rgba(15,23,42,0.45)]">
+            <Card className={panelClass}>
               <CardHeader>
                 <CardTitle>Bantuan</CardTitle>
                 <CardDescription>Pertanyaan yang sering diajukan</CardDescription>
@@ -877,7 +897,7 @@ export default function EmployeeDashboardReadonly() {
 
           {!isLoading && activeTab === "profile" && (
             <div className="space-y-4">
-              <Card className="rounded-2xl border-slate-200/80 bg-white/90 shadow-[0_10px_30px_-20px_rgba(15,23,42,0.45)]">
+              <Card className={panelClass}>
                 <CardHeader>
                   <CardTitle>Profil Pegawai</CardTitle>
                   <CardDescription>Informasi akun dan identitas</CardDescription>
@@ -910,8 +930,8 @@ export default function EmployeeDashboardReadonly() {
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2 pt-2">
-                    <Button variant="outline" onClick={() => navigate("/auth/forgot-password")}>Ganti Password</Button>
-                    <Button variant="outline" onClick={() => loadData()}>Refresh Data</Button>
+                    <Button variant="outline" className="hover:border-amber-300 hover:bg-amber-50" onClick={() => navigate("/auth/forgot-password")}>Ganti Password</Button>
+                    <Button variant="outline" className="hover:border-amber-300 hover:bg-amber-50" onClick={() => loadData()}>Refresh Data</Button>
                   </div>
                 </CardContent>
               </Card>
@@ -954,7 +974,7 @@ export default function EmployeeDashboardReadonly() {
           )}
 
           {!isLoading && activeTab === "activation" && employee?.tenant_id && (
-            <Card className="rounded-2xl border-slate-200/80 bg-white/90 shadow-[0_10px_30px_-20px_rgba(15,23,42,0.45)]">
+            <Card className={panelClass}>
               <CardHeader>
                 <CardTitle>Aktivasi</CardTitle>
                 <CardDescription>Status aktivasi akun individual</CardDescription>
@@ -968,7 +988,7 @@ export default function EmployeeDashboardReadonly() {
         </div>
       </div>
 
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 p-2 backdrop-blur md:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200/90 bg-white/96 p-2 shadow-[0_-12px_30px_-24px_rgba(15,23,42,0.35)] backdrop-blur md:hidden">
         <div className="flex gap-1 overflow-x-auto">
           {visibleTabs.map((tab) => {
             const Icon = tab.icon;
@@ -978,7 +998,7 @@ export default function EmployeeDashboardReadonly() {
                 key={tab.id}
                 onClick={() => setTab(tab.id)}
                 className={`relative flex min-w-[88px] flex-col items-center justify-center rounded-xl py-2 text-[11px] ${
-                  active ? "bg-slate-900 text-white" : "text-slate-600"
+                  active ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-amber-50"
                 }`}
               >
                 {tab.id === "notifications" && unreadCount > 0 ? (
@@ -1043,7 +1063,7 @@ export default function EmployeeDashboardReadonly() {
 
 function InfoItem({ label, value }: { label: string; value?: string | null }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+    <div className="rounded-2xl border border-slate-200/90 bg-white/90 p-3 shadow-sm">
       <p className="text-xs text-slate-500">{label}</p>
       <p className="font-medium text-slate-900">{value || "-"}</p>
     </div>

@@ -145,6 +145,7 @@ export default function RoleManagement() {
   const [employeeRefs, setEmployeeRefs] = useState<EmployeeRef[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<"all" | AppRole>("all");
@@ -183,6 +184,7 @@ export default function RoleManagement() {
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       const [roleRes, tenantRes] = await Promise.all([
         supabase
@@ -224,7 +226,9 @@ export default function RoleManagement() {
       setEmployeeRefs(refs);
     } catch (error) {
       const errorRef = reportError(error, "admin.roles.load");
-      toast.error(appendErrorReference("Gagal memuat data role", errorRef));
+      const message = appendErrorReference("Gagal memuat data role", errorRef);
+      toast.error(message);
+      setLoadError(message);
       setRows([]);
       setTenants([]);
       setEmployeeRefs([]);
@@ -276,6 +280,18 @@ export default function RoleManagement() {
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const paginatedRows = filteredRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const visiblePages = useMemo(() => {
+    if (totalPages <= 5) {
+      return Array.from({ length: totalPages }, (_, i) => i + 1);
+    }
+    if (currentPage <= 3) {
+      return [1, 2, 3, 4, 5];
+    }
+    if (currentPage >= totalPages - 2) {
+      return [totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+    }
+    return [currentPage - 2, currentPage - 1, currentPage, currentPage + 1, currentPage + 2];
+  }, [currentPage, totalPages]);
 
   const openAddDialog = () => {
     resetForm();
@@ -438,6 +454,11 @@ export default function RoleManagement() {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            {loadError && (
+              <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {loadError}
+              </div>
+            )}
             <div className="grid gap-3 md:grid-cols-3">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -551,25 +572,29 @@ export default function RoleManagement() {
                 <PaginationContent>
                   <PaginationItem>
                     <PaginationPrevious
-                      href="#"
-                      onClick={(e) => {
-                        e.preventDefault();
+                      onClick={() => {
                         if (currentPage > 1) setCurrentPage((p) => p - 1);
                       }}
-                      className={currentPage <= 1 ? "pointer-events-none opacity-50" : ""}
+                      className={currentPage <= 1 ? "pointer-events-none opacity-50 cursor-pointer" : "cursor-pointer"}
                     />
                   </PaginationItem>
-                  <PaginationItem>
-                    <PaginationLink href="#" isActive>{currentPage}</PaginationLink>
-                  </PaginationItem>
+                  {visiblePages.map((page) => (
+                    <PaginationItem key={page}>
+                      <PaginationLink
+                        onClick={() => setCurrentPage(page)}
+                        isActive={currentPage === page}
+                        className="cursor-pointer"
+                      >
+                        {page}
+                      </PaginationLink>
+                    </PaginationItem>
+                  ))}
                   <PaginationItem>
                     <PaginationNext
-                      href="#"
-                      onClick={(e) => {
-                        e.preventDefault();
+                      onClick={() => {
                         if (currentPage < totalPages) setCurrentPage((p) => p + 1);
                       }}
-                      className={currentPage >= totalPages ? "pointer-events-none opacity-50" : ""}
+                      className={currentPage >= totalPages ? "pointer-events-none opacity-50 cursor-pointer" : "cursor-pointer"}
                     />
                   </PaginationItem>
                 </PaginationContent>

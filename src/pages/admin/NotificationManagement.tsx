@@ -50,6 +50,7 @@ export default function NotificationManagement() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [totalCount, setTotalCount] = useState(0);
   const [readCount, setReadCount] = useState(0);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -87,6 +88,7 @@ export default function NotificationManagement() {
 
   const fetchNotifications = useCallback(async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       const pagedQuery = applyNotificationFilters(
         supabase
@@ -128,7 +130,9 @@ export default function NotificationManagement() {
         filter_type: filterType,
         page: currentPage,
       });
-      toast.error(appendErrorReference("Gagal memuat notifikasi", errorRef));
+      const message = appendErrorReference("Gagal memuat notifikasi", errorRef);
+      toast.error(message);
+      setLoadError(message);
       setNotifications([]);
       setTotalCount(0);
       setReadCount(0);
@@ -302,6 +306,18 @@ export default function NotificationManagement() {
   };
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const visiblePages = (() => {
+    if (totalPages <= 5) {
+      return Array.from({ length: totalPages }, (_, i) => i + 1);
+    }
+    if (currentPage <= 3) {
+      return [1, 2, 3, 4, 5];
+    }
+    if (currentPage >= totalPages - 2) {
+      return [totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+    }
+    return [currentPage - 2, currentPage - 1, currentPage, currentPage + 1, currentPage + 2];
+  })();
 
   return (
     <SuperAdminLayout
@@ -490,6 +506,11 @@ export default function NotificationManagement() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {loadError && (
+              <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {loadError}
+              </div>
+            )}
             <Table>
               <TableHeader>
                 <TableRow>
@@ -559,38 +580,29 @@ export default function NotificationManagement() {
                   <PaginationContent>
                     <PaginationItem>
                       <PaginationPrevious
-                        href="#"
-                        onClick={(e) => {
-                          e.preventDefault();
+                        onClick={() => {
                           if (currentPage > 1) setCurrentPage((prev) => prev - 1);
                         }}
-                        className={currentPage <= 1 ? "pointer-events-none opacity-50" : ""}
+                        className={currentPage <= 1 ? "pointer-events-none opacity-50 cursor-pointer" : "cursor-pointer"}
                       />
                     </PaginationItem>
-                    {Array.from({ length: totalPages }, (_, i) => i + 1)
-                      .filter((page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1)
-                      .map((page) => (
-                        <PaginationItem key={page}>
-                          <PaginationLink
-                            href="#"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              setCurrentPage(page);
-                            }}
-                            isActive={currentPage === page}
-                          >
-                            {page}
-                          </PaginationLink>
-                        </PaginationItem>
-                      ))}
+                    {visiblePages.map((page) => (
+                      <PaginationItem key={page}>
+                        <PaginationLink
+                          onClick={() => setCurrentPage(page)}
+                          isActive={currentPage === page}
+                          className="cursor-pointer"
+                        >
+                          {page}
+                        </PaginationLink>
+                      </PaginationItem>
+                    ))}
                     <PaginationItem>
                       <PaginationNext
-                        href="#"
-                        onClick={(e) => {
-                          e.preventDefault();
+                        onClick={() => {
                           if (currentPage < totalPages) setCurrentPage((prev) => prev + 1);
                         }}
-                        className={currentPage >= totalPages ? "pointer-events-none opacity-50" : ""}
+                        className={currentPage >= totalPages ? "pointer-events-none opacity-50 cursor-pointer" : "cursor-pointer"}
                       />
                     </PaginationItem>
                   </PaginationContent>

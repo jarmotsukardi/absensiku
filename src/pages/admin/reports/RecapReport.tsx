@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
 import { format, startOfMonth, endOfMonth } from "date-fns";
 import { id as localeId } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type OPD = Tables<"opd">;
 
@@ -52,10 +53,12 @@ export default function RecapReport() {
   const [filterMonth, setFilterMonth] = useState<string>(String(new Date().getMonth() + 1));
   const [filterYear, setFilterYear] = useState<string>(String(new Date().getFullYear()));
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
+      setLoadError(null);
       
       const year = parseInt(filterYear);
       const month = parseInt(filterMonth);
@@ -113,8 +116,14 @@ export default function RecapReport() {
 
       setRecapData(Object.values(employeeRecords));
     } catch (error) {
-      console.error("Error fetching data:", error);
-      toast.error("Gagal memuat data");
+      const errorRef = reportError(error, "admin.reports.recap.fetch", {
+        month: filterMonth,
+        year: filterYear,
+      });
+      const message = appendErrorReference("Gagal memuat data rekapitulasi", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setRecapData([]);
     } finally {
       setIsLoading(false);
     }
@@ -200,6 +209,12 @@ export default function RecapReport() {
             Export Excel
           </Button>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         {/* Summary Cards */}
         <div className="grid grid-cols-2 md:grid-cols-6 gap-4">

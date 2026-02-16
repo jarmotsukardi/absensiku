@@ -16,6 +16,7 @@ import { id } from "date-fns/locale";
 import type { Tables } from "@/integrations/supabase/types";
 import { calculateKeterangan, type AttendanceKeterangan } from "@/hooks/useWorkHours";
 import { toWorkDayOfWeek } from "@/lib/workday";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type OPD = Tables<"opd">;
 type AttendanceRecord = Tables<"attendance_records_partitioned">;
@@ -94,41 +95,69 @@ export default function OrgAttendanceReport() {
   const [endDate, setEndDate] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [tenantId, setTenantId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
 
   const fetchOpds = useCallback(async () => {
-    const { data } = await supabase.from("opd").select("*").order("name");
-    setOpds(data || []);
+    try {
+      const { data, error } = await supabase.from("opd").select("*").order("name");
+      if (error) throw error;
+      setOpds(data || []);
+    } catch (error) {
+      const errorRef = reportError(error, "org.reports.attendance.fetch_opd");
+      const message = appendErrorReference("Gagal memuat data OPD", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setOpds([]);
+    }
   }, []);
 
   const fetchWorkHours = useCallback(async (tid: string) => {
-    const { data } = await supabase
-      .from("work_hours")
-      .select("time_in, time_out, day_of_week, institution_type")
-      .eq("tenant_id", tid)
-      .eq("is_active", true);
-    setWorkHours(data || []);
+    try {
+      const { data, error } = await supabase
+        .from("work_hours")
+        .select("time_in, time_out, day_of_week, institution_type")
+        .eq("tenant_id", tid)
+        .eq("is_active", true);
+      if (error) throw error;
+      setWorkHours(data || []);
+    } catch (error) {
+      const errorRef = reportError(error, "org.reports.attendance.fetch_work_hours", { tenant_id: tid });
+      const message = appendErrorReference("Gagal memuat konfigurasi jam kerja", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setWorkHours([]);
+    }
   }, []);
 
   const fetchInitialData = useCallback(async () => {
-    // Dapatkan tenant_id dari user
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      const { data: empData } = await supabase
-        .from("employees")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      
-      if (empData?.tenant_id) {
-        setTenantId(empData.tenant_id);
-        fetchWorkHours(empData.tenant_id);
+    try {
+      // Dapatkan tenant_id dari user
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: empData, error: empError } = await supabase
+          .from("employees")
+          .select("tenant_id")
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (empError) throw empError;
+
+        if (empData?.tenant_id) {
+          setTenantId(empData.tenant_id);
+          await fetchWorkHours(empData.tenant_id);
+        }
       }
+
+      await fetchOpds();
+    } catch (error) {
+      const errorRef = reportError(error, "org.reports.attendance.fetch_initial_data");
+      const message = appendErrorReference("Gagal memuat data awal laporan", errorRef);
+      toast.error(message);
+      setLoadError(message);
     }
-    fetchOpds();
   }, [fetchOpds, fetchWorkHours]);
 
   useEffect(() => {
@@ -156,6 +185,7 @@ export default function OrgAttendanceReport() {
 
     setIsLoading(true);
     try {
+      setLoadError(null);
       // Fetch attendance dan employees terpisah karena tabel partitioned tidak punya FK
       const [attendanceResult, employeesResult, officesResult] = await Promise.all([
         supabase
@@ -218,7 +248,16 @@ export default function OrgAttendanceReport() {
       }
       setRecords(filtered);
     } catch (error) {
-      toast.error("Gagal memuat laporan");
+      const errorRef = reportError(error, "org.reports.attendance.fetch_report", {
+        tenant_id: tenantId,
+        filter_opd: filterOpd,
+        start_date: startDate,
+        end_date: endDate,
+      });
+      const message = appendErrorReference("Gagal memuat laporan absensi", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setRecords([]);
     } finally {
       setIsLoading(false);
     }
@@ -385,6 +424,12 @@ export default function OrgAttendanceReport() {
             </Button>
           </div>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>

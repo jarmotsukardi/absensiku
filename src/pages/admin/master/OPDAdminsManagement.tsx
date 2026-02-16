@@ -13,6 +13,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Plus, Search, Pencil, Trash2, Shield, Loader2 } from "lucide-react";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface OPDAdmin {
   id: string;
@@ -55,6 +56,7 @@ export default function OPDAdminsManagement() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const getErrorMessage = (error: unknown) =>
     error instanceof Error ? error.message : "Terjadi kesalahan";
   
@@ -84,6 +86,7 @@ export default function OPDAdminsManagement() {
 
   const fetchData = async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       // Fetch OPD Admins with relations
       const { data: adminsData, error: adminsError } = await supabase
@@ -132,8 +135,16 @@ export default function OPDAdminsManagement() {
       if (employeesError) throw employeesError;
       setEmployees(employeesData || []);
     } catch (error) {
-      console.error("Error fetching data:", error);
-      toast.error("Gagal memuat data");
+      const errorRef = reportError(error, "admin.master.opd_admins.fetch", {
+        search: searchTerm.trim() || null,
+      });
+      const message = appendErrorReference("Gagal memuat data admin OPD", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setAdmins([]);
+      setOpds([]);
+      setEmployees([]);
+      setFilteredEmployees([]);
     } finally {
       setIsLoading(false);
     }
@@ -147,6 +158,7 @@ export default function OPDAdminsManagement() {
       return;
     }
 
+    setLoadError(null);
     try {
       if (isEditing) {
         const { error } = await supabase
@@ -193,10 +205,16 @@ export default function OPDAdminsManagement() {
       }
 
       resetForm();
-      fetchData();
+      void fetchData();
     } catch (error) {
-      console.error("Error saving admin:", error);
-      toast.error("Gagal menyimpan: " + getErrorMessage(error));
+      const errorRef = reportError(error, "admin.master.opd_admins.save", {
+        mode: isEditing ? "update" : "insert",
+        opd_id: formData.opd_id,
+        employee_id: formData.employee_id,
+      });
+      const message = appendErrorReference(`Gagal menyimpan: ${getErrorMessage(error)}`, errorRef);
+      toast.error(message);
+      setLoadError(message);
     }
   };
 
@@ -218,14 +236,17 @@ export default function OPDAdminsManagement() {
   const handleDelete = async (id: string) => {
     if (!confirm("Yakin ingin menghapus admin OPD ini?")) return;
 
+    setLoadError(null);
     try {
       const { error } = await supabase.from("opd_admins").delete().eq("id", id);
       if (error) throw error;
       toast.success("Admin OPD berhasil dihapus");
-      fetchData();
+      void fetchData();
     } catch (error) {
-      console.error("Error deleting admin:", error);
-      toast.error("Gagal menghapus: " + getErrorMessage(error));
+      const errorRef = reportError(error, "admin.master.opd_admins.delete", { opd_admin_id: id });
+      const message = appendErrorReference(`Gagal menghapus: ${getErrorMessage(error)}`, errorRef);
+      toast.error(message);
+      setLoadError(message);
     }
   };
 
@@ -253,6 +274,14 @@ export default function OPDAdminsManagement() {
   const totalPages = Math.ceil(filteredAdmins.length / ITEMS_PER_PAGE);
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
   const paginatedAdmins = filteredAdmins.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  const visiblePages =
+    totalPages <= 5
+      ? Array.from({ length: totalPages }, (_, i) => i + 1)
+      : currentPage <= 3
+        ? [1, 2, 3, 4, 5]
+        : currentPage >= totalPages - 2
+          ? [totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages]
+          : [currentPage - 2, currentPage - 1, currentPage, currentPage + 1, currentPage + 2];
 
   useEffect(() => {
     setCurrentPage(1);
@@ -400,6 +429,11 @@ export default function OPDAdminsManagement() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {loadError && (
+              <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {loadError}
+              </div>
+            )}
             {isLoading ? (
               <div className="flex items-center justify-center py-10">
                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -476,7 +510,7 @@ export default function OPDAdminsManagement() {
                         className={currentPage === 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
                       />
                     </PaginationItem>
-                    {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                    {visiblePages.map((page) => (
                       <PaginationItem key={page}>
                         <PaginationLink
                           onClick={() => setCurrentPage(page)}

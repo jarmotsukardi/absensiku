@@ -42,6 +42,7 @@ import { EmployeeFloatingWhatsApp } from "@/components/employee/EmployeeFloating
 import EmployeeNewsArticles from "@/pages/employee/EmployeeNewsArticles";
 import EmployeeAnnouncements from "@/pages/employee/EmployeeAnnouncements";
 import DOMPurify from "dompurify";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 // Lazy load DeviceResetDialog di level modul untuk mencegah flicker
 const LazyDeviceResetDialog = React.lazy(() => 
@@ -367,7 +368,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       
       setUnreadNotificationCount(count || 0);
     } catch (error) {
-      console.error("Error fetching unread notifications:", error);
+      reportError(error, "employee.dashboard.fetch_unread_notifications");
     }
   };
 
@@ -522,7 +523,10 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
         .eq("date", todayAttendance.date);
 
       if (error) {
-        console.error("Error applying attendance metadata:", error);
+        reportError(error, "employee.dashboard.apply_attendance_metadata", {
+          attendance_id: todayAttendance.id,
+          date: todayAttendance.date,
+        });
         return;
       }
 
@@ -640,7 +644,10 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       // Bukan hari libur
       setWorkDayError(null);
     } catch (error) {
-      console.error("Error checking holiday:", error);
+      reportError(error, "employee.dashboard.check_today_holiday", {
+        tenant_id: tenantId,
+        organization_type: organizationType ?? null,
+      });
       setWorkDayError(null);
     }
   };
@@ -814,16 +821,23 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
               .order("created_at", { ascending: false })
               .limit(5);
 
-            if (!error) newsData = data || [];
+            if (!error) {
+              newsData = data || [];
+            } else {
+              reportError(error, "employee.dashboard.fetch_news", { tenant_id: tenantId });
+            }
           } else {
-            const { data } = await supabase
+            const { data, error } = await supabase
               .from("news")
               .select("id, title, content, image_url, created_at")
               .eq("is_global", true)
               .eq("is_published", true)
               .order("created_at", { ascending: false })
               .limit(5);
-            
+
+            if (error) {
+              reportError(error, "employee.dashboard.fetch_news_global");
+            }
             newsData = data || [];
           }
           
@@ -839,7 +853,10 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
         }
       })();
     } catch (error) {
-      console.error("Error fetching data:", error);
+      const errorRef = reportError(error, "employee.dashboard.fetch_data", {
+        user_id: user?.id ?? null,
+      });
+      toast.error(appendErrorReference("Gagal memuat data dashboard", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -924,7 +941,10 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
         if (!validateLocationSecurityOrNotify(position)) return;
         setCurrentLocation({ lat, lng, timestamp: position.timestamp });
       } catch (error: unknown) {
-        toast.error("Gagal Mendapatkan Lokasi", {
+        const errorRef = reportError(error, "employee.dashboard.get_location_for_checkin", {
+          employee_id: employee.id,
+        });
+        toast.error(appendErrorReference("Gagal Mendapatkan Lokasi", errorRef), {
           description: error instanceof Error ? error.message : "Aktifkan GPS dan coba lagi",
         });
         return;
@@ -1022,8 +1042,10 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
         description: result.message || `Lokasi: ${lat.toFixed(4)}, ${lng.toFixed(4)}`,
       });
     } catch (error: unknown) {
-      console.error("Check-in error:", error);
-      toast.error("Gagal Absen Masuk", {
+      const errorRef = reportError(error, "employee.dashboard.check_in", {
+        employee_id: employee.id,
+      });
+      toast.error(appendErrorReference("Gagal Absen Masuk", errorRef), {
         description: error instanceof Error ? error.message : "Terjadi kesalahan",
       });
     }
@@ -1073,9 +1095,11 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
         description: result.message || `Lokasi: ${lat.toFixed(4)}, ${lng.toFixed(4)}`,
       });
     } catch (error: unknown) {
-      console.error("Check-out error:", error);
-
-      toast.error("Gagal Absen Pulang", {
+      const errorRef = reportError(error, "employee.dashboard.check_out", {
+        employee_id: employee.id,
+        attendance_id: todayAttendance.id,
+      });
+      toast.error(appendErrorReference("Gagal Absen Pulang", errorRef), {
         description: error instanceof Error ? error.message : "Terjadi kesalahan",
       });
     }
@@ -1967,7 +1991,11 @@ const LegacyHistoryTab = ({ employeeId, timezone, tenantId }: { employeeId?: str
 
       setRecords(data || []);
     } catch (error) {
-      console.error("Error fetching history:", error);
+      reportError(error, "employee.dashboard.legacy_history.fetch", {
+        employee_id: employeeId,
+        month: filter.month,
+        year: filter.year,
+      });
     } finally {
       setIsLoading(false);
     }
@@ -1983,7 +2011,9 @@ const LegacyHistoryTab = ({ employeeId, timezone, tenantId }: { employeeId?: str
       
       setWorkHoursData(data || []);
     } catch (error) {
-      console.error("Error fetching work hours:", error);
+      reportError(error, "employee.dashboard.legacy_history.fetch_work_hours", {
+        tenant_id: tenantId,
+      });
     }
   };
 
@@ -2128,7 +2158,9 @@ function RequestsTab({ employeeId, tenantId }: { employeeId?: string; tenantId?:
 
       setRequests(data || []);
     } catch (error) {
-      console.error("Error fetching requests:", error);
+      reportError(error, "employee.dashboard.requests.fetch_leave", {
+        employee_id: employeeId,
+      });
     } finally {
       setIsLoading(false);
     }
@@ -2145,7 +2177,9 @@ function RequestsTab({ employeeId, tenantId }: { employeeId?: string; tenantId?:
 
       setWfhRequests(data || []);
     } catch (error) {
-      console.error("Error fetching WFH requests:", error);
+      reportError(error, "employee.dashboard.requests.fetch_wfh", {
+        employee_id: employeeId,
+      });
     }
   };
 
@@ -2194,7 +2228,11 @@ function RequestsTab({ employeeId, tenantId }: { employeeId?: string; tenantId?:
       setWfhReason("");
       fetchWfhRequests();
     } catch (error: unknown) {
-      toast.error("Gagal mengirim pengajuan WFH", {
+      const errorRef = reportError(error, "employee.dashboard.requests.submit_wfh", {
+        employee_id: employeeId,
+        selected_dates: selectedWfhDates.map((d) => format(d, "yyyy-MM-dd")),
+      });
+      toast.error(appendErrorReference("Gagal mengirim pengajuan WFH", errorRef), {
         description: error instanceof Error ? error.message : "Terjadi kesalahan",
       });
     } finally {
@@ -2551,14 +2589,18 @@ function HelpTab({ tenantId }: { tenantId?: string }) {
       const { data, error } = await query;
       
       if (error) {
-        console.error("Error fetching FAQs:", error);
+        reportError(error, "employee.dashboard.help.fetch_faqs", {
+          tenant_id: tenantId,
+        });
         // Set default FAQs jika error
         setFaqs(getDefaultFAQs());
       } else {
         setFaqs(data && data.length > 0 ? data : getDefaultFAQs());
       }
     } catch (error) {
-      console.error("Error fetching FAQs:", error);
+      reportError(error, "employee.dashboard.help.fetch_faqs_unhandled", {
+        tenant_id: tenantId,
+      });
       setFaqs(getDefaultFAQs());
     } finally {
       setIsLoading(false);

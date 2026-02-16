@@ -17,6 +17,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar";
 import { CalendarIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type AttendanceRecord = Tables<"attendance_records">;
 type Employee = Tables<"employees">;
@@ -34,10 +35,12 @@ export default function AttendanceReport() {
   const [endDate, setEndDate] = useState<Date | undefined>(new Date());
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
+      setLoadError(null);
       
       const [opdResult, recordResult] = await Promise.all([
         supabase.from("opd").select("*").order("name"),
@@ -57,8 +60,14 @@ export default function AttendanceReport() {
       setRecords(recordResult.data || []);
       setCurrentPage(1);
     } catch (error) {
-      console.error("Error fetching data:", error);
-      toast.error("Gagal memuat data");
+      const errorRef = reportError(error, "admin.reports.attendance.fetch", {
+        start_date: startDate ? format(startDate, "yyyy-MM-dd") : null,
+        end_date: endDate ? format(endDate, "yyyy-MM-dd") : null,
+      });
+      const message = appendErrorReference("Gagal memuat data laporan absensi", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setRecords([]);
     } finally {
       setIsLoading(false);
     }
@@ -145,6 +154,12 @@ export default function AttendanceReport() {
             Export Excel
           </Button>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>

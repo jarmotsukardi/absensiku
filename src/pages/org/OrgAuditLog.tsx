@@ -66,6 +66,7 @@ export default function OrgAuditLog() {
   const [tableFilter, setTableFilter] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -80,6 +81,7 @@ export default function OrgAuditLog() {
 
   const fetchLogs = useCallback(async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
@@ -94,7 +96,12 @@ export default function OrgAuditLog() {
 
       if (roleError) throw roleError;
       if (!roleData?.tenant_id) {
-        toast.error("Tenant organisasi tidak ditemukan");
+        const errorRef = reportError(new Error("Tenant organisasi tidak ditemukan untuk admin"), "org.audit_log.missing_tenant", {
+          user_id: user.id,
+        });
+        const message = appendErrorReference("Tenant organisasi tidak ditemukan", errorRef);
+        toast.error(message);
+        setLoadError(message);
         setLogs([]);
         setTotalCount(0);
         return;
@@ -162,7 +169,11 @@ export default function OrgAuditLog() {
         table_filter: tableFilter,
         search: debouncedSearchQuery,
       });
-      toast.error(appendErrorReference("Gagal memuat log aktivitas", errorRef));
+      const message = appendErrorReference("Gagal memuat log aktivitas", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setLogs([]);
+      setTotalCount(0);
     } finally {
       setIsLoading(false);
     }
@@ -230,6 +241,12 @@ export default function OrgAuditLog() {
             Refresh
           </Button>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         {/* Filters */}
         <Card>

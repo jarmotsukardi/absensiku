@@ -10,8 +10,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Loader2, Plus, Trash2, Edit, HelpCircle, Save, Search, ChevronLeft, ChevronRight } from "lucide-react";
+import { Loader2, Plus, Trash2, Edit, HelpCircle, Save, Search } from "lucide-react";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface FAQ {
   id: string;
@@ -33,6 +34,7 @@ export default function FAQManagement() {
   const [formData, setFormData] = useState({ question: "", answer: "", category: "Umum", sort_order: 1 });
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchFAQs();
@@ -51,6 +53,7 @@ export default function FAQManagement() {
   }, [searchQuery, faqs]);
 
   const fetchFAQs = async () => {
+    setLoadError(null);
     try {
       const { data } = await supabase
         .from("system_settings")
@@ -64,8 +67,12 @@ export default function FAQManagement() {
         setFilteredFaqs(sortedFaqs);
       }
     } catch (error) {
-      console.error("Error fetching FAQs:", error);
-      toast.error("Gagal memuat data FAQ");
+      const errorRef = reportError(error, "admin.faq.fetch");
+      const message = appendErrorReference("Gagal memuat data FAQ", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setFaqs([]);
+      setFilteredFaqs([]);
     } finally {
       setIsLoading(false);
     }
@@ -73,6 +80,7 @@ export default function FAQManagement() {
 
   const handleSaveAll = async () => {
     setIsSaving(true);
+    setLoadError(null);
     try {
       const { data: existing } = await supabase
         .from("system_settings")
@@ -95,8 +103,12 @@ export default function FAQManagement() {
       
       toast.success("FAQ berhasil disimpan");
     } catch (error) {
-      console.error("Error saving FAQs:", error);
-      toast.error("Gagal menyimpan FAQ");
+      const errorRef = reportError(error, "admin.faq.save_all", {
+        faq_count: faqs.length,
+      });
+      const message = appendErrorReference("Gagal menyimpan FAQ", errorRef);
+      toast.error(message);
+      setLoadError(message);
     } finally {
       setIsSaving(false);
     }
@@ -144,6 +156,14 @@ export default function FAQManagement() {
   const totalPages = Math.ceil(filteredFaqs.length / ITEMS_PER_PAGE);
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
   const paginatedFaqs = filteredFaqs.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  const visiblePages =
+    totalPages <= 5
+      ? Array.from({ length: totalPages }, (_, i) => i + 1)
+      : currentPage <= 3
+        ? [1, 2, 3, 4, 5]
+        : currentPage >= totalPages - 2
+          ? [totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages]
+          : [currentPage - 2, currentPage - 1, currentPage, currentPage + 1, currentPage + 2];
 
   // Get unique categories
   const categories = [...new Set(faqs.map((f) => f.category))];
@@ -212,6 +232,11 @@ export default function FAQManagement() {
             <CardDescription>Kelola pertanyaan dan jawaban untuk halaman depan</CardDescription>
           </CardHeader>
           <CardContent>
+            {loadError && (
+              <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {loadError}
+              </div>
+            )}
             {isLoading ? (
               <div className="flex items-center justify-center py-12">
                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -280,8 +305,7 @@ export default function FAQManagement() {
                             className={currentPage === 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
                           />
                         </PaginationItem>
-                        {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-                          const page = i + 1;
+                        {visiblePages.map((page) => {
                           return (
                             <PaginationItem key={page}>
                               <PaginationLink

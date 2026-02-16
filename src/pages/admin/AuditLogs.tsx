@@ -19,8 +19,6 @@ import {
   XCircle,
   Activity,
   Calendar,
-  ChevronLeft,
-  ChevronRight,
   RefreshCw,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -28,6 +26,14 @@ import { format, startOfMonth, endOfMonth, subMonths } from "date-fns";
 import { id } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { toast } from "sonner";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
 interface AuditLog {
   id: string;
@@ -99,11 +105,13 @@ export default function AuditLogs() {
   const [monthFilter, setMonthFilter] = useState(format(new Date(), "yyyy-MM"));
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const monthOptions = getMonthOptions();
 
   const fetchLogs = useCallback(async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       // Parse month filter
       const [year, month] = monthFilter.split("-").map(Number);
@@ -180,7 +188,9 @@ export default function AuditLogs() {
         search: searchQuery,
         page: currentPage,
       });
-      toast.error(appendErrorReference("Gagal memuat audit log", errorRef));
+      const message = appendErrorReference("Gagal memuat audit log", errorRef);
+      toast.error(message);
+      setLoadError(message);
       setLogs([]);
       setTotalCount(0);
     } finally {
@@ -197,6 +207,10 @@ export default function AuditLogs() {
   }, [searchQuery, actionFilter, tableFilter, monthFilter]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / ITEMS_PER_PAGE));
+  const pageStart = Math.max(1, Math.min(currentPage - 1, totalPages - 2));
+  const visiblePages = Array.from({ length: Math.min(3, totalPages) }, (_, idx) => pageStart + idx).filter(
+    (page) => page <= totalPages
+  );
 
   return (
     <SuperAdminLayout title="Audit Log" subtitle="Riwayat aktivitas sistem">
@@ -254,6 +268,12 @@ export default function AuditLogs() {
           </CardContent>
         </Card>
 
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
+
         {/* Logs */}
         <Card>
           <CardHeader>
@@ -267,27 +287,9 @@ export default function AuditLogs() {
                   {totalCount} aktivitas pada {monthOptions.find(m => m.value === monthFilter)?.label}
                 </CardDescription>
               </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                  disabled={currentPage === 1 || isLoading}
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <span className="text-sm">
-                  {currentPage} / {totalPages}
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                  disabled={currentPage === totalPages || isLoading}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
-              </div>
+              <span className="text-sm text-muted-foreground">
+                Halaman {currentPage} / {totalPages}
+              </span>
             </div>
           </CardHeader>
           <CardContent>
@@ -356,29 +358,37 @@ export default function AuditLogs() {
               </div>
             )}
 
-            <div className="flex items-center justify-center gap-2 mt-6 pt-4 border-t">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1 || isLoading}
-              >
-                <ChevronLeft className="h-4 w-4 mr-1" />
-                Sebelumnya
-              </Button>
-              <span className="text-sm px-4">
-                Halaman {currentPage} dari {totalPages}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages || isLoading}
-              >
-                Berikutnya
-                <ChevronRight className="h-4 w-4 ml-1" />
-              </Button>
-            </div>
+            {totalPages > 1 && (
+              <div className="mt-6 pt-4 border-t">
+                <Pagination>
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                        className={currentPage === 1 || isLoading ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                      />
+                    </PaginationItem>
+                    {visiblePages.map((page) => (
+                      <PaginationItem key={page}>
+                        <PaginationLink
+                          isActive={page === currentPage}
+                          onClick={() => setCurrentPage(page)}
+                          className={isLoading ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                        >
+                          {page}
+                        </PaginationLink>
+                      </PaginationItem>
+                    ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                        className={currentPage === totalPages || isLoading ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

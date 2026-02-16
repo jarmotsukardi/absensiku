@@ -13,6 +13,15 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
 type Employee = Tables<"employees">;
 type OPD = Tables<"opd">;
@@ -45,6 +54,7 @@ export default function ActiveEmployees() {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterOpd, setFilterOpd] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [formData, setFormData] = useState({
@@ -67,6 +77,7 @@ export default function ActiveEmployees() {
   const fetchData = async () => {
     try {
       setIsLoading(true);
+      setLoadError(null);
       
       const [opdResult, officeResult, employeeResult] = await Promise.all([
         supabase.from("opd").select("*").order("name"),
@@ -82,8 +93,11 @@ export default function ActiveEmployees() {
       setOfficeList(officeResult.data || []);
       setEmployees(employeeResult.data || []);
     } catch (error) {
-      console.error("Error fetching data:", error);
-      toast.error("Gagal memuat data");
+      const errorRef = reportError(error, "admin.active_employees.fetch_data");
+      const message = appendErrorReference("Gagal memuat data pegawai aktif", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setEmployees([]);
     } finally {
       setIsLoading(false);
     }
@@ -96,6 +110,7 @@ export default function ActiveEmployees() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      setLoadError(null);
       const employeeData = {
         nip: formData.nip || null,
         name: `${formData.gelar_depan} ${formData.name} ${formData.gelar_belakang}`.trim(),
@@ -140,8 +155,12 @@ export default function ActiveEmployees() {
       resetForm();
       fetchData();
     } catch (error) {
-      console.error("Error saving employee:", error);
-      toast.error("Gagal menyimpan pegawai");
+      const errorRef = reportError(error, "admin.active_employees.save_employee", {
+        employee_id: editingEmployee?.id || null,
+      });
+      const message = appendErrorReference("Gagal menyimpan pegawai", errorRef);
+      toast.error(message);
+      setLoadError(message);
     }
   };
 
@@ -189,6 +208,7 @@ export default function ActiveEmployees() {
     if (!confirm("Yakin ingin menonaktifkan pegawai ini?")) return;
 
     try {
+      setLoadError(null);
       const { error } = await supabase
         .from("employees")
         .update({ is_active: false })
@@ -198,8 +218,10 @@ export default function ActiveEmployees() {
       toast.success("Pegawai berhasil dinonaktifkan");
       fetchData();
     } catch (error) {
-      console.error("Error deactivating employee:", error);
-      toast.error("Gagal menonaktifkan pegawai");
+      const errorRef = reportError(error, "admin.active_employees.deactivate", { employee_id: id });
+      const message = appendErrorReference("Gagal menonaktifkan pegawai", errorRef);
+      toast.error(message);
+      setLoadError(message);
     }
   };
 
@@ -214,6 +236,10 @@ export default function ActiveEmployees() {
   const paginatedEmployees = filteredEmployees.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE
+  );
+  const pageStart = Math.max(1, Math.min(currentPage - 1, totalPages - 2));
+  const visiblePages = Array.from({ length: Math.min(3, totalPages) }, (_, idx) => pageStart + idx).filter(
+    (page) => page <= totalPages
   );
 
   useEffect(() => {
@@ -447,6 +473,12 @@ export default function ActiveEmployees() {
           </Dialog>
         </div>
 
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -537,25 +569,36 @@ export default function ActiveEmployees() {
             </div>
             {!isLoading && filteredEmployees.length > 0 && (
               <div className="mt-4 flex items-center justify-between">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
-                  disabled={currentPage === 1}
-                >
-                  Sebelumnya
-                </Button>
                 <span className="text-sm text-muted-foreground">
                   Halaman {currentPage} dari {totalPages}
                 </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
-                  disabled={currentPage === totalPages}
-                >
-                  Berikutnya
-                </Button>
+                <Pagination>
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                        className={currentPage === 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                      />
+                    </PaginationItem>
+                    {visiblePages.map((page) => (
+                      <PaginationItem key={page}>
+                        <PaginationLink
+                          isActive={page === currentPage}
+                          onClick={() => setCurrentPage(page)}
+                          className="cursor-pointer"
+                        >
+                          {page}
+                        </PaginationLink>
+                      </PaginationItem>
+                    ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                        className={currentPage === totalPages ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
               </div>
             )}
           </CardContent>

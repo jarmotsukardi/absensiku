@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { BarChart3, Download, Printer } from "lucide-react";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type OPD = Tables<"opd">;
 type AttendanceRecapRecord = Pick<Tables<"attendance_records_partitioned">, "employee_id" | "status" | "is_wfh">;
@@ -53,6 +54,7 @@ export default function OrgRecapReport() {
   const [month, setMonth] = useState(new Date().getMonth() + 1);
   const [year, setYear] = useState(new Date().getFullYear());
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const ITEMS_PER_PAGE = 15;
 
   useEffect(() => {
@@ -60,13 +62,23 @@ export default function OrgRecapReport() {
   }, []);
 
   const fetchOpds = async () => {
-    const { data } = await supabase.from("opd").select("*").order("name");
-    setOpds(data || []);
+    try {
+      const { data, error } = await supabase.from("opd").select("*").order("name");
+      if (error) throw error;
+      setOpds(data || []);
+    } catch (error) {
+      const errorRef = reportError(error, "org.reports.recap.fetch_opd");
+      const message = appendErrorReference("Gagal memuat data OPD", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setOpds([]);
+    }
   };
 
   const fetchRecap = async () => {
     setIsLoading(true);
     try {
+      setLoadError(null);
       const startDate = `${year}-${String(month).padStart(2, "0")}-01`;
       const endDate = new Date(year, month, 0).toISOString().split("T")[0];
 
@@ -142,7 +154,15 @@ export default function OrgRecapReport() {
 
       setRecap(result);
     } catch (error) {
-      toast.error("Gagal memuat rekapitulasi");
+      const errorRef = reportError(error, "org.reports.recap.fetch", {
+        opd_id: filterOpd === "all" ? null : filterOpd,
+        month,
+        year,
+      });
+      const message = appendErrorReference("Gagal memuat rekapitulasi", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setRecap([]);
     } finally {
       setIsLoading(false);
     }
@@ -302,6 +322,12 @@ export default function OrgRecapReport() {
             </Button>
           </div>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>

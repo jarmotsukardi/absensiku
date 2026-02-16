@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import {
   Pagination,
   PaginationContent,
@@ -49,9 +50,6 @@ interface FeedbackBugSettings {
   bugs_enabled: boolean;
   suggestions_enabled: boolean;
 }
-
-const createErrorRef = (scope: string) =>
-  `${scope}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 const escapeHtml = (text: string) =>
   text
@@ -93,6 +91,7 @@ export default function FeedbackManagement() {
   const [isSuperAdminUser, setIsSuperAdminUser] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Stats
   const [stats, setStats] = useState({ total: 0, avgRating: 0, openBugs: 0 });
@@ -115,8 +114,7 @@ export default function FeedbackManagement() {
       if (error) throw error;
       setIsSuperAdminUser(Boolean(data));
     } catch (error) {
-      const errorRef = createErrorRef("feedback-role-fetch");
-      console.error(`[${errorRef}] Error checking super admin role:`, error);
+      reportError(error, "admin.feedback.fetch_access_role");
       setIsSuperAdminUser(false);
     }
   };
@@ -132,9 +130,10 @@ export default function FeedbackManagement() {
       if (error) throw error;
       setFeedbackSettings(normalizeFeedbackSettings(data?.value));
     } catch (error) {
-      const errorRef = createErrorRef("feedback-settings-fetch");
-      console.error(`[${errorRef}] Error fetching feedback settings:`, error);
-      toast.error(`Gagal memuat pengaturan feedback. Ref: ${errorRef}`);
+      const errorRef = reportError(error, "admin.feedback.fetch_settings");
+      const message = appendErrorReference("Gagal memuat pengaturan feedback", errorRef);
+      toast.error(message);
+      setLoadError(message);
       setFeedbackSettings({
         is_enabled: true,
         bugs_enabled: true,
@@ -186,9 +185,11 @@ export default function FeedbackManagement() {
       await saveFeedbackSettings(next, `Input ${label} ${checked ? "diaktifkan" : "dinonaktifkan"}`);
     } catch (error) {
       setFeedbackSettings(prev);
-      const errorRef = createErrorRef("feedback-settings-save");
-      console.error(`[${errorRef}] Error saving feedback settings:`, error);
-      toast.error(`Gagal menyimpan pengaturan feedback. Ref: ${errorRef}`);
+      const errorRef = reportError(error, "admin.feedback.save_settings", {
+        field: type,
+        checked,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan feedback", errorRef));
     } finally {
       setIsSavingFeedbackSetting(false);
     }
@@ -196,6 +197,7 @@ export default function FeedbackManagement() {
 
   const fetchFeedbacks = useCallback(async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       let query = supabase
         .from("feedback_reports")
@@ -234,9 +236,18 @@ export default function FeedbackManagement() {
       const openBugs = items.filter(f => f.feedback_type === "bug" && f.status === "open").length;
       setStats({ total, avgRating: Math.round(avgRating * 10) / 10, openBugs });
     } catch (error) {
-      const errorRef = createErrorRef("feedback-fetch");
-      console.error(`[${errorRef}] Error fetching feedback reports:`, error);
-      toast.error(`Gagal memuat feedback. Ref: ${errorRef}`);
+      const errorRef = reportError(error, "admin.feedback.fetch_reports", {
+        tab: activeTab,
+        rating_filter: filterRating,
+        type_filter: filterType,
+        page: currentPage,
+      });
+      const message = appendErrorReference("Gagal memuat feedback", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setFeedbacks([]);
+      setTotalCount(0);
+      setStats({ total: 0, avgRating: 0, openBugs: 0 });
     } finally {
       setIsLoading(false);
     }
@@ -276,9 +287,10 @@ export default function FeedbackManagement() {
       setResolutionNotes("");
       fetchFeedbacks();
     } catch (error) {
-      const errorRef = createErrorRef("feedback-resolve");
-      console.error(`[${errorRef}] Error resolving feedback:`, error);
-      toast.error(`Gagal mengupdate feedback. Ref: ${errorRef}`);
+      const errorRef = reportError(error, "admin.feedback.resolve", {
+        feedback_id: selectedFeedback.id,
+      });
+      toast.error(appendErrorReference("Gagal mengupdate feedback", errorRef));
     } finally {
       setIsResolving(false);
     }
@@ -337,9 +349,8 @@ export default function FeedbackManagement() {
       a.click();
       URL.revokeObjectURL(url);
     } catch (error) {
-      const errorRef = createErrorRef("feedback-export");
-      console.error(`[${errorRef}] Error exporting feedback CSV:`, error);
-      toast.error(`Gagal export CSV. Ref: ${errorRef}`);
+      const errorRef = reportError(error, "admin.feedback.export_csv");
+      toast.error(appendErrorReference("Gagal export CSV", errorRef));
     }
   };
 
@@ -432,9 +443,8 @@ export default function FeedbackManagement() {
       printWindow.focus();
       printWindow.print();
     } catch (error) {
-      const errorRef = createErrorRef("feedback-print");
-      console.error(`[${errorRef}] Error printing feedback PDF:`, error);
-      toast.error(`Gagal print PDF. Ref: ${errorRef}`);
+      const errorRef = reportError(error, "admin.feedback.print_pdf");
+      toast.error(appendErrorReference("Gagal print PDF", errorRef));
     }
   };
 
@@ -453,6 +463,14 @@ export default function FeedbackManagement() {
 
   const filtered = getFilteredData();
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const visiblePages =
+    totalPages <= 5
+      ? Array.from({ length: totalPages }, (_, i) => i + 1)
+      : currentPage <= 3
+        ? [1, 2, 3, 4, 5]
+        : currentPage >= totalPages - 2
+          ? [totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages]
+          : [currentPage - 2, currentPage - 1, currentPage, currentPage + 1, currentPage + 2];
 
   return (
     <SuperAdminLayout title="Feedback & Bug Report" subtitle="Kelola feedback dan laporan bug dari pengguna">
@@ -530,6 +548,11 @@ export default function FeedbackManagement() {
           </div>
         </CardHeader>
         <CardContent>
+          {loadError && (
+            <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {loadError}
+            </div>
+          )}
           <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-4">
             <TabsList>
               <TabsTrigger value="all">Semua</TabsTrigger>
@@ -616,38 +639,29 @@ export default function FeedbackManagement() {
                 <PaginationContent>
                   <PaginationItem>
                     <PaginationPrevious
-                      href="#"
-                      onClick={(e) => {
-                        e.preventDefault();
+                      onClick={() => {
                         if (currentPage > 1) setCurrentPage((prev) => prev - 1);
                       }}
-                      className={currentPage <= 1 ? "pointer-events-none opacity-50" : ""}
+                      className={currentPage <= 1 ? "pointer-events-none opacity-50 cursor-pointer" : "cursor-pointer"}
                     />
                   </PaginationItem>
-                  {Array.from({ length: totalPages }, (_, i) => i + 1)
-                    .filter((page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1)
-                    .map((page) => (
-                      <PaginationItem key={page}>
-                        <PaginationLink
-                          href="#"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            setCurrentPage(page);
-                          }}
-                          isActive={currentPage === page}
-                        >
-                          {page}
-                        </PaginationLink>
-                      </PaginationItem>
-                    ))}
+                  {visiblePages.map((page) => (
+                    <PaginationItem key={page}>
+                      <PaginationLink
+                        onClick={() => setCurrentPage(page)}
+                        isActive={currentPage === page}
+                        className="cursor-pointer"
+                      >
+                        {page}
+                      </PaginationLink>
+                    </PaginationItem>
+                  ))}
                   <PaginationItem>
                     <PaginationNext
-                      href="#"
-                      onClick={(e) => {
-                        e.preventDefault();
+                      onClick={() => {
                         if (currentPage < totalPages) setCurrentPage((prev) => prev + 1);
                       }}
-                      className={currentPage >= totalPages ? "pointer-events-none opacity-50" : ""}
+                      className={currentPage >= totalPages ? "pointer-events-none opacity-50 cursor-pointer" : "cursor-pointer"}
                     />
                   </PaginationItem>
                 </PaginationContent>
