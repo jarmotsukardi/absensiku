@@ -24,10 +24,12 @@ interface Position {
 }
 
 export default function PositionsManagement() {
+  const ITEMS_PER_PAGE = 15;
   const [positions, setPositions] = useState<Position[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingPosition, setEditingPosition] = useState<Position | null>(null);
   const [formData, setFormData] = useState({ name: "", work_unit_id: "" });
@@ -80,6 +82,15 @@ export default function PositionsManagement() {
       pos.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       pos.work_unit_name.toLowerCase().includes(searchTerm.toLowerCase())
   );
+  const totalPages = Math.max(1, Math.ceil(filteredPositions.length / ITEMS_PER_PAGE));
+  const paginatedPositions = filteredPositions.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
 
   return (
     <SuperAdminLayout>
@@ -188,16 +199,16 @@ export default function PositionsManagement() {
                         Memuat data...
                       </TableCell>
                     </TableRow>
-                  ) : filteredPositions.length === 0 ? (
+                  ) : paginatedPositions.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={5} className="text-center py-8">
                         Tidak ada data jabatan. Tabel jabatan perlu dibuat di database.
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredPositions.map((pos, index) => (
+                    paginatedPositions.map((pos, index) => (
                       <TableRow key={pos.id}>
-                        <TableCell>{index + 1}</TableCell>
+                        <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
                         <TableCell>{pos.work_unit_name}</TableCell>
                         <TableCell className="font-medium">{pos.name}</TableCell>
                         <TableCell>
@@ -228,6 +239,27 @@ export default function PositionsManagement() {
                   )}
                 </TableBody>
               </Table>
+            </div>
+            <div className="flex items-center justify-center gap-2 mt-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+              >
+                Sebelumnya
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                Halaman {currentPage} dari {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+              >
+                Berikutnya
+              </Button>
             </div>
           </CardContent>
         </Card>

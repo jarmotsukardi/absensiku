@@ -51,6 +51,8 @@ export default function NotificationManagement() {
   const [filterType, setFilterType] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
+  const [readCount, setReadCount] = useState(0);
+  const [unreadCount, setUnreadCount] = useState(0);
   
   // Form state
   const [title, setTitle] = useState("");
@@ -62,29 +64,65 @@ export default function NotificationManagement() {
   const requiresTenantTarget = targetType === "org_admin" || targetType === "org_employee";
   const selectedTenantName = tenants.find((tenant) => tenant.id === selectedTenantId)?.name || "";
 
-  const fetchNotifications = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      let query = supabase
-        .from("notifications")
-        .select("*", { count: "exact" })
-        .order("created_at", { ascending: false })
-        .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
+  const applyNotificationFilters = useCallback(
+    <T,>(query: T) => {
+      let nextQuery = query as T & {
+        eq: (column: string, value: unknown) => typeof query;
+        or: (filters: string) => typeof query;
+      };
 
       if (filterType !== "all") {
-        query = query.eq("type", filterType);
+        nextQuery = nextQuery.eq("type", filterType) as typeof nextQuery;
       }
 
       if (searchQuery.trim()) {
         const escaped = searchQuery.trim().replace(/[%_]/g, "\\$&");
-        query = query.or(`title.ilike.%${escaped}%,message.ilike.%${escaped}%`);
+        nextQuery = nextQuery.or(`title.ilike.%${escaped}%,message.ilike.%${escaped}%`) as typeof nextQuery;
       }
 
-      const { data, error, count } = await query;
+      return nextQuery;
+    },
+    [filterType, searchQuery]
+  );
+
+  const fetchNotifications = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const pagedQuery = applyNotificationFilters(
+        supabase
+          .from("notifications")
+          .select("*", { count: "exact" })
+          .order("created_at", { ascending: false })
+          .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1)
+      );
+
+      const readCountQuery = applyNotificationFilters(
+        supabase
+          .from("notifications")
+          .select("id", { count: "exact", head: true })
+          .eq("is_read", true)
+      );
+
+      const unreadCountQuery = applyNotificationFilters(
+        supabase
+          .from("notifications")
+          .select("id", { count: "exact", head: true })
+          .eq("is_read", false)
+      );
+
+      const [{ data, error, count }, readRes, unreadRes] = await Promise.all([
+        pagedQuery,
+        readCountQuery,
+        unreadCountQuery,
+      ]);
       if (error) throw error;
+      if (readRes.error) throw readRes.error;
+      if (unreadRes.error) throw unreadRes.error;
 
       setNotifications((data || []) as Notification[]);
       setTotalCount(count || 0);
+      setReadCount(readRes.count || 0);
+      setUnreadCount(unreadRes.count || 0);
     } catch (error) {
       const errorRef = reportError(error, "admin.notifications.fetch", {
         filter_type: filterType,
@@ -93,10 +131,12 @@ export default function NotificationManagement() {
       toast.error(appendErrorReference("Gagal memuat notifikasi", errorRef));
       setNotifications([]);
       setTotalCount(0);
+      setReadCount(0);
+      setUnreadCount(0);
     } finally {
       setIsLoading(false);
     }
-  }, [currentPage, filterType, searchQuery]);
+  }, [applyNotificationFilters, currentPage, filterType]);
 
   const fetchTenants = useCallback(async () => {
     try {
@@ -148,40 +188,40 @@ export default function NotificationManagement() {
     
     try {
       // Get all users based on target
-      let query = supabase.from("user_roles").select("user_id");
-      
+      let uniqueUserIds: string[] = [];
+
       if (targetType === "all_admin") {
-        query = query.in("role", ["super_admin", "admin_instansi"]);
+        const { data: users, error: usersError } = await supabase
+          .from("user_roles")
+          .select("user_id")
+          .in("role", ["super_admin", "admin_instansi"]);
+        if (usersError) throw usersError;
+        uniqueUserIds = Array.from(new Set((users || []).map((u) => u.user_id).filter(Boolean))) as string[];
       } else if (targetType === "org_admin") {
-        query = query
+        const { data: users, error: usersError } = await supabase
+          .from("user_roles")
+          .select("user_id")
           .eq("tenant_id", selectedTenantId)
           .eq("role", "admin_instansi");
+        if (usersError) throw usersError;
+        uniqueUserIds = Array.from(new Set((users || []).map((u) => u.user_id).filter(Boolean))) as string[];
       } else if (targetType === "org_employee") {
-        query = query
+        const { data: employeeRows, error: employeeError } = await supabase
+          .from("employees")
+          .select("user_id")
           .eq("tenant_id", selectedTenantId)
-          .in("role", ["pegawai", "atasan"]);
+          .eq("is_active", true)
+          .not("user_id", "is", null);
+        if (employeeError) throw employeeError;
+        uniqueUserIds = Array.from(new Set((employeeRows || []).map((e) => e.user_id).filter(Boolean))) as string[];
       }
-      
-      const { data: users, error: usersError } = await query;
-      
-      if (usersError) throw usersError;
-      
-      if (!users || users.length === 0) {
+
+      if (uniqueUserIds.length === 0) {
         toast.error("Tidak ada user yang ditemukan");
         return;
       }
 
       // Create notifications for all users
-      const uniqueUserIds = Array.from(
-        new Set((users || []).map((u) => u.user_id).filter(Boolean))
-      ) as string[];
-
-      if (uniqueUserIds.length === 0) {
-        toast.error("Tidak ada user valid untuk menerima notifikasi");
-        setIsSending(false);
-        return;
-      }
-
       const notificationsToInsert = uniqueUserIds.map(userId => ({
         user_id: userId,
         title,
@@ -223,6 +263,7 @@ export default function NotificationManagement() {
 
   const deleteNotification = async (id: string) => {
     try {
+      const deletedNotification = notifications.find((notification) => notification.id === id) || null;
       const { error } = await supabase
         .from("notifications")
         .delete()
@@ -231,6 +272,13 @@ export default function NotificationManagement() {
       toast.success("Notifikasi berhasil dihapus");
       setNotifications((prev) => prev.filter((n) => n.id !== id));
       setTotalCount((prev) => Math.max(0, prev - 1));
+      if (deletedNotification) {
+        if (deletedNotification.is_read) {
+          setReadCount((prev) => Math.max(0, prev - 1));
+        } else {
+          setUnreadCount((prev) => Math.max(0, prev - 1));
+        }
+      }
       if (notifications.length === 1 && currentPage > 1) {
         setCurrentPage((prev) => prev - 1);
       }
@@ -284,7 +332,7 @@ export default function NotificationManagement() {
                 </div>
                 <div>
                   <p className="text-2xl font-bold">
-                    {notifications.filter(n => n.is_read).length}
+                    {readCount}
                   </p>
                   <p className="text-sm text-muted-foreground">Sudah Dibaca</p>
                 </div>
@@ -299,7 +347,7 @@ export default function NotificationManagement() {
                 </div>
                 <div>
                   <p className="text-2xl font-bold">
-                    {notifications.filter(n => !n.is_read).length}
+                    {unreadCount}
                   </p>
                   <p className="text-sm text-muted-foreground">Belum Dibaca</p>
                 </div>

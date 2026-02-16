@@ -1,5 +1,7 @@
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Home, Clock, CheckCircle2, XCircle } from "lucide-react";
 import { format } from "date-fns";
@@ -20,6 +22,8 @@ interface WfhRequestListProps {
 }
 
 export function WfhRequestList({ requests, isLoading }: WfhRequestListProps) {
+  const ITEMS_PER_PAGE = 5;
+  const [currentPage, setCurrentPage] = useState(1);
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "disetujui":
@@ -45,6 +49,15 @@ export function WfhRequestList({ requests, isLoading }: WfhRequestListProps) {
         );
     }
   };
+  const totalPages = Math.max(1, Math.ceil(requests.length / ITEMS_PER_PAGE));
+  const paginatedRequests = requests.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [requests.length]);
 
   return (
     <Card>
@@ -80,7 +93,7 @@ export function WfhRequestList({ requests, isLoading }: WfhRequestListProps) {
                   </TableCell>
                 </TableRow>
               ) : (
-                requests.slice(0, 5).map((req) => (
+                paginatedRequests.map((req) => (
                   <TableRow key={req.id}>
                     <TableCell className="font-medium">
                       {format(new Date(req.request_date), "EEEE, d MMMM yyyy", { locale: id })}
@@ -103,6 +116,29 @@ export function WfhRequestList({ requests, isLoading }: WfhRequestListProps) {
             </TableBody>
           </Table>
         </div>
+        {!isLoading && requests.length > 0 && (
+          <div className="mt-4 flex items-center justify-between">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+              disabled={currentPage === 1}
+            >
+              Sebelumnya
+            </Button>
+            <span className="text-sm text-muted-foreground">
+              Halaman {currentPage} dari {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+              disabled={currentPage === totalPages}
+            >
+              Berikutnya
+            </Button>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

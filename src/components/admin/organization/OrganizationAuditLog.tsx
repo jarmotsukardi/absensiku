@@ -37,9 +37,11 @@ const tableLabels: Record<string, string> = {
 };
 
 export function OrganizationAuditLog({ tenantId }: OrganizationAuditLogProps) {
+  const ITEMS_PER_PAGE = 10;
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
 
   const fetchLogs = useCallback(async () => {
     try {
@@ -74,6 +76,15 @@ export function OrganizationAuditLog({ tenantId }: OrganizationAuditLogProps) {
       log.employee?.name?.toLowerCase().includes(query)
     );
   });
+  const totalPages = Math.max(1, Math.ceil(filteredLogs.length / ITEMS_PER_PAGE));
+  const paginatedLogs = filteredLogs.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, logs.length]);
 
   return (
     <Card>
@@ -112,7 +123,7 @@ export function OrganizationAuditLog({ tenantId }: OrganizationAuditLogProps) {
           </div>
         ) : (
           <div className="space-y-3">
-            {filteredLogs.map((log) => (
+            {paginatedLogs.map((log) => (
               <div
                 key={log.id}
                 className="flex items-start gap-4 p-4 rounded-lg border hover:bg-muted/50 transition-colors"
@@ -157,6 +168,27 @@ export function OrganizationAuditLog({ tenantId }: OrganizationAuditLogProps) {
                 </div>
               </div>
             ))}
+          </div>
+        )}
+        {filteredLogs.length > 0 && (
+          <div className="mt-4 flex items-center justify-between">
+            <button
+              className="inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm disabled:opacity-50"
+              onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+              disabled={currentPage === 1}
+            >
+              Sebelumnya
+            </button>
+            <span className="text-sm text-muted-foreground">
+              Halaman {currentPage} dari {totalPages}
+            </span>
+            <button
+              className="inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm disabled:opacity-50"
+              onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+              disabled={currentPage === totalPages}
+            >
+              Berikutnya
+            </button>
           </div>
         )}
       </CardContent>

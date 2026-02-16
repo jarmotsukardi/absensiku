@@ -26,6 +26,8 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { format, startOfMonth, endOfMonth, subMonths } from "date-fns";
 import { id } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { toast } from "sonner";
 
 interface AuditLog {
   id: string;
@@ -73,7 +75,7 @@ const tableLabels: Record<string, string> = {
   work_units: "Satuan Kerja",
 };
 
-const ITEMS_PER_PAGE = 50;
+const ITEMS_PER_PAGE = 20;
 
 // Buat opsi bulan untuk 12 bulan terakhir
 const getMonthOptions = () => {
@@ -108,20 +110,39 @@ export default function AuditLogs() {
       const startDate = startOfMonth(new Date(year, month - 1));
       const endDate = endOfMonth(new Date(year, month - 1));
 
-      // Count total
-      const { count } = await supabase
+      const escapedQuery = searchQuery.trim().replace(/[%_]/g, "\\$&");
+
+      let countQuery = supabase
         .from("audit_logs")
-        .select("*", { count: "exact", head: true })
+        .select("id", { count: "exact", head: true })
         .gte("created_at", startDate.toISOString())
         .lte("created_at", endDate.toISOString());
 
-      setTotalCount(count || 0);
+      if (actionFilter !== "all") {
+        countQuery = countQuery.eq("action", actionFilter);
+      }
+
+      if (tableFilter !== "all") {
+        countQuery = countQuery.eq("table_name", tableFilter);
+      }
+
+      if (escapedQuery) {
+        countQuery = countQuery.or(
+          `action.ilike.%${escapedQuery}%,table_name.ilike.%${escapedQuery}%,record_id.ilike.%${escapedQuery}%,ip_address.ilike.%${escapedQuery}%`
+        );
+      }
+
+      const { count, error: countError } = await countQuery;
+      if (countError) throw countError;
+
+      const safeCount = count || 0;
+      setTotalCount(safeCount);
 
       // Fetch paginated data
       const from = (currentPage - 1) * ITEMS_PER_PAGE;
       const to = from + ITEMS_PER_PAGE - 1;
 
-      const { data, error } = await supabase
+      let dataQuery = supabase
         .from("audit_logs")
         .select(`
           *,
@@ -133,35 +154,49 @@ export default function AuditLogs() {
         .order("created_at", { ascending: false })
         .range(from, to);
 
+      if (actionFilter !== "all") {
+        dataQuery = dataQuery.eq("action", actionFilter);
+      }
+
+      if (tableFilter !== "all") {
+        dataQuery = dataQuery.eq("table_name", tableFilter);
+      }
+
+      if (escapedQuery) {
+        dataQuery = dataQuery.or(
+          `action.ilike.%${escapedQuery}%,table_name.ilike.%${escapedQuery}%,record_id.ilike.%${escapedQuery}%,ip_address.ilike.%${escapedQuery}%`
+        );
+      }
+
+      const { data, error } = await dataQuery;
+
       if (error) throw error;
       setLogs((data as unknown as AuditLog[]) || []);
     } catch (error) {
-      console.error("Error fetching logs:", error);
+      const errorRef = reportError(error, "admin.audit_logs.fetch", {
+        month_filter: monthFilter,
+        action_filter: actionFilter,
+        table_filter: tableFilter,
+        search: searchQuery,
+        page: currentPage,
+      });
+      toast.error(appendErrorReference("Gagal memuat audit log", errorRef));
+      setLogs([]);
+      setTotalCount(0);
     } finally {
       setIsLoading(false);
     }
-  }, [monthFilter, currentPage]);
+  }, [monthFilter, currentPage, actionFilter, tableFilter, searchQuery]);
 
   useEffect(() => {
     fetchLogs();
   }, [fetchLogs]);
 
-  const filteredLogs = logs.filter(log => {
-    if (actionFilter !== "all" && log.action !== actionFilter) return false;
-    if (tableFilter !== "all" && log.table_name !== tableFilter) return false;
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      return (
-        log.employee?.name?.toLowerCase().includes(query) ||
-        log.table_name.toLowerCase().includes(query) ||
-        log.action.toLowerCase().includes(query) ||
-        log.tenant?.name?.toLowerCase().includes(query)
-      );
-    }
-    return true;
-  });
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, actionFilter, tableFilter, monthFilter]);
 
-  const totalPages = Math.ceil(totalCount / ITEMS_PER_PAGE);
+  const totalPages = Math.max(1, Math.ceil(totalCount / ITEMS_PER_PAGE));
 
   return (
     <SuperAdminLayout title="Audit Log" subtitle="Riwayat aktivitas sistem">
@@ -232,30 +267,27 @@ export default function AuditLogs() {
                   {totalCount} aktivitas pada {monthOptions.find(m => m.value === monthFilter)?.label}
                 </CardDescription>
               </div>
-              {/* Pagination */}
-              {totalPages > 1 && (
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                    disabled={currentPage === 1 || isLoading}
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </Button>
-                  <span className="text-sm">
-                    {currentPage} / {totalPages}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                    disabled={currentPage === totalPages || isLoading}
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
-                </div>
-              )}
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1 || isLoading}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <span className="text-sm">
+                  {currentPage} / {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages || isLoading}
+                >
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
@@ -271,14 +303,14 @@ export default function AuditLogs() {
                   </div>
                 ))}
               </div>
-            ) : filteredLogs.length === 0 ? (
+            ) : logs.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
                 <FileText className="h-12 w-12 mx-auto mb-3 opacity-50" />
                 <p>Tidak ada log ditemukan</p>
               </div>
             ) : (
               <div className="space-y-3">
-                {filteredLogs.map((log) => {
+                {logs.map((log) => {
                   const Icon = actionIcons[log.action] || Activity;
                   const actionStyle = actionLabels[log.action];
                   
@@ -324,32 +356,29 @@ export default function AuditLogs() {
               </div>
             )}
 
-            {/* Bottom Pagination */}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-center gap-2 mt-6 pt-4 border-t">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                  disabled={currentPage === 1 || isLoading}
-                >
-                  <ChevronLeft className="h-4 w-4 mr-1" />
-                  Sebelumnya
-                </Button>
-                <span className="text-sm px-4">
-                  Halaman {currentPage} dari {totalPages}
-                </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                  disabled={currentPage === totalPages || isLoading}
-                >
-                  Berikutnya
-                  <ChevronRight className="h-4 w-4 ml-1" />
-                </Button>
-              </div>
-            )}
+            <div className="flex items-center justify-center gap-2 mt-6 pt-4 border-t">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1 || isLoading}
+              >
+                <ChevronLeft className="h-4 w-4 mr-1" />
+                Sebelumnya
+              </Button>
+              <span className="text-sm px-4">
+                Halaman {currentPage} dari {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages || isLoading}
+              >
+                Berikutnya
+                <ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>

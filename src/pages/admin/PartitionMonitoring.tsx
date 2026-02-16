@@ -171,6 +171,10 @@ const PARTITION_GLOSSARY: GlossaryItem[] = [
   { term: "Cron Job", description: "Jadwal otomatis yang mengeksekusi maintenance tanpa intervensi manual.", category: "Keandalan" },
   { term: "Warning Partial", description: "Status ketika sebagian langkah maintenance berhasil, tetapi ada langkah yang gagal.", category: "Keandalan" },
 ];
+const PARTITIONS_PER_PAGE = 10;
+const CLEANUP_LOGS_PER_PAGE = 5;
+const CREATION_LOGS_PER_PAGE = 5;
+const GLOSSARY_PER_PAGE = 10;
 
 const PartitionMonitoring = () => {
   const navigate = useNavigate();
@@ -180,6 +184,10 @@ const PartitionMonitoring = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isRunningMaintenance, setIsRunningMaintenance] = useState(false);
   const [glossaryQuery, setGlossaryQuery] = useState("");
+  const [partitionPage, setPartitionPage] = useState(1);
+  const [cleanupPage, setCleanupPage] = useState(1);
+  const [creationPage, setCreationPage] = useState(1);
+  const [glossaryPage, setGlossaryPage] = useState(1);
 
   const filteredGlossary = useMemo(() => {
     if (!glossaryQuery.trim()) return PARTITION_GLOSSARY;
@@ -188,6 +196,42 @@ const PartitionMonitoring = () => {
       item.term.toLowerCase().includes(q) || item.description.toLowerCase().includes(q) || item.category.toLowerCase().includes(q)
     );
   }, [glossaryQuery]);
+  const partitionTotalPages = Math.max(1, Math.ceil(partitionStats.length / PARTITIONS_PER_PAGE));
+  const paginatedPartitionStats = partitionStats.slice(
+    (partitionPage - 1) * PARTITIONS_PER_PAGE,
+    partitionPage * PARTITIONS_PER_PAGE
+  );
+  const cleanupTotalPages = Math.max(1, Math.ceil(cleanupLogs.length / CLEANUP_LOGS_PER_PAGE));
+  const paginatedCleanupLogs = cleanupLogs.slice(
+    (cleanupPage - 1) * CLEANUP_LOGS_PER_PAGE,
+    cleanupPage * CLEANUP_LOGS_PER_PAGE
+  );
+  const creationTotalPages = Math.max(1, Math.ceil(partitionLogs.length / CREATION_LOGS_PER_PAGE));
+  const paginatedPartitionLogs = partitionLogs.slice(
+    (creationPage - 1) * CREATION_LOGS_PER_PAGE,
+    creationPage * CREATION_LOGS_PER_PAGE
+  );
+  const glossaryTotalPages = Math.max(1, Math.ceil(filteredGlossary.length / GLOSSARY_PER_PAGE));
+  const paginatedGlossary = filteredGlossary.slice(
+    (glossaryPage - 1) * GLOSSARY_PER_PAGE,
+    glossaryPage * GLOSSARY_PER_PAGE
+  );
+
+  useEffect(() => {
+    setPartitionPage(1);
+  }, [partitionStats.length]);
+
+  useEffect(() => {
+    setCleanupPage(1);
+  }, [cleanupLogs.length]);
+
+  useEffect(() => {
+    setCreationPage(1);
+  }, [partitionLogs.length]);
+
+  useEffect(() => {
+    setGlossaryPage(1);
+  }, [glossaryQuery, filteredGlossary.length]);
 
   const runMaintenanceViaRpc = async (action: Exclude<MaintenanceAction, "all">) => {
     if (action === "cleanup_gps") {
@@ -578,7 +622,7 @@ const PartitionMonitoring = () => {
                   </TableCell>
                 </TableRow>
               ) : (
-                partitionStats.map((partition) => (
+                paginatedPartitionStats.map((partition) => (
                   <TableRow key={partition.partition_name}>
                     <TableCell className="font-medium">
                       <Badge variant="outline">
@@ -605,6 +649,29 @@ const PartitionMonitoring = () => {
               )}
             </TableBody>
           </Table>
+          {partitionStats.length > 0 && (
+            <div className="mt-4 flex items-center justify-between">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPartitionPage((prev) => Math.max(1, prev - 1))}
+                disabled={partitionPage === 1}
+              >
+                Sebelumnya
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                Halaman {partitionPage} dari {partitionTotalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPartitionPage((prev) => Math.min(partitionTotalPages, prev + 1))}
+                disabled={partitionPage === partitionTotalPages}
+              >
+                Berikutnya
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -628,7 +695,7 @@ const PartitionMonitoring = () => {
               </div>
             ) : (
               <div className="space-y-3">
-                {cleanupLogs.map((log) => (
+                {paginatedCleanupLogs.map((log) => (
                   <div key={log.id} className="flex items-center justify-between p-3 border rounded-lg">
                     <div>
                       <div className="font-medium flex items-center gap-2">
@@ -646,6 +713,29 @@ const PartitionMonitoring = () => {
                     </div>
                   </div>
                 ))}
+              </div>
+            )}
+            {cleanupLogs.length > 0 && (
+              <div className="mt-4 flex items-center justify-between">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCleanupPage((prev) => Math.max(1, prev - 1))}
+                  disabled={cleanupPage === 1}
+                >
+                  Sebelumnya
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  Halaman {cleanupPage} dari {cleanupTotalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCleanupPage((prev) => Math.min(cleanupTotalPages, prev + 1))}
+                  disabled={cleanupPage === cleanupTotalPages}
+                >
+                  Berikutnya
+                </Button>
               </div>
             )}
           </CardContent>
@@ -669,7 +759,7 @@ const PartitionMonitoring = () => {
               </div>
             ) : (
               <div className="space-y-3">
-                {partitionLogs.map((log) => (
+                {paginatedPartitionLogs.map((log) => (
                   <div key={log.id} className="flex items-center justify-between p-3 border rounded-lg">
                     <div>
                       <div className="font-medium">
@@ -690,6 +780,29 @@ const PartitionMonitoring = () => {
                 ))}
               </div>
               )}
+            {partitionLogs.length > 0 && (
+              <div className="mt-4 flex items-center justify-between">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCreationPage((prev) => Math.max(1, prev - 1))}
+                  disabled={creationPage === 1}
+                >
+                  Sebelumnya
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  Halaman {creationPage} dari {creationTotalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCreationPage((prev) => Math.min(creationTotalPages, prev + 1))}
+                  disabled={creationPage === creationTotalPages}
+                >
+                  Berikutnya
+                </Button>
+              </div>
+            )}
             </CardContent>
           </Card>
         </div>
@@ -733,7 +846,7 @@ const PartitionMonitoring = () => {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filteredGlossary.map((item) => (
+                  paginatedGlossary.map((item) => (
                     <TableRow key={item.term}>
                       <TableCell className="font-medium">{item.term}</TableCell>
                       <TableCell>
@@ -746,6 +859,29 @@ const PartitionMonitoring = () => {
               </TableBody>
             </Table>
           </div>
+          {filteredGlossary.length > 0 && (
+            <div className="mt-4 flex items-center justify-between">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setGlossaryPage((prev) => Math.max(1, prev - 1))}
+                disabled={glossaryPage === 1}
+              >
+                Sebelumnya
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                Halaman {glossaryPage} dari {glossaryTotalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setGlossaryPage((prev) => Math.min(glossaryTotalPages, prev + 1))}
+                disabled={glossaryPage === glossaryTotalPages}
+              >
+                Berikutnya
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
       </div>

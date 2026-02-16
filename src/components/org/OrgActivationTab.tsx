@@ -53,6 +53,7 @@ interface XenditInvoiceResponse {
 type PaymentMethod = "manual" | "xendit";
 
 export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps) {
+  const ITEMS_PER_PAGE = 10;
   const [packages, setPackages] = useState<SubscriptionPackage[]>([]);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -63,6 +64,7 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("manual");
   const [isCreatingXenditInvoice, setIsCreatingXenditInvoice] = useState(false);
   const [xenditEnabled, setXenditEnabled] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -110,6 +112,11 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
 
   const formatCurrency = (amount: number) =>
     new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(amount);
+  const totalPages = Math.max(1, Math.ceil(invoices.length / ITEMS_PER_PAGE));
+  const paginatedInvoices = invoices.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -156,6 +163,10 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       setIsCreatingXenditInvoice(false);
     }
   };
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [invoices.length]);
 
   if (isLoading) {
     return (
@@ -447,7 +458,7 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {invoices.map((inv) => (
+                {paginatedInvoices.map((inv) => (
                   <TableRow key={inv.id}>
                     <TableCell className="font-mono text-sm">{inv.invoice_number}</TableCell>
                     <TableCell>{format(new Date(inv.created_at), "d MMM yyyy", { locale: idLocale })}</TableCell>
@@ -472,6 +483,29 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
                 ))}
               </TableBody>
             </Table>
+          )}
+          {invoices.length > 0 && (
+            <div className="mt-4 flex items-center justify-between">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                disabled={currentPage === 1}
+              >
+                Sebelumnya
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                Halaman {currentPage} dari {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                disabled={currentPage === totalPages}
+              >
+                Berikutnya
+              </Button>
+            </div>
           )}
         </CardContent>
       </Card>

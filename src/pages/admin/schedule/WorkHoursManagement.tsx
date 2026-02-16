@@ -38,11 +38,13 @@ interface WorkHour {
   start_time: string;
   end_time: string;
 }
+const ITEMS_PER_PAGE = 10;
 
 export default function WorkHoursManagement() {
   const [workHours, setWorkHours] = useState<WorkHour[]>([]);
   const [offices, setOffices] = useState<Office[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingHour, setEditingHour] = useState<WorkHour | null>(null);
   const [formData, setFormData] = useState({
@@ -141,6 +143,15 @@ export default function WorkHoursManagement() {
 
   const getCategoryLabel = (value: string) => CATEGORIES.find(c => c.value === value)?.label || value;
   const getDayLabel = (value: string) => DAYS.find(d => d.value === value)?.label || value;
+  const totalPages = Math.max(1, Math.ceil(workHours.length / ITEMS_PER_PAGE));
+  const paginatedWorkHours = workHours.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [workHours.length]);
 
   return (
     <SuperAdminLayout>
@@ -278,9 +289,9 @@ export default function WorkHoursManagement() {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    workHours.map((hour, index) => (
+                    paginatedWorkHours.map((hour, index) => (
                       <TableRow key={hour.id}>
-                        <TableCell>{index + 1}</TableCell>
+                        <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
                         <TableCell>
                           <Badge variant="outline">{getCategoryLabel(hour.category)}</Badge>
                         </TableCell>
@@ -311,6 +322,29 @@ export default function WorkHoursManagement() {
                 </TableBody>
               </Table>
             </div>
+            {!isLoading && workHours.length > 0 && (
+              <div className="mt-4 flex items-center justify-between">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                >
+                  Sebelumnya
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  Halaman {currentPage} dari {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  Berikutnya
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

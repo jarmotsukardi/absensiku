@@ -18,11 +18,13 @@ type Employee = Tables<"employees">;
 type OPD = Tables<"opd">;
 
 export default function AbsentWithoutNotice() {
+  const ITEMS_PER_PAGE = 15;
   const [records, setRecords] = useState<(AttendanceRecord & { employee?: Employee & { opd?: OPD } })[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterOpd, setFilterOpd] = useState<string>("all");
+  const [currentPage, setCurrentPage] = useState(1);
 
   const fetchData = async () => {
     try {
@@ -64,6 +66,15 @@ export default function AbsentWithoutNotice() {
     const matchesOpd = filterOpd === "all" || rec.employee?.opd_id === filterOpd;
     return matchesSearch && matchesOpd;
   });
+  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / ITEMS_PER_PAGE));
+  const paginatedRecords = filteredRecords.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterOpd]);
 
   return (
     <SuperAdminLayout>
@@ -137,16 +148,16 @@ export default function AbsentWithoutNotice() {
                         Memuat data...
                       </TableCell>
                     </TableRow>
-                  ) : filteredRecords.length === 0 ? (
+                  ) : paginatedRecords.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={6} className="text-center py-8">
                         Tidak ada data ketidakhadiran tanpa keterangan
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredRecords.map((rec, index) => (
+                    paginatedRecords.map((rec, index) => (
                       <TableRow key={rec.id}>
-                        <TableCell>{index + 1}</TableCell>
+                        <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
                         <TableCell>
                           {format(new Date(rec.date), "dd MMM yyyy", { locale: localeId })}
                         </TableCell>
@@ -167,6 +178,27 @@ export default function AbsentWithoutNotice() {
                   )}
                 </TableBody>
               </Table>
+            </div>
+            <div className="flex items-center justify-center gap-2 mt-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+              >
+                Sebelumnya
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                Halaman {currentPage} dari {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+              >
+                Berikutnya
+              </Button>
             </div>
           </CardContent>
         </Card>

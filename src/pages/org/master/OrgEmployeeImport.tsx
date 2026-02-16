@@ -36,11 +36,13 @@ interface ImportRow {
 }
 
 export default function OrgEmployeeImport() {
+  const PREVIEW_PAGE_SIZE = 20;
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [previewData, setPreviewData] = useState<ImportRow[]>([]);
+  const [previewPage, setPreviewPage] = useState(1);
   const [importResult, setImportResult] = useState<{ success: number; failed: number } | null>(null);
 
   useEffect(() => {
@@ -147,6 +149,7 @@ export default function OrgEmployeeImport() {
     setIsLoading(true);
     setPreviewData([]);
     setImportResult(null);
+    setPreviewPage(1);
 
     try {
       const text = await file.text();
@@ -319,6 +322,11 @@ export default function OrgEmployeeImport() {
 
   const validCount = previewData.filter(r => r.status === "valid").length;
   const errorCount = previewData.filter(r => r.status === "error").length;
+  const previewTotalPages = Math.max(1, Math.ceil(previewData.length / PREVIEW_PAGE_SIZE));
+  const paginatedPreviewRows = previewData.slice(
+    (previewPage - 1) * PREVIEW_PAGE_SIZE,
+    previewPage * PREVIEW_PAGE_SIZE
+  );
 
   return (
     <OrganizationLayout>
@@ -493,7 +501,7 @@ export default function OrgEmployeeImport() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {previewData.slice(0, 20).map((row) => (
+                    {paginatedPreviewRows.map((row) => (
                       <TableRow key={row.rowNum} className={row.status === "error" ? "bg-destructive/5" : ""}>
                         <TableCell>{row.rowNum}</TableCell>
                         <TableCell>
@@ -525,11 +533,32 @@ export default function OrgEmployeeImport() {
                 </Table>
               </div>
 
-              {previewData.length > 20 && (
-                <p className="text-sm text-muted-foreground mt-2">
-                  Menampilkan 20 dari {previewData.length} baris
+              <div className="flex items-center justify-between mt-2">
+                <p className="text-sm text-muted-foreground">
+                  Menampilkan {paginatedPreviewRows.length} dari {previewData.length} baris
                 </p>
-              )}
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPreviewPage((p) => Math.max(1, p - 1))}
+                    disabled={previewPage === 1}
+                  >
+                    Sebelumnya
+                  </Button>
+                  <span className="text-sm text-muted-foreground">
+                    Halaman {previewPage} dari {previewTotalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPreviewPage((p) => Math.min(previewTotalPages, p + 1))}
+                    disabled={previewPage === previewTotalPages}
+                  >
+                    Berikutnya
+                  </Button>
+                </div>
+              </div>
 
               <div className="flex justify-end mt-4 gap-2">
                 <Button

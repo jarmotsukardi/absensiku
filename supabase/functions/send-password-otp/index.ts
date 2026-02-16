@@ -380,23 +380,28 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     // Validate WhatsApp number matches registered phone.
-    // For super admin without employee profile, allow fallback to email-only identity check.
     const inputPhone = whatsapp ? normalizePhone(whatsapp) : "";
     const storedPhone = account.phone ? normalizePhone(account.phone) : account.whatsapp ? normalizePhone(account.whatsapp) : "";
-    const canSkipPhoneValidation = login_type === "admin" && account.source === "auth_admin" && !storedPhone;
-    if (!canSkipPhoneValidation) {
-      if (!inputPhone) {
-        return new Response(
-          JSON.stringify(withTrace({ error: "No. WhatsApp diperlukan" }, traceId)),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-      if (!storedPhone || inputPhone !== storedPhone) {
-        return new Response(
-          JSON.stringify(withTrace({ error: "Email dan No. WhatsApp tidak cocok dengan data terdaftar", code: "IDENTITY_MISMATCH" }, traceId)),
-          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
+    if (login_type === "admin" && !storedPhone) {
+      return new Response(
+        JSON.stringify(withTrace({
+          error: "No. HP super admin belum terdaftar. Isi dulu di /admin/profile (Kontak Pemulihan).",
+          code: "ADMIN_PHONE_REQUIRED",
+        }, traceId)),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    if (!inputPhone) {
+      return new Response(
+        JSON.stringify(withTrace({ error: "No. WhatsApp diperlukan" }, traceId)),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    if (!storedPhone || inputPhone !== storedPhone) {
+      return new Response(
+        JSON.stringify(withTrace({ error: "Email dan No. WhatsApp tidak cocok dengan data terdaftar", code: "IDENTITY_MISMATCH" }, traceId)),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
     const targetPhone = storedPhone || inputPhone;
 

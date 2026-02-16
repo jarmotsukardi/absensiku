@@ -42,6 +42,7 @@ const MONTHS = [
   { value: "11", label: "November" },
   { value: "12", label: "Desember" },
 ];
+const ITEMS_PER_PAGE = 15;
 
 export default function RecapReport() {
   const [recapData, setRecapData] = useState<RecapData[]>([]);
@@ -50,6 +51,7 @@ export default function RecapReport() {
   const [filterOpd, setFilterOpd] = useState<string>("all");
   const [filterMonth, setFilterMonth] = useState<string>(String(new Date().getMonth() + 1));
   const [filterYear, setFilterYear] = useState<string>(String(new Date().getFullYear()));
+  const [currentPage, setCurrentPage] = useState(1);
 
   const fetchData = useCallback(async () => {
     try {
@@ -159,6 +161,15 @@ export default function RecapReport() {
     const opd = opdList.find(o => o.id === filterOpd);
     return opd && rec.opd_code === opd.code;
   });
+  const totalPages = Math.max(1, Math.ceil(filteredData.length / ITEMS_PER_PAGE));
+  const paginatedData = filteredData.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterOpd, filterMonth, filterYear, recapData.length]);
 
   const totalStats = filteredData.reduce(
     (acc, rec) => ({
@@ -364,9 +375,9 @@ export default function RecapReport() {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredData.map((rec, index) => (
+                    paginatedData.map((rec, index) => (
                       <TableRow key={rec.employee_id}>
-                        <TableCell>{index + 1}</TableCell>
+                        <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
                         <TableCell className="font-medium">{rec.employee_name}</TableCell>
                         <TableCell>{rec.opd_code}</TableCell>
                         <TableCell className="text-center text-green-600 font-medium">{rec.hadir}</TableCell>
@@ -382,6 +393,29 @@ export default function RecapReport() {
                 </TableBody>
               </Table>
             </div>
+            {!isLoading && filteredData.length > 0 && (
+              <div className="mt-4 flex items-center justify-between">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                >
+                  Sebelumnya
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  Halaman {currentPage} dari {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  Berikutnya
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

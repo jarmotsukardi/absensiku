@@ -77,6 +77,7 @@ const OrgFlexibleAttendanceRequests = lazy(() => import("./pages/org/leave/OrgFl
 const OrgAttendanceReport = lazy(() => import("./pages/org/reports/OrgAttendanceReport"));
 const OrgRecapReport = lazy(() => import("./pages/org/reports/OrgRecapReport"));
 const OrgSettings = lazy(() => import("./pages/org/OrgSettings"));
+const OrgProfile = lazy(() => import("./pages/org/OrgProfile"));
 const OrgActivation = lazy(() => import("./pages/org/OrgActivation"));
 const OrgProfileSetup = lazy(() => import("./pages/org/OrgProfileSetup"));
 const OrgOPDAdminsManagement = lazy(() => import("./pages/org/master/OrgOPDAdminsManagement"));
@@ -208,6 +209,7 @@ const App = () => (
               <Route path="/org/reports/attendance" element={<OrgAttendanceReport />} />
               <Route path="/org/reports/recap" element={<OrgRecapReport />} />
               <Route path="/org/settings" element={<OrgSettings />} />
+              <Route path="/org/profile" element={<OrgProfile />} />
               <Route path="/org/subscription" element={<Navigate to="/org/activation" replace />} />
               <Route path="/org/activation" element={<OrgActivation />} />
               <Route path="/org/profile/setup" element={<OrgProfileSetup />} />

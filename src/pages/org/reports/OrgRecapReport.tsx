@@ -52,6 +52,8 @@ export default function OrgRecapReport() {
   const [filterOpd, setFilterOpd] = useState<string>("all");
   const [month, setMonth] = useState(new Date().getMonth() + 1);
   const [year, setYear] = useState(new Date().getFullYear());
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 15;
 
   useEffect(() => {
     fetchOpds();
@@ -270,6 +272,15 @@ export default function OrgRecapReport() {
     "Januari", "Februari", "Maret", "April", "Mei", "Juni",
     "Juli", "Agustus", "September", "Oktober", "November", "Desember"
   ];
+  const totalPages = Math.max(1, Math.ceil(recap.length / ITEMS_PER_PAGE));
+  const paginatedRecap = recap.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [filterOpd, month, year, recap.length]);
 
   return (
     <OrganizationLayout>
@@ -369,9 +380,9 @@ export default function OrgRecapReport() {
                   ) : recap.length === 0 ? (
                     <TableRow><TableCell colSpan={13} className="text-center py-8 text-muted-foreground">Pilih filter dan klik Tampilkan</TableCell></TableRow>
                   ) : (
-                    recap.map((r, i) => (
+                    paginatedRecap.map((r, i) => (
                       <TableRow key={r.employee_id}>
-                        <TableCell>{i + 1}</TableCell>
+                        <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + i + 1}</TableCell>
                         <TableCell className="font-mono text-sm">{r.nip || "-"}</TableCell>
                         <TableCell>{r.employee_name}</TableCell>
                         <TableCell>{r.opd_code || "-"}</TableCell>
@@ -390,6 +401,29 @@ export default function OrgRecapReport() {
                 </TableBody>
               </Table>
             </div>
+            {!isLoading && recap.length > 0 && (
+              <div className="mt-4 flex items-center justify-between">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                >
+                  Sebelumnya
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  Halaman {currentPage} dari {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  Berikutnya
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

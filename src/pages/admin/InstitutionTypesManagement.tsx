@@ -54,12 +54,14 @@ const iconOptions = [
   { value: "briefcase", label: "Kantor", Icon: Briefcase },
   { value: "palette", label: "Kreatif", Icon: Palette },
 ];
+const ITEMS_PER_PAGE = 10;
 
 export default function AdminInstitutionTypesManagement({ embedded = false }: { embedded?: boolean }) {
   const [types, setTypes] = useState<InstitutionType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
   const [editingType, setEditingType] = useState<InstitutionType | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [formData, setFormData] = useState({
@@ -149,6 +151,15 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
   };
 
   const filteredTypes = types.filter(t => t.name.toLowerCase().includes(searchTerm.toLowerCase()) || t.code.toLowerCase().includes(searchTerm.toLowerCase()));
+  const totalPages = Math.max(1, Math.ceil(filteredTypes.length / ITEMS_PER_PAGE));
+  const paginatedTypes = filteredTypes.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, types.length]);
 
   const content = (
     <div className="space-y-6">
@@ -225,37 +236,62 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
         </CardHeader>
         <CardContent>
           {isLoading ? <div className="space-y-3">{[1,2,3].map(i => <Skeleton key={i} className="h-14 w-full" />)}</div> : (
-            <div className="rounded-md border">
-              <Table>
-                <TableHeader><TableRow>
-                  <TableHead className="w-12">No</TableHead><TableHead>Ikon</TableHead><TableHead>Nama</TableHead><TableHead>Kode</TableHead>
-                  <TableHead className="hidden md:table-cell">Deskripsi</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Aksi</TableHead>
-                </TableRow></TableHeader>
-                <TableBody>
-                  {filteredTypes.length === 0 ? (
-                    <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">Tidak ada data</TableCell></TableRow>
-                  ) : filteredTypes.map((type, i) => {
-                    const IC = getIcon(type.icon);
-                    return (
-                      <TableRow key={type.id}>
-                        <TableCell>{i + 1}</TableCell>
-                        <TableCell><div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center"><IC className="h-5 w-5 text-primary" /></div></TableCell>
-                        <TableCell className="font-medium">{type.name}</TableCell>
-                        <TableCell><Badge variant="outline">{type.code}</Badge></TableCell>
-                        <TableCell className="hidden md:table-cell text-muted-foreground max-w-xs truncate">{type.description || "-"}</TableCell>
-                        <TableCell><Badge variant={type.is_active ? "default" : "secondary"}>{type.is_active ? "Aktif" : "Nonaktif"}</Badge></TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-1">
-                            <Button variant="ghost" size="icon" onClick={() => handleEdit(type)}><Edit className="h-4 w-4" /></Button>
-                            <Button variant="ghost" size="icon" onClick={() => handleDelete(type.id)} className="text-destructive hover:text-destructive"><Trash2 className="h-4 w-4" /></Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
+            <>
+              <div className="rounded-md border">
+                <Table>
+                  <TableHeader><TableRow>
+                    <TableHead className="w-12">No</TableHead><TableHead>Ikon</TableHead><TableHead>Nama</TableHead><TableHead>Kode</TableHead>
+                    <TableHead className="hidden md:table-cell">Deskripsi</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Aksi</TableHead>
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {filteredTypes.length === 0 ? (
+                      <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">Tidak ada data</TableCell></TableRow>
+                    ) : paginatedTypes.map((type, i) => {
+                      const IC = getIcon(type.icon);
+                      return (
+                        <TableRow key={type.id}>
+                          <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + i + 1}</TableCell>
+                          <TableCell><div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center"><IC className="h-5 w-5 text-primary" /></div></TableCell>
+                          <TableCell className="font-medium">{type.name}</TableCell>
+                          <TableCell><Badge variant="outline">{type.code}</Badge></TableCell>
+                          <TableCell className="hidden md:table-cell text-muted-foreground max-w-xs truncate">{type.description || "-"}</TableCell>
+                          <TableCell><Badge variant={type.is_active ? "default" : "secondary"}>{type.is_active ? "Aktif" : "Nonaktif"}</Badge></TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-1">
+                              <Button variant="ghost" size="icon" onClick={() => handleEdit(type)}><Edit className="h-4 w-4" /></Button>
+                              <Button variant="ghost" size="icon" onClick={() => handleDelete(type.id)} className="text-destructive hover:text-destructive"><Trash2 className="h-4 w-4" /></Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+              {filteredTypes.length > 0 && (
+                <div className="mt-4 flex items-center justify-between">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                    disabled={currentPage === 1}
+                  >
+                    Sebelumnya
+                  </Button>
+                  <span className="text-sm text-muted-foreground">
+                    Halaman {currentPage} dari {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                    disabled={currentPage === totalPages}
+                  >
+                    Berikutnya
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </CardContent>
       </Card>

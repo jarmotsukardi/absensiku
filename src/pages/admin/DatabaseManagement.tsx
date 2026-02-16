@@ -36,12 +36,16 @@ interface SystemSetting {
   description: string | null;
   updated_at: string;
 }
+const TABLES_PER_PAGE = 10;
+const SETTINGS_PER_PAGE = 10;
 
 export default function DatabaseManagement({ embedded = false }: { embedded?: boolean }) {
   const [tableStats, setTableStats] = useState<TableStats[]>([]);
   const [systemSettings, setSystemSettings] = useState<SystemSetting[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("overview");
+  const [tablesPage, setTablesPage] = useState(1);
+  const [settingsPage, setSettingsPage] = useState(1);
 
   useEffect(() => {
     fetchTableStats();
@@ -158,6 +162,24 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
     'Audit Log': 'audit_logs',
     'Notifikasi': 'notifications',
   };
+  const tableTotalPages = Math.max(1, Math.ceil(tableStats.length / TABLES_PER_PAGE));
+  const paginatedTableStats = tableStats.slice(
+    (tablesPage - 1) * TABLES_PER_PAGE,
+    tablesPage * TABLES_PER_PAGE
+  );
+  const settingsTotalPages = Math.max(1, Math.ceil(systemSettings.length / SETTINGS_PER_PAGE));
+  const paginatedSettings = systemSettings.slice(
+    (settingsPage - 1) * SETTINGS_PER_PAGE,
+    settingsPage * SETTINGS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setTablesPage(1);
+  }, [tableStats.length]);
+
+  useEffect(() => {
+    setSettingsPage(1);
+  }, [systemSettings.length]);
 
   const content = (
     <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
@@ -287,7 +309,7 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {tableStats.map((table) => (
+                  {paginatedTableStats.map((table) => (
                     <TableRow key={table.name}>
                       <TableCell className="font-medium">
                         <div className="flex items-center gap-2">
@@ -314,6 +336,29 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
                   ))}
                 </TableBody>
               </Table>
+              {tableStats.length > 0 && (
+                <div className="mt-4 flex items-center justify-between">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setTablesPage((prev) => Math.max(1, prev - 1))}
+                    disabled={tablesPage === 1}
+                  >
+                    Sebelumnya
+                  </Button>
+                  <span className="text-sm text-muted-foreground">
+                    Halaman {tablesPage} dari {tableTotalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setTablesPage((prev) => Math.min(tableTotalPages, prev + 1))}
+                    disabled={tablesPage === tableTotalPages}
+                  >
+                    Berikutnya
+                  </Button>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -340,7 +385,7 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {systemSettings.map((setting) => (
+                  {paginatedSettings.map((setting) => (
                     <TableRow key={setting.id}>
                       <TableCell className="font-mono text-sm">
                         {setting.key}
@@ -368,6 +413,29 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
                   ))}
                 </TableBody>
               </Table>
+              {systemSettings.length > 0 && (
+                <div className="mt-4 flex items-center justify-between">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setSettingsPage((prev) => Math.max(1, prev - 1))}
+                    disabled={settingsPage === 1}
+                  >
+                    Sebelumnya
+                  </Button>
+                  <span className="text-sm text-muted-foreground">
+                    Halaman {settingsPage} dari {settingsTotalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setSettingsPage((prev) => Math.min(settingsTotalPages, prev + 1))}
+                    disabled={settingsPage === settingsTotalPages}
+                  >
+                    Berikutnya
+                  </Button>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

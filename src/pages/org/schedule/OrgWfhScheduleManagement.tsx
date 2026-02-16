@@ -56,6 +56,8 @@ export default function OrgWfhScheduleManagement() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<WfhSchedule | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 10;
   
   const [formData, setFormData] = useState<ScheduleFormData>({
     scope: "organization",
@@ -289,6 +291,15 @@ export default function OrgWfhScheduleManagement() {
     }
     return "-";
   };
+  const totalPages = Math.max(1, Math.ceil(schedules.length / ITEMS_PER_PAGE));
+  const paginatedSchedules = schedules.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [schedules.length]);
 
   return (
     <OrganizationLayout>
@@ -488,7 +499,7 @@ export default function OrgWfhScheduleManagement() {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    schedules.map((schedule) => {
+                    paginatedSchedules.map((schedule) => {
                       const scope = getScopeLabel(schedule);
                       const ScopeIcon = scope.icon;
                       return (
@@ -525,6 +536,29 @@ export default function OrgWfhScheduleManagement() {
                 </TableBody>
               </Table>
             </div>
+            {!isLoading && schedules.length > 0 && (
+              <div className="mt-4 flex items-center justify-between">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                >
+                  Sebelumnya
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  Halaman {currentPage} dari {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  Berikutnya
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

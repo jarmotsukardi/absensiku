@@ -80,6 +80,7 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
   disetujui: { label: "Disetujui", variant: "default" },
   ditolak: { label: "Ditolak", variant: "destructive" },
 };
+const ITEMS_PER_PAGE = 10;
 
 export default function LeaveApprovals() {
   const navigate = useNavigate();
@@ -93,6 +94,7 @@ export default function LeaveApprovals() {
   const [actionType, setActionType] = useState<"approve" | "reject" | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
     fetchLeaveRequests();
@@ -134,6 +136,10 @@ export default function LeaveApprovals() {
   useEffect(() => {
     filterRequests();
   }, [filterRequests]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, statusFilter, typeFilter, requests.length]);
 
   const handleApprove = async () => {
     if (!selectedRequest) return;
@@ -193,6 +199,11 @@ export default function LeaveApprovals() {
   };
 
   const pendingCount = requests.filter(r => r.status === "menunggu").length;
+  const totalPages = Math.max(1, Math.ceil(filteredRequests.length / ITEMS_PER_PAGE));
+  const paginatedRequests = filteredRequests.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
 
   return (
     <SuperAdminLayout title="Approval Pengajuan" subtitle="Kelola pengajuan izin & cuti pegawai">
@@ -297,7 +308,7 @@ export default function LeaveApprovals() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredRequests.map((req) => (
+                    {paginatedRequests.map((req) => (
                       <TableRow key={req.id}>
                         <TableCell>
                           <div className="flex items-center gap-3">
@@ -324,6 +335,29 @@ export default function LeaveApprovals() {
                     ))}
                   </TableBody>
                 </Table>
+              </div>
+            )}
+            {!isLoading && filteredRequests.length > 0 && (
+              <div className="mt-4 flex items-center justify-between">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                >
+                  Sebelumnya
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  Halaman {currentPage} dari {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  Berikutnya
+                </Button>
               </div>
             )}
           </CardContent>

@@ -9,6 +9,8 @@ import {
   MapPin,
   Clock,
   CheckCircle2,
+  UserCheck,
+  UserX,
   TrendingUp,
   Sparkles,
   UserPlus,
@@ -18,6 +20,7 @@ import {
   Download,
   AlertTriangle,
   CreditCard,
+  Timer,
 } from "lucide-react";
 import { toast } from "sonner";
 import { format, differenceInDays } from "date-fns";
@@ -38,11 +41,28 @@ interface SubscriptionInfo {
 
 interface DashboardStats {
   totalEmployees: number;
+  linkedEmployees: number;
   totalOffices: number;
   todayPresent: number;
+  pendingOvertime: number;
   pendingLeaves: number;
   pendingWfh: number;
   expiredInvitations: number;
+}
+
+interface AttendanceTrendPoint {
+  date: string;
+  label: string;
+  present: number;
+  absent: number;
+  coveragePct: number;
+}
+
+interface ApprovalPerformance {
+  avgApprovalHours: number;
+  processedCount: number;
+  approvedCount: number;
+  rejectedCount: number;
 }
 
 interface ApkInfo {
@@ -64,14 +84,23 @@ export default function OrgDashboard() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [stats, setStats] = useState<DashboardStats>({
     totalEmployees: 0,
+    linkedEmployees: 0,
     totalOffices: 0,
     todayPresent: 0,
+    pendingOvertime: 0,
     pendingLeaves: 0,
     pendingWfh: 0,
     expiredInvitations: 0,
   });
   const [userName, setUserName] = useState("");
   const [apkInfo, setApkInfo] = useState<ApkInfo | null>(null);
+  const [attendanceTrend, setAttendanceTrend] = useState<AttendanceTrendPoint[]>([]);
+  const [approvalPerformance, setApprovalPerformance] = useState<ApprovalPerformance>({
+    avgApprovalHours: 0,
+    processedCount: 0,
+    approvedCount: 0,
+    rejectedCount: 0,
+  });
 
   const fetchDashboardData = useCallback(async () => {
     let resolvedTenantIdForLog: string | null = null;
@@ -192,6 +221,11 @@ export default function OrgDashboard() {
 
       // Fetch stats
       const today = new Date().toISOString().split('T')[0];
+      const now = new Date();
+      const sevenDaysAgoDate = new Date(now);
+      sevenDaysAgoDate.setDate(sevenDaysAgoDate.getDate() - 6);
+      const sevenDaysAgo = format(sevenDaysAgoDate, "yyyy-MM-dd");
+      const thirtyDaysAgoIso = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000)).toISOString();
       const { data: officeRows, error: officeRowsError } = await withTimeout(
         Promise.resolve(
           supabase
@@ -211,8 +245,16 @@ export default function OrgDashboard() {
           .in("office_id", officeIds)
           .eq("date", today)
         : Promise.resolve({ count: 0 as number | null, error: null });
+      const attendanceTrendPromise = officeIds.length > 0
+        ? supabase
+          .from("attendance_records_partitioned")
+          .select("date")
+          .in("office_id", officeIds)
+          .gte("date", sevenDaysAgo)
+          .lte("date", today)
+        : Promise.resolve({ data: [] as { date: string }[], error: null });
 
-      const [employeesRes, officesRes, attendanceRes, leavesRes, wfhRes, invitationsRes, apkSettings] = await withTimeout(
+      const [employeesRes, linkedEmployeesRes, officesRes, attendanceRes, attendanceTrendRes, leavesRes, wfhRes, overtimeRes, leaveApprovalsRes, wfhApprovalsRes, overtimeApprovalsRes, invitationsRes, apkSettings] = await withTimeout(
         Promise.all([
           supabase
             .from("employees")
@@ -220,11 +262,18 @@ export default function OrgDashboard() {
             .eq("tenant_id", resolvedTenantId)
             .eq("is_active", true),
           supabase
+            .from("employees")
+            .select("id", { count: "exact", head: true })
+            .eq("tenant_id", resolvedTenantId)
+            .eq("is_active", true)
+            .not("user_id", "is", null),
+          supabase
             .from("offices")
             .select("id", { count: "exact", head: true })
             .eq("tenant_id", resolvedTenantId)
             .eq("is_active", true),
           attendancePromise,
+          attendanceTrendPromise,
           supabase
             .from("leave_requests")
             .select("id", { count: "exact", head: true })
@@ -235,6 +284,26 @@ export default function OrgDashboard() {
             .select("id", { count: "exact", head: true })
             .eq("tenant_id", resolvedTenantId)
             .eq("status", "pending"),
+          supabase
+            .from("overtime_requests")
+            .select("id", { count: "exact", head: true })
+            .eq("tenant_id", resolvedTenantId)
+            .eq("status", "pending"),
+          supabase
+            .from("leave_requests")
+            .select("created_at, approved_at, status")
+            .eq("tenant_id", resolvedTenantId)
+            .gte("created_at", thirtyDaysAgoIso),
+          supabase
+            .from("wfh_requests")
+            .select("created_at, approved_at, status")
+            .eq("tenant_id", resolvedTenantId)
+            .gte("created_at", thirtyDaysAgoIso),
+          supabase
+            .from("overtime_requests")
+            .select("created_at, approved_at, status")
+            .eq("tenant_id", resolvedTenantId)
+            .gte("created_at", thirtyDaysAgoIso),
           supabase
             .from("employee_invitations")
             .select("id", { count: "exact", head: true })
@@ -253,31 +322,114 @@ export default function OrgDashboard() {
 
       if (
         employeesRes.error ||
+        linkedEmployeesRes.error ||
         officesRes.error ||
         attendanceRes.error ||
+        attendanceTrendRes.error ||
         leavesRes.error ||
         wfhRes.error ||
+        overtimeRes.error ||
+        leaveApprovalsRes.error ||
+        wfhApprovalsRes.error ||
+        overtimeApprovalsRes.error ||
         invitationsRes.error ||
         apkSettings.error
       ) {
         throw (
           employeesRes.error ||
+          linkedEmployeesRes.error ||
           officesRes.error ||
           attendanceRes.error ||
+          attendanceTrendRes.error ||
           leavesRes.error ||
           wfhRes.error ||
+          overtimeRes.error ||
+          leaveApprovalsRes.error ||
+          wfhApprovalsRes.error ||
+          overtimeApprovalsRes.error ||
           invitationsRes.error ||
           apkSettings.error
         );
       }
 
+      const totalEmployees = employeesRes.count || 0;
+      const linkedEmployees = linkedEmployeesRes.count || 0;
+      const totalOffices = officesRes.count || 0;
+      const todayPresent = attendanceRes.count || 0;
+      const pendingOvertime = overtimeRes.count || 0;
+      const pendingLeaves = leavesRes.count || 0;
+      const pendingWfh = wfhRes.count || 0;
+      const expiredInvitations = invitationsRes.count || 0;
+
       setStats({
-        totalEmployees: employeesRes.count || 0,
-        totalOffices: officesRes.count || 0,
-        todayPresent: attendanceRes.count || 0,
-        pendingLeaves: leavesRes.count || 0,
-        pendingWfh: wfhRes.count || 0,
-        expiredInvitations: invitationsRes.count || 0,
+        totalEmployees,
+        linkedEmployees,
+        totalOffices,
+        todayPresent,
+        pendingOvertime,
+        pendingLeaves,
+        pendingWfh,
+        expiredInvitations,
+      });
+
+      const attendanceByDate = new Map<string, number>();
+      for (const row of attendanceTrendRes.data || []) {
+        const dateKey = row.date;
+        attendanceByDate.set(dateKey, (attendanceByDate.get(dateKey) || 0) + 1);
+      }
+      const trendPoints: AttendanceTrendPoint[] = [];
+      for (let index = 0; index < 7; index += 1) {
+        const pointDate = new Date(sevenDaysAgoDate);
+        pointDate.setDate(sevenDaysAgoDate.getDate() + index);
+        const dateKey = format(pointDate, "yyyy-MM-dd");
+        const present = attendanceByDate.get(dateKey) || 0;
+        const absent = Math.max(0, totalEmployees - present);
+        const coveragePct = totalEmployees > 0
+          ? Math.min(100, Math.round((present / totalEmployees) * 100))
+          : 0;
+        trendPoints.push({
+          date: dateKey,
+          label: format(pointDate, "EEE, d MMM", { locale: id }),
+          present,
+          absent,
+          coveragePct,
+        });
+      }
+      setAttendanceTrend(trendPoints);
+
+      const normalizeStatus = (value: unknown) => String(value || "").toLowerCase();
+      const approvedStatuses = new Set(["approved", "disetujui"]);
+      const rejectedStatuses = new Set(["rejected", "ditolak"]);
+      const approvalRows = [
+        ...(leaveApprovalsRes.data || []),
+        ...(wfhApprovalsRes.data || []),
+        ...(overtimeApprovalsRes.data || []),
+      ] as { created_at: string | null; approved_at: string | null; status: string | null }[];
+
+      let approvedCount = 0;
+      let rejectedCount = 0;
+      let processedCount = 0;
+      let totalApprovalHours = 0;
+      for (const row of approvalRows) {
+        const status = normalizeStatus(row.status);
+        if (!approvedStatuses.has(status) && !rejectedStatuses.has(status)) continue;
+        if (!row.created_at || !row.approved_at) continue;
+
+        const createdAt = new Date(row.created_at).getTime();
+        const approvedAt = new Date(row.approved_at).getTime();
+        if (Number.isNaN(createdAt) || Number.isNaN(approvedAt) || approvedAt < createdAt) continue;
+
+        const approvalHours = (approvedAt - createdAt) / (1000 * 60 * 60);
+        totalApprovalHours += approvalHours;
+        processedCount += 1;
+        if (approvedStatuses.has(status)) approvedCount += 1;
+        if (rejectedStatuses.has(status)) rejectedCount += 1;
+      }
+      setApprovalPerformance({
+        avgApprovalHours: processedCount > 0 ? Number((totalApprovalHours / processedCount).toFixed(1)) : 0,
+        processedCount,
+        approvedCount,
+        rejectedCount,
       });
 
       // Set APK info
@@ -351,6 +503,12 @@ export default function OrgDashboard() {
 
   const status = getSubscriptionStatus();
   const daysRemaining = getDaysRemaining();
+  const totalPendingRequests = stats.pendingLeaves + stats.pendingWfh + stats.pendingOvertime;
+  const unlinkedEmployees = Math.max(0, stats.totalEmployees - stats.linkedEmployees);
+  const todayAbsent = Math.max(0, stats.totalEmployees - stats.todayPresent);
+  const attendanceCoveragePct = stats.totalEmployees > 0
+    ? Math.min(100, Math.round((stats.todayPresent / stats.totalEmployees) * 100))
+    : 0;
 
   return (
     <OrganizationLayout>
@@ -404,7 +562,7 @@ export default function OrgDashboard() {
         </div>
 
         {/* Stats Grid */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -415,6 +573,21 @@ export default function OrgDashboard() {
             <CardContent>
               <div className="text-2xl font-bold">{stats.totalEmployees}</div>
               <p className="text-xs text-muted-foreground mt-2">Akses berbasis kebijakan streak</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Akun Terhubung
+              </CardTitle>
+              <UserCheck className="h-4 w-4 text-blue-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{stats.linkedEmployees}</div>
+              <p className="text-xs text-muted-foreground mt-2">
+                {unlinkedEmployees > 0 ? `${unlinkedEmployees} belum terhubung` : "Semua akun aktif terhubung"}
+              </p>
             </CardContent>
           </Card>
 
@@ -441,8 +614,21 @@ export default function OrgDashboard() {
             <CardContent>
               <div className="text-2xl font-bold">{stats.todayPresent}</div>
               <p className="text-xs text-muted-foreground mt-2">
-                {format(new Date(), "EEEE, d MMMM yyyy", { locale: id })}
+                {attendanceCoveragePct}% cakupan hadir • {format(new Date(), "EEEE, d MMMM yyyy", { locale: id })}
               </p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                Belum Hadir Hari Ini
+              </CardTitle>
+              <UserX className="h-4 w-4 text-orange-500" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">{todayAbsent}</div>
+              <p className="text-xs text-muted-foreground mt-2">Perlu pemantauan jam masuk</p>
             </CardContent>
           </Card>
 
@@ -454,14 +640,91 @@ export default function OrgDashboard() {
               <Clock className="h-4 w-4 text-amber-500" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{stats.pendingLeaves}</div>
-              <p className="text-xs text-muted-foreground mt-2">Menunggu persetujuan</p>
+              <div className="text-2xl font-bold">{totalPendingRequests}</div>
+              <p className="text-xs text-muted-foreground mt-2">
+                Cuti {stats.pendingLeaves} • WFH {stats.pendingWfh} • Lembur {stats.pendingOvertime}
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Operational Insight */}
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Tren Kehadiran 7 Hari</CardTitle>
+              <CardDescription>Pantau cakupan hadir harian dalam seminggu terakhir</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {attendanceTrend.length === 0 ? (
+                <p className="text-sm text-muted-foreground">Belum ada data kehadiran 7 hari terakhir.</p>
+              ) : (
+                attendanceTrend.map((point) => (
+                  <div key={point.date} className="space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">{point.label}</span>
+                      <span className="font-medium">
+                        {point.present}/{stats.totalEmployees} hadir ({point.coveragePct}%)
+                      </span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-primary"
+                        style={{ width: `${point.coveragePct}%` }}
+                      />
+                    </div>
+                  </div>
+                ))
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Performa Persetujuan (30 Hari)</CardTitle>
+              <CardDescription>Rata-rata waktu proses pengajuan cuti, WFH, dan lembur</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 rounded-lg bg-muted/50">
+                  <p className="text-xs text-muted-foreground">Rata-rata Proses</p>
+                  <p className="text-lg font-semibold">{approvalPerformance.avgApprovalHours} jam</p>
+                </div>
+                <div className="p-3 rounded-lg bg-muted/50">
+                  <p className="text-xs text-muted-foreground">Request Diproses</p>
+                  <p className="text-lg font-semibold">{approvalPerformance.processedCount}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="p-3 rounded-lg border border-emerald-200/60 bg-emerald-50/60 dark:border-emerald-500/30 dark:bg-emerald-500/10">
+                  <p className="text-xs text-emerald-700 dark:text-emerald-300">Disetujui</p>
+                  <p className="text-lg font-semibold text-emerald-700 dark:text-emerald-300">
+                    {approvalPerformance.approvedCount}
+                  </p>
+                </div>
+                <div className="p-3 rounded-lg border border-red-200/60 bg-red-50/60 dark:border-red-500/30 dark:bg-red-500/10">
+                  <p className="text-xs text-red-700 dark:text-red-300">Ditolak</p>
+                  <p className="text-lg font-semibold text-red-700 dark:text-red-300">
+                    {approvalPerformance.rejectedCount}
+                  </p>
+                </div>
+              </div>
+
+              <div className="pt-1">
+                <p className="text-xs text-muted-foreground mb-2">Pending saat ini</p>
+                <div className="flex flex-wrap gap-2">
+                  <Badge variant="secondary">Cuti {stats.pendingLeaves}</Badge>
+                  <Badge variant="secondary">WFH {stats.pendingWfh}</Badge>
+                  <Badge variant="secondary">Lembur {stats.pendingOvertime}</Badge>
+                </div>
+              </div>
             </CardContent>
           </Card>
         </div>
 
         {/* Perlu Perhatian */}
-        {(stats.pendingLeaves > 0 || stats.pendingWfh > 0 || stats.expiredInvitations > 0 || (subscription?.status === "expired")) && (
+        {(stats.pendingLeaves > 0 || stats.pendingWfh > 0 || stats.pendingOvertime > 0 || stats.expiredInvitations > 0 || unlinkedEmployees > 0 || (subscription?.status === "expired")) && (
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
@@ -522,6 +785,23 @@ export default function OrgDashboard() {
                 </div>
               )}
 
+              {stats.pendingOvertime > 0 && (
+                <div
+                  className="flex items-center gap-3 p-3 rounded-lg bg-purple-50 dark:bg-purple-500/10 border border-purple-200 dark:border-purple-500/20 cursor-pointer hover:bg-purple-100 dark:hover:bg-purple-500/20 transition-colors"
+                  onClick={() => navigate("/org/leave/overtime")}
+                >
+                  <Timer className="h-5 w-5 text-purple-500 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-purple-700 dark:text-purple-400">
+                      {stats.pendingOvertime} pengajuan lembur menunggu
+                    </p>
+                    <p className="text-xs text-purple-600/70 dark:text-purple-400/70">
+                      Klik untuk proses persetujuan lembur
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {stats.expiredInvitations > 0 && (
                 <div 
                   className="flex items-center gap-3 p-3 rounded-lg bg-gray-50 dark:bg-gray-500/10 border border-gray-200 dark:border-gray-500/20 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-500/20 transition-colors"
@@ -534,6 +814,23 @@ export default function OrgDashboard() {
                     </p>
                     <p className="text-xs text-gray-600/70 dark:text-gray-400/70">
                       Perlu dihapus atau diperpanjang
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {unlinkedEmployees > 0 && (
+                <div
+                  className="flex items-center gap-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 cursor-pointer hover:bg-blue-100 dark:hover:bg-blue-500/20 transition-colors"
+                  onClick={() => navigate("/org/employees/active")}
+                >
+                  <UserCheck className="h-5 w-5 text-blue-500 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-blue-700 dark:text-blue-400">
+                      {unlinkedEmployees} pegawai belum terhubung akun
+                    </p>
+                    <p className="text-xs text-blue-600/70 dark:text-blue-400/70">
+                      Aktivasi akun agar notifikasi & akses dashboard tersedia
                     </p>
                   </div>
                 </div>

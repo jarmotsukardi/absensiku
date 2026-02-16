@@ -24,10 +24,12 @@ type AbsentRecord = AttendanceRecord & {
 };
 
 export default function OrgAbsentWithoutNotice() {
+  const ITEMS_PER_PAGE = 15;
   const [records, setRecords] = useState<AbsentRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
+  const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
     const initTenant = async () => {
@@ -95,6 +97,15 @@ export default function OrgAbsentWithoutNotice() {
   const filteredRecords = records.filter((record) =>
     (record.employees?.name || "").toLowerCase().includes(searchTerm.toLowerCase())
   );
+  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / ITEMS_PER_PAGE));
+  const paginatedRecords = filteredRecords.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
 
   return (
     <OrganizationLayout>
@@ -139,12 +150,12 @@ export default function OrgAbsentWithoutNotice() {
               <TableBody>
                 {isLoading ? (
                   <TableRow><TableCell colSpan={6} className="text-center py-8"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto"></div></TableCell></TableRow>
-                ) : filteredRecords.length === 0 ? (
+                ) : paginatedRecords.length === 0 ? (
                   <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">Tidak ada data</TableCell></TableRow>
                 ) : (
-                  filteredRecords.map((record, index) => (
+                  paginatedRecords.map((record, index) => (
                     <TableRow key={record.id}>
-                      <TableCell>{index + 1}</TableCell>
+                      <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
                       <TableCell>{format(new Date(record.date), "d MMM yyyy", { locale: id })}</TableCell>
                       <TableCell>{record.employees?.name}</TableCell>
                       <TableCell className="font-mono text-sm">{record.employees?.nip || "-"}</TableCell>
@@ -155,6 +166,27 @@ export default function OrgAbsentWithoutNotice() {
                 )}
               </TableBody>
             </Table>
+            <div className="flex items-center justify-center gap-2 mt-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+              >
+                Sebelumnya
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                Halaman {currentPage} dari {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+              >
+                Berikutnya
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>

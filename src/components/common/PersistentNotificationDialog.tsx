@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import {
   Dialog,
@@ -15,9 +15,11 @@ import { id as idLocale } from "date-fns/locale";
 
 interface Notification {
   id: string;
+  user_id?: string | null;
   title: string;
   message: string;
   type: string;
+  is_read?: boolean;
   created_at: string;
   link?: string;
 }
@@ -27,42 +29,18 @@ export function PersistentNotificationDialog() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
 
-  useEffect(() => {
-    fetchUnreadNotifications();
-
-    // Setup realtime subscription for new notifications
-    const channel = supabase
-      .channel('persistent-notifications')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'notifications',
-        },
-        (payload) => {
-          // Add new notification to the queue
-          if (payload.new && !payload.new.is_read) {
-            setNotifications(prev => [...prev, payload.new as Notification]);
-            setIsOpen(true);
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
-
-  const fetchUnreadNotifications = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+  const fetchUnreadNotifications = useCallback(async (userId?: string) => {
+    let resolvedUserId = userId;
+    if (!resolvedUserId) {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      resolvedUserId = user.id;
+    }
 
     const { data, error } = await supabase
       .from("notifications")
       .select("*")
-      .eq("user_id", user.id)
+      .eq("user_id", resolvedUserId)
       .eq("is_read", false)
       .order("created_at", { ascending: true });
 
@@ -70,7 +48,54 @@ export function PersistentNotificationDialog() {
       setNotifications(data);
       setIsOpen(true);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    let activeUserId: string | null = null;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    const init = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!isMounted || !user) return;
+
+      activeUserId = user.id;
+      await fetchUnreadNotifications(activeUserId);
+
+      // Setup realtime subscription for new notifications.
+      // Keep channel broad and validate recipient in callback for reliability.
+      channel = supabase
+        .channel('persistent-notifications')
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'notifications',
+          },
+          (payload) => {
+            const next = payload.new as Notification | null;
+            if (!next || !activeUserId || next.user_id !== activeUserId || next.is_read) return;
+
+            setNotifications(prev => {
+              if (prev.some(item => item.id === next.id)) return prev;
+              return [...prev, next];
+            });
+            setIsOpen(true);
+          }
+        )
+        .subscribe();
+    };
+
+    void init();
+
+    return () => {
+      isMounted = false;
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+    };
+  }, [fetchUnreadNotifications]);
 
   const handleAcknowledge = async () => {
     const currentNotification = notifications[currentIndex];

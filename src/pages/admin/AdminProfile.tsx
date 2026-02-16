@@ -21,6 +21,14 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+interface AdminEmployeeRow {
+    id: string;
+    email: string;
+    phone: string | null;
+    whatsapp: string | null;
+    user_id: string | null;
+}
+
 export default function AdminProfile() {
     const [session, setSession] = useState<Session | null>(null);
     const [user, setUser] = useState<User | null>(null);
@@ -36,21 +44,78 @@ export default function AdminProfile() {
     const [isChangingPassword, setIsChangingPassword] = useState(false);
 
     useEffect(() => {
-        supabase.auth.getSession().then(({ data: { session } }) => {
-            setSession(session);
-            setUser(session?.user ?? null);
-            setPhoneNumber(
-                String(session?.user?.user_metadata?.phone || session?.user?.user_metadata?.whatsapp || "")
-            );
-            setIsLoading(false);
-        });
+        const hydrateProfile = async (incomingSession?: Session | null) => {
+            const currentSession = incomingSession ?? (await supabase.auth.getSession()).data.session;
+            const { data: authUserData } = await supabase.auth.getUser();
+            const currentUser = authUserData?.user ?? currentSession?.user ?? null;
+            setSession(currentSession);
+            setUser(currentUser);
 
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-            setSession(session);
-            setUser(session?.user ?? null);
-            setPhoneNumber(
-                String(session?.user?.user_metadata?.phone || session?.user?.user_metadata?.whatsapp || "")
+            const metadataPhone = String(
+                currentUser?.user_metadata?.phone ||
+                currentUser?.user_metadata?.whatsapp ||
+                ""
             );
+            let resolvedPhone = metadataPhone;
+
+            try {
+                if (currentUser?.id) {
+                    const settingKey = `super_admin_recovery_phone_${currentUser.id}`;
+
+                    const { data: byUserRows } = await supabase
+                        .from("employees")
+                        .select("id, email, phone, whatsapp, user_id")
+                        .eq("user_id", currentUser.id)
+                        .order("updated_at", { ascending: false })
+                        .limit(1);
+
+                    let employee = (byUserRows?.[0] || null) as AdminEmployeeRow | null;
+
+                    if (!employee && currentUser.email) {
+                        const { data: byEmailRows } = await supabase
+                            .from("employees")
+                            .select("id, email, phone, whatsapp, user_id")
+                            .ilike("email", currentUser.email)
+                            .order("updated_at", { ascending: false })
+                            .limit(1);
+                        employee = (byEmailRows?.[0] || null) as AdminEmployeeRow | null;
+
+                        if (employee && !employee.user_id) {
+                            await supabase
+                                .from("employees")
+                                .update({ user_id: currentUser.id })
+                                .eq("id", employee.id);
+                        }
+                    }
+
+                    resolvedPhone = employee?.phone || employee?.whatsapp || metadataPhone;
+
+                    if (!resolvedPhone) {
+                        const { data: systemSettingRow } = await supabase
+                            .from("system_settings")
+                            .select("value")
+                            .eq("key", settingKey)
+                            .maybeSingle();
+                        const savedPhone = (
+                            (systemSettingRow?.value as { phone?: string; whatsapp?: string } | null)?.phone ||
+                            (systemSettingRow?.value as { phone?: string; whatsapp?: string } | null)?.whatsapp ||
+                            ""
+                        ).toString();
+                        resolvedPhone = savedPhone || resolvedPhone;
+                    }
+                }
+            } catch {
+                resolvedPhone = metadataPhone;
+            }
+
+            setPhoneNumber(resolvedPhone || "");
+            setIsLoading(false);
+        };
+
+        void hydrateProfile();
+
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+            void hydrateProfile(nextSession);
         });
 
         return () => subscription.unsubscribe();
@@ -107,6 +172,7 @@ export default function AdminProfile() {
 
         setIsSavingPhone(true);
         try {
+            const settingKey = user?.id ? `super_admin_recovery_phone_${user.id}` : null;
             const existingMetadata = user?.user_metadata && typeof user.user_metadata === "object"
                 ? user.user_metadata
                 : {};
@@ -119,6 +185,59 @@ export default function AdminProfile() {
             });
 
             if (error) throw error;
+
+            if (user?.id) {
+                const { data: byUserUpdated, error: updateByUserError } = await supabase
+                    .from("employees")
+                    .update({ phone: normalizedPhone, whatsapp: normalizedPhone })
+                    .eq("user_id", user.id)
+                    .select("id, email");
+                if (updateByUserError) throw updateByUserError;
+
+                if ((!byUserUpdated || byUserUpdated.length === 0) && user.email) {
+                    const { error: updateByEmailError } = await supabase
+                        .from("employees")
+                        .update({ phone: normalizedPhone, whatsapp: normalizedPhone, user_id: user.id })
+                        .ilike("email", user.email);
+                    if (updateByEmailError) throw updateByEmailError;
+                }
+            }
+
+            if (settingKey) {
+                const settingPayload = {
+                    phone: normalizedPhone,
+                    whatsapp: normalizedPhone,
+                    saved_at: new Date().toISOString(),
+                };
+                const { data: existingSetting, error: checkSettingError } = await supabase
+                    .from("system_settings")
+                    .select("id")
+                    .eq("key", settingKey)
+                    .maybeSingle();
+                if (checkSettingError) throw checkSettingError;
+
+                if (existingSetting?.id) {
+                    const { error: updateSettingError } = await supabase
+                        .from("system_settings")
+                        .update({
+                            value: settingPayload,
+                            updated_by: user?.id || null,
+                            updated_at: new Date().toISOString(),
+                        })
+                        .eq("key", settingKey);
+                    if (updateSettingError) throw updateSettingError;
+                } else {
+                    const { error: insertSettingError } = await supabase
+                        .from("system_settings")
+                        .insert({
+                            key: settingKey,
+                            description: "Nomor recovery super admin",
+                            value: settingPayload,
+                            updated_by: user?.id || null,
+                        });
+                    if (insertSettingError) throw insertSettingError;
+                }
+            }
 
             const { data: userData } = await supabase.auth.getUser();
             if (userData.user) {
@@ -281,7 +400,7 @@ export default function AdminProfile() {
                                 type="tel"
                                 value={phoneNumber}
                                 onChange={(e) => setPhoneNumber(e.target.value)}
-                                placeholder="081234567890"
+                                placeholder="Masukkan no HP aktif (contoh: 08xxxxxxxxxx)"
                             />
                         </div>
                         <Button

@@ -37,6 +37,8 @@ export default function OrgInstitutionTypesManagement() {
   const [institutionTypes, setInstitutionTypes] = useState<InstitutionType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const ITEMS_PER_PAGE = 10;
 
   useEffect(() => {
     fetchInstitutionTypes();
@@ -62,6 +64,15 @@ export default function OrgInstitutionTypesManagement() {
     type.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     type.code.toLowerCase().includes(searchTerm.toLowerCase())
   );
+  const totalPages = Math.max(1, Math.ceil(filteredTypes.length / ITEMS_PER_PAGE));
+  const paginatedTypes = filteredTypes.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, institutionTypes.length]);
 
   return (
     <OrganizationLayout>
@@ -111,53 +122,76 @@ export default function OrgInstitutionTypesManagement() {
                 {[1,2,3].map(i => <Skeleton key={i} className="h-16 w-full" />)}
               </div>
             ) : (
-              <div className="rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-12">No</TableHead>
-                      <TableHead>Ikon</TableHead>
-                      <TableHead>Nama</TableHead>
-                      <TableHead>Kode</TableHead>
-                      <TableHead className="hidden md:table-cell">Deskripsi</TableHead>
-                      <TableHead>Status</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredTypes.length === 0 ? (
+              <>
+                <div className="rounded-md border">
+                  <Table>
+                    <TableHeader>
                       <TableRow>
-                        <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
-                          Tidak ada data jenis instansi
-                        </TableCell>
+                        <TableHead className="w-12">No</TableHead>
+                        <TableHead>Ikon</TableHead>
+                        <TableHead>Nama</TableHead>
+                        <TableHead>Kode</TableHead>
+                        <TableHead className="hidden md:table-cell">Deskripsi</TableHead>
+                        <TableHead>Status</TableHead>
                       </TableRow>
-                    ) : (
-                      filteredTypes.map((type, index) => {
-                        const IconComponent = getIcon(type.icon);
-                        return (
-                          <TableRow key={type.id}>
-                            <TableCell>{index + 1}</TableCell>
-                            <TableCell>
-                              <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
-                                <IconComponent className="h-5 w-5 text-primary" />
-                              </div>
-                            </TableCell>
-                            <TableCell className="font-medium">{type.name}</TableCell>
-                            <TableCell><Badge variant="outline">{type.code}</Badge></TableCell>
-                            <TableCell className="hidden md:table-cell text-muted-foreground max-w-xs truncate">
-                              {type.description || "-"}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant={type.is_active ? "default" : "secondary"}>
-                                {type.is_active ? "Aktif" : "Nonaktif"}
-                              </Badge>
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })
+                    </TableHeader>
+                    <TableBody>
+                      {filteredTypes.length === 0 ? (
+                        <TableRow>
+                          <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                            Tidak ada data jenis instansi
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        paginatedTypes.map((type, index) => {
+                          const IconComponent = getIcon(type.icon);
+                          return (
+                            <TableRow key={type.id}>
+                              <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
+                              <TableCell>
+                                <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                                  <IconComponent className="h-5 w-5 text-primary" />
+                                </div>
+                              </TableCell>
+                              <TableCell className="font-medium">{type.name}</TableCell>
+                              <TableCell><Badge variant="outline">{type.code}</Badge></TableCell>
+                              <TableCell className="hidden md:table-cell text-muted-foreground max-w-xs truncate">
+                                {type.description || "-"}
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant={type.is_active ? "default" : "secondary"}>
+                                  {type.is_active ? "Aktif" : "Nonaktif"}
+                                </Badge>
+                              </TableCell>
+                            </TableRow>
+                          );
+                        })
                     )}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableBody>
+                  </Table>
+                </div>
+                {filteredTypes.length > 0 && (
+                  <div className="mt-4 flex items-center justify-between">
+                    <button
+                      className="inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm disabled:opacity-50"
+                      onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                      disabled={currentPage === 1}
+                    >
+                      Sebelumnya
+                    </button>
+                    <span className="text-sm text-muted-foreground">
+                      Halaman {currentPage} dari {totalPages}
+                    </span>
+                    <button
+                      className="inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm disabled:opacity-50"
+                      onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                      disabled={currentPage === totalPages}
+                    >
+                      Berikutnya
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </CardContent>
         </Card>

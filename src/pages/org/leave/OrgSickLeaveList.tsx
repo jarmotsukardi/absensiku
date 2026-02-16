@@ -20,10 +20,12 @@ type SickLeaveRequest = Tables<"leave_requests"> & {
 };
 
 export default function OrgSickLeaveList() {
+  const ITEMS_PER_PAGE = 15;
   const [requests, setRequests] = useState<SickLeaveRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
+  const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
     const initTenant = async () => {
@@ -76,6 +78,15 @@ export default function OrgSickLeaveList() {
   const filteredRequests = requests.filter(req =>
     (req.employees?.name || "").toLowerCase().includes(searchTerm.toLowerCase())
   );
+  const totalPages = Math.max(1, Math.ceil(filteredRequests.length / ITEMS_PER_PAGE));
+  const paginatedRequests = filteredRequests.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
 
   return (
     <OrganizationLayout>
@@ -121,12 +132,12 @@ export default function OrgSickLeaveList() {
               <TableBody>
                 {isLoading ? (
                   <TableRow><TableCell colSpan={7} className="text-center py-8"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto"></div></TableCell></TableRow>
-                ) : filteredRequests.length === 0 ? (
+                ) : paginatedRequests.length === 0 ? (
                   <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">Tidak ada data</TableCell></TableRow>
                 ) : (
-                  filteredRequests.map((req, i) => (
+                  paginatedRequests.map((req, i) => (
                     <TableRow key={req.id}>
-                      <TableCell>{i + 1}</TableCell>
+                      <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + i + 1}</TableCell>
                       <TableCell>{req.employees?.name}</TableCell>
                       <TableCell>{format(new Date(req.start_date), "d MMM yyyy", { locale: id })}</TableCell>
                       <TableCell>{format(new Date(req.end_date), "d MMM yyyy", { locale: id })}</TableCell>
@@ -138,6 +149,27 @@ export default function OrgSickLeaveList() {
                 )}
               </TableBody>
             </Table>
+            <div className="flex items-center justify-center gap-2 mt-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+              >
+                Sebelumnya
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                Halaman {currentPage} dari {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+              >
+                Berikutnya
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>

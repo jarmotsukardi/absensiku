@@ -17,9 +17,11 @@ type Employee = Tables<"employees">;
 type LeaveRequestWithEmployee = LeaveRequest & { employee?: Employee | null };
 
 export default function OfficialTravelList() {
+  const ITEMS_PER_PAGE = 15;
   const [requests, setRequests] = useState<LeaveRequestWithEmployee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
 
   const fetchData = async () => {
     try {
@@ -66,6 +68,15 @@ export default function OfficialTravelList() {
     req.employee?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     req.reason.toLowerCase().includes(searchTerm.toLowerCase())
   );
+  const totalPages = Math.max(1, Math.ceil(filteredRequests.length / ITEMS_PER_PAGE));
+  const paginatedRequests = filteredRequests.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
 
   return (
     <SuperAdminLayout>
@@ -126,21 +137,21 @@ export default function OfficialTravelList() {
                         Memuat data...
                       </TableCell>
                     </TableRow>
-                  ) : filteredRequests.length === 0 ? (
+                  ) : paginatedRequests.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center py-8">
                         Tidak ada data tugas dinas
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredRequests.map((req, index) => {
+                    paginatedRequests.map((req, index) => {
                       const startDate = new Date(req.start_date);
                       const endDate = new Date(req.end_date);
                       const duration = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24)) + 1;
                       
                       return (
                         <TableRow key={req.id}>
-                        <TableCell>{index + 1}</TableCell>
+                        <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
                         <TableCell className="font-medium">
                           {req.employee?.name || "-"}
                         </TableCell>
@@ -159,6 +170,27 @@ export default function OfficialTravelList() {
                   )}
                 </TableBody>
               </Table>
+            </div>
+            <div className="flex items-center justify-center gap-2 mt-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+              >
+                Sebelumnya
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                Halaman {currentPage} dari {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+              >
+                Berikutnya
+              </Button>
             </div>
           </CardContent>
         </Card>

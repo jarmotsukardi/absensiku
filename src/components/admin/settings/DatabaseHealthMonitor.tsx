@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -36,10 +36,12 @@ interface HealthCheck {
 }
 
 export function DatabaseHealthMonitor() {
+  const ITEMS_PER_PAGE = 10;
   const [isLoading, setIsLoading] = useState(false);
   const [partitionStats, setPartitionStats] = useState<PartitionStat[]>([]);
   const [healthChecks, setHealthChecks] = useState<HealthCheck[]>([]);
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const runHealthCheck = async () => {
     setIsLoading(true);
@@ -191,6 +193,15 @@ export function DatabaseHealthMonitor() {
       : healthChecks.some(c => c.status === "critical") 
         ? "critical" 
         : "warning";
+  const totalPages = Math.max(1, Math.ceil(partitionStats.length / ITEMS_PER_PAGE));
+  const paginatedPartitionStats = partitionStats.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [partitionStats.length]);
 
   return (
     <div className="space-y-6">
@@ -284,7 +295,7 @@ export function DatabaseHealthMonitor() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {partitionStats.map((partition) => (
+                  {paginatedPartitionStats.map((partition) => (
                     <TableRow key={partition.partition_name}>
                       <TableCell className="font-mono text-sm">{partition.partition_name}</TableCell>
                       <TableCell className="text-right">{partition.row_count?.toLocaleString() || 0}</TableCell>
@@ -295,6 +306,29 @@ export function DatabaseHealthMonitor() {
                   ))}
                 </TableBody>
               </Table>
+              {partitionStats.length > 0 && (
+                <div className="mt-4 flex items-center justify-between">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                    disabled={currentPage === 1}
+                  >
+                    Sebelumnya
+                  </Button>
+                  <span className="text-sm text-muted-foreground">
+                    Halaman {currentPage} dari {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                    disabled={currentPage === totalPages}
+                  >
+                    Berikutnya
+                  </Button>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>

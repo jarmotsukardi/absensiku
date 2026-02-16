@@ -57,11 +57,13 @@ const emptyStaff: Partial<MarketingStaff> = {
 };
 
 export function MarketingStaffManager() {
+  const ITEMS_PER_PAGE = 10;
   const [staff, setStaff] = useState<MarketingStaff[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showDialog, setShowDialog] = useState(false);
   const [editingStaff, setEditingStaff] = useState<Partial<MarketingStaff> | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
   const getErrorMessage = (error: unknown) =>
     error instanceof Error ? error.message : "Unknown error";
 
@@ -152,6 +154,15 @@ export function MarketingStaffManager() {
       toast.error("Gagal menghapus: " + getErrorMessage(error));
     }
   };
+  const totalPages = Math.max(1, Math.ceil(staff.length / ITEMS_PER_PAGE));
+  const paginatedStaff = staff.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [staff.length]);
 
   if (isLoading) {
     return (
@@ -233,7 +244,7 @@ export function MarketingStaffManager() {
                 </TableCell>
               </TableRow>
             ) : (
-              staff.map((s) => (
+              paginatedStaff.map((s) => (
                 <TableRow key={s.id}>
                   <TableCell className="font-medium">{s.name}</TableCell>
                   <TableCell>
@@ -276,6 +287,29 @@ export function MarketingStaffManager() {
             )}
           </TableBody>
         </Table>
+        {staff.length > 0 && (
+          <div className="flex items-center justify-between px-4 py-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+              disabled={currentPage === 1}
+            >
+              Sebelumnya
+            </Button>
+            <span className="text-sm text-muted-foreground">
+              Halaman {currentPage} dari {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+              disabled={currentPage === totalPages}
+            >
+              Berikutnya
+            </Button>
+          </div>
+        )}
       </Card>
 
       {/* Edit Dialog */}

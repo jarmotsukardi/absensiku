@@ -167,6 +167,7 @@ const menuGroups: MenuGroup[] = [
   {
     label: "Pengaturan",
     items: [
+      { title: "Profil Saya", icon: UserCog, path: "/org/profile" },
       { title: "Pengaturan Umum", icon: Settings, path: "/org/settings" },
       { title: "Undangan Pegawai", icon: UserCheck, path: "/org/invitations" },
       { title: "Landing Page & Aplikasi", icon: LandmarkIcon, path: "/org/landing-settings" },

@@ -31,9 +31,11 @@ interface OrganizationEmployeesProps {
 }
 
 export function OrganizationEmployees({ tenantId }: OrganizationEmployeesProps) {
+  const ITEMS_PER_PAGE = 10;
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
 
   const fetchEmployees = useCallback(async () => {
     try {
@@ -79,6 +81,15 @@ export function OrganizationEmployees({ tenantId }: OrganizationEmployeesProps) 
       emp.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
       emp.nik.includes(searchQuery)
   );
+  const totalPages = Math.max(1, Math.ceil(filteredEmployees.length / ITEMS_PER_PAGE));
+  const paginatedEmployees = filteredEmployees.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, employees.length]);
 
   return (
     <Card>
@@ -136,7 +147,7 @@ export function OrganizationEmployees({ tenantId }: OrganizationEmployeesProps) 
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filteredEmployees.map((emp) => (
+                  paginatedEmployees.map((emp) => (
                     <TableRow key={emp.id}>
                       <TableCell>
                         <div>
@@ -182,6 +193,29 @@ export function OrganizationEmployees({ tenantId }: OrganizationEmployeesProps) 
                 )}
               </TableBody>
             </Table>
+          </div>
+        )}
+        {!isLoading && filteredEmployees.length > 0 && (
+          <div className="mt-4 flex items-center justify-between">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+              disabled={currentPage === 1}
+            >
+              Sebelumnya
+            </Button>
+            <span className="text-sm text-muted-foreground">
+              Halaman {currentPage} dari {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+              disabled={currentPage === totalPages}
+            >
+              Berikutnya
+            </Button>
           </div>
         )}
       </CardContent>

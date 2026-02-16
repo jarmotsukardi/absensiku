@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,48 +24,69 @@ export function BillingActivationOverlay({ tenantId, employeeId, billingMode }: 
       setHasPaid(true);
       setIsLoading(false);
     }
-  }, [billingMode, employeeId]);
+  }, [billingMode, employeeId, checkPaymentStatus]);
 
-  const checkPaymentStatus = async () => {
+  const checkPaymentStatus = useCallback(async () => {
+    const now = new Date();
     try {
-      // Check if there's an active subscription or paid invoice for this employee
-      const { data: subscription } = await supabase
+      // Check latest subscription snapshot first.
+      const { data: subscription, error: subscriptionError } = await supabase
         .from("subscriptions")
-        .select("status, end_date")
+        .select("status, end_date, grace_period_end")
         .eq("tenant_id", tenantId)
+        .order("updated_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
 
-      // For individual billing, check if overall subscription is active
-      // In a full implementation, you'd check per-employee payment status
+      if (subscriptionError) {
+        const logId = `ERR-BILLING-OVERLAY-SUB-${Date.now()}`;
+        console.error(`[${logId}] Failed to load subscription`, subscriptionError);
+        setHasPaid(false);
+        return;
+      }
+
+      if (subscription?.status === "expired" || subscription?.status === "cancelled") {
+        setHasPaid(false);
+        return;
+      }
+
       if (subscription?.status === "active" && subscription?.end_date) {
         const endDate = new Date(subscription.end_date);
-        if (endDate > new Date()) {
+        if (endDate > now) {
           setHasPaid(true);
           return;
         }
       }
 
-      // Check streak status - if reached target and within grace period, still accessible
-      const { data: streak } = await supabase
+      // Check streak status as fallback.
+      const { data: streak, error: streakError } = await supabase
         .from("stability_streaks")
         .select("status, reached_target, grace_period_end")
         .eq("tenant_id", tenantId)
         .maybeSingle();
 
+      if (streakError) {
+        const logId = `ERR-BILLING-OVERLAY-STREAK-${Date.now()}`;
+        console.error(`[${logId}] Failed to load streak`, streakError);
+        setHasPaid(false);
+        return;
+      }
+
       if (streak?.status === "tracking" || !streak?.reached_target) {
         setHasPaid(true); // Still in free/tracking period
       } else if (streak?.grace_period_end) {
-        setHasPaid(new Date(streak.grace_period_end) > new Date());
+        setHasPaid(new Date(streak.grace_period_end) > now);
       } else {
         setHasPaid(false);
       }
     } catch (error) {
-      console.error("Error checking payment:", error);
-      setHasPaid(true); // Default to allowing access on error
+      const logId = `ERR-BILLING-OVERLAY-UNEXPECTED-${Date.now()}`;
+      console.error(`[${logId}] Error checking payment`, error);
+      setHasPaid(false);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [tenantId]);
 
   if (isLoading || hasPaid !== false) return null;
 

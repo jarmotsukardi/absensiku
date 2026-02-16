@@ -60,6 +60,8 @@ interface AppCronLogRow {
   completed_at: string | null;
   error_message: string | null;
 }
+const RUNS_PER_PAGE = 20;
+const LOGS_PER_PAGE = 20;
 
 const isKnownCronInfraError = (message: string) => {
   const m = message.toLowerCase();
@@ -241,6 +243,8 @@ export default function CronJobsInfo() {
   const [query, setQuery] = useState("");
   const [isFallbackMode, setIsFallbackMode] = useState(false);
   const [partialLoadNote, setPartialLoadNote] = useState<string | null>(null);
+  const [runsPage, setRunsPage] = useState(1);
+  const [logsPage, setLogsPage] = useState(1);
 
   const filteredTasks = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -260,6 +264,18 @@ export default function CronJobsInfo() {
     const failedRuns = runs.filter((item) => (item.status || "").toLowerCase().includes("fail")).length;
     return { total, scheduled, active, failedRuns };
   }, [tasks, runs]);
+  const runsTotalPages = Math.max(1, Math.ceil(runs.length / RUNS_PER_PAGE));
+  const paginatedRuns = runs.slice((runsPage - 1) * RUNS_PER_PAGE, runsPage * RUNS_PER_PAGE);
+  const logsTotalPages = Math.max(1, Math.ceil(appLogs.length / LOGS_PER_PAGE));
+  const paginatedLogs = appLogs.slice((logsPage - 1) * LOGS_PER_PAGE, logsPage * LOGS_PER_PAGE);
+
+  useEffect(() => {
+    setRunsPage(1);
+  }, [runs.length]);
+
+  useEffect(() => {
+    setLogsPage(1);
+  }, [appLogs.length]);
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
@@ -276,7 +292,7 @@ export default function CronJobsInfo() {
           .limit(100),
       ]);
 
-      let warningRefs: string[] = [];
+      const warningRefs: string[] = [];
       let knownInfraIssue = false;
       let fallbackUsed = false;
 
@@ -572,7 +588,7 @@ export default function CronJobsInfo() {
                         </TableCell>
                       </TableRow>
                     ) : (
-                      runs.map((row) => (
+                      paginatedRuns.map((row) => (
                         <TableRow key={`${row.run_id}-${row.started_at}`}>
                           <TableCell className="font-medium">{row.job_name}</TableCell>
                           <TableCell>{statusBadge(row.status)}</TableCell>
@@ -587,6 +603,29 @@ export default function CronJobsInfo() {
                     )}
                   </TableBody>
                 </Table>
+                {runs.length > 0 && (
+                  <div className="mt-4 flex items-center justify-between">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setRunsPage((prev) => Math.max(1, prev - 1))}
+                      disabled={runsPage === 1}
+                    >
+                      Sebelumnya
+                    </Button>
+                    <span className="text-sm text-muted-foreground">
+                      Halaman {runsPage} dari {runsTotalPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setRunsPage((prev) => Math.min(runsTotalPages, prev + 1))}
+                      disabled={runsPage === runsTotalPages}
+                    >
+                      Berikutnya
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -621,7 +660,7 @@ export default function CronJobsInfo() {
                         </TableCell>
                       </TableRow>
                     ) : (
-                      appLogs.map((row) => (
+                      paginatedLogs.map((row) => (
                         <TableRow key={row.id}>
                           <TableCell className="font-medium">{row.job_name}</TableCell>
                           <TableCell>{statusBadge(row.status)}</TableCell>
@@ -640,6 +679,29 @@ export default function CronJobsInfo() {
                     )}
                   </TableBody>
                 </Table>
+                {appLogs.length > 0 && (
+                  <div className="mt-4 flex items-center justify-between">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setLogsPage((prev) => Math.max(1, prev - 1))}
+                      disabled={logsPage === 1}
+                    >
+                      Sebelumnya
+                    </Button>
+                    <span className="text-sm text-muted-foreground">
+                      Halaman {logsPage} dari {logsTotalPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setLogsPage((prev) => Math.min(logsTotalPages, prev + 1))}
+                      disabled={logsPage === logsTotalPages}
+                    >
+                      Berikutnya
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

@@ -468,6 +468,14 @@ serve(async (req) => {
       );
     }
 
+    // Enforce suspend/expiry policy before sending notifications so grace-expired tenants
+    // are processed near-real-time (same cadence as notifier cron).
+    const syncArgs = tenantFilter ? { p_tenant_id: tenantFilter } : {};
+    const { error: syncError } = await supabase.rpc("sync_streak_subscription_status", syncArgs);
+    if (syncError) {
+      logTraceError(traceId, "Failed to sync streak subscription status", syncError);
+    }
+
     let streakQuery = supabase
       .from("stability_streaks")
       .select("tenant_id, status, grace_period_end, reached_target, reached_target_at")
@@ -539,7 +547,7 @@ serve(async (req) => {
       );
     }
 
-    const invoices = (invoiceRes.data ?? []) as InvoiceRow[];
+    let invoices = (invoiceRes.data ?? []) as InvoiceRow[];
     const tenants = (tenantRes.data ?? []) as TenantRow[];
     const gatewayRows = (gatewayRes.data ?? []) as GatewaySettingRow[];
     const emailGateway = getGatewaySetting(gatewayRows, "email_gateway");
@@ -547,6 +555,36 @@ serve(async (req) => {
 
     const tenantMap = new Map(tenants.map((tenant) => [tenant.id, tenant]));
     const streakMap = new Map(streaks.map((streak) => [streak.tenant_id, streak]));
+
+    const tenantWithoutOpenInvoice = tenantIds.filter((tenantId) =>
+      !invoices.some((item) => item.tenant_id === tenantId),
+    );
+
+    if (!dryRun && tenantWithoutOpenInvoice.length > 0) {
+      for (const tenantId of tenantWithoutOpenInvoice) {
+        const { error: createInvoiceError } = await supabase.rpc("create_pending_streak_invoice", {
+          p_tenant_id: tenantId,
+        });
+        if (createInvoiceError) {
+          logTraceError(traceId, `Failed to auto-create pending streak invoice for tenant ${tenantId}`, createInvoiceError);
+        }
+      }
+
+      const { data: refreshedInvoices, error: refreshedInvoicesError } = await supabase
+        .from("invoices")
+        .select(
+          "id, tenant_id, invoice_number, gross_amount, due_date, issue_date, status, payment_method_type, invoice_url, package_name, notes, created_at",
+        )
+        .in("tenant_id", tenantIds)
+        .in("status", ["PENDING", "AWAITING_VERIFICATION"])
+        .order("created_at", { ascending: false });
+
+      if (refreshedInvoicesError) {
+        logTraceError(traceId, "Failed to reload invoices after auto-create", refreshedInvoicesError);
+      } else {
+        invoices = (refreshedInvoices ?? []) as InvoiceRow[];
+      }
+    }
 
     const candidateInvoices: InvoiceRow[] = [];
     for (const tenantId of tenantIds) {

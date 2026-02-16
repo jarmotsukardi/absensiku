@@ -35,6 +35,7 @@ const GOLONGAN_OPTIONS = [
   "III/a", "III/b", "III/c", "III/d",
   "IV/a", "IV/b", "IV/c", "IV/d", "IV/e",
 ];
+const ITEMS_PER_PAGE = 15;
 
 export default function ActiveEmployees() {
   const [employees, setEmployees] = useState<(Employee & { opd?: OPD; office?: Office })[]>([]);
@@ -43,6 +44,7 @@ export default function ActiveEmployees() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterOpd, setFilterOpd] = useState<string>("all");
+  const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [formData, setFormData] = useState({
@@ -208,6 +210,15 @@ export default function ActiveEmployees() {
     const matchesOpd = filterOpd === "all" || emp.opd_id === filterOpd;
     return matchesSearch && matchesOpd;
   });
+  const totalPages = Math.max(1, Math.ceil(filteredEmployees.length / ITEMS_PER_PAGE));
+  const paginatedEmployees = filteredEmployees.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterOpd, employees.length]);
 
   return (
     <SuperAdminLayout>
@@ -500,9 +511,9 @@ export default function ActiveEmployees() {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredEmployees.map((emp, index) => (
+                    paginatedEmployees.map((emp, index) => (
                       <TableRow key={emp.id}>
-                        <TableCell>{index + 1}</TableCell>
+                        <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
                         <TableCell className="font-mono text-sm">{emp.nip || "-"}</TableCell>
                         <TableCell className="font-medium">{emp.name}</TableCell>
                         <TableCell>{emp.opd?.code || "-"}</TableCell>
@@ -524,6 +535,29 @@ export default function ActiveEmployees() {
                 </TableBody>
               </Table>
             </div>
+            {!isLoading && filteredEmployees.length > 0 && (
+              <div className="mt-4 flex items-center justify-between">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                >
+                  Sebelumnya
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  Halaman {currentPage} dari {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  Berikutnya
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

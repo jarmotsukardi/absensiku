@@ -31,10 +31,12 @@ const CATEGORIES = [
 ];
 
 export default function WorkUnitsManagement() {
+  const ITEMS_PER_PAGE = 15;
   const [workUnits, setWorkUnits] = useState<WorkUnit[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingUnit, setEditingUnit] = useState<WorkUnit | null>(null);
   const [formData, setFormData] = useState({ name: "", opd_id: "", category: "" });
@@ -105,10 +107,19 @@ export default function WorkUnitsManagement() {
       unit.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       unit.opd?.code.toLowerCase().includes(searchTerm.toLowerCase())
   );
+  const totalPages = Math.max(1, Math.ceil(filteredUnits.length / ITEMS_PER_PAGE));
+  const paginatedUnits = filteredUnits.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
 
   const getCategoryLabel = (value: string) => {
     return CATEGORIES.find(c => c.value === value)?.label || value;
   };
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
 
   return (
     <SuperAdminLayout>
@@ -236,16 +247,16 @@ export default function WorkUnitsManagement() {
                         Memuat data...
                       </TableCell>
                     </TableRow>
-                  ) : filteredUnits.length === 0 ? (
+                  ) : paginatedUnits.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={6} className="text-center py-8">
                         Tidak ada data satuan kerja
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredUnits.map((unit, index) => (
+                    paginatedUnits.map((unit, index) => (
                       <TableRow key={unit.id}>
-                        <TableCell>{index + 1}</TableCell>
+                        <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
                         <TableCell className="font-medium">{unit.name}</TableCell>
                         <TableCell>{unit.opd?.code || "-"}</TableCell>
                         <TableCell>{getCategoryLabel(unit.category)}</TableCell>
@@ -277,6 +288,27 @@ export default function WorkUnitsManagement() {
                   )}
                 </TableBody>
               </Table>
+            </div>
+            <div className="flex items-center justify-center gap-2 mt-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+              >
+                Sebelumnya
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                Halaman {currentPage} dari {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+              >
+                Berikutnya
+              </Button>
             </div>
           </CardContent>
         </Card>

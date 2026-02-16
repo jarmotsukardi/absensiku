@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { withTimeout } from "@/lib/attendanceResilience";
 import { FloatingWhatsApp } from "@/components/common/FloatingWhatsApp";
+import { HardRequestNotifications } from "@/components/org/HardRequestNotifications";
 
 interface OrganizationLayoutProps {
   children: React.ReactNode;
@@ -27,6 +28,7 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
   const queryTenantId = searchParams.get("tenant_id");
   const [isLoading, setIsLoading] = useState(true);
   const [tenant, setTenant] = useState<TenantInfo | null>(null);
+  const [activeTenantId, setActiveTenantId] = useState<string | null>(null);
 
   const checkAccess = useCallback(async () => {
     try {
@@ -60,6 +62,7 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
       const isPegawai = roles?.some((r) => r.role === "pegawai");
       const resolvedTenantId = adminInstansiRole?.tenant_id || (isSuperAdmin ? queryTenantId : null);
       if (resolvedTenantId) {
+        setActiveTenantId(resolvedTenantId);
         try {
           sessionStorage.setItem(ORG_ACTIVE_TENANT_STORAGE_KEY, resolvedTenantId);
         } catch {
@@ -93,6 +96,7 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
       }
 
       if (isSuperAdmin) {
+        setActiveTenantId(null);
         try {
           sessionStorage.removeItem(ORG_ACTIVE_TENANT_STORAGE_KEY);
         } catch {
@@ -112,6 +116,7 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
         navigate("/employee/dashboard", { replace: true });
       }
     } catch (error) {
+      setActiveTenantId(null);
       try {
         sessionStorage.removeItem(ORG_ACTIVE_TENANT_STORAGE_KEY);
       } catch {
@@ -187,6 +192,7 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
         panelTitle="Dukungan Admin"
         panelSubtitle="Layanan pelanggan & bantuan teknis"
       />
+      <HardRequestNotifications tenantId={activeTenantId} />
     </SidebarProvider>
   );
 }

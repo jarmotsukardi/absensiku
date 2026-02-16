@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useFinancialLedger } from "@/hooks/useBilling";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,12 +34,14 @@ const formatCurrency = (amount: number) => {
 };
 
 export function FinancialReport() {
+  const ITEMS_PER_PAGE = 10;
   const [dateRange, setDateRange] = useState({
     start: format(startOfMonth(new Date()), "yyyy-MM-dd"),
     end: format(endOfMonth(new Date()), "yyyy-MM-dd"),
   });
 
   const { summary, transactions, isLoading, refetch } = useFinancialLedger(dateRange);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const handleQuickFilter = (months: number) => {
     const targetDate = months === 0 ? new Date() : subMonths(new Date(), months);
@@ -71,6 +73,14 @@ export function FinancialReport() {
     a.download = `laporan-keuangan-${dateRange.start}-${dateRange.end}.csv`;
     a.click();
   };
+  const totalPages = Math.max(1, Math.ceil(transactions.length / ITEMS_PER_PAGE));
+  const paginatedTransactions = transactions.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [dateRange.start, dateRange.end, transactions.length]);
 
   if (isLoading) {
     return (
@@ -211,7 +221,7 @@ export function FinancialReport() {
                   </TableCell>
                 </TableRow>
               ) : (
-                transactions.map((tx) => (
+                paginatedTransactions.map((tx) => (
                   <TableRow key={tx.id}>
                     <TableCell>
                       {format(new Date(tx.transaction_date), "dd MMM yyyy", { locale: id })}
@@ -243,6 +253,29 @@ export function FinancialReport() {
               )}
             </TableBody>
           </Table>
+          {transactions.length > 0 && (
+            <div className="mt-4 flex items-center justify-between px-6 pb-4">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                disabled={currentPage === 1}
+              >
+                Sebelumnya
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                Halaman {currentPage} dari {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                disabled={currentPage === totalPages}
+              >
+                Berikutnya
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

@@ -42,12 +42,14 @@ const formatCurrency = (amount: number) => {
 };
 
 export function SubscriptionPackagesManager() {
+  const ITEMS_PER_PAGE = 10;
   const { packages, isLoading, createPackage, updatePackage, deletePackage } = useSubscriptionPackages();
   const { settings, isLoading: isLoadingSettings, getSetting } = useBillingSettings();
   const [showDialog, setShowDialog] = useState(false);
   const [editingPackage, setEditingPackage] = useState<Partial<SubscriptionPackage> | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
 
   // Global billing settings
   const globalPrice = getSetting("price_per_employee")?.amount || 15000;
@@ -134,6 +136,15 @@ export function SubscriptionPackagesManager() {
 
   // Check if any package is out of sync
   const outOfSyncCount = packages.filter(p => p.base_price_per_month !== globalPrice).length;
+  const totalPages = Math.max(1, Math.ceil(packages.length / ITEMS_PER_PAGE));
+  const paginatedPackages = packages.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [packages.length]);
 
   if (isLoading || isLoadingSettings) {
     return (
@@ -214,7 +225,7 @@ export function SubscriptionPackagesManager() {
                 </TableCell>
               </TableRow>
             ) : (
-              packages.map((pkg) => {
+              paginatedPackages.map((pkg) => {
                 const subtotal = calculateSubtotal(pkg);
                 const { total } = calculateWithVat(subtotal);
                 const isOutOfSync = pkg.base_price_per_month !== globalPrice;
@@ -273,6 +284,29 @@ export function SubscriptionPackagesManager() {
             )}
           </TableBody>
         </Table>
+        {packages.length > 0 && (
+          <div className="flex items-center justify-between px-4 py-3">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+              disabled={currentPage === 1}
+            >
+              Sebelumnya
+            </Button>
+            <span className="text-sm text-muted-foreground">
+              Halaman {currentPage} dari {totalPages}
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+              disabled={currentPage === totalPages}
+            >
+              Berikutnya
+            </Button>
+          </div>
+        )}
       </Card>
 
       {/* Edit/Create Dialog */}

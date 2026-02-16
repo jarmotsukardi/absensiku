@@ -44,6 +44,7 @@ type Organization = Tables<"tenants"> & {
 interface OrganizationListProps {
   filterType?: string;
 }
+const ITEMS_PER_PAGE = 10;
 
 const orgTypeIcons: Record<string, React.ComponentType<{ className?: string }>> = {
   pemerintah_daerah: Landmark,
@@ -64,6 +65,7 @@ export function OrganizationList({ filterType }: OrganizationListProps) {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
 
   const fetchOrganizations = useCallback(async () => {
     try {
@@ -137,6 +139,15 @@ export function OrganizationList({ filterType }: OrganizationListProps) {
       org.code.toLowerCase().includes(searchQuery.toLowerCase()) ||
       (org.email && org.email.toLowerCase().includes(searchQuery.toLowerCase()))
   );
+  const totalPages = Math.max(1, Math.ceil(filteredOrganizations.length / ITEMS_PER_PAGE));
+  const paginatedOrganizations = filteredOrganizations.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filterType, organizations.length]);
 
   const getSubscriptionBadge = (status: string) => {
     const variants: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
@@ -205,7 +216,7 @@ export function OrganizationList({ filterType }: OrganizationListProps) {
                 </TableCell>
               </TableRow>
             ) : (
-              filteredOrganizations.map((org) => {
+              paginatedOrganizations.map((org) => {
                 const OrgIcon = orgTypeIcons[org.organization_type || "perusahaan"] || Briefcase;
                 return (
                   <TableRow key={org.id}>
@@ -282,6 +293,29 @@ export function OrganizationList({ filterType }: OrganizationListProps) {
           </TableBody>
         </Table>
       </div>
+      {filteredOrganizations.length > 0 && (
+        <div className="flex items-center justify-between">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+            disabled={currentPage === 1}
+          >
+            Sebelumnya
+          </Button>
+          <span className="text-sm text-muted-foreground">
+            Halaman {currentPage} dari {totalPages}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+            disabled={currentPage === totalPages}
+          >
+            Berikutnya
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

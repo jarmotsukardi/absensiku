@@ -383,9 +383,10 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
           event: '*',
           schema: 'public',
           table: 'notifications',
-          filter: `user_id=eq.${user.id}`
         },
-        () => {
+        (payload) => {
+          const row = payload.new as { user_id?: string | null } | null;
+          if (!row || row.user_id !== user.id) return;
           fetchUnreadNotificationCount();
         }
       )

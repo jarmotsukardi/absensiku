@@ -190,6 +190,9 @@ const STREAK_GLOSSARY: StreakGlossaryItem[] = [
   { term: "Payment Logs", description: "Riwayat aktivitas pembayaran untuk audit dan monitoring tindak lanjut.", reference: "Tab: `Payment Logs` pada halaman ini" },
   { term: "Regression Test Unpaid Grace", description: "Skenario uji otomatis untuk memastikan tenant non-bayar benar-benar masuk `expired` setelah grace berakhir.", reference: "Script: `npm run streak:test-grace-expired`" },
 ];
+const STREAK_ITEMS_PER_PAGE = 10;
+const PAYMENTS_PER_PAGE = 10;
+const GLOSSARY_PER_PAGE = 10;
 
 export default function StreakMonitoring() {
   const [streaks, setStreaks] = useState<StreakItem[]>([]);
@@ -199,6 +202,11 @@ export default function StreakMonitoring() {
   const [activeTab, setActiveTab] = useState("active");
   const [streakThreshold, setStreakThreshold] = useState(30);
   const [glossaryQuery, setGlossaryQuery] = useState("");
+  const [activePage, setActivePage] = useState(1);
+  const [nearPage, setNearPage] = useState(1);
+  const [suspendedPage, setSuspendedPage] = useState(1);
+  const [paymentsPage, setPaymentsPage] = useState(1);
+  const [glossaryPage, setGlossaryPage] = useState(1);
 
   useEffect(() => {
     fetchStreaks();
@@ -307,48 +315,113 @@ export default function StreakMonitoring() {
       item.reference.toLowerCase().includes(q)
     );
   });
+  const activeTotalPages = Math.max(1, Math.ceil(activeStreaks.length / STREAK_ITEMS_PER_PAGE));
+  const paginatedActiveStreaks = activeStreaks.slice(
+    (activePage - 1) * STREAK_ITEMS_PER_PAGE,
+    activePage * STREAK_ITEMS_PER_PAGE
+  );
+  const nearTotalPages = Math.max(1, Math.ceil(nearSuspension.length / STREAK_ITEMS_PER_PAGE));
+  const paginatedNearSuspension = nearSuspension.slice(
+    (nearPage - 1) * STREAK_ITEMS_PER_PAGE,
+    nearPage * STREAK_ITEMS_PER_PAGE
+  );
+  const suspendedTotalPages = Math.max(1, Math.ceil(suspended.length / STREAK_ITEMS_PER_PAGE));
+  const paginatedSuspended = suspended.slice(
+    (suspendedPage - 1) * STREAK_ITEMS_PER_PAGE,
+    suspendedPage * STREAK_ITEMS_PER_PAGE
+  );
+  const paymentsTotalPages = Math.max(1, Math.ceil(payments.length / PAYMENTS_PER_PAGE));
+  const paginatedPayments = payments.slice(
+    (paymentsPage - 1) * PAYMENTS_PER_PAGE,
+    paymentsPage * PAYMENTS_PER_PAGE
+  );
+  const glossaryTotalPages = Math.max(1, Math.ceil(filteredGlossary.length / GLOSSARY_PER_PAGE));
+  const paginatedGlossary = filteredGlossary.slice(
+    (glossaryPage - 1) * GLOSSARY_PER_PAGE,
+    glossaryPage * GLOSSARY_PER_PAGE
+  );
 
-  const renderTable = (data: StreakItem[]) => (
+  useEffect(() => {
+    setActivePage(1);
+    setNearPage(1);
+    setSuspendedPage(1);
+  }, [searchQuery, streaks.length]);
+
+  useEffect(() => {
+    setPaymentsPage(1);
+  }, [payments.length]);
+
+  useEffect(() => {
+    setGlossaryPage(1);
+  }, [glossaryQuery]);
+
+  const renderTable = (
+    data: StreakItem[],
+    currentPage: number,
+    totalPages: number,
+    onPageChange: React.Dispatch<React.SetStateAction<number>>
+  ) => (
     data.length === 0 ? (
       <p className="text-center text-muted-foreground py-8">Tidak ada data</p>
     ) : (
-      <div className="rounded-md border overflow-x-auto">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Organisasi</TableHead>
-              <TableHead>Streak</TableHead>
-              <TableHead>Progress</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Aktivitas Terakhir</TableHead>
-              <TableHead>Grace Period</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {data.map(s => (
-              <TableRow key={s.id}>
-                <TableCell className="font-medium">{s.tenants?.name || "-"}</TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-1">
-                    <Flame className={cn("w-4 h-4", s.streak_count >= Math.max(safeThreshold - 5, 1) ? "text-orange-500" : "text-muted-foreground")} />
-                    <span className="font-bold">{s.streak_count}</span>
-                    <span className="text-xs text-muted-foreground">/{safeThreshold}</span>
-                  </div>
-                </TableCell>
-                <TableCell className="min-w-[120px]">
-                  <Progress value={Math.min((s.streak_count / safeThreshold) * 100, 100)} className="h-2" />
-                </TableCell>
-                <TableCell>{statusBadge(s)}</TableCell>
-                <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                  {s.last_activity_date ? format(new Date(s.last_activity_date), "dd MMM yyyy", { locale: idLocale }) : "-"}
-                </TableCell>
-                <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                  {s.grace_period_end ? format(new Date(s.grace_period_end), "dd MMM yyyy", { locale: idLocale }) : "-"}
-                </TableCell>
+      <div>
+        <div className="rounded-md border overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Organisasi</TableHead>
+                <TableHead>Streak</TableHead>
+                <TableHead>Progress</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Aktivitas Terakhir</TableHead>
+                <TableHead>Grace Period</TableHead>
               </TableRow>
-            ))}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {data.map(s => (
+                <TableRow key={s.id}>
+                  <TableCell className="font-medium">{s.tenants?.name || "-"}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-1">
+                      <Flame className={cn("w-4 h-4", s.streak_count >= Math.max(safeThreshold - 5, 1) ? "text-orange-500" : "text-muted-foreground")} />
+                      <span className="font-bold">{s.streak_count}</span>
+                      <span className="text-xs text-muted-foreground">/{safeThreshold}</span>
+                    </div>
+                  </TableCell>
+                  <TableCell className="min-w-[120px]">
+                    <Progress value={Math.min((s.streak_count / safeThreshold) * 100, 100)} className="h-2" />
+                  </TableCell>
+                  <TableCell>{statusBadge(s)}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                    {s.last_activity_date ? format(new Date(s.last_activity_date), "dd MMM yyyy", { locale: idLocale }) : "-"}
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
+                    {s.grace_period_end ? format(new Date(s.grace_period_end), "dd MMM yyyy", { locale: idLocale }) : "-"}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+        <div className="mt-4 flex items-center justify-between">
+          <button
+            className="inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm disabled:opacity-50"
+            onClick={() => onPageChange((prev) => Math.max(1, prev - 1))}
+            disabled={currentPage === 1}
+          >
+            Sebelumnya
+          </button>
+          <span className="text-sm text-muted-foreground">
+            Halaman {currentPage} dari {totalPages}
+          </span>
+          <button
+            className="inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm disabled:opacity-50"
+            onClick={() => onPageChange((prev) => Math.min(totalPages, prev + 1))}
+            disabled={currentPage === totalPages}
+          >
+            Berikutnya
+          </button>
+        </div>
       </div>
     )
   );
@@ -408,7 +481,7 @@ export default function StreakMonitoring() {
               </p>
             </CardHeader>
             <CardContent>
-              {isLoading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : renderTable(activeStreaks)}
+              {isLoading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : renderTable(paginatedActiveStreaks, activePage, activeTotalPages, setActivePage)}
             </CardContent>
           </Card>
         </TabsContent>
@@ -423,7 +496,7 @@ export default function StreakMonitoring() {
               </p>
             </CardHeader>
             <CardContent>
-              {isLoading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : renderTable(nearSuspension)}
+              {isLoading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : renderTable(paginatedNearSuspension, nearPage, nearTotalPages, setNearPage)}
             </CardContent>
           </Card>
         </TabsContent>
@@ -438,7 +511,7 @@ export default function StreakMonitoring() {
               </p>
             </CardHeader>
             <CardContent>
-              {isLoading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : renderTable(suspended)}
+              {isLoading ? <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div> : renderTable(paginatedSuspended, suspendedPage, suspendedTotalPages, setSuspendedPage)}
             </CardContent>
           </Card>
         </TabsContent>
@@ -468,7 +541,7 @@ export default function StreakMonitoring() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {payments.map(p => (
+                      {paginatedPayments.map(p => (
                         <TableRow key={p.id}>
                           <TableCell className="font-medium">{p.tenants?.name || "-"}</TableCell>
                           <TableCell>Rp {Number(p.amount).toLocaleString("id-ID")}</TableCell>
@@ -485,6 +558,27 @@ export default function StreakMonitoring() {
                       ))}
                     </TableBody>
                   </Table>
+                </div>
+              )}
+              {payments.length > 0 && (
+                <div className="mt-4 flex items-center justify-between">
+                  <button
+                    className="inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm disabled:opacity-50"
+                    onClick={() => setPaymentsPage((prev) => Math.max(1, prev - 1))}
+                    disabled={paymentsPage === 1}
+                  >
+                    Sebelumnya
+                  </button>
+                  <span className="text-sm text-muted-foreground">
+                    Halaman {paymentsPage} dari {paymentsTotalPages}
+                  </span>
+                  <button
+                    className="inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm disabled:opacity-50"
+                    onClick={() => setPaymentsPage((prev) => Math.min(paymentsTotalPages, prev + 1))}
+                    disabled={paymentsPage === paymentsTotalPages}
+                  >
+                    Berikutnya
+                  </button>
                 </div>
               )}
             </CardContent>
@@ -553,7 +647,7 @@ export default function StreakMonitoring() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredGlossary.map((item) => (
+                    {paginatedGlossary.map((item) => (
                       <TableRow key={item.term}>
                         <TableCell className="font-medium">{item.term}</TableCell>
                         <TableCell className="text-sm text-muted-foreground">{item.description}</TableCell>
@@ -562,6 +656,27 @@ export default function StreakMonitoring() {
                     ))}
                   </TableBody>
                 </Table>
+              </div>
+            )}
+            {filteredGlossary.length > 0 && (
+              <div className="mt-4 flex items-center justify-between">
+                <button
+                  className="inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm disabled:opacity-50"
+                  onClick={() => setGlossaryPage((prev) => Math.max(1, prev - 1))}
+                  disabled={glossaryPage === 1}
+                >
+                  Sebelumnya
+                </button>
+                <span className="text-sm text-muted-foreground">
+                  Halaman {glossaryPage} dari {glossaryTotalPages}
+                </span>
+                <button
+                  className="inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm disabled:opacity-50"
+                  onClick={() => setGlossaryPage((prev) => Math.min(glossaryTotalPages, prev + 1))}
+                  disabled={glossaryPage === glossaryTotalPages}
+                >
+                  Berikutnya
+                </button>
               </div>
             )}
           </CardContent>

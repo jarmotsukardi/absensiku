@@ -18,6 +18,7 @@ interface AbsenceLimit {
   warning_type: string;
   is_active: boolean;
 }
+const ITEMS_PER_PAGE = 10;
 
 export default function AbsenceLimitsManagement() {
   const [limits, setLimits] = useState<AbsenceLimit[]>([
@@ -28,6 +29,7 @@ export default function AbsenceLimitsManagement() {
     { id: "5", max_days: 20, description: "Pemberhentian sementara", warning_type: "pemberhentian", is_active: true },
   ]);
   const [isLoading, setIsLoading] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingLimit, setEditingLimit] = useState<AbsenceLimit | null>(null);
   const [formData, setFormData] = useState({
@@ -89,6 +91,15 @@ export default function AbsenceLimitsManagement() {
       default: return "";
     }
   };
+  const totalPages = Math.max(1, Math.ceil(limits.length / ITEMS_PER_PAGE));
+  const paginatedLimits = limits.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [limits.length]);
 
   return (
     <SuperAdminLayout>
@@ -200,9 +211,9 @@ export default function AbsenceLimitsManagement() {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    limits.map((limit, index) => (
+                    paginatedLimits.map((limit, index) => (
                       <TableRow key={limit.id}>
-                        <TableCell>{index + 1}</TableCell>
+                        <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
                         <TableCell className="font-bold text-lg">{limit.max_days} hari</TableCell>
                         <TableCell>
                           <Badge className={getWarningBadgeColor(limit.warning_type)}>
@@ -239,6 +250,29 @@ export default function AbsenceLimitsManagement() {
                 </TableBody>
               </Table>
             </div>
+            {!isLoading && limits.length > 0 && (
+              <div className="mt-4 flex items-center justify-between">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                >
+                  Sebelumnya
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  Halaman {currentPage} dari {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  Berikutnya
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

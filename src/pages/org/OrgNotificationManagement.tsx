@@ -77,6 +77,8 @@ export default function OrgNotificationManagement() {
   const [filterType, setFilterType] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
+  const [readCount, setReadCount] = useState(0);
+  const [unreadCount, setUnreadCount] = useState(0);
   
   // Form state
   const [title, setTitle] = useState("");
@@ -174,48 +176,36 @@ export default function OrgNotificationManagement() {
     setWorkUnitOptions((workUnitsRes.data || []) as WorkUnitOption[]);
   }, []);
 
-  const resolveNotifiableEmployees = useCallback(async (baseEmployees: Employee[]): Promise<Employee[]> => {
-    if (baseEmployees.length === 0) return [];
+  const applyNotificationFilters = useCallback(
+    <T,>(query: T) => {
+      let nextQuery = query as T & {
+        eq: (column: string, value: unknown) => typeof query;
+        or: (filters: string) => typeof query;
+      };
 
-    const userIds = baseEmployees.map((e) => e.user_id).filter(Boolean) as string[];
-    let roleRows: Array<{ user_id: string; role: string }> = [];
-    if (userIds.length > 0) {
-      const { data: fetchedRoles, error: roleError } = await supabase
-        .from("user_roles")
-        .select("user_id, role")
-        .in("user_id", userIds)
-        .in("role", ["pegawai", "atasan", "admin_instansi", "super_admin"]);
-      if (roleError) throw roleError;
-      roleRows = (fetchedRoles || []) as Array<{ user_id: string; role: string }>;
-    }
+      if (filterType !== "all") {
+        nextQuery = nextQuery.eq("type", filterType) as typeof nextQuery;
+      }
+      if (searchQuery.trim()) {
+        const escaped = searchQuery.trim().replace(/[%_]/g, "\\$&");
+        nextQuery = nextQuery.or(`title.ilike.%${escaped}%,message.ilike.%${escaped}%`) as typeof nextQuery;
+      }
 
-    const roleMap = new Map<string, Set<string>>();
-    roleRows.forEach((row) => {
-      if (!row.user_id) return;
-      if (!roleMap.has(row.user_id)) roleMap.set(row.user_id, new Set<string>());
-      roleMap.get(row.user_id)!.add(row.role);
-    });
-
-    // Legacy-safe:
-    // - include: pegawai / atasan / belum punya role (data lama)
-    // - exclude: admin_instansi / super_admin tanpa role pegawai/atasan
-    return baseEmployees.filter((e) => {
-      if (!e.user_id) return false;
-      const roles = e.user_id ? roleMap.get(e.user_id) : undefined;
-      if (!roles || roles.size === 0) return true;
-      if (roles.has("pegawai") || roles.has("atasan")) return true;
-      if (roles.has("admin_instansi") || roles.has("super_admin")) return false;
-      return true;
-    });
-  }, []);
+      return nextQuery;
+    },
+    [filterType, searchQuery]
+  );
 
   const fetchNotifications = useCallback(async (tid: string) => {
     try {
     const activeEmployees = await fetchActiveEmployees(tid);
-    const recipients = await resolveNotifiableEmployees(activeEmployees);
+    const recipients = activeEmployees.filter((employee) => !!employee.user_id);
 
     if (!recipients || recipients.length === 0) {
       setNotifications([]);
+      setTotalCount(0);
+      setReadCount(0);
+      setUnreadCount(0);
       return;
     }
 
@@ -226,30 +216,48 @@ export default function OrgNotificationManagement() {
     }
     const userNameMap = new Map(recipients.map(e => [e.user_id, e.name]));
 
-    let query = supabase
-      .from('notifications')
-      .select('*', { count: "exact" })
-      .in('user_id', userIds)
-      .order('created_at', { ascending: false })
-      .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
+    const pagedQuery = applyNotificationFilters(
+      supabase
+        .from('notifications')
+        .select('*', { count: "exact" })
+        .in('user_id', userIds)
+        .order('created_at', { ascending: false })
+        .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1)
+    );
 
-    if (filterType !== "all") {
-      query = query.eq("type", filterType);
-    }
-    if (searchQuery.trim()) {
-      const escaped = searchQuery.trim().replace(/[%_]/g, "\\$&");
-      query = query.or(`title.ilike.%${escaped}%,message.ilike.%${escaped}%`);
-    }
+    const readCountQuery = applyNotificationFilters(
+      supabase
+        .from("notifications")
+        .select("id", { count: "exact", head: true })
+        .in("user_id", userIds)
+        .eq("is_read", true)
+    );
 
-    const { data, error, count } = await query;
+    const unreadCountQuery = applyNotificationFilters(
+      supabase
+        .from("notifications")
+        .select("id", { count: "exact", head: true })
+        .in("user_id", userIds)
+        .eq("is_read", false)
+    );
+
+    const [{ data, error, count }, readRes, unreadRes] = await Promise.all([
+      pagedQuery,
+      readCountQuery,
+      unreadCountQuery,
+    ]);
 
     if (!error && data) {
+      if (readRes.error) throw readRes.error;
+      if (unreadRes.error) throw unreadRes.error;
       const enriched = data.map(n => ({
         ...n,
         employee_name: userNameMap.get(n.user_id) || "Unknown"
       }));
       setNotifications(enriched);
       setTotalCount(count || 0);
+      setReadCount(readRes.count || 0);
+      setUnreadCount(unreadRes.count || 0);
       return;
     }
 
@@ -258,22 +266,26 @@ export default function OrgNotificationManagement() {
       const errorRef = reportError(error, "org.notifications.fetch_notifications", { tenant_id: tid });
       toast.error(appendErrorReference("Gagal memuat notifikasi organisasi", errorRef));
       setNotifications([]);
+      setTotalCount(0);
+      setReadCount(0);
+      setUnreadCount(0);
     }
-  }, [currentPage, fetchActiveEmployees, filterType, resolveNotifiableEmployees, searchQuery]);
+  }, [applyNotificationFilters, currentPage, fetchActiveEmployees]);
 
   const fetchEmployees = useCallback(async (tid: string) => {
     try {
       const activeEmployees = await fetchActiveEmployees(tid);
       setEmployees(activeEmployees);
-      const recipients = await resolveNotifiableEmployees(activeEmployees);
-      setNotifiableEmployeeIds(recipients.map((emp) => emp.id));
+      setNotifiableEmployeeIds(
+        activeEmployees.filter((employee) => !!employee.user_id).map((employee) => employee.id)
+      );
     } catch (error) {
       const errorRef = reportError(error, "org.notifications.fetch_employees", { tenant_id: tid });
       toast.error(appendErrorReference("Gagal memuat data pegawai", errorRef));
       setEmployees([]);
       setNotifiableEmployeeIds([]);
     }
-  }, [fetchActiveEmployees, resolveNotifiableEmployees]);
+  }, [fetchActiveEmployees]);
 
   const fetchTenantAndData = useCallback(async () => {
     try {
@@ -431,6 +443,7 @@ export default function OrgNotificationManagement() {
 
   const deleteNotification = async (id: string) => {
     try {
+      const deletedNotification = notifications.find((notification) => notification.id === id) || null;
       const { error } = await supabase
         .from('notifications')
         .delete()
@@ -439,6 +452,17 @@ export default function OrgNotificationManagement() {
 
       toast.success("Notifikasi berhasil dihapus");
       setNotifications(prev => prev.filter(n => n.id !== id));
+      setTotalCount((prev) => Math.max(0, prev - 1));
+      if (deletedNotification) {
+        if (deletedNotification.is_read) {
+          setReadCount((prev) => Math.max(0, prev - 1));
+        } else {
+          setUnreadCount((prev) => Math.max(0, prev - 1));
+        }
+      }
+      if (notifications.length === 1 && currentPage > 1) {
+        setCurrentPage((prev) => prev - 1);
+      }
     } catch (error) {
       const errorRef = reportError(error, "org.notifications.delete", { notification_id: id, tenant_id: tenantId });
       toast.error(appendErrorReference("Gagal menghapus notifikasi", errorRef));
@@ -473,8 +497,8 @@ export default function OrgNotificationManagement() {
 
   const stats = {
     total: totalCount,
-    read: notifications.filter(n => n.is_read).length,
-    unread: notifications.filter(n => !n.is_read).length,
+    read: readCount,
+    unread: unreadCount,
   };
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
