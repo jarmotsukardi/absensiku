@@ -2,18 +2,23 @@ import { useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
+import { Button } from "@/components/ui/button";
+import { useNavigate } from "react-router-dom";
 import { 
   Building2, 
   Users, 
   CreditCard, 
-  TrendingUp, 
-  TrendingDown,
   AlertTriangle,
   CheckCircle2,
   Clock,
   Activity,
   ArrowUpRight,
-  ArrowDownRight
+  ArrowDownRight,
+  Flame,
+  MessageSquare,
+  ShieldAlert,
+  CalendarClock,
+  Wrench
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -26,9 +31,17 @@ interface Stats {
   expiredSubscriptions: number;
   todayAttendance: number;
   pendingLeaves: number;
+  readyForInvoicing: number;
+  pendingInvoices: number;
+  overdueInvoices: number;
+  failedCronRuns24h: number;
+  openFeedbacks: number;
+  openBugs: number;
+  lockedOtpUsers: number;
 }
 
 export function DashboardWidgets() {
+  const navigate = useNavigate();
   const [stats, setStats] = useState<Stats>({
     totalTenants: 0,
     activeTenants: 0,
@@ -38,6 +51,13 @@ export function DashboardWidgets() {
     expiredSubscriptions: 0,
     todayAttendance: 0,
     pendingLeaves: 0,
+    readyForInvoicing: 0,
+    pendingInvoices: 0,
+    overdueInvoices: 0,
+    failedCronRuns24h: 0,
+    openFeedbacks: 0,
+    openBugs: 0,
+    lockedOtpUsers: 0,
   });
   const [isLoading, setIsLoading] = useState(true);
 
@@ -48,6 +68,8 @@ export function DashboardWidgets() {
   const fetchStats = async () => {
     try {
       const today = new Date().toISOString().split('T')[0];
+      const nowIso = new Date().toISOString();
+      const dayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
       const [
         tenantsRes,
@@ -58,6 +80,14 @@ export function DashboardWidgets() {
         expiredSubsRes,
         attendanceRes,
         leavesRes,
+        readyForInvoicingRes,
+        pendingInvoicesRes,
+        awaitingInvoicesRes,
+        overdueInvoicesRes,
+        failedCronRunsRes,
+        openFeedbackRes,
+        openBugsRes,
+        lockedOtpRes,
       ] = await Promise.all([
         supabase.from("tenants").select("id", { count: "exact" }),
         supabase.from("tenants").select("id", { count: "exact" }).eq("is_active", true),
@@ -67,6 +97,22 @@ export function DashboardWidgets() {
         supabase.from("subscriptions").select("id", { count: "exact" }).eq("status", "expired"),
         supabase.from("attendance_records_partitioned").select("id", { count: "exact" }).eq("date", today),
         supabase.from("leave_requests").select("id", { count: "exact" }).eq("status", "menunggu"),
+        supabase.from("stability_streaks").select("id", { count: "exact" }).eq("status", "ready_for_invoicing"),
+        supabase.from("invoices").select("id", { count: "exact" }).eq("status", "PENDING"),
+        supabase.from("invoices").select("id", { count: "exact" }).eq("status", "AWAITING_VERIFICATION"),
+        supabase
+          .from("invoices")
+          .select("id", { count: "exact" })
+          .in("status", ["PENDING", "AWAITING_VERIFICATION"])
+          .lt("due_date", today),
+        supabase
+          .from("cron_job_logs")
+          .select("id", { count: "exact" })
+          .gte("started_at", dayAgoIso)
+          .or("status.ilike.%fail%,status.ilike.%error%"),
+        supabase.from("feedback_reports").select("id", { count: "exact" }).eq("status", "open"),
+        supabase.from("feedback_reports").select("id", { count: "exact" }).eq("status", "open").eq("feedback_type", "bug"),
+        supabase.from("rate_limit_otp").select("id", { count: "exact" }).gt("locked_until", nowIso),
       ]);
 
       setStats({
@@ -78,6 +124,13 @@ export function DashboardWidgets() {
         expiredSubscriptions: expiredSubsRes.count || 0,
         todayAttendance: attendanceRes.count || 0,
         pendingLeaves: leavesRes.count || 0,
+        readyForInvoicing: readyForInvoicingRes.count || 0,
+        pendingInvoices: (pendingInvoicesRes.count || 0) + (awaitingInvoicesRes.count || 0),
+        overdueInvoices: overdueInvoicesRes.count || 0,
+        failedCronRuns24h: failedCronRunsRes.count || 0,
+        openFeedbacks: openFeedbackRes.count || 0,
+        openBugs: openBugsRes.count || 0,
+        lockedOtpUsers: lockedOtpRes.count || 0,
       });
     } catch (error) {
       console.error("Error fetching stats:", error);
@@ -183,7 +236,7 @@ export function DashboardWidgets() {
       </div>
 
       {/* Secondary Stats */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {/* Subscription Overview */}
         <Card>
           <CardHeader>
@@ -301,6 +354,98 @@ export function DashboardWidgets() {
               <span className="text-sm">Storage</span>
               <Badge variant="default" className="bg-green-500">Online</Badge>
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Streak & Billing */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Streak & Billing</CardTitle>
+            <CardDescription>Status billing berbasis streak</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+              <span className="text-sm flex items-center gap-2">
+                <Flame className="h-4 w-4 text-orange-500" />
+                Ready for invoicing
+              </span>
+              <Badge variant="outline">{stats.readyForInvoicing}</Badge>
+            </div>
+            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+              <span className="text-sm flex items-center gap-2">
+                <CreditCard className="h-4 w-4 text-blue-500" />
+                Invoice pending
+              </span>
+              <Badge variant="outline">{stats.pendingInvoices}</Badge>
+            </div>
+            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+              <span className="text-sm flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-red-500" />
+                Invoice overdue
+              </span>
+              <Badge variant={stats.overdueInvoices > 0 ? "destructive" : "outline"}>{stats.overdueInvoices}</Badge>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Operations & Security */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Operasional & Security</CardTitle>
+            <CardDescription>Monitoring cron, feedback, dan lock login</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+              <span className="text-sm flex items-center gap-2">
+                <CalendarClock className="h-4 w-4 text-amber-500" />
+                Cron gagal (24 jam)
+              </span>
+              <Badge variant={stats.failedCronRuns24h > 0 ? "destructive" : "outline"}>{stats.failedCronRuns24h}</Badge>
+            </div>
+            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+              <span className="text-sm flex items-center gap-2">
+                <MessageSquare className="h-4 w-4 text-indigo-500" />
+                Feedback terbuka
+              </span>
+              <Badge variant="outline">{stats.openFeedbacks} ({stats.openBugs} bug)</Badge>
+            </div>
+            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+              <span className="text-sm flex items-center gap-2">
+                <ShieldAlert className="h-4 w-4 text-red-500" />
+                OTP lock aktif
+              </span>
+              <Badge variant={stats.lockedOtpUsers > 0 ? "destructive" : "outline"}>{stats.lockedOtpUsers}</Badge>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Quick Actions */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Aksi Cepat Super Admin</CardTitle>
+            <CardDescription>Pintasan ke area prioritas operasional</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-2">
+            <Button variant="outline" className="justify-start" onClick={() => navigate("/admin/streak-monitoring")}>
+              <Flame className="h-4 w-4 mr-2" />
+              Buka Streak Monitoring
+            </Button>
+            <Button variant="outline" className="justify-start" onClick={() => navigate("/admin/billing")}>
+              <CreditCard className="h-4 w-4 mr-2" />
+              Review Billing
+            </Button>
+            <Button variant="outline" className="justify-start" onClick={() => navigate("/admin/cron-jobs")}>
+              <Wrench className="h-4 w-4 mr-2" />
+              Cek Cron Jobs
+            </Button>
+            <Button variant="outline" className="justify-start" onClick={() => navigate("/admin/feedback")}>
+              <MessageSquare className="h-4 w-4 mr-2" />
+              Kelola Feedback & Bug
+            </Button>
+            <Button variant="outline" className="justify-start" onClick={() => navigate("/admin/attendance-security")}>
+              <ShieldAlert className="h-4 w-4 mr-2" />
+              Validasi Keamanan
+            </Button>
           </CardContent>
         </Card>
       </div>

@@ -99,6 +99,7 @@ const menuGroups: MenuGroup[] = [
   {
     label: "Pengaturan",
     items: [
+      { title: "Profil Saya", icon: UserCog, path: "/admin/profile" },
       { title: "Tata Letak Homepage", icon: Layout, path: "/admin/homepage-layout" },
       { title: "Manajemen FAQ", icon: MessageCircleQuestion, path: "/admin/faq" },
       { title: "Keamanan Absensi", icon: Shield, path: "/admin/attendance-security" },
@@ -148,7 +149,7 @@ export function SuperAdminSidebar() {
   const renderMenuItem = (item: MenuItem) => {
     if (item.subItems) {
       const isOpen = openMenus[item.title] || isSubMenuActive(item.subItems);
-      
+
       return (
         <Collapsible key={item.title} open={isOpen} onOpenChange={() => toggleMenu(item.title)}>
           <SidebarMenuItem>

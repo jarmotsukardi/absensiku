@@ -173,7 +173,7 @@ export function EmployeeFloatingWhatsApp({ tenantId }: EmployeeFloatingWhatsAppP
         "fixed z-[60] h-14 w-14 rounded-full bg-green-600 text-white shadow-lg",
         "flex items-center justify-center",
         "transition-transform duration-150 hover:scale-105",
-        "animate-water-wobble"
+        "animate-wa-wobble"
       )}
       style={{
         left: `${position.x}px`,
@@ -188,4 +188,3 @@ export function EmployeeFloatingWhatsApp({ tenantId }: EmployeeFloatingWhatsAppP
     </button>
   );
 }
-

@@ -42,6 +42,8 @@ interface AuthUserRecord {
   email?: string;
   user_metadata?: {
     name?: string;
+    phone?: string;
+    whatsapp?: string;
   };
 }
 
@@ -168,8 +170,8 @@ const resolveAccount = async (
         name: authUser.user_metadata?.name || "Super Admin",
         userId: authUser.id,
         authEmail: authUser.email,
-        phone: selected?.phone || null,
-        whatsapp: selected?.whatsapp || null,
+        phone: selected?.phone || authUser.user_metadata?.phone || null,
+        whatsapp: selected?.whatsapp || authUser.user_metadata?.whatsapp || authUser.user_metadata?.phone || null,
         source: "auth_admin",
       },
       hasEmployeeRow,

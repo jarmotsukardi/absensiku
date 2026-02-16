@@ -98,6 +98,7 @@ const DatabaseManagement = lazy(() => import("./pages/admin/DatabaseManagement")
 const TrialSettings = lazy(() => import("./pages/admin/TrialSettings"));
 const SupabaseSettings = lazy(() => import("./pages/admin/SupabaseSettings"));
 const CronJobsInfo = lazy(() => import("./pages/admin/CronJobsInfo"));
+const AdminProfile = lazy(() => import("./pages/admin/AdminProfile"));
 
 const RouteLoadingFallback = () => (
   <div className="min-h-screen bg-background flex items-center justify-center">
@@ -131,111 +132,111 @@ const App = () => (
               <Route path="/notifications" element={<Navigate to="/dashboard?tab=notifications" replace />} />
               <Route path="/leave-requests" element={<Navigate to="/dashboard?tab=requests" replace />} />
               <Route path="/attendance-history" element={<Navigate to="/dashboard?tab=history" replace />} />
-          
-          {/* Super Admin Routes */}
-          <Route path="/admin/login" element={<SuperAdminLogin />} />
-          <Route path="/admin" element={<AdminDashboard />} />
-          <Route path="/admin/dashboard" element={<TenantDashboard />} />
-          <Route path="/admin/organizations" element={<Organizations />} />
-          <Route path="/admin/organizations/new" element={<OrganizationForm />} />
-          <Route path="/admin/organizations/:id" element={<OrganizationDetail />} />
-          <Route path="/admin/organizations/:id/edit" element={<OrganizationForm />} />
-          <Route path="/admin/users" element={<UserManagement />} />
-          <Route path="/admin/roles" element={<RoleManagement />} />
-          <Route path="/admin/profile" element={<Navigate to="/admin/settings" replace />} />
-          <Route path="/admin/reports" element={<Navigate to="/admin/reports/attendance" replace />} />
-          <Route path="/admin/reports/attendance" element={<AttendanceReport />} />
-          <Route path="/admin/reports/recap" element={<RecapReport />} />
-          <Route path="/admin/reports/audit" element={<AuditLogs />} />
-          <Route path="/admin/settings" element={<Settings />} />
-          <Route path="/admin/subscriptions" element={<SubscriptionManagement />} />
-          <Route path="/admin/master/offices" element={<MasterOffices />} />
-          <Route path="/admin/master/employees" element={<MasterEmployees />} />
-          <Route path="/admin/schedule/holidays" element={<MasterHolidays />} />
-          <Route path="/admin/leave-approvals" element={<LeaveApprovals />} />
-          <Route path="/admin/notifications" element={<NotificationManagement />} />
-          <Route path="/admin/database" element={<DatabaseManagement />} />
-          <Route path="/admin/partition-monitoring" element={<PartitionMonitoring />} />
-          <Route path="/admin/faq" element={<FAQManagement />} />
-          <Route path="/admin/org-type-settings" element={<OrganizationTypeSettings />} />
-          <Route path="/admin/homepage-layout" element={<HomepageLayoutSettings />} />
-          <Route path="/admin/national-holidays" element={<NationalHolidaysManagement />} />
-          <Route path="/admin/manual-payments" element={<ManualPaymentsManagement />} />
-          <Route path="/admin/trial-settings" element={<TrialSettings />} />
-          <Route path="/admin/supabase-settings" element={<SupabaseSettings />} />
-          <Route path="/admin/cron-jobs" element={<CronJobsInfo />} />
-          <Route path="/admin/attendance-security" element={<AttendanceSecuritySettings />} />
-          <Route path="/admin/billing" element={<BillingDashboard />} />
-          <Route path="/admin/feedback" element={<FeedbackManagement />} />
-          <Route path="/admin/streak-monitoring" element={<StreakMonitoring />} />
-          <Route path="/admin/master/opd" element={<OPDManagement />} />
-          <Route path="/admin/master/opd-admins" element={<OPDAdminsManagement />} />
-          <Route path="/admin/master/employee-import" element={<EmployeeImport />} />
-          <Route path="/admin/institution-types" element={<AdminInstitutionTypesManagement />} />
-          <Route path="/admin/stress-test" element={<AttendanceStressTest />} />
-          
-          {/* Organization Admin Routes */}
-          <Route path="/org/login" element={<OrgLogin />} />
-          <Route path="/org" element={<OrgDashboard />} />
-          <Route path="/org/dashboard" element={<Navigate to="/org" replace />} />
-          <Route path="/org/master/opd" element={<OrgOPDManagement />} />
-          <Route path="/org/master/opd-admins" element={<OrgOPDAdminsManagement />} />
-          <Route path="/org/master/institution-types" element={<OrgInstitutionTypesManagement />} />
-          <Route path="/org/master/work-units" element={<OrgWorkUnitsManagement />} />
-          <Route path="/org/master/work-locations" element={<OrgWorkLocationsManagement />} />
-          <Route path="/org/master/positions" element={<OrgPositionsManagement />} />
-          <Route path="/org/master/employee-import" element={<OrgEmployeeImport />} />
-          <Route path="/org/master" element={<Navigate to="/org/master/opd" replace />} />
-          <Route path="/org/master/work-hours" element={<Navigate to="/org/schedule/work-hours" replace />} />
-          <Route path="/org/schedule/national-holidays" element={<OrgNationalHolidaysManagement />} />
-          <Route path="/org/schedule/holidays" element={<OrgHolidaysManagement />} />
-          <Route path="/org/schedule/work-hours" element={<OrgWorkHoursManagement />} />
-          <Route path="/org/schedule/absence-limits" element={<OrgAbsenceLimitsManagement />} />
-          <Route path="/org/schedule/wfh" element={<OrgWfhScheduleManagement />} />
-          <Route path="/org/employees/active" element={<OrgActiveEmployees />} />
-          <Route path="/org/employees/inactive" element={<OrgInactiveEmployees />} />
-          <Route path="/org/employees/mutations" element={<OrgMutationRequests />} />
-          <Route path="/org/leave/requests" element={<OrgLeaveRequests />} />
-          <Route path="/org/leave/approved" element={<OrgApprovedLeaveList />} />
-          <Route path="/org/leave/sick" element={<OrgSickLeaveList />} />
-          <Route path="/org/leave/official" element={<OrgOfficialTravelList />} />
-          <Route path="/org/leave/absent" element={<OrgAbsentWithoutNotice />} />
-          <Route path="/org/leave/wfh" element={<OrgWfhRequests />} />
-          <Route path="/org/leave/flexible" element={<OrgFlexibleAttendanceRequests />} />
-           <Route path="/org/leave/overtime" element={<OrgOvertimeRequests />} />
-           <Route path="/org/schedule/overtime" element={<OrgOvertimeSettings />} />
-          <Route path="/org/reports/attendance" element={<OrgAttendanceReport />} />
-          <Route path="/org/reports/recap" element={<OrgRecapReport />} />
-          <Route path="/org/settings" element={<OrgSettings />} />
-          <Route path="/org/subscription" element={<Navigate to="/org/activation" replace />} />
-          <Route path="/org/activation" element={<OrgActivation />} />
-          <Route path="/org/profile/setup" element={<OrgProfileSetup />} />
-          <Route path="/org/invitations" element={<OrgEmployeeInvitations />} />
-          <Route path="/org/landing-settings" element={<OrgLandingSettings />} />
-          <Route path="/org/news" element={<OrgNewsManagement />} />
-          <Route path="/org/notifications" element={<OrgNotificationManagement />} />
-          <Route path="/org/help" element={<OrgHelp />} />
-          <Route path="/org/audit-log" element={<OrgAuditLog />} />
-          {/* Employee Routes */}
-          <Route path="/employee/login" element={<EmployeeLogin />} />
-          <Route path="/employee/dashboard" element={<EmployeeDashboardNew />} />
-          <Route path="/employee/profile" element={<EmployeeProfile />} />
-          <Route path="/employee/help" element={<EmployeeHelp />} />
-          <Route path="/employee/reset-password" element={<ResetPassword />} />
-          
-          {/* Organization Landing Page */}
-          <Route path="/landing/:code" element={<OrganizationLanding />} />
-          
-          {/* News Detail Page */}
-          <Route path="/news/:id" element={<NewsDetail />} />
-          
+
+              {/* Super Admin Routes */}
+              <Route path="/admin/login" element={<SuperAdminLogin />} />
+              <Route path="/admin" element={<AdminDashboard />} />
+              <Route path="/admin/dashboard" element={<TenantDashboard />} />
+              <Route path="/admin/organizations" element={<Organizations />} />
+              <Route path="/admin/organizations/new" element={<OrganizationForm />} />
+              <Route path="/admin/organizations/:id" element={<OrganizationDetail />} />
+              <Route path="/admin/organizations/:id/edit" element={<OrganizationForm />} />
+              <Route path="/admin/users" element={<UserManagement />} />
+              <Route path="/admin/roles" element={<RoleManagement />} />
+              <Route path="/admin/profile" element={<AdminProfile />} />
+              <Route path="/admin/reports" element={<Navigate to="/admin/reports/attendance" replace />} />
+              <Route path="/admin/reports/attendance" element={<AttendanceReport />} />
+              <Route path="/admin/reports/recap" element={<RecapReport />} />
+              <Route path="/admin/reports/audit" element={<AuditLogs />} />
+              <Route path="/admin/settings" element={<Settings />} />
+              <Route path="/admin/subscriptions" element={<SubscriptionManagement />} />
+              <Route path="/admin/master/offices" element={<MasterOffices />} />
+              <Route path="/admin/master/employees" element={<MasterEmployees />} />
+              <Route path="/admin/schedule/holidays" element={<MasterHolidays />} />
+              <Route path="/admin/leave-approvals" element={<LeaveApprovals />} />
+              <Route path="/admin/notifications" element={<NotificationManagement />} />
+              <Route path="/admin/database" element={<DatabaseManagement />} />
+              <Route path="/admin/partition-monitoring" element={<PartitionMonitoring />} />
+              <Route path="/admin/faq" element={<FAQManagement />} />
+              <Route path="/admin/org-type-settings" element={<OrganizationTypeSettings />} />
+              <Route path="/admin/homepage-layout" element={<HomepageLayoutSettings />} />
+              <Route path="/admin/national-holidays" element={<NationalHolidaysManagement />} />
+              <Route path="/admin/manual-payments" element={<ManualPaymentsManagement />} />
+              <Route path="/admin/trial-settings" element={<TrialSettings />} />
+              <Route path="/admin/supabase-settings" element={<SupabaseSettings />} />
+              <Route path="/admin/cron-jobs" element={<CronJobsInfo />} />
+              <Route path="/admin/attendance-security" element={<AttendanceSecuritySettings />} />
+              <Route path="/admin/billing" element={<BillingDashboard />} />
+              <Route path="/admin/feedback" element={<FeedbackManagement />} />
+              <Route path="/admin/streak-monitoring" element={<StreakMonitoring />} />
+              <Route path="/admin/master/opd" element={<OPDManagement />} />
+              <Route path="/admin/master/opd-admins" element={<OPDAdminsManagement />} />
+              <Route path="/admin/master/employee-import" element={<EmployeeImport />} />
+              <Route path="/admin/institution-types" element={<AdminInstitutionTypesManagement />} />
+              <Route path="/admin/stress-test" element={<AttendanceStressTest />} />
+
+              {/* Organization Admin Routes */}
+              <Route path="/org/login" element={<OrgLogin />} />
+              <Route path="/org" element={<OrgDashboard />} />
+              <Route path="/org/dashboard" element={<Navigate to="/org" replace />} />
+              <Route path="/org/master/opd" element={<OrgOPDManagement />} />
+              <Route path="/org/master/opd-admins" element={<OrgOPDAdminsManagement />} />
+              <Route path="/org/master/institution-types" element={<OrgInstitutionTypesManagement />} />
+              <Route path="/org/master/work-units" element={<OrgWorkUnitsManagement />} />
+              <Route path="/org/master/work-locations" element={<OrgWorkLocationsManagement />} />
+              <Route path="/org/master/positions" element={<OrgPositionsManagement />} />
+              <Route path="/org/master/employee-import" element={<OrgEmployeeImport />} />
+              <Route path="/org/master" element={<Navigate to="/org/master/opd" replace />} />
+              <Route path="/org/master/work-hours" element={<Navigate to="/org/schedule/work-hours" replace />} />
+              <Route path="/org/schedule/national-holidays" element={<OrgNationalHolidaysManagement />} />
+              <Route path="/org/schedule/holidays" element={<OrgHolidaysManagement />} />
+              <Route path="/org/schedule/work-hours" element={<OrgWorkHoursManagement />} />
+              <Route path="/org/schedule/absence-limits" element={<OrgAbsenceLimitsManagement />} />
+              <Route path="/org/schedule/wfh" element={<OrgWfhScheduleManagement />} />
+              <Route path="/org/employees/active" element={<OrgActiveEmployees />} />
+              <Route path="/org/employees/inactive" element={<OrgInactiveEmployees />} />
+              <Route path="/org/employees/mutations" element={<OrgMutationRequests />} />
+              <Route path="/org/leave/requests" element={<OrgLeaveRequests />} />
+              <Route path="/org/leave/approved" element={<OrgApprovedLeaveList />} />
+              <Route path="/org/leave/sick" element={<OrgSickLeaveList />} />
+              <Route path="/org/leave/official" element={<OrgOfficialTravelList />} />
+              <Route path="/org/leave/absent" element={<OrgAbsentWithoutNotice />} />
+              <Route path="/org/leave/wfh" element={<OrgWfhRequests />} />
+              <Route path="/org/leave/flexible" element={<OrgFlexibleAttendanceRequests />} />
+              <Route path="/org/leave/overtime" element={<OrgOvertimeRequests />} />
+              <Route path="/org/schedule/overtime" element={<OrgOvertimeSettings />} />
+              <Route path="/org/reports/attendance" element={<OrgAttendanceReport />} />
+              <Route path="/org/reports/recap" element={<OrgRecapReport />} />
+              <Route path="/org/settings" element={<OrgSettings />} />
+              <Route path="/org/subscription" element={<Navigate to="/org/activation" replace />} />
+              <Route path="/org/activation" element={<OrgActivation />} />
+              <Route path="/org/profile/setup" element={<OrgProfileSetup />} />
+              <Route path="/org/invitations" element={<OrgEmployeeInvitations />} />
+              <Route path="/org/landing-settings" element={<OrgLandingSettings />} />
+              <Route path="/org/news" element={<OrgNewsManagement />} />
+              <Route path="/org/notifications" element={<OrgNotificationManagement />} />
+              <Route path="/org/help" element={<OrgHelp />} />
+              <Route path="/org/audit-log" element={<OrgAuditLog />} />
+              {/* Employee Routes */}
+              <Route path="/employee/login" element={<EmployeeLogin />} />
+              <Route path="/employee/dashboard" element={<EmployeeDashboardNew />} />
+              <Route path="/employee/profile" element={<EmployeeProfile />} />
+              <Route path="/employee/help" element={<EmployeeHelp />} />
+              <Route path="/employee/reset-password" element={<ResetPassword />} />
+
+              {/* Organization Landing Page */}
+              <Route path="/landing/:code" element={<OrganizationLanding />} />
+
+              {/* News Detail Page */}
+              <Route path="/news/:id" element={<NewsDetail />} />
+
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>
-        <PersistentNotificationDialog />
-      </BrowserRouter>
-    </TooltipProvider>
-  </QueryClientProvider>
+          <PersistentNotificationDialog />
+        </BrowserRouter>
+      </TooltipProvider>
+    </QueryClientProvider>
   </HelmetProvider>
 );
 

@@ -61,6 +61,105 @@ interface AppCronLogRow {
   error_message: string | null;
 }
 
+const isKnownCronInfraError = (message: string) => {
+  const m = message.toLowerCase();
+  return (
+    m.includes("does not exist") ||
+    m.includes("permission denied") ||
+    m.includes("schema cron") ||
+    m.includes("cron.job") ||
+    m.includes("get_cron_jobs_overview") ||
+    m.includes("get_cron_recent_runs")
+  );
+};
+
+const CRON_CATALOG_FALLBACK: CronTaskRow[] = [
+  {
+    job_name: "attendance-ingest-worker",
+    category: "Attendance",
+    target: "SQL/RPC",
+    description: "Memproses queue absensi offline->DB.",
+    timezone: "UTC (WIB +7)",
+    expected_schedule: "* * * * *",
+    current_schedule: null,
+    is_scheduled: false,
+    is_active: false,
+    command_preview: null,
+  },
+  {
+    job_name: "cleanup-gps-daily",
+    category: "Maintenance",
+    target: "SQL/RPC",
+    description: "Membersihkan GPS lama pada tabel absensi partisi.",
+    timezone: "UTC (WIB +7)",
+    expected_schedule: "0 19 * * *",
+    current_schedule: null,
+    is_scheduled: false,
+    is_active: false,
+    command_preview: null,
+  },
+  {
+    job_name: "analyze-partitions-daily",
+    category: "Maintenance",
+    target: "SQL/RPC",
+    description: "VACUUM ANALYZE partisi absensi harian.",
+    timezone: "UTC (WIB +7)",
+    expected_schedule: "0 20 * * *",
+    current_schedule: null,
+    is_scheduled: false,
+    is_active: false,
+    command_preview: null,
+  },
+  {
+    job_name: "cleanup-audit-logs-weekly",
+    category: "Maintenance",
+    target: "SQL/RPC",
+    description: "Pembersihan log audit mingguan.",
+    timezone: "UTC (WIB +7)",
+    expected_schedule: "0 20 * * 6",
+    current_schedule: null,
+    is_scheduled: false,
+    is_active: false,
+    command_preview: null,
+  },
+  {
+    job_name: "create-next-month-partition-monthly",
+    category: "Maintenance",
+    target: "SQL/RPC",
+    description: "Membuat partisi bulan berikutnya.",
+    timezone: "UTC (WIB +7)",
+    expected_schedule: "0 18 24 * *",
+    current_schedule: null,
+    is_scheduled: false,
+    is_active: false,
+    command_preview: null,
+  },
+  {
+    job_name: "streak-subscription-sync-daily",
+    category: "Billing",
+    target: "SQL/RPC",
+    description: "Sinkron status subscription terhadap grace period streak.",
+    timezone: "UTC (WIB +7)",
+    expected_schedule: "10 17 * * *",
+    current_schedule: null,
+    is_scheduled: false,
+    is_active: false,
+    command_preview: null,
+  },
+  {
+    job_name: "billing-grace-notifier-10m",
+    category: "Billing",
+    target: "Edge Function",
+    description: "Kirim invoice grace period ke email/WhatsApp.",
+    timezone: "UTC (WIB +7)",
+    expected_schedule: "*/10 * * * *",
+    current_schedule: null,
+    is_scheduled: false,
+    is_active: false,
+    command_preview: null,
+  },
+];
+
 const statusBadge = (status: string | null | undefined) => {
   const normalized = (status || "").toLowerCase();
   if (normalized.includes("succeed") || normalized.includes("success") || normalized.includes("done")) {
@@ -93,6 +192,46 @@ const rpcUntyped = supabase.rpc.bind(supabase) as (
   params?: Record<string, unknown>
 ) => Promise<{ data: unknown; error: { message?: string } | null }>;
 
+const callPublicRpc = async <T = unknown>(fn: string, payload?: Record<string, unknown>) => {
+  const supabaseUrl =
+    import.meta.env.VITE_SUPABASE_URL ||
+    import.meta.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey =
+    import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+    import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error("Supabase env tidak tersedia untuk public RPC fallback.");
+  }
+
+  const response = await fetch(`${supabaseUrl}/rest/v1/rpc/${fn}`, {
+    method: "POST",
+    headers: {
+      apikey: supabaseKey,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload || {}),
+  });
+
+  const text = await response.text();
+  let parsed: unknown = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = text;
+  }
+
+  if (!response.ok) {
+    const message =
+      typeof parsed === "object" && parsed !== null && "message" in parsed
+        ? String((parsed as { message?: unknown }).message || "Public RPC gagal.")
+        : `Public RPC gagal (${response.status}).`;
+    throw new Error(message);
+  }
+
+  return parsed as T;
+};
+
 export default function CronJobsInfo() {
   const [tasks, setTasks] = useState<CronTaskRow[]>([]);
   const [runs, setRuns] = useState<CronRunRow[]>([]);
@@ -100,6 +239,8 @@ export default function CronJobsInfo() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
   const [query, setQuery] = useState("");
+  const [isFallbackMode, setIsFallbackMode] = useState(false);
+  const [partialLoadNote, setPartialLoadNote] = useState<string | null>(null);
 
   const filteredTasks = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -122,8 +263,10 @@ export default function CronJobsInfo() {
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
+    setIsFallbackMode(false);
+    setPartialLoadNote(null);
     try {
-      const [tasksRes, runsRes, logsRes] = await Promise.all([
+      const [tasksRes, runsRes, logsRes] = await Promise.allSettled([
         rpcUntyped("get_cron_jobs_overview"),
         rpcUntyped("get_cron_recent_runs", { p_limit: 100 }),
         supabase
@@ -133,13 +276,106 @@ export default function CronJobsInfo() {
           .limit(100),
       ]);
 
-      if (tasksRes.error) throw new Error(tasksRes.error.message || "Gagal memuat task cron");
-      if (runsRes.error) throw new Error(runsRes.error.message || "Gagal memuat run cron");
-      if (logsRes.error) throw logsRes.error;
+      let warningRefs: string[] = [];
+      let knownInfraIssue = false;
+      let fallbackUsed = false;
 
-      setTasks(Array.isArray(tasksRes.data) ? (tasksRes.data as CronTaskRow[]) : []);
-      setRuns(Array.isArray(runsRes.data) ? (runsRes.data as CronRunRow[]) : []);
-      setAppLogs(logsRes.data || []);
+      if (tasksRes.status === "fulfilled") {
+        if (tasksRes.value.error) {
+          try {
+            const publicTasks = await callPublicRpc<CronTaskRow[]>("get_cron_jobs_overview");
+            setTasks(Array.isArray(publicTasks) ? publicTasks : []);
+          } catch (publicRpcError) {
+            fallbackUsed = true;
+            setTasks(CRON_CATALOG_FALLBACK);
+            const errorRef = reportError(
+              new Error(tasksRes.value.error.message || "Gagal memuat task cron"),
+              "admin.cron_jobs.tasks_rpc"
+            );
+            knownInfraIssue = isKnownCronInfraError(tasksRes.value.error.message || "");
+            warningRefs.push(errorRef);
+            const fallbackRef = reportError(publicRpcError, "admin.cron_jobs.tasks_public_rpc");
+            warningRefs.push(fallbackRef);
+          }
+        } else {
+          setTasks(Array.isArray(tasksRes.value.data) ? (tasksRes.value.data as CronTaskRow[]) : []);
+        }
+      } else {
+        try {
+          const publicTasks = await callPublicRpc<CronTaskRow[]>("get_cron_jobs_overview");
+          setTasks(Array.isArray(publicTasks) ? publicTasks : []);
+        } catch (publicRpcError) {
+          fallbackUsed = true;
+          setTasks(CRON_CATALOG_FALLBACK);
+          const errorRef = reportError(tasksRes.reason, "admin.cron_jobs.tasks_rpc_rejected");
+          const reasonMessage = tasksRes.reason instanceof Error ? tasksRes.reason.message : String(tasksRes.reason || "");
+          knownInfraIssue = knownInfraIssue || isKnownCronInfraError(reasonMessage);
+          warningRefs.push(errorRef);
+          const fallbackRef = reportError(publicRpcError, "admin.cron_jobs.tasks_public_rpc");
+          warningRefs.push(fallbackRef);
+        }
+      }
+
+      if (runsRes.status === "fulfilled") {
+        if (runsRes.value.error) {
+          try {
+            const publicRuns = await callPublicRpc<CronRunRow[]>("get_cron_recent_runs", { p_limit: 100 });
+            setRuns(Array.isArray(publicRuns) ? publicRuns : []);
+          } catch (publicRpcError) {
+            setRuns([]);
+            const errorRef = reportError(
+              new Error(runsRes.value.error.message || "Gagal memuat run cron"),
+              "admin.cron_jobs.runs_rpc"
+            );
+            knownInfraIssue = knownInfraIssue || isKnownCronInfraError(runsRes.value.error.message || "");
+            warningRefs.push(errorRef);
+            const fallbackRef = reportError(publicRpcError, "admin.cron_jobs.runs_public_rpc");
+            warningRefs.push(fallbackRef);
+          }
+        } else {
+          setRuns(Array.isArray(runsRes.value.data) ? (runsRes.value.data as CronRunRow[]) : []);
+        }
+      } else {
+        try {
+          const publicRuns = await callPublicRpc<CronRunRow[]>("get_cron_recent_runs", { p_limit: 100 });
+          setRuns(Array.isArray(publicRuns) ? publicRuns : []);
+        } catch (publicRpcError) {
+          setRuns([]);
+          const errorRef = reportError(runsRes.reason, "admin.cron_jobs.runs_rpc_rejected");
+          const reasonMessage = runsRes.reason instanceof Error ? runsRes.reason.message : String(runsRes.reason || "");
+          knownInfraIssue = knownInfraIssue || isKnownCronInfraError(reasonMessage);
+          warningRefs.push(errorRef);
+          const fallbackRef = reportError(publicRpcError, "admin.cron_jobs.runs_public_rpc");
+          warningRefs.push(fallbackRef);
+        }
+      }
+
+      if (logsRes.status === "fulfilled") {
+        if (logsRes.value.error) {
+          setAppLogs([]);
+          const errorRef = reportError(logsRes.value.error, "admin.cron_jobs.logs_query");
+          warningRefs.push(errorRef);
+        } else {
+          setAppLogs(logsRes.value.data || []);
+        }
+      } else {
+        setAppLogs([]);
+        const errorRef = reportError(logsRes.reason, "admin.cron_jobs.logs_query_rejected");
+        warningRefs.push(errorRef);
+      }
+
+      if (fallbackUsed) {
+        setIsFallbackMode(true);
+      }
+      if (warningRefs.length > 0) {
+        if (knownInfraIssue) {
+          setPartialLoadNote(
+            `Sebagian data cron tidak tersedia di database saat ini. Jalankan migration cron terbaru. [Log: ${warningRefs[0]}]`
+          );
+        } else {
+          setPartialLoadNote(`Sebagian data cron gagal dimuat. [Log: ${warningRefs[0]}]`);
+        }
+      }
     } catch (error) {
       const errorRef = reportError(error, "admin.cron_jobs.fetch");
       console.error(`[${errorRef}] Failed to fetch cron dashboard data`, error);
@@ -172,6 +408,21 @@ export default function CronJobsInfo() {
   return (
     <SuperAdminLayout title="Informasi Cron Jobs" subtitle="Pusat informasi seluruh tugas cron sistem">
       <div className="space-y-6">
+        {partialLoadNote && (
+          <Card className="border-slate-300 bg-slate-50/80 dark:bg-slate-900/30">
+            <CardContent className="pt-6 text-sm text-slate-700 dark:text-slate-300">
+              {partialLoadNote}
+            </CardContent>
+          </Card>
+        )}
+        {isFallbackMode && (
+          <Card className="border-amber-300 bg-amber-50/80 dark:bg-amber-950/20">
+            <CardContent className="pt-6 text-sm text-amber-900 dark:text-amber-200">
+              Mode fallback aktif: RPC cron belum tersedia/bermasalah pada database saat ini.
+              Halaman tetap menampilkan katalog standar. Jalankan migration Supabase terbaru lalu refresh halaman.
+            </CardContent>
+          </Card>
+        )}
         <div className="grid gap-4 md:grid-cols-4">
           <Card>
             <CardHeader className="pb-2">
