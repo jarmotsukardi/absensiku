@@ -49,6 +49,7 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface OPDAdmin {
   id: string;
@@ -95,6 +96,7 @@ export default function OrgOPDAdminsManagement() {
   const [isSaving, setIsSaving] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [tenantId, setTenantId] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   
@@ -161,6 +163,7 @@ export default function OrgOPDAdminsManagement() {
 
   const fetchTenantAndData = useCallback(async () => {
     try {
+      setLoadError(null);
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
@@ -178,9 +181,11 @@ export default function OrgOPDAdminsManagement() {
         fetchOpdList(roleData.tenant_id),
         fetchEmployees(roleData.tenant_id),
       ]);
-    } catch (error) {
-      console.error("Error:", error);
-      toast.error("Gagal memuat data");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.master.opd_admins.fetch_data");
+      const message = appendErrorReference("Gagal memuat data admin OPD", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -234,9 +239,13 @@ export default function OrgOPDAdminsManagement() {
         can_invite_employees: true,
       });
       if (tenantId) fetchAdmins(tenantId);
-    } catch (error) {
-      console.error("Error:", error);
-      toast.error("Gagal menambahkan admin OPD");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.master.opd_admins.add", {
+        tenant_id: tenantId,
+        opd_id: formData.opd_id,
+        employee_id: formData.employee_id,
+      });
+      toast.error(appendErrorReference("Gagal menambahkan admin OPD", errorRef));
     } finally {
       setIsSaving(false);
     }
@@ -254,9 +263,12 @@ export default function OrgOPDAdminsManagement() {
       if (error) throw error;
       toast.success("Admin OPD berhasil dihapus");
       if (tenantId) fetchAdmins(tenantId);
-    } catch (error) {
-      console.error("Error:", error);
-      toast.error("Gagal menghapus admin OPD");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.master.opd_admins.delete", {
+        tenant_id: tenantId,
+        opd_admin_id: id,
+      });
+      toast.error(appendErrorReference("Gagal menghapus admin OPD", errorRef));
     }
   };
 
@@ -270,9 +282,12 @@ export default function OrgOPDAdminsManagement() {
       if (error) throw error;
       toast.success(`Admin OPD ${admin.is_active ? "dinonaktifkan" : "diaktifkan"}`);
       if (tenantId) fetchAdmins(tenantId);
-    } catch (error) {
-      console.error("Error:", error);
-      toast.error("Gagal mengubah status");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.master.opd_admins.toggle_status", {
+        tenant_id: tenantId,
+        opd_admin_id: admin.id,
+      });
+      toast.error(appendErrorReference("Gagal mengubah status", errorRef));
     }
   };
 
@@ -440,6 +455,12 @@ export default function OrgOPDAdminsManagement() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>

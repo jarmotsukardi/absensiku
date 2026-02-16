@@ -1,11 +1,17 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import type { TablesUpdate } from "@/integrations/supabase/types";
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return "Terjadi kesalahan";
+};
 
 export interface BillingSetting {
   id: string;
   setting_key: string;
-  setting_value: any;
+  setting_value: unknown;
   description: string | null;
 }
 
@@ -18,7 +24,7 @@ export interface SubscriptionPackage {
   is_active: boolean;
   applies_to: string;
   description: string | null;
-  features: any;
+  features: unknown;
   sort_order: number;
 }
 
@@ -67,6 +73,15 @@ export interface FinancialSummary {
   transaction_count: number;
 }
 
+export interface FinancialTransaction {
+  id: string;
+  gross_amount: number | null;
+  xendit_fee: number | null;
+  vat_amount: number | null;
+  net_amount: number | null;
+  [key: string]: unknown;
+}
+
 export function useBillingSettings() {
   const [settings, setSettings] = useState<BillingSetting[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -91,12 +106,12 @@ export function useBillingSettings() {
     fetchSettings();
   }, [fetchSettings]);
 
-  const getSetting = (key: string): any => {
+  const getSetting = (key: string): unknown => {
     const setting = settings.find(s => s.setting_key === key);
     return setting?.setting_value || null;
   };
 
-  const updateSetting = async (key: string, value: any): Promise<boolean> => {
+  const updateSetting = async (key: string, value: unknown): Promise<boolean> => {
     try {
       const { error } = await supabase
         .from("billing_settings")
@@ -107,8 +122,8 @@ export function useBillingSettings() {
       toast.success("Pengaturan berhasil disimpan");
       await fetchSettings();
       return true;
-    } catch (error: any) {
-      toast.error("Gagal menyimpan: " + error.message);
+    } catch (error: unknown) {
+      toast.error("Gagal menyimpan: " + getErrorMessage(error));
       return false;
     }
   };
@@ -158,8 +173,8 @@ export function useSubscriptionPackages() {
       toast.success("Paket berhasil ditambahkan");
       await fetchPackages();
       return true;
-    } catch (error: any) {
-      toast.error("Gagal menambah paket: " + error.message);
+    } catch (error: unknown) {
+      toast.error("Gagal menambah paket: " + getErrorMessage(error));
       return false;
     }
   };
@@ -174,8 +189,8 @@ export function useSubscriptionPackages() {
       toast.success("Paket berhasil diperbarui");
       await fetchPackages();
       return true;
-    } catch (error: any) {
-      toast.error("Gagal memperbarui paket: " + error.message);
+    } catch (error: unknown) {
+      toast.error("Gagal memperbarui paket: " + getErrorMessage(error));
       return false;
     }
   };
@@ -187,8 +202,8 @@ export function useSubscriptionPackages() {
       toast.success("Paket berhasil dihapus");
       await fetchPackages();
       return true;
-    } catch (error: any) {
-      toast.error("Gagal menghapus paket: " + error.message);
+    } catch (error: unknown) {
+      toast.error("Gagal menghapus paket: " + getErrorMessage(error));
       return false;
     }
   };
@@ -253,7 +268,7 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
 
       const { data: { user } } = await supabase.auth.getUser();
       
-      const updates: any = {
+      const updates: TablesUpdate<"invoices"> = {
         status: approved ? "PAID" : "CANCELLED",
         updated_at: new Date().toISOString(),
       };
@@ -368,8 +383,8 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
       toast.success(approved ? "Pembayaran diverifikasi" : "Pembayaran ditolak");
       await fetchInvoices();
       return true;
-    } catch (error: any) {
-      toast.error("Gagal memproses: " + error.message);
+    } catch (error: unknown) {
+      toast.error("Gagal memproses: " + getErrorMessage(error));
       return false;
     }
   };
@@ -385,7 +400,7 @@ export function useFinancialLedger(dateRange?: { start: string; end: string }) {
     total_net: 0,
     transaction_count: 0,
   });
-  const [transactions, setTransactions] = useState<any[]>([]);
+  const [transactions, setTransactions] = useState<FinancialTransaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchLedger = useCallback(async () => {
@@ -405,7 +420,7 @@ export function useFinancialLedger(dateRange?: { start: string; end: string }) {
       const { data, error } = await query;
       if (error) throw error;
 
-      setTransactions(data || []);
+      setTransactions((data || []) as FinancialTransaction[]);
 
       // Calculate summary
       const sum = (data || []).reduce(

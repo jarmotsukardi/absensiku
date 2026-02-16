@@ -70,6 +70,7 @@ export default function OrgNotificationManagement() {
   const [opdOptions, setOpdOptions] = useState<OPDOption[]>([]);
   const [workUnitOptions, setWorkUnitOptions] = useState<WorkUnitOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -198,6 +199,7 @@ export default function OrgNotificationManagement() {
 
   const fetchNotifications = useCallback(async (tid: string) => {
     try {
+    setLoadError(null);
     const activeEmployees = await fetchActiveEmployees(tid);
     const recipients = activeEmployees.filter((employee) => !!employee.user_id);
 
@@ -264,7 +266,9 @@ export default function OrgNotificationManagement() {
       if (error) throw error;
     } catch (error) {
       const errorRef = reportError(error, "org.notifications.fetch_notifications", { tenant_id: tid });
-      toast.error(appendErrorReference("Gagal memuat notifikasi organisasi", errorRef));
+      const message = appendErrorReference("Gagal memuat notifikasi organisasi", errorRef);
+      toast.error(message);
+      setLoadError(message);
       setNotifications([]);
       setTotalCount(0);
       setReadCount(0);
@@ -274,6 +278,7 @@ export default function OrgNotificationManagement() {
 
   const fetchEmployees = useCallback(async (tid: string) => {
     try {
+      setLoadError(null);
       const activeEmployees = await fetchActiveEmployees(tid);
       setEmployees(activeEmployees);
       setNotifiableEmployeeIds(
@@ -281,7 +286,9 @@ export default function OrgNotificationManagement() {
       );
     } catch (error) {
       const errorRef = reportError(error, "org.notifications.fetch_employees", { tenant_id: tid });
-      toast.error(appendErrorReference("Gagal memuat data pegawai", errorRef));
+      const message = appendErrorReference("Gagal memuat data pegawai", errorRef);
+      toast.error(message);
+      setLoadError(message);
       setEmployees([]);
       setNotifiableEmployeeIds([]);
     }
@@ -289,6 +296,7 @@ export default function OrgNotificationManagement() {
 
   const fetchTenantAndData = useCallback(async () => {
     try {
+      setLoadError(null);
       const resolvedTenantId = await resolveOrgTenantId();
       if (resolvedTenantId) {
         setTenantId(resolvedTenantId);
@@ -304,7 +312,9 @@ export default function OrgNotificationManagement() {
       }
     } catch (error) {
       const errorRef = reportError(error, "org.notifications.fetch_tenant_and_data");
-      toast.error(appendErrorReference("Gagal memuat halaman notifikasi", errorRef));
+      const message = appendErrorReference("Gagal memuat halaman notifikasi", errorRef);
+      toast.error(message);
+      setLoadError(message);
       setEmployees([]);
       setNotifiableEmployeeIds([]);
       setOpdOptions([]);
@@ -799,6 +809,12 @@ export default function OrgNotificationManagement() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         {/* Stats Cards */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

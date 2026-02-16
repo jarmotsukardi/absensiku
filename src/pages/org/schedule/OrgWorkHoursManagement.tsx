@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { Plus, Pencil, Trash2, Timer, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface WorkHour {
   id: string;
@@ -45,6 +46,7 @@ const daysOfWeek = [
 export default function OrgWorkHoursManagement() {
   const [workHours, setWorkHours] = useState<WorkHour[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isApplyingTemplate, setIsApplyingTemplate] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -84,6 +86,7 @@ export default function OrgWorkHoursManagement() {
 
   const fetchData = async () => {
     try {
+      setLoadError(null);
       const { data, error } = await supabase
         .from("work_hours")
         .select("*")
@@ -92,9 +95,12 @@ export default function OrgWorkHoursManagement() {
 
       if (error) throw error;
       setWorkHours((data as WorkHour[]) || []);
-    } catch (error) {
-      console.error("Error fetching work hours:", error);
-      toast.error("Gagal memuat data jam kerja");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.schedule.work_hours.fetch_data");
+      const message = appendErrorReference("Gagal memuat data jam kerja", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setWorkHours([]);
     } finally {
       setIsLoading(false);
     }
@@ -149,9 +155,13 @@ export default function OrgWorkHoursManagement() {
       setIsDialogOpen(false);
       resetForm();
       fetchData();
-    } catch (error) {
-      console.error("Error saving work hour:", error);
-      toast.error("Gagal menyimpan jam kerja");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.schedule.work_hours.save", {
+        work_hour_id: formData.id || null,
+        institution_type: formData.institution_type,
+        day_of_week: formData.day_of_week,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan jam kerja", errorRef));
     }
   };
 
@@ -219,9 +229,12 @@ export default function OrgWorkHoursManagement() {
 
       toast.success(`${label} diterapkan untuk ${getInstitutionLabel(targetInstitution)} (${affectedRows} hari aktif).`);
       fetchData();
-    } catch (error) {
-      console.error("Error applying workday template:", error);
-      toast.error("Gagal menerapkan template hari kerja");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.schedule.work_hours.apply_template", {
+        institution_type: filterInstitution,
+        template_label: label,
+      });
+      toast.error(appendErrorReference("Gagal menerapkan template hari kerja", errorRef));
     } finally {
       setIsApplyingTemplate(false);
     }
@@ -258,9 +271,9 @@ export default function OrgWorkHoursManagement() {
       if (error) throw error;
       toast.success("Jam kerja berhasil dihapus");
       fetchData();
-    } catch (error) {
-      console.error("Error deleting work hour:", error);
-      toast.error("Gagal menghapus jam kerja");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.schedule.work_hours.delete", { work_hour_id: id });
+      toast.error(appendErrorReference("Gagal menghapus jam kerja", errorRef));
     }
   };
 
@@ -378,6 +391,12 @@ export default function OrgWorkHoursManagement() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>

@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Badge } from "@/components/ui/badge";
 import { Plus, Pencil, Trash2, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface AbsenceLimit {
   id: string;
@@ -29,6 +30,7 @@ export default function AbsenceLimitsManagement() {
     { id: "5", max_days: 20, description: "Pemberhentian sementara", warning_type: "pemberhentian", is_active: true },
   ]);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingLimit, setEditingLimit] = useState<AbsenceLimit | null>(null);
@@ -40,29 +42,36 @@ export default function AbsenceLimitsManagement() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (editingLimit) {
-      setLimits(prev => prev.map(l => 
-        l.id === editingLimit.id 
-          ? { ...l, max_days: parseInt(formData.max_days), description: formData.description, warning_type: formData.warning_type }
-          : l
-      ));
-      toast.success("Batas absen berhasil diperbarui");
-    } else {
-      const newLimit: AbsenceLimit = {
-        id: Date.now().toString(),
-        max_days: parseInt(formData.max_days),
-        description: formData.description,
-        warning_type: formData.warning_type,
-        is_active: true,
-      };
-      setLimits(prev => [...prev, newLimit]);
-      toast.success("Batas absen berhasil ditambahkan");
+    try {
+      setLoadError(null);
+      if (editingLimit) {
+        setLimits(prev => prev.map(l => 
+          l.id === editingLimit.id 
+            ? { ...l, max_days: parseInt(formData.max_days), description: formData.description, warning_type: formData.warning_type }
+            : l
+        ));
+        toast.success("Batas absen berhasil diperbarui");
+      } else {
+        const newLimit: AbsenceLimit = {
+          id: Date.now().toString(),
+          max_days: parseInt(formData.max_days),
+          description: formData.description,
+          warning_type: formData.warning_type,
+          is_active: true,
+        };
+        setLimits(prev => [...prev, newLimit]);
+        toast.success("Batas absen berhasil ditambahkan");
+      }
+
+      setIsDialogOpen(false);
+      setEditingLimit(null);
+      setFormData({ max_days: "", description: "", warning_type: "" });
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.schedule.absence_limits.save");
+      const message = appendErrorReference("Gagal menyimpan batas absen", errorRef);
+      setLoadError(message);
+      toast.error(message);
     }
-    
-    setIsDialogOpen(false);
-    setEditingLimit(null);
-    setFormData({ max_days: "", description: "", warning_type: "" });
   };
 
   const handleEdit = (limit: AbsenceLimit) => {
@@ -77,8 +86,16 @@ export default function AbsenceLimitsManagement() {
 
   const handleDelete = (id: string) => {
     if (!confirm("Yakin ingin menghapus batas absen ini?")) return;
-    setLimits(prev => prev.filter(l => l.id !== id));
-    toast.success("Batas absen berhasil dihapus");
+    try {
+      setLoadError(null);
+      setLimits(prev => prev.filter(l => l.id !== id));
+      toast.success("Batas absen berhasil dihapus");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.schedule.absence_limits.delete", { limit_id: id });
+      const message = appendErrorReference("Gagal menghapus batas absen", errorRef);
+      setLoadError(message);
+      toast.error(message);
+    }
   };
 
   const getWarningBadgeColor = (type: string) => {
@@ -173,6 +190,12 @@ export default function AbsenceLimitsManagement() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>

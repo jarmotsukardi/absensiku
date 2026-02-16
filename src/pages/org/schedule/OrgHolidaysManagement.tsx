@@ -17,6 +17,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface WorkHoliday {
   id: string;
@@ -59,6 +60,7 @@ export default function OrgHolidaysManagement() {
   const [holidays, setHolidays] = useState<WorkHoliday[]>([]);
   const [workHours, setWorkHours] = useState<{ day_of_week: number; institution_type: string }[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isCopying, setIsCopying] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -88,6 +90,7 @@ export default function OrgHolidaysManagement() {
 
   const fetchData = async () => {
     try {
+      setLoadError(null);
       const { data, error } = await supabase
         .from("work_holidays")
         .select("*")
@@ -96,9 +99,12 @@ export default function OrgHolidaysManagement() {
 
       if (error) throw error;
       setHolidays((data as WorkHoliday[]) || []);
-    } catch (error) {
-      console.error("Error fetching holidays:", error);
-      toast.error("Gagal memuat data libur kerja");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.schedule.holidays.fetch_data");
+      const message = appendErrorReference("Gagal memuat data libur kerja", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setHolidays([]);
     } finally {
       setIsLoading(false);
     }
@@ -112,8 +118,12 @@ export default function OrgHolidaysManagement() {
         .eq("is_active", true);
       
       setWorkHours(data || []);
-    } catch (error) {
-      console.error("Error fetching work hours:", error);
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.schedule.holidays.fetch_work_hours");
+      const message = appendErrorReference("Gagal memuat jam kerja untuk validasi kalender", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setWorkHours([]);
     }
   };
 
@@ -201,9 +211,13 @@ export default function OrgHolidaysManagement() {
       
       toast.success(`Berhasil menyalin ${copiedCount} data libur ke tahun ${targetYear}`);
       fetchData();
-    } catch (error) {
-      console.error("Error copying holidays:", error);
-      toast.error("Gagal menyalin data libur");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.schedule.holidays.copy_previous_year", {
+        institution_type: targetInstitution,
+        source_year: previousYear,
+        target_year: targetYear,
+      });
+      toast.error(appendErrorReference("Gagal menyalin data libur", errorRef));
     } finally {
       setIsCopying(false);
     }
@@ -276,9 +290,14 @@ export default function OrgHolidaysManagement() {
       setIsDialogOpen(false);
       resetForm();
       fetchData();
-    } catch (error) {
-      console.error("Error saving holiday:", error);
-      toast.error("Gagal menyimpan libur kerja");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.schedule.holidays.save", {
+        holiday_id: formData.id || null,
+        institution_type: formData.institution_type,
+        year: formData.year,
+        month: formData.month,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan libur kerja", errorRef));
     }
   };
 
@@ -315,9 +334,9 @@ export default function OrgHolidaysManagement() {
       if (error) throw error;
       toast.success("Libur kerja berhasil dihapus");
       fetchData();
-    } catch (error) {
-      console.error("Error deleting holiday:", error);
-      toast.error("Gagal menghapus libur kerja");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.schedule.holidays.delete", { holiday_id: id });
+      toast.error(appendErrorReference("Gagal menghapus libur kerja", errorRef));
     }
   };
 
@@ -575,6 +594,12 @@ export default function OrgHolidaysManagement() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>

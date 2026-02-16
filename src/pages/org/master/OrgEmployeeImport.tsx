@@ -8,6 +8,15 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { 
@@ -20,6 +29,7 @@ import {
   Loader2,
   BookOpen,
 } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface ImportRow {
   rowNum: number;
@@ -44,23 +54,33 @@ export default function OrgEmployeeImport() {
   const [previewData, setPreviewData] = useState<ImportRow[]>([]);
   const [previewPage, setPreviewPage] = useState(1);
   const [importResult, setImportResult] = useState<{ success: number; failed: number } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchUserTenant();
+    void fetchUserTenant();
   }, []);
 
   const fetchUserTenant = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      const { data: employee } = await supabase
-        .from("employees")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .single();
-      
-      if (employee) {
-        setTenantId(employee.tenant_id);
+    setLoadError(null);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: employee, error } = await supabase
+          .from("employees")
+          .select("tenant_id")
+          .eq("user_id", user.id)
+          .single();
+        if (error) throw error;
+
+        if (employee) {
+          setTenantId(employee.tenant_id);
+        }
       }
+    } catch (error) {
+      const errorRef = reportError(error, "org.employee_import.fetch_user_tenant");
+      const message = appendErrorReference("Gagal menentukan tenant import", errorRef);
+      setLoadError(message);
+      toast.error(message);
     }
   };
 
@@ -147,6 +167,7 @@ export default function OrgEmployeeImport() {
     }
 
     setIsLoading(true);
+    setLoadError(null);
     setPreviewData([]);
     setImportResult(null);
     setPreviewPage(1);
@@ -234,8 +255,10 @@ export default function OrgEmployeeImport() {
 
       setPreviewData(parsedRows);
     } catch (error) {
-      console.error("Error parsing CSV:", error);
-      toast.error("Gagal membaca file CSV");
+      const errorRef = reportError(error, "org.employee_import.parse_csv");
+      const message = appendErrorReference("Gagal membaca file CSV", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -254,6 +277,7 @@ export default function OrgEmployeeImport() {
     }
 
     setIsImporting(true);
+    setLoadError(null);
     let success = 0;
     let failed = 0;
 
@@ -313,8 +337,13 @@ export default function OrgEmployeeImport() {
         setPreviewData([]);
       }
     } catch (error) {
-      console.error("Error during import:", error);
-      toast.error("Terjadi kesalahan saat import");
+      const errorRef = reportError(error, "org.employee_import.import", {
+        tenant_id: tenantId,
+        file_name: file?.name,
+      });
+      const message = appendErrorReference("Terjadi kesalahan saat import", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsImporting(false);
     }
@@ -327,6 +356,11 @@ export default function OrgEmployeeImport() {
     (previewPage - 1) * PREVIEW_PAGE_SIZE,
     previewPage * PREVIEW_PAGE_SIZE
   );
+  const previewPageNumbers = Array.from({ length: previewTotalPages }, (_, idx) => idx + 1).filter((page) => {
+    if (previewTotalPages <= 7) return true;
+    if (page <= 2 || page > previewTotalPages - 2) return true;
+    return Math.abs(page - previewPage) <= 1;
+  });
 
   return (
     <OrganizationLayout>
@@ -335,6 +369,14 @@ export default function OrgEmployeeImport() {
           <h1 className="text-2xl font-bold text-foreground">Import Pegawai</h1>
           <p className="text-sm text-muted-foreground">Import data pegawai dari file CSV</p>
         </div>
+
+        {loadError && (
+          <Card className="border-destructive/40">
+            <CardContent className="pt-6">
+              <p className="text-sm text-destructive">{loadError}</p>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Panduan Import */}
         <Card>
@@ -537,28 +579,63 @@ export default function OrgEmployeeImport() {
                 <p className="text-sm text-muted-foreground">
                   Menampilkan {paginatedPreviewRows.length} dari {previewData.length} baris
                 </p>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setPreviewPage((p) => Math.max(1, p - 1))}
-                    disabled={previewPage === 1}
-                  >
-                    Sebelumnya
-                  </Button>
-                  <span className="text-sm text-muted-foreground">
-                    Halaman {previewPage} dari {previewTotalPages}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setPreviewPage((p) => Math.min(previewTotalPages, p + 1))}
-                    disabled={previewPage === previewTotalPages}
-                  >
-                    Berikutnya
-                  </Button>
-                </div>
               </div>
+
+              {previewTotalPages > 1 && (
+                <Pagination className="mt-4">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          setPreviewPage((p) => Math.max(1, p - 1));
+                        }}
+                        aria-disabled={previewPage === 1}
+                        className={previewPage === 1 ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+
+                    {previewPageNumbers.map((page, index) => {
+                      const prev = previewPageNumbers[index - 1];
+                      const showEllipsis = prev && page - prev > 1;
+                      return (
+                        <div key={`preview-page-${page}`} className="flex items-center">
+                          {showEllipsis && (
+                            <PaginationItem>
+                              <PaginationEllipsis />
+                            </PaginationItem>
+                          )}
+                          <PaginationItem>
+                            <PaginationLink
+                              href="#"
+                              isActive={page === previewPage}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                setPreviewPage(page);
+                              }}
+                            >
+                              {page}
+                            </PaginationLink>
+                          </PaginationItem>
+                        </div>
+                      );
+                    })}
+
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          setPreviewPage((p) => Math.min(previewTotalPages, p + 1));
+                        }}
+                        aria-disabled={previewPage === previewTotalPages}
+                        className={previewPage === previewTotalPages ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              )}
 
               <div className="flex justify-end mt-4 gap-2">
                 <Button

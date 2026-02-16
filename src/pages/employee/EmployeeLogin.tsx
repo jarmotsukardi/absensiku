@@ -51,6 +51,29 @@ const generateCaptcha = () => {
   return { question, answer };
 };
 
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return "Terjadi kesalahan";
+};
+
+interface InvitationTenant {
+  name: string | null;
+  code: string | null;
+  logo_url: string | null;
+}
+
+interface InvitationData {
+  id: string;
+  tenant_id: string;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  nik: string | null;
+  opd_id: string | null;
+  office_id: string | null;
+  tenants?: InvitationTenant | null;
+}
+
 export default function EmployeeLogin() {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -122,7 +145,7 @@ export default function EmployeeLogin() {
   const [invitationCode, setInvitationCode] = useState(inviteCode || "");
   const [registerPassword, setRegisterPassword] = useState("");
   const [registerConfirmPassword, setRegisterConfirmPassword] = useState("");
-  const [invitationData, setInvitationData] = useState<any>(null);
+  const [invitationData, setInvitationData] = useState<InvitationData | null>(null);
   
   // Additional fields for invite registration (if not provided in invitation)
   const [inviteRegName, setInviteRegName] = useState("");
@@ -193,14 +216,7 @@ export default function EmployeeLogin() {
     return () => subscription.unsubscribe();
   }, [navigate, sessionManagement]);
 
-  // Fetch invitation data if code exists
-  useEffect(() => {
-    if (invitationCode && activeTab === "register" && registerMode === "invite") {
-      fetchInvitation();
-    }
-  }, [invitationCode, activeTab, registerMode]);
-
-  const fetchInvitation = async () => {
+  const fetchInvitation = useCallback(async () => {
     if (!invitationCode) return;
     
     try {
@@ -214,7 +230,7 @@ export default function EmployeeLogin() {
       if (error) throw error;
       
       if (data) {
-        setInvitationData(data);
+        setInvitationData(data as InvitationData);
         // Pre-fill fields from invitation data if available
         setInviteRegName(data.name || "");
         setInviteRegEmail(data.email || "");
@@ -229,7 +245,14 @@ export default function EmployeeLogin() {
     } catch (error) {
       console.error("Error fetching invitation:", error);
     }
-  };
+  }, [invitationCode, toast]);
+
+  // Fetch invitation data if code exists
+  useEffect(() => {
+    if (invitationCode && activeTab === "register" && registerMode === "invite") {
+      void fetchInvitation();
+    }
+  }, [invitationCode, activeTab, registerMode, fetchInvitation]);
 
   const refreshForgotCaptcha = () => {
     setForgotCaptcha(generateCaptcha());
@@ -464,8 +487,8 @@ export default function EmployeeLogin() {
       setMaskedEmail(result.email || forgotEmail);
       setOtpStep("otp");
       toast({ title: "Kode OTP Terkirim", description: "Periksa email Anda (berlaku 10 menit)." });
-    } catch (error: any) {
-      toast({ variant: "destructive", title: "Gagal Mengirim OTP", description: error.message });
+    } catch (error: unknown) {
+      toast({ variant: "destructive", title: "Gagal Mengirim OTP", description: getErrorMessage(error) });
       refreshForgotCaptcha();
     } finally {
       setIsLoading(false);
@@ -532,8 +555,8 @@ export default function EmployeeLogin() {
 
       setOtpStep("success");
       toast({ title: "Password Berhasil Diubah" });
-    } catch (error: any) {
-      toast({ variant: "destructive", title: "Gagal Reset Password", description: error.message });
+    } catch (error: unknown) {
+      toast({ variant: "destructive", title: "Gagal Reset Password", description: getErrorMessage(error) });
     } finally {
       setIsLoading(false);
     }
@@ -561,8 +584,8 @@ export default function EmployeeLogin() {
       otpInputRef.current?.clear();
       setOtpValid(false);
       toast({ title: "Kode OTP Terkirim Ulang" });
-    } catch (error: any) {
-      toast({ variant: "destructive", title: "Gagal Mengirim Ulang", description: error.message });
+    } catch (error: unknown) {
+      toast({ variant: "destructive", title: "Gagal Mengirim Ulang", description: getErrorMessage(error) });
     } finally {
       setIsLoading(false);
     }
@@ -628,8 +651,8 @@ export default function EmployeeLogin() {
       setSelfRegMaskedEmail(result.email);
       setSelfRegStep("otp");
       toast({ title: "Kode OTP Terkirim", description: "Periksa email Anda (berlaku 10 menit)." });
-    } catch (error: any) {
-      toast({ variant: "destructive", title: "Gagal Mengirim OTP", description: error.message });
+    } catch (error: unknown) {
+      toast({ variant: "destructive", title: "Gagal Mengirim OTP", description: getErrorMessage(error) });
       refreshSelfRegCaptcha();
     } finally {
       setIsLoading(false);
@@ -712,8 +735,8 @@ export default function EmployeeLogin() {
 
       setSelfRegStep("success");
       toast({ title: "Registrasi Berhasil!", description: "Silakan login dengan akun Anda." });
-    } catch (error: any) {
-      toast({ variant: "destructive", title: "Registrasi Gagal", description: error.message });
+    } catch (error: unknown) {
+      toast({ variant: "destructive", title: "Registrasi Gagal", description: getErrorMessage(error) });
     } finally {
       setIsLoading(false);
     }
@@ -740,8 +763,8 @@ export default function EmployeeLogin() {
       selfRegOtpRef.current?.clear();
       setSelfRegOtpValid(false);
       toast({ title: "Kode OTP Terkirim Ulang" });
-    } catch (error: any) {
-      toast({ variant: "destructive", title: "Gagal Mengirim Ulang", description: error.message });
+    } catch (error: unknown) {
+      toast({ variant: "destructive", title: "Gagal Mengirim Ulang", description: getErrorMessage(error) });
     } finally {
       setIsLoading(false);
     }
@@ -893,8 +916,8 @@ export default function EmployeeLogin() {
         setActiveTab("login");
         setEmail(finalEmail);
       }
-    } catch (error: any) {
-      toast({ variant: "destructive", title: "Registrasi Gagal", description: error.message });
+    } catch (error: unknown) {
+      toast({ variant: "destructive", title: "Registrasi Gagal", description: getErrorMessage(error) });
     } finally {
       setIsLoading(false);
     }

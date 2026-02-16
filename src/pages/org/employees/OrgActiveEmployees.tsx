@@ -14,6 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { SearchableSelect, SearchableSelectOption } from "@/components/ui/searchable-select";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type Employee = Tables<"employees">;
 type OPD = Tables<"opd">;
@@ -74,6 +75,7 @@ export default function OrgActiveEmployees() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     id: "",
     nip: "",
@@ -103,6 +105,7 @@ export default function OrgActiveEmployees() {
   }, [searchTerm, filterOpd, filterCategory, filterWorkUnit, filterAccountStatus]);
 
   const fetchData = async () => {
+    setLoadError(null);
     try {
       const [employeesRes, opdsRes, officesRes, workUnitsRes, positionsRes] = await Promise.all([
         supabase.from("employees").select("*, opd(*), offices:office_id(*), work_unit:work_unit_id(*), position_rel:position_id(*)").eq("is_active", true).order("name"),
@@ -113,14 +116,20 @@ export default function OrgActiveEmployees() {
       ]);
 
       if (employeesRes.error) throw employeesRes.error;
+      if (opdsRes.error) throw opdsRes.error;
+      if (officesRes.error) throw officesRes.error;
+      if (workUnitsRes.error) throw workUnitsRes.error;
+      if (positionsRes.error) throw positionsRes.error;
       setEmployees(employeesRes.data || []);
       setOpds(opdsRes.data || []);
       setOffices(officesRes.data || []);
       setWorkUnits(workUnitsRes.data || []);
       setPositions(positionsRes.data || []);
     } catch (error) {
-      console.error("Error fetching data:", error);
-      toast.error("Gagal memuat data");
+      const errorRef = reportError(error, "org.employees.active.fetch");
+      const message = appendErrorReference("Gagal memuat data pegawai aktif", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -689,6 +698,14 @@ export default function OrgActiveEmployees() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {loadError && (
+          <Card className="border-destructive/40">
+            <CardContent className="pt-6">
+              <p className="text-sm text-destructive">{loadError}</p>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>

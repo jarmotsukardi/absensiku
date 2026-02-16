@@ -35,29 +35,22 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { 
   Users, 
   Search, 
   MoreHorizontal,
-  Eye,
-  Edit,
   Shield,
   UserX,
   Crown,
   Building2,
-  Plus,
-  ChevronLeft,
-  ChevronRight,
   Loader2,
   Key,
 } from "lucide-react";
@@ -65,6 +58,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface AdminUser {
   id: string;
@@ -96,13 +90,12 @@ export default function UserManagement() {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [filteredUsers, setFilteredUsers] = useState<AdminUser[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [orgTypeFilter, setOrgTypeFilter] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
   
   // Dialog states
-  const [editDialogOpen, setEditDialogOpen] = useState(false);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState<AdminUser | null>(null);
   const [newPassword, setNewPassword] = useState("");
@@ -110,12 +103,11 @@ export default function UserManagement() {
   const getErrorMessage = (error: unknown) =>
     error instanceof Error ? error.message : "Terjadi kesalahan";
 
-  useEffect(() => {
-    fetchAdminUsers();
-  }, []);
-
-  const fetchAdminUsers = async () => {
+  const fetchAdminUsers = useCallback(async () => {
     try {
+      setIsLoading(true);
+      setLoadError(null);
+
       // Fetch all admin_instansi and super_admin roles with tenant info
       const { data: rolesData, error: rolesError } = await supabase
         .from("user_roles")
@@ -131,23 +123,39 @@ export default function UserManagement() {
       if (rolesError) throw rolesError;
 
       // Get unique user IDs
-      const userIds = [...new Set(rolesData?.map(r => r.user_id) || [])];
+      const userIds = [...new Set(rolesData?.map((r) => r.user_id) || [])];
       
       // Fetch tenant info
-      const tenantIds = [...new Set(rolesData?.filter(r => r.tenant_id).map(r => r.tenant_id) || [])];
-      
-      const { data: tenantsData } = await supabase
-        .from("tenants")
-        .select("id, name, organization_type, is_active")
-        .in("id", tenantIds);
+      const tenantIds = [
+        ...new Set(
+          rolesData
+            ?.filter((r) => Boolean(r.tenant_id))
+            .map((r) => r.tenant_id as string) || []
+        ),
+      ];
+
+      let tenantsData: Array<{ id: string; name: string; organization_type: string | null; is_active: boolean | null }> = [];
+      if (tenantIds.length) {
+        const { data, error } = await supabase
+          .from("tenants")
+          .select("id, name, organization_type, is_active")
+          .in("id", tenantIds);
+        if (error) throw error;
+        tenantsData = data ?? [];
+      }
 
       const tenantMap = new Map(tenantsData?.map(t => [t.id, t]) || []);
 
       // Fetch user emails from auth (we'll use employees table as fallback)
-      const { data: employeesData } = await supabase
-        .from("employees")
-        .select("user_id, email, is_active")
-        .in("user_id", userIds);
+      let employeesData: Array<{ user_id: string | null; email: string | null; is_active: boolean | null }> = [];
+      if (userIds.length) {
+        const { data, error } = await supabase
+          .from("employees")
+          .select("user_id, email, is_active")
+          .in("user_id", userIds);
+        if (error) throw error;
+        employeesData = data ?? [];
+      }
 
       const employeeMap = new Map(employeesData?.map(e => [e.user_id, e]) || []);
 
@@ -179,13 +187,20 @@ export default function UserManagement() {
       }, [] as AdminUser[]);
 
       setUsers(uniqueUsers);
-    } catch (error) {
-      console.error("Error fetching admin users:", error);
-      toast.error("Gagal memuat data user admin");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.user-management.fetch");
+      const message = appendErrorReference("Gagal memuat data user admin", errorRef);
+      setLoadError(message);
+      setUsers([]);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchAdminUsers();
+  }, [fetchAdminUsers]);
 
   const filterUsers = useCallback(() => {
     let filtered = [...users];
@@ -210,7 +225,10 @@ export default function UserManagement() {
     filterUsers();
   }, [filterUsers]);
 
-  const totalPages = Math.ceil(filteredUsers.length / ITEMS_PER_PAGE);
+  const totalPages = Math.max(1, Math.ceil(filteredUsers.length / ITEMS_PER_PAGE));
+  const pageNumbers = Array.from({ length: totalPages }, (_, index) => index + 1).filter(
+    (page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1
+  );
   const paginatedUsers = filteredUsers.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE
@@ -234,8 +252,9 @@ export default function UserManagement() {
       toast.info("Fitur reset password memerlukan konfigurasi edge function dengan service role");
       setPasswordDialogOpen(false);
       setNewPassword("");
-    } catch (error) {
-      toast.error(getErrorMessage(error));
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.user-management.password-reset");
+      toast.error(appendErrorReference(getErrorMessage(error), errorRef));
     } finally {
       setIsSaving(false);
     }
@@ -251,9 +270,13 @@ export default function UserManagement() {
       if (error) throw error;
       
       toast.success(user.is_active ? "User dinonaktifkan" : "User diaktifkan");
-      fetchAdminUsers();
-    } catch (error) {
-      toast.error(getErrorMessage(error));
+      await fetchAdminUsers();
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.user-management.toggle-active", {
+        user_id: user.user_id,
+        is_active: user.is_active,
+      });
+      toast.error(appendErrorReference(getErrorMessage(error), errorRef));
     }
   };
 
@@ -288,6 +311,12 @@ export default function UserManagement() {
             </div>
           </CardContent>
         </Card>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         {/* Users Table */}
         <Card>
@@ -392,29 +421,53 @@ export default function UserManagement() {
             )}
 
             {/* Pagination */}
-            {totalPages > 1 && (
-              <div className="flex items-center justify-between mt-4 pt-4 border-t">
+            {!isLoading && filteredUsers.length > 0 && totalPages > 1 && (
+              <div className="mt-4 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm text-muted-foreground">
                   Halaman {currentPage} dari {totalPages}
                 </p>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                    disabled={currentPage === 1}
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                    disabled={currentPage === totalPages}
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
-                </div>
+                <Pagination className="mx-0 w-auto justify-end">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          if (currentPage > 1) {
+                            setCurrentPage((page) => page - 1);
+                          }
+                        }}
+                        className={currentPage === 1 ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                    {pageNumbers.map((page) => (
+                      <PaginationItem key={page}>
+                        <PaginationLink
+                          href="#"
+                          isActive={page === currentPage}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            setCurrentPage(page);
+                          }}
+                        >
+                          {page}
+                        </PaginationLink>
+                      </PaginationItem>
+                    ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          if (currentPage < totalPages) {
+                            setCurrentPage((page) => page + 1);
+                          }
+                        }}
+                        className={currentPage === totalPages ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
               </div>
             )}
           </CardContent>

@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,6 +28,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { 
   Search,
   Filter,
@@ -46,6 +53,7 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface LeaveRequest {
   id: string;
@@ -59,11 +67,11 @@ interface LeaveRequest {
   is_half_day: boolean;
   attachment_url: string | null;
   rejection_reason?: string;
-  employee: {
+  employee?: {
     name: string;
     email: string;
     position: string | null;
-  };
+  } | null;
 }
 
 const leaveTypeLabels: Record<string, string> = {
@@ -83,8 +91,8 @@ const statusLabels: Record<string, { label: string; variant: "default" | "second
 const ITEMS_PER_PAGE = 10;
 
 export default function LeaveApprovals() {
-  const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [requests, setRequests] = useState<LeaveRequest[]>([]);
   const [filteredRequests, setFilteredRequests] = useState<LeaveRequest[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -96,13 +104,10 @@ export default function LeaveApprovals() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
 
-  useEffect(() => {
-    fetchLeaveRequests();
-  }, []);
-
-  const fetchLeaveRequests = async () => {
+  const fetchLeaveRequests = useCallback(async () => {
     setIsLoading(true);
     try {
+      setLoadError(null);
       const { data, error } = await supabase
         .from("leave_requests")
         .select(`*, employee:employees!leave_requests_employee_id_fkey(name, email, position)`)
@@ -110,13 +115,20 @@ export default function LeaveApprovals() {
 
       if (error) throw error;
       setRequests((data as unknown as LeaveRequest[]) || []);
-    } catch (error) {
-      console.error("Error fetching leave requests:", error);
-      toast.error("Gagal memuat data pengajuan");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.leave-approvals.fetch");
+      const message = appendErrorReference("Gagal memuat data pengajuan", errorRef);
+      setLoadError(message);
+      setRequests([]);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchLeaveRequests();
+  }, [fetchLeaveRequests]);
 
   const filterRequests = useCallback(() => {
     let filtered = [...requests];
@@ -125,8 +137,8 @@ export default function LeaveApprovals() {
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(r => 
-        r.employee.name.toLowerCase().includes(query) ||
-        r.employee.email.toLowerCase().includes(query) ||
+        (r.employee?.name || "").toLowerCase().includes(query) ||
+        (r.employee?.email || "").toLowerCase().includes(query) ||
         r.reason.toLowerCase().includes(query)
       );
     }
@@ -141,24 +153,44 @@ export default function LeaveApprovals() {
     setCurrentPage(1);
   }, [searchQuery, statusFilter, typeFilter, requests.length]);
 
+  const getApproverEmployeeId = useCallback(async () => {
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+    if (authError) throw authError;
+    if (!user) throw new Error("Sesi login tidak valid. Silakan login ulang.");
+
+    const { data: empData, error: employeeError } = await supabase
+      .from("employees")
+      .select("id")
+      .eq("user_id", user.id)
+      .single();
+
+    if (employeeError) throw employeeError;
+    return empData?.id ?? null;
+  }, []);
+
   const handleApprove = async () => {
     if (!selectedRequest) return;
     setIsProcessing(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const { data: empData } = await supabase.from("employees").select("id").eq("user_id", user?.id).single();
+      const approverEmployeeId = await getApproverEmployeeId();
       const { error } = await supabase.from("leave_requests").update({
         status: "disetujui",
-        approved_by: empData?.id,
+        approved_by: approverEmployeeId,
         approved_at: new Date().toISOString(),
       }).eq("id", selectedRequest.id);
       if (error) throw error;
-      toast.success(`Pengajuan ${selectedRequest.employee.name} telah disetujui`);
+      toast.success(`Pengajuan ${selectedRequest.employee?.name || "pegawai"} telah disetujui`);
       setRequests(prev => prev.map(r => r.id === selectedRequest.id ? { ...r, status: "disetujui" } : r));
       setSelectedRequest(null);
       setActionType(null);
-    } catch (error) {
-      toast.error("Gagal menyetujui pengajuan");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.leave-approvals.approve", {
+        request_id: selectedRequest.id,
+      });
+      toast.error(appendErrorReference("Gagal menyetujui pengajuan", errorRef));
     } finally {
       setIsProcessing(false);
     }
@@ -171,35 +203,34 @@ export default function LeaveApprovals() {
     }
     setIsProcessing(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const { data: empData } = await supabase.from("employees").select("id").eq("user_id", user?.id).single();
+      const approverEmployeeId = await getApproverEmployeeId();
       const { error } = await supabase.from("leave_requests").update({
         status: "ditolak",
         rejection_reason: rejectionReason,
-        approved_by: empData?.id,
+        approved_by: approverEmployeeId,
         approved_at: new Date().toISOString(),
       }).eq("id", selectedRequest.id);
       if (error) throw error;
-      toast.success(`Pengajuan ${selectedRequest.employee.name} telah ditolak`);
+      toast.success(`Pengajuan ${selectedRequest.employee?.name || "pegawai"} telah ditolak`);
       setRequests(prev => prev.map(r => r.id === selectedRequest.id ? { ...r, status: "ditolak" } : r));
       setSelectedRequest(null);
       setActionType(null);
       setRejectionReason("");
-    } catch (error) {
-      toast.error("Gagal menolak pengajuan");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.leave-approvals.reject", {
+        request_id: selectedRequest.id,
+      });
+      toast.error(appendErrorReference("Gagal menolak pengajuan", errorRef));
     } finally {
       setIsProcessing(false);
     }
   };
 
-  const getDayCount = (startDate: string, endDate: string, isHalfDay: boolean) => {
-    if (isHalfDay) return 0.5;
-    const diffTime = Math.abs(new Date(endDate).getTime() - new Date(startDate).getTime());
-    return Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
-  };
-
   const pendingCount = requests.filter(r => r.status === "menunggu").length;
   const totalPages = Math.max(1, Math.ceil(filteredRequests.length / ITEMS_PER_PAGE));
+  const pageNumbers = Array.from({ length: totalPages }, (_, index) => index + 1).filter(
+    (page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1
+  );
   const paginatedRequests = filteredRequests.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE
@@ -287,6 +318,12 @@ export default function LeaveApprovals() {
           </CardContent>
         </Card>
 
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
+
         {/* Table */}
         <Card>
           <CardHeader><CardTitle>Daftar Pengajuan</CardTitle><CardDescription>Menampilkan {filteredRequests.length} pengajuan</CardDescription></CardHeader>
@@ -313,7 +350,10 @@ export default function LeaveApprovals() {
                         <TableCell>
                           <div className="flex items-center gap-3">
                             <div className="h-9 w-9 rounded-full bg-primary/10 flex items-center justify-center"><User className="h-4 w-4 text-primary" /></div>
-                            <div><p className="font-medium">{req.employee.name}</p><p className="text-xs text-muted-foreground">{req.employee.position || req.employee.email}</p></div>
+                            <div>
+                              <p className="font-medium">{req.employee?.name || "Pegawai tidak ditemukan"}</p>
+                              <p className="text-xs text-muted-foreground">{req.employee?.position || req.employee?.email || "-"}</p>
+                            </div>
                           </div>
                         </TableCell>
                         <TableCell><Badge variant="outline">{leaveTypeLabels[req.leave_type]}</Badge></TableCell>
@@ -337,27 +377,53 @@ export default function LeaveApprovals() {
                 </Table>
               </div>
             )}
-            {!isLoading && filteredRequests.length > 0 && (
-              <div className="mt-4 flex items-center justify-between">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
-                  disabled={currentPage === 1}
-                >
-                  Sebelumnya
-                </Button>
+            {!isLoading && filteredRequests.length > 0 && totalPages > 1 && (
+              <div className="mt-4 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
                 <span className="text-sm text-muted-foreground">
                   Halaman {currentPage} dari {totalPages}
                 </span>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
-                  disabled={currentPage === totalPages}
-                >
-                  Berikutnya
-                </Button>
+                <Pagination className="mx-0 w-auto justify-end">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          if (currentPage > 1) {
+                            setCurrentPage((page) => page - 1);
+                          }
+                        }}
+                        className={currentPage === 1 ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                    {pageNumbers.map((page) => (
+                      <PaginationItem key={page}>
+                        <PaginationLink
+                          href="#"
+                          isActive={page === currentPage}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            setCurrentPage(page);
+                          }}
+                        >
+                          {page}
+                        </PaginationLink>
+                      </PaginationItem>
+                    ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          if (currentPage < totalPages) {
+                            setCurrentPage((page) => page + 1);
+                          }
+                        }}
+                        className={currentPage === totalPages ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
               </div>
             )}
           </CardContent>
@@ -368,7 +434,7 @@ export default function LeaveApprovals() {
       <Dialog open={actionType === "approve"} onOpenChange={(open) => !open && setActionType(null)}>
         <DialogContent>
           <DialogHeader><DialogTitle>Setujui Pengajuan</DialogTitle><DialogDescription>Yakin ingin menyetujui?</DialogDescription></DialogHeader>
-          {selectedRequest && <div className="py-4 text-sm"><p><strong>{selectedRequest.employee.name}</strong> - {leaveTypeLabels[selectedRequest.leave_type]}</p><p className="text-muted-foreground mt-2">{selectedRequest.reason}</p></div>}
+          {selectedRequest && <div className="py-4 text-sm"><p><strong>{selectedRequest.employee?.name || "Pegawai"}</strong> - {leaveTypeLabels[selectedRequest.leave_type]}</p><p className="text-muted-foreground mt-2">{selectedRequest.reason}</p></div>}
           <DialogFooter><Button variant="outline" onClick={() => setActionType(null)}>Batal</Button><Button onClick={handleApprove} disabled={isProcessing} className="bg-green-600">{isProcessing ? <Loader2 className="h-4 w-4 animate-spin" /> : "Setujui"}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
@@ -386,7 +452,7 @@ export default function LeaveApprovals() {
       <Dialog open={selectedRequest !== null && actionType === null} onOpenChange={(open) => !open && setSelectedRequest(null)}>
         <DialogContent>
           <DialogHeader><DialogTitle>Detail Pengajuan</DialogTitle></DialogHeader>
-          {selectedRequest && <div className="py-4 space-y-2 text-sm"><p><strong>{selectedRequest.employee.name}</strong></p><p>Tipe: {leaveTypeLabels[selectedRequest.leave_type]}</p><p>Status: {statusLabels[selectedRequest.status]?.label}</p><p>Alasan: {selectedRequest.reason}</p>{selectedRequest.rejection_reason && <p className="text-red-600">Alasan ditolak: {selectedRequest.rejection_reason}</p>}</div>}
+          {selectedRequest && <div className="py-4 space-y-2 text-sm"><p><strong>{selectedRequest.employee?.name || "Pegawai"}</strong></p><p>Tipe: {leaveTypeLabels[selectedRequest.leave_type]}</p><p>Status: {statusLabels[selectedRequest.status]?.label}</p><p>Alasan: {selectedRequest.reason}</p>{selectedRequest.rejection_reason && <p className="text-red-600">Alasan ditolak: {selectedRequest.rejection_reason}</p>}</div>}
           <DialogFooter><Button variant="outline" onClick={() => setSelectedRequest(null)}>Tutup</Button></DialogFooter>
         </DialogContent>
       </Dialog>

@@ -25,6 +25,7 @@ import {
   PaginationPrevious,
 } from "@/components/ui/pagination";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type MutationRequestRow = Tables<"mutation_requests">;
 type MutationStatus = Enums<"request_status">;
@@ -75,6 +76,7 @@ export default function OrgMutationRequests() {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("menunggu");
   const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const [selectedRequest, setSelectedRequest] = useState<MutationRequest | null>(null);
@@ -94,7 +96,12 @@ export default function OrgMutationRequests() {
       try {
         const resolved = await resolveOrgTenantId();
         setTenantId(resolved);
-      } catch {
+        setLoadError(null);
+      } catch (error) {
+        const errorRef = reportError(error, "org.mutation_requests.resolve_tenant");
+        const message = appendErrorReference("Gagal menentukan tenant organisasi", errorRef);
+        setLoadError(message);
+        toast.error(message);
         setTenantId(null);
       }
     };
@@ -103,6 +110,7 @@ export default function OrgMutationRequests() {
 
   const fetchEmployees = useCallback(async () => {
     try {
+      setLoadError(null);
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
       
@@ -122,8 +130,12 @@ export default function OrgMutationRequests() {
         .order("name");
       
       setEmployees((data || []) as EmployeeOption[]);
-    } catch (error) {
-      console.error("Error fetching employees:", error);
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.mutation_requests.fetch_employees");
+      const message = appendErrorReference("Gagal memuat data pegawai", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setEmployees([]);
     }
   }, []);
   
@@ -142,6 +154,7 @@ export default function OrgMutationRequests() {
   const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
+      setLoadError(null);
       if (!tenantId) {
         setRequests([]);
         setTotalCount(0);
@@ -180,9 +193,17 @@ export default function OrgMutationRequests() {
 
       setRequests(requestsWithEmployees);
       setTotalCount(count || 0);
-    } catch (error) {
-      console.error("Error fetching data:", error);
-      toast.error("Gagal memuat data");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.mutation_requests.fetch_data", {
+        tenant_id: tenantId,
+        status: statusFilter,
+        page: currentPage,
+      });
+      const message = appendErrorReference("Gagal memuat data permohonan mutasi", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setRequests([]);
+      setTotalCount(0);
     } finally {
       setIsLoading(false);
     }
@@ -255,9 +276,9 @@ export default function OrgMutationRequests() {
       setShowDetailDialog(false);
       void fetchData();
     } catch (error: unknown) {
-      console.error("Error approving:", error);
       const errorMessage = error instanceof Error ? error.message : "Gagal menyetujui pengajuan";
-      toast.error("Gagal menyetujui pengajuan", { description: errorMessage });
+      const errorRef = reportError(error, "org.mutation_requests.approve", { request_id: request.id, tenant_id: tenantId });
+      toast.error(appendErrorReference("Gagal menyetujui pengajuan", errorRef), { description: errorMessage });
     } finally {
       setIsProcessing(false);
     }
@@ -307,9 +328,12 @@ export default function OrgMutationRequests() {
       setRejectionReason("");
       void fetchData();
     } catch (error: unknown) {
-      console.error("Error rejecting:", error);
       const errorMessage = error instanceof Error ? error.message : "Gagal menolak pengajuan";
-      toast.error("Gagal menolak pengajuan", { description: errorMessage });
+      const errorRef = reportError(error, "org.mutation_requests.reject", {
+        request_id: selectedRequest.id,
+        tenant_id: tenantId,
+      });
+      toast.error(appendErrorReference("Gagal menolak pengajuan", errorRef), { description: errorMessage });
     } finally {
       setIsProcessing(false);
     }
@@ -366,6 +390,12 @@ export default function OrgMutationRequests() {
           </h1>
           <p className="text-muted-foreground">Kelola permohonan mutasi dan perubahan profil pegawai</p>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>

@@ -6,12 +6,21 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { Search, Calendar, Download, Filter } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Enums, Tables } from "@/integrations/supabase/types";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type LeaveRequest = Tables<"leave_requests">;
 type Employee = Tables<"employees">;
@@ -22,6 +31,7 @@ export default function ApprovedLeaveList() {
   const ITEMS_PER_PAGE = 15;
   const [requests, setRequests] = useState<LeaveRequestWithEmployee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
@@ -29,6 +39,7 @@ export default function ApprovedLeaveList() {
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
+      setLoadError(null);
       
       let query = supabase
         .from("leave_requests")
@@ -44,9 +55,12 @@ export default function ApprovedLeaveList() {
 
       if (error) throw error;
       setRequests((data as LeaveRequestWithEmployee[]) || []);
-    } catch (error) {
-      console.error("Error fetching data:", error);
-      toast.error("Gagal memuat data");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.leave.approved.fetch", { leave_type: typeFilter });
+      const message = appendErrorReference("Gagal memuat data izin/cuti disetujui", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setRequests([]);
     } finally {
       setIsLoading(false);
     }
@@ -101,6 +115,12 @@ export default function ApprovedLeaveList() {
             Export Excel
           </Button>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>
@@ -194,27 +214,50 @@ export default function ApprovedLeaveList() {
                 </TableBody>
               </Table>
             </div>
-            <div className="flex items-center justify-center gap-2 mt-4">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-              >
-                Sebelumnya
-              </Button>
-              <span className="text-sm text-muted-foreground">
-                Halaman {currentPage} dari {totalPages}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-              >
-                Berikutnya
-              </Button>
-            </div>
+            {totalPages > 1 && (
+              <div className="mt-4">
+                <Pagination>
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (currentPage > 1) setCurrentPage((p) => p - 1);
+                        }}
+                        className={currentPage <= 1 ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                    {Array.from({ length: totalPages }, (_, i) => i + 1)
+                      .filter((page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1)
+                      .map((page) => (
+                        <PaginationItem key={page}>
+                          <PaginationLink
+                            href="#"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              setCurrentPage(page);
+                            }}
+                            isActive={currentPage === page}
+                          >
+                            {page}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (currentPage < totalPages) setCurrentPage((p) => p + 1);
+                        }}
+                        className={currentPage >= totalPages ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

@@ -13,6 +13,7 @@ import { Plus, Search, Pencil, Trash2, AlertTriangle, RotateCcw, Bell } from "lu
 import { toast } from "sonner";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { Switch } from "@/components/ui/switch";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface AbsenceLimit {
   id: string;
@@ -30,6 +31,7 @@ type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
 export default function OrgAbsenceLimitsManagement() {
   const [limits, setLimits] = useState<AbsenceLimit[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -52,6 +54,7 @@ export default function OrgAbsenceLimitsManagement() {
 
   const fetchData = async () => {
     try {
+      setLoadError(null);
       const { data, error } = await supabase
         .from("absence_limits")
         .select("*")
@@ -59,9 +62,12 @@ export default function OrgAbsenceLimitsManagement() {
 
       if (error) throw error;
       setLimits((data as AbsenceLimit[]) || []);
-    } catch (error) {
-      console.error("Error fetching absence limits:", error);
-      toast.error("Gagal memuat data batas absen");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.schedule.absence_limits.fetch_data");
+      const message = appendErrorReference("Gagal memuat data batas absen", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setLimits([]);
     } finally {
       setIsLoading(false);
     }
@@ -127,9 +133,12 @@ export default function OrgAbsenceLimitsManagement() {
       setIsDialogOpen(false);
       resetForm();
       fetchData();
-    } catch (error) {
-      console.error("Error saving absence limit:", error);
-      toast.error("Gagal menyimpan batas absen");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.schedule.absence_limits.save", {
+        rule_id: formData.id || null,
+        is_editing: isEditing,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan batas absen", errorRef));
     }
   };
 
@@ -169,9 +178,12 @@ export default function OrgAbsenceLimitsManagement() {
       if (error) throw error;
       setLimits((prev) => prev.map((row) => (row.id === limit.id ? { ...row, is_active: nextValue } : row)));
       toast.success(`Aturan ${nextValue ? "diaktifkan" : "dinonaktifkan"}.`);
-    } catch (error) {
-      console.error("Error toggling absence limit:", error);
-      toast.error("Gagal mengubah status aturan");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.schedule.absence_limits.toggle_status", {
+        rule_id: limit.id,
+        next_value: nextValue,
+      });
+      toast.error(appendErrorReference("Gagal mengubah status aturan", errorRef));
     }
   };
 
@@ -269,9 +281,12 @@ export default function OrgAbsenceLimitsManagement() {
       }
 
       toast.success(`Notifikasi terkirim: ${inserts.length} pegawai (aturan: ${limit.warning_type}).`);
-    } catch (error) {
-      console.error("Error sending absence warning notifications:", error);
-      toast.error("Gagal mengirim notifikasi aturan");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.schedule.absence_limits.notify_rule", {
+        rule_id: limit.id,
+        tenant_id: limit.tenant_id,
+      });
+      toast.error(appendErrorReference("Gagal mengirim notifikasi aturan", errorRef));
     } finally {
       setSendingRuleId(null);
     }
@@ -285,9 +300,9 @@ export default function OrgAbsenceLimitsManagement() {
       if (error) throw error;
       toast.success("Batas absen berhasil dihapus");
       fetchData();
-    } catch (error) {
-      console.error("Error deleting absence limit:", error);
-      toast.error("Gagal menghapus batas absen");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.schedule.absence_limits.delete", { rule_id: id });
+      toast.error(appendErrorReference("Gagal menghapus batas absen", errorRef));
     }
   };
 
@@ -385,6 +400,12 @@ export default function OrgAbsenceLimitsManagement() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>

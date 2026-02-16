@@ -150,6 +150,7 @@ export default function OrgNationalHolidaysManagement() {
   const [fallbackPreviewHolidays, setFallbackPreviewHolidays] = useState<NationalHoliday[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isPulling, setIsPulling] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterYear, setFilterYear] = useState<string>(currentYear.toString());
   const [currentPage, setCurrentPage] = useState(1);
@@ -157,6 +158,7 @@ export default function OrgNationalHolidaysManagement() {
 
   const fetchHolidays = useCallback(async () => {
     try {
+      setLoadError(null);
       let query = supabase
         .from("national_holidays")
         .select("*")
@@ -173,7 +175,10 @@ export default function OrgNationalHolidaysManagement() {
       const errorRef = reportError(error, "org.national_holidays.fetch", {
         year: filterYear,
       });
-      toast.error(appendErrorReference("Gagal memuat data libur nasional", errorRef));
+      const message = appendErrorReference("Gagal memuat data libur nasional", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setHolidays([]);
     } finally {
       setIsLoading(false);
     }
@@ -185,6 +190,7 @@ export default function OrgNationalHolidaysManagement() {
 
   const pullFromNational = async () => {
     setIsPulling(true);
+    setLoadError(null);
     setFallbackPreviewHolidays([]);
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -384,7 +390,9 @@ export default function OrgNationalHolidaysManagement() {
         year: filterYear,
         tenant_id: queryTenantId,
       });
-      toast.error(appendErrorReference("Gagal menarik data libur nasional", errorRef));
+      const message = appendErrorReference("Gagal menarik data libur nasional", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsPulling(false);
     }
@@ -446,6 +454,12 @@ export default function OrgNationalHolidaysManagement() {
             {isPulling ? "Menarik..." : "Tarik ke Kalender Organisasi"}
           </Button>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>

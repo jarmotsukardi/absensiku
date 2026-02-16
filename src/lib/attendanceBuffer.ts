@@ -12,6 +12,7 @@
  */
 
 import { Tables } from "@/integrations/supabase/types";
+import { reportError } from "@/lib/errorLogger";
 
 type AttendanceRecord = Tables<"attendance_records">;
 
@@ -183,7 +184,9 @@ export function cacheTodayAttendance(employeeId: string, record: AttendanceRecor
     } else {
       localStorage.removeItem(key);
     }
-  } catch {}
+  } catch (error: unknown) {
+    reportError(error, "attendance_buffer.cache_today_attendance", { employee_id: employeeId });
+  }
 }
 
 /**

@@ -29,6 +29,11 @@ interface AdminEmployeeRow {
     user_id: string | null;
 }
 
+const getErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    return "Terjadi kesalahan";
+};
+
 export default function AdminProfile() {
     const [session, setSession] = useState<Session | null>(null);
     const [user, setUser] = useState<User | null>(null);
@@ -145,9 +150,9 @@ export default function AdminProfile() {
             setShowPasswordForm(false);
             setNewPassword("");
             setConfirmPassword("");
-        } catch (error: any) {
+        } catch (error: unknown) {
             toast.error("Gagal mengubah password", {
-                description: error.message || "Terjadi kesalahan",
+                description: getErrorMessage(error),
             });
         } finally {
             setIsChangingPassword(false);
@@ -245,9 +250,9 @@ export default function AdminProfile() {
             }
 
             toast.success("No HP super admin berhasil disimpan");
-        } catch (error: any) {
+        } catch (error: unknown) {
             toast.error("Gagal menyimpan No HP", {
-                description: error.message || "Terjadi kesalahan",
+                description: getErrorMessage(error),
             });
         } finally {
             setIsSavingPhone(false);

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +13,7 @@ import { Plus, Search, Pencil, Trash2, MapPin, ChevronLeft, ChevronRight, Filter
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { LocationPicker } from "@/components/maps/LocationPicker";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type Office = Tables<"offices">;
 type OPD = Tables<"opd">;
@@ -28,6 +29,7 @@ export default function OrgWorkLocationsManagement() {
   const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     id: "",
     name: "",
@@ -39,14 +41,11 @@ export default function OrgWorkLocationsManagement() {
   });
 
   useEffect(() => {
-    fetchData();
-  }, []);
-
-  useEffect(() => {
     setCurrentPage(1);
   }, [searchTerm, filterOpdId]);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
+    setLoadError(null);
     try {
       const [officesRes, opdsRes] = await Promise.all([
         supabase.from("offices").select("*, opd(*)").order("name"),
@@ -59,12 +58,18 @@ export default function OrgWorkLocationsManagement() {
       setOffices(officesRes.data || []);
       setOpds(opdsRes.data || []);
     } catch (error) {
-      console.error("Error fetching data:", error);
-      toast.error("Gagal memuat data");
+      const errorRef = reportError(error, "org.work_locations.fetch");
+      const message = appendErrorReference("Gagal memuat data lokasi kerja", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    void fetchData();
+  }, [fetchData]);
 
   const handleSubmit = async () => {
     if (!formData.name || !formData.latitude || !formData.longitude) {
@@ -109,10 +114,10 @@ export default function OrgWorkLocationsManagement() {
 
       setIsDialogOpen(false);
       resetForm();
-      fetchData();
+      void fetchData();
     } catch (error) {
-      console.error("Error saving location:", error);
-      toast.error("Gagal menyimpan lokasi kerja");
+      const errorRef = reportError(error, "org.work_locations.save", { location_id: formData.id || undefined });
+      toast.error(appendErrorReference("Gagal menyimpan lokasi kerja", errorRef));
     }
   };
 
@@ -142,10 +147,10 @@ export default function OrgWorkLocationsManagement() {
       const { error } = await supabase.from("offices").delete().eq("id", id);
       if (error) throw error;
       toast.success("Lokasi kerja berhasil dihapus");
-      fetchData();
+      void fetchData();
     } catch (error) {
-      console.error("Error deleting location:", error);
-      toast.error("Gagal menghapus lokasi kerja");
+      const errorRef = reportError(error, "org.work_locations.delete", { location_id: id });
+      toast.error(appendErrorReference("Gagal menghapus lokasi kerja", errorRef));
     }
   };
 
@@ -247,6 +252,14 @@ export default function OrgWorkLocationsManagement() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {loadError && (
+          <Card className="border-destructive/40">
+            <CardContent className="pt-6">
+              <p className="text-sm text-destructive">{loadError}</p>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>

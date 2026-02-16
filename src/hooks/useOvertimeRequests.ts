@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { TablesUpdate } from "@/integrations/supabase/types";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
  
 export interface OvertimeRequest {
    id: string;
@@ -128,9 +129,11 @@ export function useOvertimeRequests(filters?: {
    const [requests, setRequests] = useState<OvertimeRequest[]>([]);
    const [isLoading, setIsLoading] = useState(true);
    const [totalCount, setTotalCount] = useState(0);
+   const [loadError, setLoadError] = useState<string | null>(null);
  
    const fetchRequests = useCallback(async () => {
      try {
+       setLoadError(null);
        let query = supabase
          .from("overtime_requests")
          .select(`
@@ -180,8 +183,17 @@ export function useOvertimeRequests(filters?: {
        if (error) throw error;
        setRequests((data || []) as OvertimeRequest[]);
        setTotalCount(count || 0);
-     } catch (error) {
-       console.error("Error fetching overtime requests:", error);
+     } catch (error: unknown) {
+       const errorRef = reportError(error, "overtime_requests.fetch", {
+         tenant_id: filters?.tenantId,
+         employee_id: filters?.employeeId,
+         status: filters?.status,
+         page: filters?.page,
+       });
+       const message = appendErrorReference("Gagal memuat data pengajuan lembur", errorRef);
+       setLoadError(message);
+       setRequests([]);
+       setTotalCount(0);
      } finally {
        setIsLoading(false);
      }
@@ -308,6 +320,7 @@ export function useOvertimeRequests(filters?: {
    return { 
      requests, 
      isLoading, 
+     loadError,
      totalCount,
      createRequest, 
      approveRequest, 

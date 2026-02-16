@@ -6,12 +6,21 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { Search, FileText, Check, X, Filter } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Enums, Tables } from "@/integrations/supabase/types";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type LeaveRequest = Tables<"leave_requests">;
 type Employee = Tables<"employees">;
@@ -22,6 +31,7 @@ export default function LeaveRequestsAdmin() {
   const ITEMS_PER_PAGE = 15;
   const [requests, setRequests] = useState<LeaveRequestWithEmployee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("menunggu");
   const [currentPage, setCurrentPage] = useState(1);
@@ -29,6 +39,7 @@ export default function LeaveRequestsAdmin() {
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
+      setLoadError(null);
       
       let query = supabase
         .from("leave_requests")
@@ -43,9 +54,14 @@ export default function LeaveRequestsAdmin() {
 
       if (error) throw error;
       setRequests((data as LeaveRequestWithEmployee[]) || []);
-    } catch (error) {
-      console.error("Error fetching data:", error);
-      toast.error("Gagal memuat data");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.leave-requests.fetch", {
+        status_filter: statusFilter,
+      });
+      const message = appendErrorReference("Gagal memuat data", errorRef);
+      setLoadError(message);
+      setRequests([]);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -55,32 +71,42 @@ export default function LeaveRequestsAdmin() {
     fetchData();
   }, [fetchData]);
 
+  const getCurrentEmployeeId = useCallback(async () => {
+    const {
+      data: { user },
+      error: authError,
+    } = await supabase.auth.getUser();
+    if (authError) throw authError;
+    if (!user) throw new Error("Sesi login tidak valid. Silakan login ulang.");
+
+    const { data: currentEmployee, error: employeeError } = await supabase
+      .from("employees")
+      .select("id")
+      .eq("user_id", user.id)
+      .single();
+    if (employeeError) throw employeeError;
+    return currentEmployee?.id ?? null;
+  }, []);
+
   const handleApprove = async (id: string) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      const { data: currentEmployee } = await supabase
-        .from("employees")
-        .select("id")
-        .eq("user_id", user.id)
-        .single();
+      const currentEmployeeId = await getCurrentEmployeeId();
 
       const { error } = await supabase
         .from("leave_requests")
         .update({ 
           status: "disetujui", 
-          approved_by: currentEmployee?.id,
+          approved_by: currentEmployeeId,
           approved_at: new Date().toISOString()
         })
         .eq("id", id);
 
       if (error) throw error;
       toast.success("Permohonan cuti disetujui");
-      fetchData();
-    } catch (error) {
-      console.error("Error approving request:", error);
-      toast.error("Gagal menyetujui permohonan");
+      await fetchData();
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.leave-requests.approve", { request_id: id });
+      toast.error(appendErrorReference("Gagal menyetujui permohonan", errorRef));
     }
   };
 
@@ -99,10 +125,10 @@ export default function LeaveRequestsAdmin() {
 
       if (error) throw error;
       toast.success("Permohonan cuti ditolak");
-      fetchData();
-    } catch (error) {
-      console.error("Error rejecting request:", error);
-      toast.error("Gagal menolak permohonan");
+      await fetchData();
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.leave-requests.reject", { request_id: id });
+      toast.error(appendErrorReference("Gagal menolak permohonan", errorRef));
     }
   };
 
@@ -136,6 +162,9 @@ export default function LeaveRequestsAdmin() {
     req.reason.toLowerCase().includes(searchTerm.toLowerCase())
   );
   const totalPages = Math.max(1, Math.ceil(filteredRequests.length / ITEMS_PER_PAGE));
+  const pageNumbers = Array.from({ length: totalPages }, (_, index) => index + 1).filter(
+    (page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1
+  );
   const paginatedRequests = filteredRequests.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE
@@ -154,6 +183,12 @@ export default function LeaveRequestsAdmin() {
             Kelola permohonan cuti dan izin pegawai
           </p>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>
@@ -259,27 +294,55 @@ export default function LeaveRequestsAdmin() {
                 </TableBody>
               </Table>
             </div>
-            <div className="flex items-center justify-center gap-2 mt-4">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-              >
-                Sebelumnya
-              </Button>
-              <span className="text-sm text-muted-foreground">
-                Halaman {currentPage} dari {totalPages}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-              >
-                Berikutnya
-              </Button>
-            </div>
+            {!isLoading && filteredRequests.length > 0 && totalPages > 1 && (
+              <div className="mt-4 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
+                <span className="text-sm text-muted-foreground">
+                  Halaman {currentPage} dari {totalPages}
+                </span>
+                <Pagination className="mx-0 w-auto justify-end">
+                  <PaginationContent>
+                    <PaginationItem>
+                      <PaginationPrevious
+                        href="#"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          if (currentPage > 1) {
+                            setCurrentPage((page) => page - 1);
+                          }
+                        }}
+                        className={currentPage === 1 ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                    {pageNumbers.map((page) => (
+                      <PaginationItem key={page}>
+                        <PaginationLink
+                          href="#"
+                          isActive={page === currentPage}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            setCurrentPage(page);
+                          }}
+                        >
+                          {page}
+                        </PaginationLink>
+                      </PaginationItem>
+                    ))}
+                    <PaginationItem>
+                      <PaginationNext
+                        href="#"
+                        onClick={(event) => {
+                          event.preventDefault();
+                          if (currentPage < totalPages) {
+                            setCurrentPage((page) => page + 1);
+                          }
+                        }}
+                        className={currentPage === totalPages ? "pointer-events-none opacity-50" : ""}
+                      />
+                    </PaginationItem>
+                  </PaginationContent>
+                </Pagination>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>

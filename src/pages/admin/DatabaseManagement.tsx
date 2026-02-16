@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -6,6 +6,14 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { 
   Database, 
   Table2, 
@@ -21,6 +29,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface TableStats {
   name: string;
@@ -43,19 +52,16 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
   const [tableStats, setTableStats] = useState<TableStats[]>([]);
   const [systemSettings, setSystemSettings] = useState<SystemSetting[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("overview");
   const [tablesPage, setTablesPage] = useState(1);
   const [settingsPage, setSettingsPage] = useState(1);
 
-  useEffect(() => {
-    fetchTableStats();
-    fetchSystemSettings();
-  }, []);
-
-  const fetchTableStats = async () => {
+  const fetchTableStats = useCallback(async () => {
     setIsLoading(true);
     
     try {
+      setLoadError(null);
       const [
         tenantsRes,
         employeesRes,
@@ -78,6 +84,20 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
         supabase.from('notifications').select('id', { count: 'exact', head: true }),
       ]);
 
+      const responses = [
+        tenantsRes,
+        employeesRes,
+        officesRes,
+        attendanceRes,
+        leaveRequestsRes,
+        userRolesRes,
+        holidaysRes,
+        auditLogsRes,
+        notificationsRes,
+      ];
+      const firstError = responses.find((res) => res.error)?.error;
+      if (firstError) throw firstError;
+
       setTableStats([
         { name: 'Organisasi (Tenants)', icon: Building2, count: tenantsRes.count || 0, description: 'Daftar organisasi terdaftar' },
         { name: 'Pegawai (Employees)', icon: Users, count: employeesRes.count || 0, description: 'Data pegawai semua organisasi' },
@@ -89,54 +109,77 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
         { name: 'Audit Log', icon: FileText, count: auditLogsRes.count || 0, description: 'Catatan aktivitas sistem' },
         { name: 'Notifikasi', icon: Activity, count: notificationsRes.count || 0, description: 'Notifikasi pengguna' },
       ]);
-    } catch (error) {
-      console.error('Error fetching table stats:', error);
-      toast.error("Gagal memuat statistik database");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.database.table_stats.fetch");
+      const message = appendErrorReference("Gagal memuat statistik database", errorRef);
+      setLoadError(message);
+      setTableStats([]);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
-  const fetchSystemSettings = async () => {
-    const { data, error } = await supabase
-      .from('system_settings')
-      .select('*')
-      .order('key');
+  const fetchSystemSettings = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('system_settings')
+        .select('*')
+        .order('key');
 
-    if (!error && data) {
-      setSystemSettings(data.map(s => ({
-        ...s,
-        value: typeof s.value === 'string' ? s.value.replace(/"/g, '') : JSON.stringify(s.value),
-      })));
+      if (error) throw error;
+      if (data) {
+        setSystemSettings(data.map(s => ({
+          ...s,
+          value: typeof s.value === 'string' ? s.value.replace(/"/g, '') : JSON.stringify(s.value),
+        })));
+      }
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.database.system_settings.fetch");
+      const message = appendErrorReference("Gagal memuat pengaturan sistem", errorRef);
+      setLoadError((prev) => prev ?? message);
+      setSystemSettings([]);
+      toast.error(message);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    void Promise.all([fetchTableStats(), fetchSystemSettings()]);
+  }, [fetchSystemSettings, fetchTableStats]);
 
   const updateSystemSetting = async (key: string, value: string) => {
     const jsonValue = isNaN(Number(value)) ? `"${value}"` : value;
-    
-    const { error } = await supabase
-      .from('system_settings')
-      .update({ value: JSON.parse(jsonValue), updated_at: new Date().toISOString() })
-      .eq('key', key);
 
-    if (!error) {
+    try {
+      const { error } = await supabase
+        .from('system_settings')
+        .update({ value: JSON.parse(jsonValue), updated_at: new Date().toISOString() })
+        .eq('key', key);
+
+      if (error) throw error;
       toast.success("Pengaturan berhasil diperbarui");
-      fetchSystemSettings();
-    } else {
-      toast.error("Gagal memperbarui pengaturan");
+      await fetchSystemSettings();
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.database.system_settings.update", { key });
+      toast.error(appendErrorReference("Gagal memperbarui pengaturan", errorRef));
     }
   };
 
   const exportTableData = async (tableName: string) => {
     toast.info(`Mengekspor data ${tableName}...`);
-    
-    // Simplified export - in real app would use proper export logic
-    const { data, error } = await supabase
-      .from(tableName as 'tenants')
-      .select('*')
-      .limit(1000);
 
-    if (!error && data) {
+    try {
+      // Simplified export - in real app would use proper export logic
+      const { data, error } = await supabase
+        .from(tableName as 'tenants')
+        .select('*')
+        .limit(1000);
+
+      if (error) throw error;
+      if (!data) {
+        throw new Error(`Data ${tableName} kosong atau tidak tersedia.`);
+      }
+
       const jsonStr = JSON.stringify(data, null, 2);
       const blob = new Blob([jsonStr], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -146,8 +189,9 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
       a.click();
       URL.revokeObjectURL(url);
       toast.success(`Data ${tableName} berhasil diekspor`);
-    } else {
-      toast.error(`Gagal mengekspor data ${tableName}`);
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.database.export_table", { table_name: tableName });
+      toast.error(appendErrorReference(`Gagal mengekspor data ${tableName}`, errorRef));
     }
   };
 
@@ -163,11 +207,17 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
     'Notifikasi': 'notifications',
   };
   const tableTotalPages = Math.max(1, Math.ceil(tableStats.length / TABLES_PER_PAGE));
+  const tablePageNumbers = Array.from({ length: tableTotalPages }, (_, index) => index + 1).filter(
+    (page) => page === 1 || page === tableTotalPages || Math.abs(page - tablesPage) <= 1
+  );
   const paginatedTableStats = tableStats.slice(
     (tablesPage - 1) * TABLES_PER_PAGE,
     tablesPage * TABLES_PER_PAGE
   );
   const settingsTotalPages = Math.max(1, Math.ceil(systemSettings.length / SETTINGS_PER_PAGE));
+  const settingsPageNumbers = Array.from({ length: settingsTotalPages }, (_, index) => index + 1).filter(
+    (page) => page === 1 || page === settingsTotalPages || Math.abs(page - settingsPage) <= 1
+  );
   const paginatedSettings = systemSettings.slice(
     (settingsPage - 1) * SETTINGS_PER_PAGE,
     settingsPage * SETTINGS_PER_PAGE
@@ -183,6 +233,13 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
 
   const content = (
     <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+        {loadError && (
+          <Card className="border-destructive/30 bg-destructive/5">
+            <CardContent className="pt-6 text-sm text-destructive">
+              {loadError}
+            </CardContent>
+          </Card>
+        )}
         <TabsList>
           <TabsTrigger value="overview">
             <Database className="h-4 w-4 mr-2" />
@@ -337,26 +394,52 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
                 </TableBody>
               </Table>
               {tableStats.length > 0 && (
-                <div className="mt-4 flex items-center justify-between">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setTablesPage((prev) => Math.max(1, prev - 1))}
-                    disabled={tablesPage === 1}
-                  >
-                    Sebelumnya
-                  </Button>
+                <div className="mt-4 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
                   <span className="text-sm text-muted-foreground">
                     Halaman {tablesPage} dari {tableTotalPages}
                   </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setTablesPage((prev) => Math.min(tableTotalPages, prev + 1))}
-                    disabled={tablesPage === tableTotalPages}
-                  >
-                    Berikutnya
-                  </Button>
+                  <Pagination className="mx-0 w-auto justify-end">
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious
+                          href="#"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            if (tablesPage > 1) {
+                              setTablesPage((page) => page - 1);
+                            }
+                          }}
+                          className={tablesPage === 1 ? "pointer-events-none opacity-50" : ""}
+                        />
+                      </PaginationItem>
+                      {tablePageNumbers.map((page) => (
+                        <PaginationItem key={`table-page-${page}`}>
+                          <PaginationLink
+                            href="#"
+                            isActive={page === tablesPage}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              setTablesPage(page);
+                            }}
+                          >
+                            {page}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ))}
+                      <PaginationItem>
+                        <PaginationNext
+                          href="#"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            if (tablesPage < tableTotalPages) {
+                              setTablesPage((page) => page + 1);
+                            }
+                          }}
+                          className={tablesPage === tableTotalPages ? "pointer-events-none opacity-50" : ""}
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
                 </div>
               )}
             </CardContent>
@@ -414,26 +497,52 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
                 </TableBody>
               </Table>
               {systemSettings.length > 0 && (
-                <div className="mt-4 flex items-center justify-between">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setSettingsPage((prev) => Math.max(1, prev - 1))}
-                    disabled={settingsPage === 1}
-                  >
-                    Sebelumnya
-                  </Button>
+                <div className="mt-4 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
                   <span className="text-sm text-muted-foreground">
                     Halaman {settingsPage} dari {settingsTotalPages}
                   </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setSettingsPage((prev) => Math.min(settingsTotalPages, prev + 1))}
-                    disabled={settingsPage === settingsTotalPages}
-                  >
-                    Berikutnya
-                  </Button>
+                  <Pagination className="mx-0 w-auto justify-end">
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious
+                          href="#"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            if (settingsPage > 1) {
+                              setSettingsPage((page) => page - 1);
+                            }
+                          }}
+                          className={settingsPage === 1 ? "pointer-events-none opacity-50" : ""}
+                        />
+                      </PaginationItem>
+                      {settingsPageNumbers.map((page) => (
+                        <PaginationItem key={`settings-page-${page}`}>
+                          <PaginationLink
+                            href="#"
+                            isActive={page === settingsPage}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              setSettingsPage(page);
+                            }}
+                          >
+                            {page}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ))}
+                      <PaginationItem>
+                        <PaginationNext
+                          href="#"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            if (settingsPage < settingsTotalPages) {
+                              setSettingsPage((page) => page + 1);
+                            }
+                          }}
+                          className={settingsPage === settingsTotalPages ? "pointer-events-none opacity-50" : ""}
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
                 </div>
               )}
             </CardContent>

@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Search, Building, Hospital, GraduationCap, Landmark, Factory, Store, Hotel, HardHat, Truck, Briefcase, Palette, Info } from "lucide-react";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface InstitutionType {
   id: string;
@@ -38,6 +40,7 @@ export default function OrgInstitutionTypesManagement() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const ITEMS_PER_PAGE = 10;
 
   useEffect(() => {
@@ -45,6 +48,7 @@ export default function OrgInstitutionTypesManagement() {
   }, []);
 
   const fetchInstitutionTypes = async () => {
+    setLoadError(null);
     try {
       const { data, error } = await supabase
         .from("institution_types")
@@ -54,7 +58,10 @@ export default function OrgInstitutionTypesManagement() {
       if (error) throw error;
       setInstitutionTypes(data || []);
     } catch (err) {
-      console.error("Error fetching institution types:", err);
+      const errorRef = reportError(err, "org.institution_types.fetch");
+      const message = appendErrorReference("Gagal memuat daftar jenis instansi", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -97,6 +104,14 @@ export default function OrgInstitutionTypesManagement() {
             </div>
           </div>
         </div>
+
+        {loadError && (
+          <Card className="border-destructive/40">
+            <CardContent className="pt-6">
+              <p className="text-sm text-destructive">{loadError}</p>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>

@@ -11,6 +11,7 @@ import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import type { Tables } from "@/integrations/supabase/types";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type AttendanceRecord = Tables<"attendance_records_partitioned">;
 type EmployeeSummary = {
@@ -30,12 +31,15 @@ export default function OrgAbsentWithoutNotice() {
   const [searchTerm, setSearchTerm] = useState("");
   const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     const initTenant = async () => {
       try {
         setTenantId(await resolveOrgTenantId());
-      } catch {
+      } catch (error) {
+        const errorRef = reportError(error, "org.absent_without_notice.resolve_tenant");
+        setLoadError(appendErrorReference("Gagal menentukan tenant organisasi", errorRef));
         setTenantId(null);
       }
     };
@@ -43,6 +47,7 @@ export default function OrgAbsentWithoutNotice() {
   }, []);
 
   const fetchData = useCallback(async () => {
+    setLoadError(null);
     try {
       if (!tenantId) {
         setRecords([]);
@@ -79,7 +84,10 @@ export default function OrgAbsentWithoutNotice() {
 
       setRecords(recordsWithEmployee);
     } catch (error) {
-      toast.error("Gagal memuat data");
+      const errorRef = reportError(error, "org.absent_without_notice.fetch", { tenant_id: tenantId });
+      const message = appendErrorReference("Gagal memuat data tanpa keterangan", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -122,6 +130,14 @@ export default function OrgAbsentWithoutNotice() {
             <Download className="mr-2 h-4 w-4" /> Export
           </Button>
         </div>
+
+        {loadError && (
+          <Card className="border-destructive/40">
+            <CardContent className="pt-6">
+              <p className="text-sm text-destructive">{loadError}</p>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { supabase } from "@/integrations/supabase/client";
-import { reportError } from "@/lib/errorLogger";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
@@ -11,6 +11,14 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import {
   Table,
   TableBody,
@@ -248,6 +256,7 @@ export default function CronJobsInfo() {
   const [runs, setRuns] = useState<CronRunRow[]>([]);
   const [appLogs, setAppLogs] = useState<AppCronLogRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [query, setQuery] = useState("");
   const [isFallbackMode, setIsFallbackMode] = useState(false);
@@ -274,8 +283,14 @@ export default function CronJobsInfo() {
     return { total, scheduled, active, failedRuns };
   }, [tasks, runs]);
   const runsTotalPages = Math.max(1, Math.ceil(runs.length / RUNS_PER_PAGE));
+  const runsPageNumbers = Array.from({ length: runsTotalPages }, (_, index) => index + 1).filter(
+    (page) => page === 1 || page === runsTotalPages || Math.abs(page - runsPage) <= 1
+  );
   const paginatedRuns = runs.slice((runsPage - 1) * RUNS_PER_PAGE, runsPage * RUNS_PER_PAGE);
   const logsTotalPages = Math.max(1, Math.ceil(appLogs.length / LOGS_PER_PAGE));
+  const logsPageNumbers = Array.from({ length: logsTotalPages }, (_, index) => index + 1).filter(
+    (page) => page === 1 || page === logsTotalPages || Math.abs(page - logsPage) <= 1
+  );
   const paginatedLogs = appLogs.slice((logsPage - 1) * LOGS_PER_PAGE, logsPage * LOGS_PER_PAGE);
 
   useEffect(() => {
@@ -289,6 +304,7 @@ export default function CronJobsInfo() {
   const loadData = useCallback(async () => {
     setIsLoading(true);
     setIsFallbackMode(false);
+    setLoadError(null);
     setPartialLoadNote(null);
     try {
       const [tasksRes, runsRes, logsRes] = await Promise.allSettled([
@@ -401,10 +417,11 @@ export default function CronJobsInfo() {
           setPartialLoadNote(`Sebagian data cron gagal dimuat. [Log: ${warningRefs[0]}]`);
         }
       }
-    } catch (error) {
+    } catch (error: unknown) {
       const errorRef = reportError(error, "admin.cron_jobs.fetch");
-      console.error(`[${errorRef}] Failed to fetch cron dashboard data`, error);
-      toast.error(`Gagal memuat data cron [Log: ${errorRef}]`);
+      const message = appendErrorReference("Gagal memuat data cron", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -421,10 +438,9 @@ export default function CronJobsInfo() {
       if (error) throw new Error(error.message || "Gagal sinkron jadwal cron");
       toast.success("Sinkron jadwal cron berhasil dijalankan.");
       await loadData();
-    } catch (error) {
+    } catch (error: unknown) {
       const errorRef = reportError(error, "admin.cron_jobs.sync");
-      console.error(`[${errorRef}] Failed syncing cron jobs`, error);
-      toast.error(`Sinkron cron gagal [Log: ${errorRef}]`);
+      toast.error(appendErrorReference("Sinkron cron gagal", errorRef));
     } finally {
       setIsSyncing(false);
     }
@@ -433,6 +449,13 @@ export default function CronJobsInfo() {
   return (
     <SuperAdminLayout title="Informasi Cron Jobs" subtitle="Pusat informasi seluruh tugas cron sistem">
       <div className="space-y-6">
+        {loadError && (
+          <Card className="border-destructive/30 bg-destructive/5">
+            <CardContent className="pt-6 text-sm text-destructive">
+              {loadError}
+            </CardContent>
+          </Card>
+        )}
         {partialLoadNote && (
           <Card className="border-slate-300 bg-slate-50/80 dark:bg-slate-900/30">
             <CardContent className="pt-6 text-sm text-slate-700 dark:text-slate-300">
@@ -613,26 +636,52 @@ export default function CronJobsInfo() {
                   </TableBody>
                 </Table>
                 {runs.length > 0 && (
-                  <div className="mt-4 flex items-center justify-between">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setRunsPage((prev) => Math.max(1, prev - 1))}
-                      disabled={runsPage === 1}
-                    >
-                      Sebelumnya
-                    </Button>
+                  <div className="mt-4 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
                     <span className="text-sm text-muted-foreground">
                       Halaman {runsPage} dari {runsTotalPages}
                     </span>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setRunsPage((prev) => Math.min(runsTotalPages, prev + 1))}
-                      disabled={runsPage === runsTotalPages}
-                    >
-                      Berikutnya
-                    </Button>
+                    <Pagination className="mx-0 w-auto justify-end">
+                      <PaginationContent>
+                        <PaginationItem>
+                          <PaginationPrevious
+                            href="#"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              if (runsPage > 1) {
+                                setRunsPage((page) => page - 1);
+                              }
+                            }}
+                            className={runsPage === 1 ? "pointer-events-none opacity-50" : ""}
+                          />
+                        </PaginationItem>
+                        {runsPageNumbers.map((page) => (
+                          <PaginationItem key={`runs-${page}`}>
+                            <PaginationLink
+                              href="#"
+                              isActive={page === runsPage}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                setRunsPage(page);
+                              }}
+                            >
+                              {page}
+                            </PaginationLink>
+                          </PaginationItem>
+                        ))}
+                        <PaginationItem>
+                          <PaginationNext
+                            href="#"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              if (runsPage < runsTotalPages) {
+                                setRunsPage((page) => page + 1);
+                              }
+                            }}
+                            className={runsPage === runsTotalPages ? "pointer-events-none opacity-50" : ""}
+                          />
+                        </PaginationItem>
+                      </PaginationContent>
+                    </Pagination>
                   </div>
                 )}
               </CardContent>
@@ -689,26 +738,52 @@ export default function CronJobsInfo() {
                   </TableBody>
                 </Table>
                 {appLogs.length > 0 && (
-                  <div className="mt-4 flex items-center justify-between">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setLogsPage((prev) => Math.max(1, prev - 1))}
-                      disabled={logsPage === 1}
-                    >
-                      Sebelumnya
-                    </Button>
+                  <div className="mt-4 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
                     <span className="text-sm text-muted-foreground">
                       Halaman {logsPage} dari {logsTotalPages}
                     </span>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setLogsPage((prev) => Math.min(logsTotalPages, prev + 1))}
-                      disabled={logsPage === logsTotalPages}
-                    >
-                      Berikutnya
-                    </Button>
+                    <Pagination className="mx-0 w-auto justify-end">
+                      <PaginationContent>
+                        <PaginationItem>
+                          <PaginationPrevious
+                            href="#"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              if (logsPage > 1) {
+                                setLogsPage((page) => page - 1);
+                              }
+                            }}
+                            className={logsPage === 1 ? "pointer-events-none opacity-50" : ""}
+                          />
+                        </PaginationItem>
+                        {logsPageNumbers.map((page) => (
+                          <PaginationItem key={`logs-${page}`}>
+                            <PaginationLink
+                              href="#"
+                              isActive={page === logsPage}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                setLogsPage(page);
+                              }}
+                            >
+                              {page}
+                            </PaginationLink>
+                          </PaginationItem>
+                        ))}
+                        <PaginationItem>
+                          <PaginationNext
+                            href="#"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              if (logsPage < logsTotalPages) {
+                                setLogsPage((page) => page + 1);
+                              }
+                            }}
+                            className={logsPage === logsTotalPages ? "pointer-events-none opacity-50" : ""}
+                          />
+                        </PaginationItem>
+                      </PaginationContent>
+                    </Pagination>
                   </div>
                 )}
               </CardContent>

@@ -11,6 +11,14 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { toast } from "sonner";
 import { format, parseISO } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
@@ -20,12 +28,11 @@ import {
   X,
   Loader2,
   Search,
-  ChevronLeft,
-  ChevronRight,
   Eye,
   Building2,
   Receipt,
 } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface ManualPayment {
   id: string;
@@ -62,6 +69,7 @@ const statusBadge: Record<string, { label: string; variant: "default" | "seconda
 export default function ManualPaymentsManagement() {
   const [payments, setPayments] = useState<ManualPayment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("pending");
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
@@ -73,6 +81,7 @@ export default function ManualPaymentsManagement() {
   const fetchPayments = useCallback(async () => {
     setIsLoading(true);
     try {
+      setLoadError(null);
       let query = supabase
         .from("manual_payments")
         .select(`
@@ -89,9 +98,12 @@ export default function ManualPaymentsManagement() {
 
       if (error) throw error;
       setPayments(data || []);
-    } catch (error) {
-      console.error("Error fetching payments:", error);
-      toast.error("Gagal memuat data");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.manual_payments.fetch", { tab: activeTab });
+      const message = appendErrorReference("Gagal memuat data pembayaran manual", errorRef);
+      setLoadError(message);
+      setPayments([]);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -139,8 +151,9 @@ export default function ManualPaymentsManagement() {
       toast.success("Pembayaran berhasil diverifikasi");
       setIsDetailOpen(false);
       fetchPayments();
-    } catch (error) {
-      toast.error("Gagal memverifikasi pembayaran");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.manual_payments.verify", { payment_id: payment.id });
+      toast.error(appendErrorReference("Gagal memverifikasi pembayaran", errorRef));
     }
   };
 
@@ -176,8 +189,9 @@ export default function ManualPaymentsManagement() {
       setIsDetailOpen(false);
       setRejectionReason("");
       fetchPayments();
-    } catch (error) {
-      toast.error("Gagal menolak pembayaran");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.manual_payments.reject", { payment_id: selectedPayment.id });
+      toast.error(appendErrorReference("Gagal menolak pembayaran", errorRef));
     }
   };
 
@@ -192,11 +206,18 @@ export default function ManualPaymentsManagement() {
     p.invoice_number?.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const totalPages = Math.ceil(filteredPayments.length / ITEMS_PER_PAGE);
+  const totalPages = Math.max(1, Math.ceil(filteredPayments.length / ITEMS_PER_PAGE));
+  const pageNumbers = Array.from({ length: totalPages }, (_, index) => index + 1).filter(
+    (page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1
+  );
   const paginatedPayments = filteredPayments.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE
   );
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeTab, searchTerm, payments.length]);
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat("id-ID", {
@@ -216,6 +237,12 @@ export default function ManualPaymentsManagement() {
           </h1>
           <p className="text-muted-foreground">Verifikasi pembayaran transfer dari organisasi</p>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>
@@ -303,28 +330,52 @@ export default function ManualPaymentsManagement() {
                 </Table>
 
                 {totalPages > 1 && (
-                  <div className="flex items-center justify-between mt-4">
-                    <p className="text-sm text-muted-foreground">
+                  <div className="mt-4 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
+                    <span className="text-sm text-muted-foreground">
                       Halaman {currentPage} dari {totalPages}
-                    </p>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                        disabled={currentPage === 1}
-                      >
-                        <ChevronLeft className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                        disabled={currentPage === totalPages}
-                      >
-                        <ChevronRight className="h-4 w-4" />
-                      </Button>
-                    </div>
+                    </span>
+                    <Pagination className="mx-0 w-auto justify-end">
+                      <PaginationContent>
+                        <PaginationItem>
+                          <PaginationPrevious
+                            href="#"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              if (currentPage > 1) {
+                                setCurrentPage((page) => page - 1);
+                              }
+                            }}
+                            className={currentPage === 1 ? "pointer-events-none opacity-50" : ""}
+                          />
+                        </PaginationItem>
+                        {pageNumbers.map((page) => (
+                          <PaginationItem key={`manual-payment-page-${page}`}>
+                            <PaginationLink
+                              href="#"
+                              isActive={page === currentPage}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                setCurrentPage(page);
+                              }}
+                            >
+                              {page}
+                            </PaginationLink>
+                          </PaginationItem>
+                        ))}
+                        <PaginationItem>
+                          <PaginationNext
+                            href="#"
+                            onClick={(event) => {
+                              event.preventDefault();
+                              if (currentPage < totalPages) {
+                                setCurrentPage((page) => page + 1);
+                              }
+                            }}
+                            className={currentPage === totalPages ? "pointer-events-none opacity-50" : ""}
+                          />
+                        </PaginationItem>
+                      </PaginationContent>
+                    </Pagination>
                   </div>
                 )}
               </>

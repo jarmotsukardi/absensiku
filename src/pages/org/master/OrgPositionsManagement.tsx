@@ -14,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { toast } from "@/hooks/use-toast";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface Position {
   id: string;
@@ -59,6 +60,7 @@ export default function OrgPositionsManagement() {
   const [editingPosition, setEditingPosition] = useState<Position | null>(null);
   const [deletingPosition, setDeletingPosition] = useState<Position | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [formData, setFormData] = useState<FormData>({
     name: "",
     work_unit_id: "",
@@ -67,6 +69,7 @@ export default function OrgPositionsManagement() {
 
   const fetchPositions = useCallback(async () => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       let query = supabase
         .from('positions')
@@ -93,7 +96,14 @@ export default function OrgPositionsManagement() {
       setPositions(data as unknown as Position[] || []);
       setTotalCount(count || 0);
     } catch (error) {
-      console.error('Error fetching positions:', error);
+      const errorRef = reportError(error, "org.positions.fetch", {
+        page: currentPage,
+        search: searchTerm,
+        work_unit_id: selectedWorkUnit,
+      });
+      const message = appendErrorReference("Gagal memuat data jabatan", errorRef);
+      setLoadError(message);
+      toast({ title: "Error", description: message, variant: "destructive" });
     } finally {
       setIsLoading(false);
     }
@@ -110,7 +120,8 @@ export default function OrgPositionsManagement() {
       if (error) throw error;
       setWorkUnits(data || []);
     } catch (error) {
-      console.error('Error fetching work units:', error);
+      const errorRef = reportError(error, "org.positions.fetch_work_units");
+      setLoadError(appendErrorReference("Gagal memuat daftar satuan kerja", errorRef));
     }
   }, []);
 
@@ -200,11 +211,14 @@ export default function OrgPositionsManagement() {
       }
 
       setIsDialogOpen(false);
-      fetchPositions();
+      void fetchPositions();
     } catch (error: unknown) {
-      console.error('Error saving position:', error);
-      const errorMessage = error instanceof Error ? error.message : "Gagal menyimpan jabatan";
-      toast({ title: "Error", description: errorMessage, variant: "destructive" });
+      const errorRef = reportError(error, "org.positions.save", { position_id: editingPosition?.id || undefined });
+      toast({
+        title: "Error",
+        description: appendErrorReference("Gagal menyimpan jabatan", errorRef),
+        variant: "destructive",
+      });
     } finally {
       setIsSubmitting(false);
     }
@@ -223,11 +237,14 @@ export default function OrgPositionsManagement() {
       if (error) throw error;
       toast({ title: "Berhasil", description: "Jabatan berhasil dihapus" });
       setIsDeleteDialogOpen(false);
-      fetchPositions();
+      void fetchPositions();
     } catch (error: unknown) {
-      console.error('Error deleting position:', error);
-      const errorMessage = error instanceof Error ? error.message : "Gagal menghapus jabatan";
-      toast({ title: "Error", description: errorMessage, variant: "destructive" });
+      const errorRef = reportError(error, "org.positions.delete", { position_id: deletingPosition.id });
+      toast({
+        title: "Error",
+        description: appendErrorReference("Gagal menghapus jabatan", errorRef),
+        variant: "destructive",
+      });
     } finally {
       setIsSubmitting(false);
     }
@@ -249,6 +266,14 @@ export default function OrgPositionsManagement() {
             Tambah Jabatan
           </Button>
         </div>
+
+        {loadError && (
+          <Card className="border-destructive/40">
+            <CardContent className="pt-6">
+              <p className="text-sm text-destructive">{loadError}</p>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>

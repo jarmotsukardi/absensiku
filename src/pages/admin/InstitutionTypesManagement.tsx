@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,10 +9,19 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { toast } from "sonner";
 import { Plus, Search, Edit, Trash2, Building, Hospital, GraduationCap, Landmark, Factory, Store, Hotel, HardHat, Truck, Briefcase, Palette } from "lucide-react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { RichTextEditor } from "@/components/editor/RichTextEditor";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface InstitutionType {
   id: string;
@@ -59,6 +68,7 @@ const ITEMS_PER_PAGE = 10;
 export default function AdminInstitutionTypesManagement({ embedded = false }: { embedded?: boolean }) {
   const [types, setTypes] = useState<InstitutionType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
@@ -74,15 +84,27 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
     sort_order: 0,
   });
 
-  useEffect(() => { fetchTypes(); }, []);
-
-  const fetchTypes = async () => {
+  const fetchTypes = useCallback(async () => {
     try {
+      setIsLoading(true);
+      setLoadError(null);
       const { data, error } = await supabase.from("institution_types").select("*").order("sort_order");
       if (error) throw error;
       setTypes(data || []);
-    } catch (err) { console.error(err); } finally { setIsLoading(false); }
-  };
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.institution_types.fetch");
+      const message = appendErrorReference("Gagal memuat jenis instansi", errorRef);
+      setLoadError(message);
+      setTypes([]);
+      toast.error(message);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchTypes();
+  }, [fetchTypes]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -109,10 +131,13 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
       }
       setIsDialogOpen(false);
       resetForm();
-      fetchTypes();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Gagal menyimpan";
-      toast.error(message);
+      await fetchTypes();
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.institution_types.save", {
+        is_edit: Boolean(editingType),
+        code: formData.code,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan jenis instansi", errorRef));
     } finally {
       setIsSaving(false);
     }
@@ -138,10 +163,10 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
       const { error } = await supabase.from("institution_types").delete().eq("id", id);
       if (error) throw error;
       toast.success("Berhasil dihapus");
-      fetchTypes();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Gagal menghapus";
-      toast.error(message);
+      await fetchTypes();
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.institution_types.delete", { institution_type_id: id });
+      toast.error(appendErrorReference("Gagal menghapus jenis instansi", errorRef));
     }
   };
 
@@ -152,6 +177,9 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
 
   const filteredTypes = types.filter(t => t.name.toLowerCase().includes(searchTerm.toLowerCase()) || t.code.toLowerCase().includes(searchTerm.toLowerCase()));
   const totalPages = Math.max(1, Math.ceil(filteredTypes.length / ITEMS_PER_PAGE));
+  const pageNumbers = Array.from({ length: totalPages }, (_, index) => index + 1).filter(
+    (page) => page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1
+  );
   const paginatedTypes = filteredTypes.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE
@@ -167,6 +195,12 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
         <div>
           <h1 className="text-2xl font-bold">Manajemen Jenis Instansi</h1>
           <p className="text-muted-foreground">Kelola jenis instansi secara terpusat. Perubahan berlaku untuk semua organisasi.</p>
+        </div>
+      )}
+
+      {loadError && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {loadError}
         </div>
       )}
 
@@ -269,26 +303,52 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
                 </Table>
               </div>
               {filteredTypes.length > 0 && (
-                <div className="mt-4 flex items-center justify-between">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
-                    disabled={currentPage === 1}
-                  >
-                    Sebelumnya
-                  </Button>
+                <div className="mt-4 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
                   <span className="text-sm text-muted-foreground">
                     Halaman {currentPage} dari {totalPages}
                   </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
-                    disabled={currentPage === totalPages}
-                  >
-                    Berikutnya
-                  </Button>
+                  <Pagination className="mx-0 w-auto justify-end">
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious
+                          href="#"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            if (currentPage > 1) {
+                              setCurrentPage((page) => page - 1);
+                            }
+                          }}
+                          className={currentPage === 1 ? "pointer-events-none opacity-50" : ""}
+                        />
+                      </PaginationItem>
+                      {pageNumbers.map((page) => (
+                        <PaginationItem key={`institution-type-page-${page}`}>
+                          <PaginationLink
+                            href="#"
+                            isActive={page === currentPage}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              setCurrentPage(page);
+                            }}
+                          >
+                            {page}
+                          </PaginationLink>
+                        </PaginationItem>
+                      ))}
+                      <PaginationItem>
+                        <PaginationNext
+                          href="#"
+                          onClick={(event) => {
+                            event.preventDefault();
+                            if (currentPage < totalPages) {
+                              setCurrentPage((page) => page + 1);
+                            }
+                          }}
+                          className={currentPage === totalPages ? "pointer-events-none opacity-50" : ""}
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
                 </div>
               )}
             </>

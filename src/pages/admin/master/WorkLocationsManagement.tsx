@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { Plus, Pencil, Trash2, Search, MapPin } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type Office = Tables<"offices">;
 type OPD = Tables<"opd">;
@@ -21,6 +22,7 @@ export default function WorkLocationsManagement() {
   const [locations, setLocations] = useState<(Office & { opd?: OPD })[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -34,9 +36,10 @@ export default function WorkLocationsManagement() {
     address: "",
   });
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
+      setLoadError(null);
       
       const { data: opdData, error: opdError } = await supabase
         .from("opd")
@@ -53,17 +56,21 @@ export default function WorkLocationsManagement() {
 
       if (officesError) throw officesError;
       setLocations(officesData || []);
-    } catch (error) {
-      console.error("Error fetching data:", error);
-      toast.error("Gagal memuat data");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.master.work_locations.fetch");
+      const message = appendErrorReference("Gagal memuat data lokasi kerja", errorRef);
+      setLoadError(message);
+      setLocations([]);
+      setOpdList([]);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    void fetchData();
+  }, [fetchData]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -108,10 +115,12 @@ export default function WorkLocationsManagement() {
       setIsDialogOpen(false);
       setEditingLocation(null);
       setFormData({ name: "", opd_id: "", latitude: "", longitude: "", radius_meters: "100", address: "" });
-      fetchData();
-    } catch (error) {
-      console.error("Error saving location:", error);
-      toast.error("Gagal menyimpan lokasi kerja");
+      await fetchData();
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.master.work_locations.save", {
+        is_edit: Boolean(editingLocation),
+      });
+      toast.error(appendErrorReference("Gagal menyimpan lokasi kerja", errorRef));
     }
   };
 
@@ -135,10 +144,10 @@ export default function WorkLocationsManagement() {
       const { error } = await supabase.from("offices").delete().eq("id", id);
       if (error) throw error;
       toast.success("Lokasi kerja berhasil dihapus");
-      fetchData();
-    } catch (error) {
-      console.error("Error deleting location:", error);
-      toast.error("Gagal menghapus lokasi kerja");
+      await fetchData();
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.master.work_locations.delete", { office_id: id });
+      toast.error(appendErrorReference("Gagal menghapus lokasi kerja", errorRef));
     }
   };
 
@@ -271,6 +280,12 @@ export default function WorkLocationsManagement() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>

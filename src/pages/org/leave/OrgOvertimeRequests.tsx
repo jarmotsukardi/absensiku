@@ -103,6 +103,7 @@ export default function OrgOvertimeRequests() {
   const {
     requests: pendingRequests,
     isLoading: loadingPending,
+    loadError: pendingLoadError,
     totalCount: pendingTotalCount,
     approveRequest,
   } = useOvertimeRequests({
@@ -112,7 +113,12 @@ export default function OrgOvertimeRequests() {
     pageSize: PAGE_SIZE,
     searchQuery,
   });
-  const { requests: allRequests, isLoading: loadingAll, totalCount: allTotalCount } = useOvertimeRequests({
+  const {
+    requests: allRequests,
+    isLoading: loadingAll,
+    loadError: allLoadError,
+    totalCount: allTotalCount,
+  } = useOvertimeRequests({
     tenantId: tenantId || undefined,
     page: allPage,
     pageSize: PAGE_SIZE,
@@ -121,6 +127,7 @@ export default function OrgOvertimeRequests() {
 
   const displayRequests = activeTab === "pending" ? pendingRequests : allRequests;
   const isLoading = !isTenantReady || (activeTab === "pending" ? loadingPending : loadingAll);
+  const activeLoadError = activeTab === "pending" ? pendingLoadError : allLoadError;
   const totalRows = activeTab === "pending" ? pendingTotalCount : allTotalCount;
   const activePage = activeTab === "pending" ? pendingPage : allPage;
   const setActivePage = activeTab === "pending" ? setPendingPage : setAllPage;
@@ -155,6 +162,11 @@ export default function OrgOvertimeRequests() {
           <h1 className="text-2xl font-bold text-foreground">Pengajuan Lembur</h1>
           <p className="text-sm text-muted-foreground">Kelola pengajuan lembur pegawai</p>
         </div>
+        {activeLoadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {activeLoadError}
+          </div>
+        )}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
              <TabsList>

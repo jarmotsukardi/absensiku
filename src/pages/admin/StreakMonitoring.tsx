@@ -11,6 +11,7 @@ import { Flame, CheckCircle2, Clock, Search, Loader2, Zap, AlertTriangle, Credit
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface StreakItem {
   id: string;
@@ -198,6 +199,7 @@ export default function StreakMonitoring() {
   const [streaks, setStreaks] = useState<StreakItem[]>([]);
   const [payments, setPayments] = useState<PaymentLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState("active");
   const [streakThreshold, setStreakThreshold] = useState(30);
@@ -228,21 +230,26 @@ export default function StreakMonitoring() {
       if (Number.isFinite(parsedValue) && parsedValue > 0) {
         setStreakThreshold(parsedValue);
       }
-    } catch (error) {
-      console.error("Error fetching streak threshold:", error);
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.streak.threshold.fetch");
+      setLoadError((prev) => prev ?? appendErrorReference("Gagal memuat threshold streak", errorRef));
     }
   };
 
   const fetchStreaks = async () => {
     setIsLoading(true);
     try {
+      setLoadError(null);
       const { data } = await supabase
         .from("stability_streaks")
         .select("*, tenants(name)")
         .order("streak_count", { ascending: false });
       setStreaks((data || []) as StreakItem[]);
-    } catch (error) {
-      console.error("Error:", error);
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.streak.items.fetch");
+      const message = appendErrorReference("Gagal memuat data streak monitoring", errorRef);
+      setLoadError(message);
+      setStreaks([]);
     } finally {
       setIsLoading(false);
     }
@@ -256,8 +263,10 @@ export default function StreakMonitoring() {
         .order("created_at", { ascending: false })
         .limit(50);
       setPayments((data as PaymentLog[]) || []);
-    } catch (error) {
-      console.error("Error fetching payment logs:", error);
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.streak.payment_logs.fetch");
+      setLoadError((prev) => prev ?? appendErrorReference("Gagal memuat payment logs streak", errorRef));
+      setPayments([]);
     }
   };
 
@@ -428,6 +437,11 @@ export default function StreakMonitoring() {
 
   return (
     <SuperAdminLayout title="Streak Monitoring" subtitle="Pantau stabilitas penggunaan per tenant">
+      {loadError && (
+        <div className="mb-6 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {loadError}
+        </div>
+      )}
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
         <Card><CardContent className="p-4 flex items-center gap-3">

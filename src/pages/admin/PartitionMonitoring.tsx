@@ -7,10 +7,19 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { useNavigate } from "react-router-dom";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import {
   Database,
   HardDrive,
@@ -182,6 +191,7 @@ const PartitionMonitoring = () => {
   const [cleanupLogs, setCleanupLogs] = useState<CleanupLog[]>([]);
   const [partitionLogs, setPartitionLogs] = useState<PartitionCreationLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isRunningMaintenance, setIsRunningMaintenance] = useState(false);
   const [glossaryQuery, setGlossaryQuery] = useState("");
   const [partitionPage, setPartitionPage] = useState(1);
@@ -260,12 +270,14 @@ const PartitionMonitoring = () => {
   const fetchData = async () => {
     setIsLoading(true);
     try {
+      setLoadError(null);
       // Fetch partition stats
       const { data: stats, error: statsError } = await supabase
         .rpc('get_partition_stats');
       
       if (statsError) {
-        console.error('Error fetching partition stats:', statsError);
+        const errorRef = reportError(statsError, "admin.partition_monitoring.partition_stats.fetch");
+        setLoadError((prev) => prev ?? appendErrorReference("Gagal memuat statistik partisi", errorRef));
       } else {
         setPartitionStats(stats || []);
       }
@@ -275,7 +287,8 @@ const PartitionMonitoring = () => {
         .rpc('get_gps_cleanup_logs', { limit_count: 10 });
       
       if (cleanupError) {
-        console.error('Error fetching cleanup logs:', cleanupError);
+        const errorRef = reportError(cleanupError, "admin.partition_monitoring.cleanup_logs.fetch");
+        setLoadError((prev) => prev ?? appendErrorReference("Gagal memuat log cleanup GPS", errorRef));
       } else {
         setCleanupLogs(cleanup || []);
       }
@@ -285,13 +298,16 @@ const PartitionMonitoring = () => {
         .rpc('get_partition_creation_logs', { limit_count: 10 });
       
       if (creationError) {
-        console.error('Error fetching partition logs:', creationError);
+        const errorRef = reportError(creationError, "admin.partition_monitoring.partition_logs.fetch");
+        setLoadError((prev) => prev ?? appendErrorReference("Gagal memuat log pembuatan partisi", errorRef));
       } else {
         setPartitionLogs(creation || []);
       }
-    } catch (error) {
-      console.error('Error fetching data:', error);
-      toast.error('Gagal memuat data monitoring');
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.partition_monitoring.fetch");
+      const message = appendErrorReference("Gagal memuat data monitoring", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -421,14 +437,17 @@ const PartitionMonitoring = () => {
 
       // Refresh data
       await fetchData();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Terjadi kesalahan";
-      console.error('Maintenance error:', error);
+    } catch (error: unknown) {
+      const baseMessage = error instanceof Error ? error.message : "Terjadi kesalahan";
+      const errorRef = reportError(error, "admin.partition_monitoring.maintenance", { action });
+      const message = appendErrorReference(baseMessage, errorRef);
 
       if (isJwtAuthError(message)) {
         await forceReauth();
         return;
       }
+
+      setLoadError((prev) => prev ?? message);
 
       toast.error('Gagal menjalankan maintenance', {
         description: message
@@ -458,6 +477,11 @@ const PartitionMonitoring = () => {
   return (
     <SuperAdminLayout title="Monitoring Partisi" subtitle="Status tabel absensi partitioned dan log maintenance">
       <div className="space-y-6">
+        {loadError && (
+          <Card className="border-destructive/30 bg-destructive/5">
+            <CardContent className="pt-6 text-sm text-destructive">{loadError}</CardContent>
+          </Card>
+        )}
         {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -650,26 +674,47 @@ const PartitionMonitoring = () => {
             </TableBody>
           </Table>
           {partitionStats.length > 0 && (
-            <div className="mt-4 flex items-center justify-between">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setPartitionPage((prev) => Math.max(1, prev - 1))}
-                disabled={partitionPage === 1}
-              >
-                Sebelumnya
-              </Button>
+            <div className="mt-4 flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-center sm:justify-between">
               <span className="text-sm text-muted-foreground">
                 Halaman {partitionPage} dari {partitionTotalPages}
               </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setPartitionPage((prev) => Math.min(partitionTotalPages, prev + 1))}
-                disabled={partitionPage === partitionTotalPages}
-              >
-                Berikutnya
-              </Button>
+              <Pagination className="mx-0 w-auto justify-end">
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious
+                      href="#"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        if (partitionPage > 1) {
+                          setPartitionPage((page) => page - 1);
+                        }
+                      }}
+                      className={partitionPage === 1 ? "pointer-events-none opacity-50" : ""}
+                    />
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationLink
+                      href="#"
+                      isActive
+                      onClick={(event) => event.preventDefault()}
+                    >
+                      {partitionPage}
+                    </PaginationLink>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationNext
+                      href="#"
+                      onClick={(event) => {
+                        event.preventDefault();
+                        if (partitionPage < partitionTotalPages) {
+                          setPartitionPage((page) => page + 1);
+                        }
+                      }}
+                      className={partitionPage === partitionTotalPages ? "pointer-events-none opacity-50" : ""}
+                    />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
             </div>
           )}
         </CardContent>

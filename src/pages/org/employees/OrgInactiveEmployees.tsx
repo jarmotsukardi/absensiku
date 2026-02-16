@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Search, UserX, RotateCcw, ChevronLeft, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type Employee = Tables<"employees">;
 type OPD = Tables<"opd">;
@@ -21,12 +22,10 @@ export default function OrgInactiveEmployees() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
+    setLoadError(null);
     try {
       const { data, error } = await supabase
         .from("employees")
@@ -37,12 +36,18 @@ export default function OrgInactiveEmployees() {
       if (error) throw error;
       setEmployees(data || []);
     } catch (error) {
-      console.error("Error fetching data:", error);
-      toast.error("Gagal memuat data");
+      const errorRef = reportError(error, "org.employees.inactive.fetch");
+      const message = appendErrorReference("Gagal memuat data pegawai non-aktif", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    void fetchData();
+  }, [fetchData]);
 
   const handleReactivate = async (id: string) => {
     if (!confirm("Yakin ingin mengaktifkan kembali pegawai ini?")) return;
@@ -50,9 +55,10 @@ export default function OrgInactiveEmployees() {
       const { error } = await supabase.from("employees").update({ is_active: true }).eq("id", id);
       if (error) throw error;
       toast.success("Pegawai berhasil diaktifkan kembali");
-      fetchData();
+      void fetchData();
     } catch (error) {
-      toast.error("Gagal mengaktifkan pegawai");
+      const errorRef = reportError(error, "org.employees.inactive.reactivate", { employee_id: id });
+      toast.error(appendErrorReference("Gagal mengaktifkan pegawai", errorRef));
     }
   };
 
@@ -84,6 +90,14 @@ export default function OrgInactiveEmployees() {
           </h1>
           <p className="text-muted-foreground">Daftar pegawai yang sudah tidak aktif</p>
         </div>
+
+        {loadError && (
+          <Card className="border-destructive/40">
+            <CardContent className="pt-6">
+              <p className="text-sm text-destructive">{loadError}</p>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>

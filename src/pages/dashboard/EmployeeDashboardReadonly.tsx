@@ -531,32 +531,33 @@ export default function EmployeeDashboardReadonly() {
   }, [activeTab, fetchHistoryByMonth]);
 
   const panelClass =
-    "rounded-3xl border border-slate-200/70 bg-white/88 shadow-[0_20px_60px_-34px_rgba(15,23,42,0.55)] backdrop-blur";
+    "rounded-[28px] border border-slate-200/80 bg-white/92 shadow-[0_30px_80px_-44px_rgba(15,23,42,0.52)] backdrop-blur";
   const compactStatCardClass =
-    "rounded-3xl border border-slate-200/80 bg-white/90 shadow-[0_16px_50px_-34px_rgba(15,23,42,0.55)]";
+    "group overflow-hidden rounded-[24px] border border-slate-200/85 bg-white/92 shadow-[0_22px_60px_-42px_rgba(15,23,42,0.5)] transition hover:-translate-y-0.5 hover:shadow-[0_30px_70px_-42px_rgba(15,23,42,0.58)]";
 
   return (
-    <div className="relative min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_12%_-5%,#fde68a_0%,transparent_26%),radial-gradient(circle_at_96%_0%,#bfdbfe_0%,transparent_32%),linear-gradient(180deg,#f8fafc_0%,#eef2ff_100%)] text-slate-900">
+    <div className="relative min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_10%_-10%,#dbeafe_0%,transparent_34%),radial-gradient(circle_at_90%_0%,#bfdbfe_0%,transparent_28%),radial-gradient(circle_at_50%_120%,#e0f2fe_0%,transparent_34%),linear-gradient(180deg,#f8fbff_0%,#f1f5ff_48%,#eef4ff_100%)] text-slate-900">
       <div className="pointer-events-none absolute inset-0 -z-10">
-        <div className="absolute left-[-130px] top-[-96px] h-[340px] w-[340px] rounded-full bg-[#93c5fd]/35 blur-3xl" />
-        <div className="absolute bottom-[-120px] right-[-80px] h-[360px] w-[360px] rounded-full bg-[#fef08a]/35 blur-3xl" />
+        <div className="absolute left-[-120px] top-[-100px] h-[360px] w-[360px] rounded-full bg-sky-300/30 blur-3xl" />
+        <div className="absolute bottom-[-140px] right-[-100px] h-[420px] w-[420px] rounded-full bg-blue-300/25 blur-3xl" />
       </div>
-      <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6 lg:px-8">
-        <header className="relative overflow-hidden rounded-[32px] border border-slate-200/80 bg-white/88 p-4 shadow-[0_24px_70px_-36px_rgba(15,23,42,0.62)] backdrop-blur sm:p-6">
-          <div className="pointer-events-none absolute inset-0 opacity-70">
-            <div className="absolute -left-14 -top-16 h-44 w-44 rounded-full bg-sky-300/25 blur-3xl" />
-            <div className="absolute -right-10 -bottom-16 h-52 w-52 rounded-full bg-amber-300/20 blur-3xl" />
+      <div className="mx-auto max-w-[1240px] px-4 py-4 sm:px-6 lg:px-8">
+        <header className="relative overflow-hidden rounded-[36px] border border-slate-200/90 bg-white/90 p-5 shadow-[0_32px_90px_-44px_rgba(15,23,42,0.58)] backdrop-blur sm:p-7">
+          <div className="pointer-events-none absolute inset-0 opacity-80">
+            <div className="absolute inset-y-0 left-0 w-[260px] bg-gradient-to-r from-blue-100/55 to-transparent" />
+            <div className="absolute -left-20 -top-24 h-56 w-56 rounded-full bg-sky-300/25 blur-3xl" />
+            <div className="absolute -right-24 -bottom-24 h-64 w-64 rounded-full bg-indigo-300/25 blur-3xl" />
           </div>
 
-          <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-3">
-              <Avatar className="h-14 w-14 ring-2 ring-sky-200/80 shadow-sm">
+          <div className="relative flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="flex items-center gap-4">
+              <Avatar className="h-16 w-16 ring-2 ring-blue-200/80 shadow-sm">
                 <AvatarImage src={tenant?.logo_url || undefined} alt={tenant?.name || "Org"} />
                 <AvatarFallback>{(tenant?.name || "ORG").slice(0, 2).toUpperCase()}</AvatarFallback>
               </Avatar>
               <div>
-                <p className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Portal Pegawai Desktop / Mobile</p>
-                <h1 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-[28px]">{tenant?.name || "Dashboard Pegawai"}</h1>
+                <p className="text-[11px] uppercase tracking-[0.24em] text-slate-500">Employee Workspace</p>
+                <h1 className="text-[30px] font-semibold leading-tight tracking-tight text-slate-900">{tenant?.name || "Dashboard Pegawai"}</h1>
                 <p className="text-sm text-slate-600">{employee?.name || "Pengguna"} • {employee?.position || "Pegawai"}</p>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <Badge className="border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-50">
@@ -568,17 +569,26 @@ export default function EmployeeDashboardReadonly() {
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <div className="rounded-2xl border border-slate-200/90 bg-white/85 px-3 py-2 text-right shadow-sm">
+                <p className="text-[10px] uppercase tracking-[0.16em] text-slate-500">Hari Ini</p>
+                <p className="text-xs font-medium text-slate-700">{format(new Date(), "EEEE, dd MMM yyyy", { locale: localeId })}</p>
+              </div>
               <Badge className="border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-50 shadow-sm">
                 <ShieldCheck className="mr-1 h-3.5 w-3.5" /> Mode Non-Absensi
               </Badge>
-              <Button variant="outline" className="border-slate-300 bg-white/95 hover:bg-amber-50 hover:border-amber-300" onClick={logout}>
+              <Button
+                variant="outline"
+                className="border-slate-300 bg-white/95 hover:border-blue-300 hover:bg-blue-50"
+                onClick={logout}
+              >
                 <LogOut className="mr-2 h-4 w-4" /> Keluar
               </Button>
             </div>
           </div>
 
-          <div className="relative mt-5 flex gap-2 overflow-x-auto pb-1">
+          <div className="relative mt-6 flex gap-2 overflow-x-auto pb-1">
             {visibleTabs.map((tab) => {
               const Icon = tab.icon;
               const active = activeTab === tab.id;
@@ -586,10 +596,10 @@ export default function EmployeeDashboardReadonly() {
                 <button
                   key={tab.id}
                   onClick={() => setTab(tab.id)}
-                  className={`inline-flex min-w-max items-center gap-2 rounded-full border px-4 py-2 text-sm transition ${
+                  className={`inline-flex min-w-max items-center gap-2 rounded-2xl border px-4 py-2.5 text-sm transition ${
                     active
-                      ? "border-slate-900 bg-slate-900 text-white shadow-[0_16px_30px_-20px_rgba(15,23,42,0.85)]"
-                      : "border-slate-200 bg-white text-slate-700 hover:border-amber-300 hover:bg-amber-50 hover:text-slate-900"
+                      ? "border-blue-900 bg-gradient-to-r from-blue-950 to-slate-900 text-white shadow-[0_16px_30px_-20px_rgba(15,23,42,0.9)]"
+                      : "border-slate-200 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50 hover:text-slate-900"
                   }`}
                 >
                   <Icon className="h-4 w-4" /> {tab.label}
@@ -604,10 +614,10 @@ export default function EmployeeDashboardReadonly() {
           </div>
         </header>
 
-        <div className="mt-6 grid gap-6 lg:grid-cols-[250px_minmax(0,1fr)]">
+        <div className="mt-6 grid gap-6 lg:grid-cols-[270px_minmax(0,1fr)]">
           <aside className="hidden lg:block">
-            <div className="sticky top-4 rounded-3xl border border-sky-200/80 bg-gradient-to-b from-sky-100/95 via-blue-100/90 to-indigo-100/85 p-3 shadow-[0_24px_60px_-36px_rgba(37,99,235,0.45)] backdrop-blur">
-              <p className="px-3 pb-2 pt-1 text-[11px] uppercase tracking-[0.2em] text-sky-800/75">Navigasi</p>
+            <div className="sticky top-4 rounded-[28px] border border-slate-200/85 bg-white/88 p-3 shadow-[0_24px_60px_-34px_rgba(15,23,42,0.36)] backdrop-blur">
+              <p className="px-3 pb-2 pt-1 text-[11px] uppercase tracking-[0.2em] text-slate-500">Navigasi</p>
               <div className="space-y-1.5">
                 {visibleTabs.map((tab) => {
                   const Icon = tab.icon;
@@ -618,8 +628,8 @@ export default function EmployeeDashboardReadonly() {
                       onClick={() => setTab(tab.id)}
                       className={`flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm transition ${
                         active
-                          ? "bg-white/90 text-sky-900 ring-1 ring-sky-200/80 shadow-[0_16px_30px_-22px_rgba(37,99,235,0.45)]"
-                          : "text-slate-700 hover:bg-white/70 hover:text-sky-900"
+                          ? "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-[0_16px_30px_-22px_rgba(37,99,235,0.58)]"
+                          : "text-slate-700 hover:bg-blue-50 hover:text-blue-900"
                       }`}
                     >
                       <Icon className="h-4 w-4" />
@@ -649,22 +659,42 @@ export default function EmployeeDashboardReadonly() {
             <>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <Card className={compactStatCardClass}>
-                  <CardHeader className="pb-2"><CardDescription>Status Hari Ini</CardDescription><CardTitle className="text-base">{todayAttendance?.status || "Belum ada data"}</CardTitle></CardHeader>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Status Hari Ini</CardDescription>
+                    <CardTitle className="text-base">{todayAttendance?.status || "Belum ada data"}</CardTitle>
+                  </CardHeader>
                   <CardContent className="text-sm text-slate-600">
                     <p>Masuk: {todayAttendance?.check_in_time || "-"}</p>
                     <p>Pulang: {todayAttendance?.check_out_time || "-"}</p>
                   </CardContent>
                 </Card>
                 <Card className={compactStatCardClass}>
-                  <CardHeader className="pb-2"><CardDescription>Pengajuan Pending</CardDescription><CardTitle className="text-2xl">{pendingRequests}</CardTitle></CardHeader>
-                  <CardContent><Button variant="outline" size="sm" className="hover:border-amber-300 hover:bg-amber-50" onClick={() => setTab("requests")}>Lihat Pengajuan</Button></CardContent>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Pengajuan Pending</CardDescription>
+                    <CardTitle className="text-2xl">{pendingRequests}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <Button variant="outline" size="sm" className="hover:border-blue-300 hover:bg-blue-50" onClick={() => setTab("requests")}>
+                      Lihat Pengajuan
+                    </Button>
+                  </CardContent>
                 </Card>
                 <Card className={compactStatCardClass}>
-                  <CardHeader className="pb-2"><CardDescription>Notifikasi Belum Dibaca</CardDescription><CardTitle className="text-2xl">{unreadCount}</CardTitle></CardHeader>
-                  <CardContent><Button variant="outline" size="sm" className="hover:border-amber-300 hover:bg-amber-50" onClick={() => setTab("notifications")}>Buka Notifikasi</Button></CardContent>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Notifikasi Belum Dibaca</CardDescription>
+                    <CardTitle className="text-2xl">{unreadCount}</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <Button variant="outline" size="sm" className="hover:border-blue-300 hover:bg-blue-50" onClick={() => setTab("notifications")}>
+                      Buka Notifikasi
+                    </Button>
+                  </CardContent>
                 </Card>
                 <Card className={compactStatCardClass}>
-                  <CardHeader className="pb-2"><CardDescription>Akses Absensi</CardDescription><CardTitle className="text-base">Aplikasi Mobile</CardTitle></CardHeader>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Akses Absensi</CardDescription>
+                    <CardTitle className="text-base">Aplikasi Mobile</CardTitle>
+                  </CardHeader>
                   <CardContent className="text-sm text-slate-600">
                     Fitur absen hanya tersedia di <code>/employee/dashboard</code>.
                   </CardContent>
@@ -681,7 +711,7 @@ export default function EmployeeDashboardReadonly() {
                     <p className="text-sm text-slate-600">Belum ada update terbaru.</p>
                   ) : (
                     newsItems.map((n) => (
-                      <div key={`${n.source}-${n.id}`} className="flex items-start justify-between rounded-2xl border border-slate-200/90 bg-white/90 p-3 shadow-sm transition hover:border-amber-300 hover:bg-amber-50/45">
+                      <div key={`${n.source}-${n.id}`} className="flex items-start justify-between rounded-2xl border border-slate-200/90 bg-white/90 p-3 shadow-sm transition hover:border-blue-300 hover:bg-blue-50/50">
                         <div>
                           <p className="font-medium">{n.title}</p>
                           <p className="text-xs text-slate-500">{format(new Date(n.created_at), "dd MMM yyyy HH:mm", { locale: localeId })}</p>
@@ -737,7 +767,7 @@ export default function EmployeeDashboardReadonly() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <Button variant="outline" size="sm" className="hover:border-amber-300 hover:bg-amber-50" onClick={fetchHistoryByMonth}>
+                  <Button variant="outline" size="sm" className="hover:border-blue-300 hover:bg-blue-50" onClick={fetchHistoryByMonth}>
                     Refresh
                   </Button>
                 </div>
@@ -772,16 +802,16 @@ export default function EmployeeDashboardReadonly() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant={activeRequestType === "leave" ? "default" : "outline"} className={activeRequestType === "leave" ? "" : "hover:border-amber-300 hover:bg-amber-50"} onClick={() => setActiveRequestType("leave")}>
+                  <Button size="sm" variant={activeRequestType === "leave" ? "default" : "outline"} className={activeRequestType === "leave" ? "" : "hover:border-blue-300 hover:bg-blue-50"} onClick={() => setActiveRequestType("leave")}>
                     <FileText className="mr-1 h-4 w-4" /> Cuti/Izin
                   </Button>
-                  <Button size="sm" variant={activeRequestType === "wfh" ? "default" : "outline"} className={activeRequestType === "wfh" ? "" : "hover:border-amber-300 hover:bg-amber-50"} onClick={() => setActiveRequestType("wfh")}>
+                  <Button size="sm" variant={activeRequestType === "wfh" ? "default" : "outline"} className={activeRequestType === "wfh" ? "" : "hover:border-blue-300 hover:bg-blue-50"} onClick={() => setActiveRequestType("wfh")}>
                     <HomeIcon className="mr-1 h-4 w-4" /> WFH
                   </Button>
-                  <Button size="sm" variant={activeRequestType === "overtime" ? "default" : "outline"} className={activeRequestType === "overtime" ? "" : "hover:border-amber-300 hover:bg-amber-50"} onClick={() => setActiveRequestType("overtime")}>
+                  <Button size="sm" variant={activeRequestType === "overtime" ? "default" : "outline"} className={activeRequestType === "overtime" ? "" : "hover:border-blue-300 hover:bg-blue-50"} onClick={() => setActiveRequestType("overtime")}>
                     <Timer className="mr-1 h-4 w-4" /> Lembur
                   </Button>
-                  <Button size="sm" variant={activeRequestType === "flexible" ? "default" : "outline"} className={activeRequestType === "flexible" ? "" : "hover:border-amber-300 hover:bg-amber-50"} onClick={() => setActiveRequestType("flexible")}>
+                  <Button size="sm" variant={activeRequestType === "flexible" ? "default" : "outline"} className={activeRequestType === "flexible" ? "" : "hover:border-blue-300 hover:bg-blue-50"} onClick={() => setActiveRequestType("flexible")}>
                     <MapPinOff className="mr-1 h-4 w-4" /> Absensi Khusus
                   </Button>
                 </div>
@@ -930,8 +960,8 @@ export default function EmployeeDashboardReadonly() {
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2 pt-2">
-                    <Button variant="outline" className="hover:border-amber-300 hover:bg-amber-50" onClick={() => navigate("/auth/forgot-password")}>Ganti Password</Button>
-                    <Button variant="outline" className="hover:border-amber-300 hover:bg-amber-50" onClick={() => loadData()}>Refresh Data</Button>
+                    <Button variant="outline" className="hover:border-blue-300 hover:bg-blue-50" onClick={() => navigate("/auth/forgot-password")}>Ganti Password</Button>
+                    <Button variant="outline" className="hover:border-blue-300 hover:bg-blue-50" onClick={() => loadData()}>Refresh Data</Button>
                   </div>
                 </CardContent>
               </Card>
@@ -998,7 +1028,7 @@ export default function EmployeeDashboardReadonly() {
                 key={tab.id}
                 onClick={() => setTab(tab.id)}
                 className={`relative flex min-w-[88px] flex-col items-center justify-center rounded-xl py-2 text-[11px] ${
-                  active ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-amber-50"
+                  active ? "bg-gradient-to-r from-blue-900 to-slate-900 text-white" : "text-slate-600 hover:bg-blue-50"
                 }`}
               >
                 {tab.id === "notifications" && unreadCount > 0 ? (

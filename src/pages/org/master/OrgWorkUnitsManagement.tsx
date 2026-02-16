@@ -13,6 +13,7 @@ import { Pagination, PaginationContent, PaginationItem, PaginationLink, Paginati
 import { toast } from "sonner";
 import { Plus, Search, Edit, Trash2, Building2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface WorkUnit {
   id: string;
@@ -47,6 +48,7 @@ export default function OrgWorkUnitsManagement() {
   const [workUnits, setWorkUnits] = useState<WorkUnit[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingUnit, setEditingUnit] = useState<WorkUnit | null>(null);
@@ -63,6 +65,7 @@ export default function OrgWorkUnitsManagement() {
   const fetchData = async () => {
     setIsLoading(true);
     try {
+      setLoadError(null);
       // Fetch OPD list
       const { data: opdData, error: opdError } = await supabase
         .from("opd")
@@ -85,8 +88,12 @@ export default function OrgWorkUnitsManagement() {
       if (workUnitsError) throw workUnitsError;
       setWorkUnits(workUnitsData || []);
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      toast.error("Gagal memuat data: " + errorMessage);
+      const errorRef = reportError(error, "org.master.work_units.fetch_data");
+      const message = appendErrorReference("Gagal memuat data satuan kerja", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setWorkUnits([]);
+      setOpdList([]);
     } finally {
       setIsLoading(false);
     }
@@ -145,8 +152,10 @@ export default function OrgWorkUnitsManagement() {
       resetForm();
       fetchData();
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      toast.error("Gagal menyimpan: " + errorMessage);
+      const errorRef = reportError(error, "org.master.work_units.save", {
+        editing_id: editingUnit?.id ?? null,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan satuan kerja", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -178,8 +187,8 @@ export default function OrgWorkUnitsManagement() {
       toast.success("Satuan kerja berhasil dihapus");
       fetchData();
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      toast.error("Gagal menghapus: " + errorMessage);
+      const errorRef = reportError(error, "org.master.work_units.delete", { work_unit_id: id });
+      toast.error(appendErrorReference("Gagal menghapus satuan kerja", errorRef));
     }
   };
 
@@ -194,8 +203,11 @@ export default function OrgWorkUnitsManagement() {
       toast.success("Status berhasil diperbarui");
       fetchData();
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      toast.error("Gagal mengubah status: " + errorMessage);
+      const errorRef = reportError(error, "org.master.work_units.toggle_status", {
+        work_unit_id: id,
+        current_status: currentStatus,
+      });
+      toast.error(appendErrorReference("Gagal mengubah status satuan kerja", errorRef));
     }
   };
 
@@ -241,6 +253,12 @@ export default function OrgWorkUnitsManagement() {
           </h1>
           <p className="text-muted-foreground">Kelola satuan kerja dalam organisasi</p>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Dialog open={isDialogOpen} onOpenChange={(open) => {
           setIsDialogOpen(open);

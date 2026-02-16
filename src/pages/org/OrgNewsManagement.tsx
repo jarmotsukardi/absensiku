@@ -38,6 +38,7 @@ import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { RichTextEditor } from "@/components/editor/RichTextEditor";
 import { NewsThumbnailPreview } from "@/components/common/NewsThumbnailPreview";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface NewsItem {
   id: string;
@@ -56,6 +57,7 @@ export default function OrgNewsManagement() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<"all" | "published" | "draft">("all");
+  const [loadError, setLoadError] = useState<string | null>(null);
   
   // Pagination
   const [currentPage, setCurrentPage] = useState(1);
@@ -79,6 +81,7 @@ export default function OrgNewsManagement() {
 
   const fetchNews = useCallback(async (tid: string) => {
     setIsLoading(true);
+    setLoadError(null);
     try {
       const { data, error } = await supabase
         .from("announcements")
@@ -90,7 +93,10 @@ export default function OrgNewsManagement() {
       if (error) throw error;
       setNews(data || []);
     } catch (error) {
-      console.error("Error fetching news:", error);
+      const errorRef = reportError(error, "org.news.fetch", { tenant_id: tid });
+      const message = appendErrorReference("Gagal memuat daftar pengumuman", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -112,8 +118,10 @@ export default function OrgNewsManagement() {
         await fetchNews(roleData.tenant_id);
       }
     } catch (error) {
-      console.error("Error:", error);
-      toast.error("Gagal memuat data");
+      const errorRef = reportError(error, "org.news.fetch_tenant_and_news");
+      const message = appendErrorReference("Gagal memuat halaman pengumuman", errorRef);
+      setLoadError(message);
+      toast.error(message);
     }
   }, [fetchNews]);
 
@@ -344,6 +352,14 @@ export default function OrgNewsManagement() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {loadError && (
+          <Card className="border-destructive/40">
+            <CardContent className="pt-6">
+              <p className="text-sm text-destructive">{loadError}</p>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Filters */}
         <Card>

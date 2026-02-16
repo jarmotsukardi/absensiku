@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { Plus, Pencil, Trash2, Timer } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type Office = Tables<"offices">;
 
@@ -42,8 +43,8 @@ const ITEMS_PER_PAGE = 10;
 
 export default function WorkHoursManagement() {
   const [workHours, setWorkHours] = useState<WorkHour[]>([]);
-  const [offices, setOffices] = useState<Office[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingHour, setEditingHour] = useState<WorkHour | null>(null);
@@ -54,9 +55,10 @@ export default function WorkHoursManagement() {
     end_time: "17:00",
   });
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
+      setLoadError(null);
       
       // Get offices to extract work hours
       const { data: officesData, error } = await supabase
@@ -65,16 +67,8 @@ export default function WorkHoursManagement() {
         .order("name");
 
       if (error) throw error;
-      setOffices(officesData || []);
-
-      // Transform offices to work hours format (using office settings)
-      const hours: WorkHour[] = (officesData || []).map((office, index) => ({
-        id: office.id,
-        category: "pemerintahan",
-        day: "senin-jumat",
-        start_time: office.work_start_time || "08:00",
-        end_time: office.work_end_time || "17:00",
-      }));
+      const typedOffices = (officesData || []) as Office[];
+      void typedOffices;
 
       // Create default work hours structure
       const defaultHours: WorkHour[] = [
@@ -88,40 +82,52 @@ export default function WorkHoursManagement() {
       ];
       
       setWorkHours(defaultHours);
-    } catch (error) {
-      console.error("Error fetching data:", error);
-      toast.error("Gagal memuat data");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.schedule.work_hours.fetch");
+      const message = appendErrorReference("Gagal memuat data jam kerja", errorRef);
+      setLoadError(message);
+      setWorkHours([]);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    void fetchData();
+  }, [fetchData]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
-    if (editingHour) {
-      setWorkHours(prev => prev.map(h => 
-        h.id === editingHour.id 
-          ? { ...h, ...formData }
-          : h
-      ));
-      toast.success("Jam kerja berhasil diperbarui");
-    } else {
-      const newHour: WorkHour = {
-        id: Date.now().toString(),
-        ...formData,
-      };
-      setWorkHours(prev => [...prev, newHour]);
-      toast.success("Jam kerja berhasil ditambahkan");
+    try {
+      setLoadError(null);
+      if (editingHour) {
+        setWorkHours(prev => prev.map(h => 
+          h.id === editingHour.id 
+            ? { ...h, ...formData }
+            : h
+        ));
+        toast.success("Jam kerja berhasil diperbarui");
+      } else {
+        const newHour: WorkHour = {
+          id: Date.now().toString(),
+          ...formData,
+        };
+        setWorkHours(prev => [...prev, newHour]);
+        toast.success("Jam kerja berhasil ditambahkan");
+      }
+
+      setIsDialogOpen(false);
+      setEditingHour(null);
+      setFormData({ category: "", day: "", start_time: "08:00", end_time: "17:00" });
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.schedule.work_hours.save", {
+        is_edit: Boolean(editingHour),
+      });
+      const message = appendErrorReference("Gagal menyimpan jam kerja", errorRef);
+      setLoadError(message);
+      toast.error(message);
     }
-    
-    setIsDialogOpen(false);
-    setEditingHour(null);
-    setFormData({ category: "", day: "", start_time: "08:00", end_time: "17:00" });
   };
 
   const handleEdit = (hour: WorkHour) => {
@@ -137,8 +143,16 @@ export default function WorkHoursManagement() {
 
   const handleDelete = (id: string) => {
     if (!confirm("Yakin ingin menghapus jam kerja ini?")) return;
-    setWorkHours(prev => prev.filter(h => h.id !== id));
-    toast.success("Jam kerja berhasil dihapus");
+    try {
+      setLoadError(null);
+      setWorkHours(prev => prev.filter(h => h.id !== id));
+      toast.success("Jam kerja berhasil dihapus");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.schedule.work_hours.delete", { work_hour_id: id });
+      const message = appendErrorReference("Gagal menghapus jam kerja", errorRef);
+      setLoadError(message);
+      toast.error(message);
+    }
   };
 
   const getCategoryLabel = (value: string) => CATEGORIES.find(c => c.value === value)?.label || value;
@@ -251,6 +265,12 @@ export default function WorkHoursManagement() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>

@@ -9,6 +9,8 @@
  * - Enterprise: 100.001–500.000 user
  */
 
+import { reportError } from "@/lib/errorLogger";
+
 export type ScalabilityTier = 'small' | 'medium' | 'large' | 'enterprise';
 
 export interface ScalabilityProfile {
@@ -188,7 +190,9 @@ export function saveScalabilityConfig(tier: ScalabilityTier): void {
       tier,
       savedAt: new Date().toISOString(),
     }));
-  } catch {}
+  } catch (error: unknown) {
+    reportError(error, "scalability_config.save", { tier });
+  }
 }
 
 /**

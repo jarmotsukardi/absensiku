@@ -24,6 +24,7 @@ import type { User } from "@supabase/supabase-js";
 import type { LucideIcon } from "lucide-react";
 import type { Tables } from "@/integrations/supabase/types";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type WfhRequest = Tables<"wfh_requests"> & {
   employees: {
@@ -39,6 +40,7 @@ export default function OrgWfhRequests() {
   const [isLoading, setIsLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
   const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<string | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
@@ -56,7 +58,12 @@ export default function OrgWfhRequests() {
     const initTenant = async () => {
       try {
         setTenantId(await resolveOrgTenantId());
-      } catch {
+        setLoadError(null);
+      } catch (error) {
+        const errorRef = reportError(error, "org.wfh_requests.resolve_tenant");
+        const message = appendErrorReference("Gagal menentukan tenant organisasi", errorRef);
+        setLoadError(message);
+        toast.error(message);
         setTenantId(null);
       }
     };
@@ -65,31 +72,45 @@ export default function OrgWfhRequests() {
 
   const fetchRequests = useCallback(async () => {
     setIsLoading(true);
-    if (!tenantId) {
-      setRequests([]);
-      setIsLoading(false);
-      return;
-    }
+    try {
+      setLoadError(null);
+      if (!tenantId) {
+        setRequests([]);
+        setTotalCount(0);
+        return;
+      }
 
-    const employeeIds = await getTenantEmployeeIds(tenantId);
-    if (employeeIds.length === 0) {
-      setRequests([]);
-      setIsLoading(false);
-      return;
-    }
+      const employeeIds = await getTenantEmployeeIds(tenantId);
+      if (employeeIds.length === 0) {
+        setRequests([]);
+        setTotalCount(0);
+        return;
+      }
 
-    const { data, error, count } = await supabase
-      .from("wfh_requests")
-      .select("*, employees!wfh_requests_employee_id_fkey(name, nip, opd(name, code))", { count: "exact" })
-      .in("employee_id", employeeIds)
-      .order("created_at", { ascending: false })
-      .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
-    
-    if (!error) {
+      const { data, error, count } = await supabase
+        .from("wfh_requests")
+        .select("*, employees!wfh_requests_employee_id_fkey(name, nip, opd(name, code))", { count: "exact" })
+        .in("employee_id", employeeIds)
+        .order("created_at", { ascending: false })
+        .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
+      
+      if (error) throw error;
+
       setRequests((data || []) as WfhRequest[]);
       setTotalCount(count || 0);
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.wfh_requests.fetch_data", {
+        tenant_id: tenantId,
+        page: currentPage,
+      });
+      const message = appendErrorReference("Gagal memuat data pengajuan WFH", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setRequests([]);
+      setTotalCount(0);
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
   }, [currentPage, tenantId]);
 
   useEffect(() => {
@@ -104,33 +125,45 @@ export default function OrgWfhRequests() {
   const handleApprove = async (id: string) => {
     if (!employee?.id) return;
     setIsSubmitting(true);
-    const { error } = await supabase
-      .from("wfh_requests")
-      .update({ status: "disetujui", approved_by: employee.id, approved_at: new Date().toISOString() })
-      .eq("id", id);
-    
-    if (!error) {
+    try {
+      const { error } = await supabase
+        .from("wfh_requests")
+        .update({ status: "disetujui", approved_by: employee.id, approved_at: new Date().toISOString() })
+        .eq("id", id);
+
+      if (error) throw error;
+
       toast.success("Pengajuan WFH disetujui");
       void fetchRequests();
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.wfh_requests.approve", { request_id: id, tenant_id: tenantId });
+      toast.error(appendErrorReference("Gagal menyetujui pengajuan WFH", errorRef));
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
 
   const handleReject = async () => {
     if (!employee?.id || !selectedRequest) return;
     setIsSubmitting(true);
-    const { error } = await supabase
-      .from("wfh_requests")
-      .update({ status: "ditolak", approved_by: employee.id, approved_at: new Date().toISOString(), rejection_reason: rejectionReason })
-      .eq("id", selectedRequest);
-    
-    if (!error) {
+    try {
+      const { error } = await supabase
+        .from("wfh_requests")
+        .update({ status: "ditolak", approved_by: employee.id, approved_at: new Date().toISOString(), rejection_reason: rejectionReason })
+        .eq("id", selectedRequest);
+
+      if (error) throw error;
+
       toast.success("Pengajuan WFH ditolak");
       setRejectDialogOpen(false);
       setRejectionReason("");
       void fetchRequests();
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.wfh_requests.reject", { request_id: selectedRequest, tenant_id: tenantId });
+      toast.error(appendErrorReference("Gagal menolak pengajuan WFH", errorRef));
+    } finally {
+      setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
 
   const getStatusBadge = (status: string) => {
@@ -151,6 +184,12 @@ export default function OrgWfhRequests() {
           <h1 className="text-2xl font-bold flex items-center gap-2"><Home className="h-6 w-6" />Pengajuan WFH</h1>
           <p className="text-muted-foreground">Kelola pengajuan work from home pegawai</p>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>

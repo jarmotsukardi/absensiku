@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +12,7 @@ import { Switch } from "@/components/ui/switch";
 import { Plus, Search, Pencil, Trash2, FolderTree, ChevronLeft, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type OPD = Tables<"opd">;
 
@@ -25,12 +26,10 @@ export default function OrgOPDManagement() {
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState({ id: "", code: "", name: "", is_active: true });
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
+    setLoadError(null);
     try {
       const { data, error } = await supabase
         .from("opd")
@@ -40,12 +39,18 @@ export default function OrgOPDManagement() {
       if (error) throw error;
       setOpds(data || []);
     } catch (error) {
-      console.error("Error fetching OPD:", error);
-      toast.error("Gagal memuat data OPD");
+      const errorRef = reportError(error, "org.opd.fetch");
+      const message = appendErrorReference("Gagal memuat data OPD", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    void fetchData();
+  }, [fetchData]);
 
   const handleSubmit = async () => {
     if (!formData.code || !formData.name) {
@@ -86,10 +91,10 @@ export default function OrgOPDManagement() {
       setIsDialogOpen(false);
       setFormData({ id: "", code: "", name: "", is_active: true });
       setIsEditing(false);
-      fetchData();
+      void fetchData();
     } catch (error) {
-      console.error("Error saving OPD:", error);
-      toast.error("Gagal menyimpan OPD");
+      const errorRef = reportError(error, "org.opd.save", { opd_id: formData.id || undefined });
+      toast.error(appendErrorReference("Gagal menyimpan OPD", errorRef));
     }
   };
 
@@ -107,10 +112,10 @@ export default function OrgOPDManagement() {
         .eq("id", opd.id);
       if (error) throw error;
       toast.success(`OPD berhasil ${opd.is_active ? "dinonaktifkan" : "diaktifkan"}`);
-      fetchData();
+      void fetchData();
     } catch (error) {
-      console.error("Error toggling status:", error);
-      toast.error("Gagal mengubah status OPD");
+      const errorRef = reportError(error, "org.opd.toggle_status", { opd_id: opd.id });
+      toast.error(appendErrorReference("Gagal mengubah status OPD", errorRef));
     }
   };
 
@@ -121,10 +126,10 @@ export default function OrgOPDManagement() {
       const { error } = await supabase.from("opd").delete().eq("id", id);
       if (error) throw error;
       toast.success("OPD berhasil dihapus");
-      fetchData();
+      void fetchData();
     } catch (error) {
-      console.error("Error deleting OPD:", error);
-      toast.error("Gagal menghapus OPD");
+      const errorRef = reportError(error, "org.opd.delete", { opd_id: id });
+      toast.error(appendErrorReference("Gagal menghapus OPD", errorRef));
     }
   };
 
@@ -199,6 +204,14 @@ export default function OrgOPDManagement() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {loadError && (
+          <Card className="border-destructive/40">
+            <CardContent className="pt-6">
+              <p className="text-sm text-destructive">{loadError}</p>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>

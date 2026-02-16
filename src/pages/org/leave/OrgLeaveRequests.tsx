@@ -21,6 +21,7 @@ import { format, differenceInDays, isBefore, startOfDay } from "date-fns";
 import { id } from "date-fns/locale";
 import type { Enums, Tables } from "@/integrations/supabase/types";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type RequestStatus = Enums<"request_status">;
 type LeaveRequest = Tables<"leave_requests"> & {
@@ -39,6 +40,7 @@ export default function OrgLeaveRequests() {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("menunggu");
   const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
 
@@ -47,7 +49,12 @@ export default function OrgLeaveRequests() {
       try {
         const resolved = await resolveOrgTenantId();
         setTenantId(resolved);
-      } catch {
+        setLoadError(null);
+      } catch (error) {
+        const errorRef = reportError(error, "org.leave_requests.resolve_tenant");
+        const message = appendErrorReference("Gagal menentukan tenant organisasi", errorRef);
+        setLoadError(message);
+        toast.error(message);
         setTenantId(null);
       }
     };
@@ -56,9 +63,11 @@ export default function OrgLeaveRequests() {
 
   const fetchData = useCallback(async () => {
     try {
+      setLoadError(null);
       if (!tenantId) {
         setRequests([]);
         setExpiredRequests([]);
+        setTotalCount(0);
         return;
       }
 
@@ -102,9 +111,18 @@ export default function OrgLeaveRequests() {
       );
       setExpiredRequests(expired as LeaveRequest[]);
       setRequests((data || []) as LeaveRequest[]);
-    } catch (error) {
-      console.error("Error fetching data:", error);
-      toast.error("Gagal memuat data");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.leave_requests.fetch_data", {
+        tenant_id: tenantId,
+        status: statusFilter,
+        page: currentPage,
+      });
+      const message = appendErrorReference("Gagal memuat data permohonan cuti", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setRequests([]);
+      setExpiredRequests([]);
+      setTotalCount(0);
     } finally {
       setIsLoading(false);
     }
@@ -144,8 +162,9 @@ export default function OrgLeaveRequests() {
       if (error) throw error;
       toast.success("Permohonan disetujui");
       void fetchData();
-    } catch (error) {
-      toast.error("Gagal menyetujui permohonan");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.leave_requests.approve", { request_id: id, tenant_id: tenantId });
+      toast.error(appendErrorReference("Gagal menyetujui permohonan", errorRef));
     }
   };
 
@@ -162,8 +181,9 @@ export default function OrgLeaveRequests() {
       if (error) throw error;
       toast.success("Permohonan ditolak");
       void fetchData();
-    } catch (error) {
-      toast.error("Gagal menolak permohonan");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.leave_requests.reject", { request_id: id, tenant_id: tenantId });
+      toast.error(appendErrorReference("Gagal menolak permohonan", errorRef));
     }
   };
 
@@ -210,6 +230,12 @@ export default function OrgLeaveRequests() {
           </h1>
           <p className="text-muted-foreground">Kelola permohonan izin dan cuti pegawai</p>
         </div>
+
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
 
         <Card>
           <CardHeader>
