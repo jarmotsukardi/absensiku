@@ -204,6 +204,8 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   const [todayAttendance, setTodayAttendance] = useState<AttendanceRecord | null>(null);
   const todayAttendanceRef = React.useRef<AttendanceRecord | null>(null);
   const hasFetchedRef = React.useRef(false); // Mencegah double fetch
+  const fetchDataRef = React.useRef<() => Promise<void>>(async () => {});
+  const fetchUnreadNotificationCountRef = React.useRef<() => Promise<void>>(async () => {});
   const [currentLocation, setCurrentLocation] = useState<{ lat: number; lng: number; timestamp: number } | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [news, setNews] = useState<NewsItem[]>([]);
@@ -347,15 +349,13 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   useEffect(() => {
     if (user && !hasFetchedRef.current) {
       hasFetchedRef.current = true;
-      fetchData();
-      fetchUnreadNotificationCount();
+      void fetchDataRef.current();
+      void fetchUnreadNotificationCountRef.current();
     }
-    // fetchData intentionally not in deps to keep one-time initial fetch behavior tied to user readiness.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user]);
 
   // Fetch unread notification count
-  const fetchUnreadNotificationCount = async () => {
+  const fetchUnreadNotificationCount = useCallback(async () => {
     try {
       const { data: { user: currentUser } } = await supabase.auth.getUser();
       if (!currentUser) return;
@@ -370,7 +370,11 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
     } catch (error) {
       reportError(error, "employee.dashboard.fetch_unread_notifications");
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchUnreadNotificationCountRef.current = fetchUnreadNotificationCount;
+  }, [fetchUnreadNotificationCount]);
 
   // Subscribe to realtime notification changes
   useEffect(() => {
@@ -396,7 +400,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user]);
+  }, [user, fetchUnreadNotificationCount]);
 
   // UX: saat pindah tab (Beranda/Riwayat/Pengajuan/Bantuan/Profil), reset scroll ke atas
   // Ini mencegah kesan "tab kosong" ketika user sebelumnya scroll jauh ke bawah.
@@ -484,10 +488,8 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   // Setelah background sync selesai, refresh data server agar UI konsisten.
   useEffect(() => {
     if (!offlineSyncStats.lastSyncAt || offlineSyncStats.syncedCount <= 0) return;
-    fetchData();
-    // fetchData intentionally omitted to avoid cascade refetch loop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [offlineSyncStats.lastSyncAt, offlineSyncStats.syncedCount]);
+    void fetchData();
+  }, [fetchData, offlineSyncStats.lastSyncAt, offlineSyncStats.syncedCount]);
 
   // Terapkan metadata absensi (shift/flexible) setelah record berhasil sinkron ke server.
   useEffect(() => {
@@ -531,16 +533,14 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       }
 
       setPendingAttendanceMeta(null);
-      fetchData();
+      void fetchData();
     };
 
-    applyMetadata();
-    // fetchData intentionally omitted to avoid recursive refresh while metadata pending.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingAttendanceMeta, todayAttendance?.id, todayAttendance?.date]);
+    void applyMetadata();
+  }, [fetchData, pendingAttendanceMeta, todayAttendance?.id, todayAttendance?.date]);
 
   // Get current device ID menggunakan utility tunggal
-  const getCurrentDeviceId = (): string => {
+  const getCurrentDeviceId = useCallback((): string => {
     const storedId = localStorage.getItem("web_device_id");
     if (storedId) return storedId;
     
@@ -567,10 +567,10 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
     localStorage.setItem("web_device_id", deviceId);
     
     return deviceId;
-  };
+  }, []);
 
   // Fungsi untuk cek apakah hari ini libur
-  const checkTodayHoliday = async (tenantId: string, organizationType?: string | null) => {
+  const checkTodayHoliday = useCallback(async (tenantId: string, organizationType?: string | null) => {
     try {
       const today = new Date();
       const year = today.getFullYear();
@@ -650,9 +650,9 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       });
       setWorkDayError(null);
     }
-  };
+  }, []);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       // Fetch ALL employee records for this user (multi-organisasi support)
       const { data: allEmpData, error: empError } = await supabase
@@ -860,7 +860,11 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [checkTodayHoliday, getCurrentDeviceId, selectedEmployeeId, timezone, user?.id]);
+
+  useEffect(() => {
+    fetchDataRef.current = fetchData;
+  }, [fetchData]);
 
   const getCurrentPosition = (): Promise<GeolocationPosition> => {
     return new Promise((resolve, reject) => {
@@ -1853,21 +1857,20 @@ function WeeklyAttendanceView({ employeeId }: { employeeId: string | null }) {
     
     const fetchWeekData = async () => {
       setIsLoading(true);
+      const { start: rangeStart, end: rangeEnd } = getWeekRange(weekOffset);
       const { data } = await supabase
         .from("attendance_records_partitioned")
         .select("id, date, check_in_time, check_out_time, status, notes, is_wfh")
         .eq("employee_id", employeeId)
-        .gte("date", format(start, "yyyy-MM-dd"))
-        .lte("date", format(end, "yyyy-MM-dd"))
+        .gte("date", format(rangeStart, "yyyy-MM-dd"))
+        .lte("date", format(rangeEnd, "yyyy-MM-dd"))
         .order("date", { ascending: true });
       
       setRecords(data || []);
       setIsLoading(false);
     };
     
-    fetchWeekData();
-    // start/end derived from weekOffset; dependency on weekOffset is sufficient.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void fetchWeekData();
   }, [employeeId, weekOffset]);
   
   const stats = {
@@ -1969,14 +1972,7 @@ const LegacyHistoryTab = ({ employeeId, timezone, tenantId }: { employeeId?: str
   const [isLoading, setIsLoading] = useState(true);
   const [filter, setFilter] = useState({ month: new Date().getMonth() + 1, year: new Date().getFullYear() });
 
-  useEffect(() => {
-    if (employeeId) fetchHistory();
-    if (tenantId) fetchWorkHours();
-    // fetchHistory/fetchWorkHours intentionally omitted; they depend on local filters that already drive this effect.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employeeId, tenantId, filter]);
-
-  const fetchHistory = async () => {
+  const fetchHistory = useCallback(async () => {
     try {
       const startDate = new Date(filter.year, filter.month - 1, 1);
       const endDate = new Date(filter.year, filter.month, 0);
@@ -1999,9 +1995,9 @@ const LegacyHistoryTab = ({ employeeId, timezone, tenantId }: { employeeId?: str
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [employeeId, filter.month, filter.year]);
 
-  const fetchWorkHours = async () => {
+  const fetchWorkHours = useCallback(async () => {
     try {
       const { data } = await supabase
         .from("work_hours")
@@ -2015,7 +2011,16 @@ const LegacyHistoryTab = ({ employeeId, timezone, tenantId }: { employeeId?: str
         tenant_id: tenantId,
       });
     }
-  };
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (employeeId) {
+      void fetchHistory();
+    }
+    if (tenantId) {
+      void fetchWorkHours();
+    }
+  }, [employeeId, tenantId, fetchHistory, fetchWorkHours]);
 
   const months = [
     "Januari", "Februari", "Maret", "April", "Mei", "Juni",
@@ -2133,21 +2138,12 @@ function RequestsTab({ employeeId, tenantId }: { employeeId?: string; tenantId?:
   }) => {
     const result = await createLeaveRequest(data);
     if (result.success) {
-      fetchRequests(); // Refresh the list after successful submission
+      void fetchRequests(); // Refresh the list after successful submission
     }
     return result;
   };
 
-  useEffect(() => {
-    if (employeeId) {
-      fetchRequests();
-      fetchWfhRequests();
-    }
-    // fetchRequests/fetchWfhRequests intentionally omitted to avoid unnecessary recreation.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employeeId]);
-
-  const fetchRequests = async () => {
+  const fetchRequests = useCallback(async () => {
     try {
       const { data } = await supabase
         .from("leave_requests")
@@ -2164,9 +2160,9 @@ function RequestsTab({ employeeId, tenantId }: { employeeId?: string; tenantId?:
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [employeeId]);
 
-  const fetchWfhRequests = async () => {
+  const fetchWfhRequests = useCallback(async () => {
     try {
       const { data } = await supabase
         .from("wfh_requests")
@@ -2181,7 +2177,13 @@ function RequestsTab({ employeeId, tenantId }: { employeeId?: string; tenantId?:
         employee_id: employeeId,
       });
     }
-  };
+  }, [employeeId]);
+
+  useEffect(() => {
+    if (!employeeId) return;
+    void fetchRequests();
+    void fetchWfhRequests();
+  }, [employeeId, fetchRequests, fetchWfhRequests]);
 
   const handleSubmitWfh = async () => {
     if (!employeeId || selectedWfhDates.length === 0 || !wfhReason.trim()) return;
@@ -2226,7 +2228,7 @@ function RequestsTab({ employeeId, tenantId }: { employeeId?: string; tenantId?:
       setWfhDialogOpen(false);
       setSelectedWfhDates([]);
       setWfhReason("");
-      fetchWfhRequests();
+      void fetchWfhRequests();
     } catch (error: unknown) {
       const errorRef = reportError(error, "employee.dashboard.requests.submit_wfh", {
         employee_id: employeeId,
@@ -2563,13 +2565,36 @@ function HelpTab({ tenantId }: { tenantId?: string }) {
   const [isLoading, setIsLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetchFAQs();
-    // fetchFAQs intentionally omitted; only tenant change should trigger reload.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tenantId]);
+  // Default FAQs jika tidak ada data dari database
+  const getDefaultFAQs = useCallback(() => [
+    { 
+      id: "default-1", 
+      question: "Bagaimana cara melakukan absensi?", 
+      answer: "Klik tombol 'Absen Masuk' pada halaman beranda untuk check-in dan 'Absen Pulang' untuk check-out. Pastikan GPS aktif dan Anda berada di lokasi kantor." 
+    },
+    { 
+      id: "default-2", 
+      question: "Apa yang harus dilakukan jika lokasi GPS tidak akurat?", 
+      answer: "Pastikan GPS aktif dan izin lokasi diberikan. Coba refresh halaman atau tunggu beberapa saat hingga GPS mendapat sinyal yang lebih baik." 
+    },
+    { 
+      id: "default-3", 
+      question: "Bagaimana cara mengajukan cuti atau izin?", 
+      answer: "Buka tab 'Pengajuan' lalu pilih 'Cuti/Izin'. Isi formulir dengan lengkap termasuk jenis cuti, tanggal, dan alasan." 
+    },
+    { 
+      id: "default-4", 
+      question: "Apa yang dimaksud dengan Absensi Khusus?", 
+      answer: "Absensi Khusus memungkinkan Anda melakukan absensi dari lokasi di luar kantor dengan persetujuan. Fitur ini harus diaktifkan oleh admin." 
+    },
+    { 
+      id: "default-5", 
+      question: "Bagaimana jika saya lupa absen pulang?", 
+      answer: "Hubungi admin atau atasan Anda untuk melakukan koreksi absensi. Catatan: absensi yang tidak lengkap dapat mempengaruhi perhitungan kehadiran." 
+    },
+  ], []);
 
-  const fetchFAQs = async () => {
+  const fetchFAQs = useCallback(async () => {
     try {
       setIsLoading(true);
       // Query FAQs - global (tenant_id is null) atau milik tenant ini
@@ -2605,36 +2630,11 @@ function HelpTab({ tenantId }: { tenantId?: string }) {
     } finally {
       setIsLoading(false);
     }
-  };
-  
-  // Default FAQs jika tidak ada data dari database
-  const getDefaultFAQs = () => [
-    { 
-      id: "default-1", 
-      question: "Bagaimana cara melakukan absensi?", 
-      answer: "Klik tombol 'Absen Masuk' pada halaman beranda untuk check-in dan 'Absen Pulang' untuk check-out. Pastikan GPS aktif dan Anda berada di lokasi kantor." 
-    },
-    { 
-      id: "default-2", 
-      question: "Apa yang harus dilakukan jika lokasi GPS tidak akurat?", 
-      answer: "Pastikan GPS aktif dan izin lokasi diberikan. Coba refresh halaman atau tunggu beberapa saat hingga GPS mendapat sinyal yang lebih baik." 
-    },
-    { 
-      id: "default-3", 
-      question: "Bagaimana cara mengajukan cuti atau izin?", 
-      answer: "Buka tab 'Pengajuan' lalu pilih 'Cuti/Izin'. Isi formulir dengan lengkap termasuk jenis cuti, tanggal, dan alasan." 
-    },
-    { 
-      id: "default-4", 
-      question: "Apa yang dimaksud dengan Absensi Khusus?", 
-      answer: "Absensi Khusus memungkinkan Anda melakukan absensi dari lokasi di luar kantor dengan persetujuan. Fitur ini harus diaktifkan oleh admin." 
-    },
-    { 
-      id: "default-5", 
-      question: "Bagaimana jika saya lupa absen pulang?", 
-      answer: "Hubungi admin atau atasan Anda untuk melakukan koreksi absensi. Catatan: absensi yang tidak lengkap dapat mempengaruhi perhitungan kehadiran." 
-    },
-  ];
+  }, [getDefaultFAQs, tenantId]);
+
+  useEffect(() => {
+    void fetchFAQs();
+  }, [fetchFAQs]);
 
   return (
     <div className="space-y-4">
