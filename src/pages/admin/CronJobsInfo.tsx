@@ -206,11 +206,20 @@ const callPublicRpc = async <T = unknown>(fn: string, payload?: Record<string, u
     throw new Error("Supabase env tidak tersedia untuk public RPC fallback.");
   }
 
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const accessToken = session?.access_token;
+  if (!accessToken) {
+    throw new Error("Session token tidak tersedia untuk fallback RPC.");
+  }
+
   const response = await fetch(`${supabaseUrl}/rest/v1/rpc/${fn}`, {
     method: "POST",
     headers: {
       apikey: supabaseKey,
       "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify(payload || {}),
   });
