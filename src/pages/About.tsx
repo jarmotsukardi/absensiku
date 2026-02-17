@@ -73,6 +73,16 @@ const testimonials = [
 const withFallbackImageAlt = (html: string) =>
   html.replace(/<img\b(?![^>]*\balt=)([^>]*)>/gi, '<img alt="Ilustrasi konten AbsensiKu"$1>');
 
+const asSafeString = (value: unknown): string => {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  try {
+    return String(value);
+  } catch {
+    return "";
+  }
+};
+
 const About = () => {
   const [content, setContent] = useState<string>("");
   const [isLoading, setIsLoading] = useState(true);
@@ -92,7 +102,8 @@ const About = () => {
         .maybeSingle();
 
       if (aboutData?.value && typeof aboutData.value === "object" && "content" in aboutData.value) {
-        setContent((aboutData.value as { content: string }).content || "");
+        const rawContent = (aboutData.value as { content?: unknown }).content;
+        setContent(asSafeString(rawContent));
       }
 
       // Fetch footer settings
@@ -102,8 +113,14 @@ const About = () => {
         .eq("key", "footer_settings")
         .maybeSingle();
 
-      if (footerData?.value) {
-        setFooterSettings({ ...defaultFooterSettings, ...(footerData.value as Partial<FooterSettings>) });
+      if (footerData?.value && typeof footerData.value === "object") {
+        const candidate = footerData.value as Partial<FooterSettings>;
+        setFooterSettings({
+          ...defaultFooterSettings,
+          ...candidate,
+          quick_links: Array.isArray(candidate.quick_links) ? candidate.quick_links : defaultFooterSettings.quick_links,
+          legal_links: Array.isArray(candidate.legal_links) ? candidate.legal_links : defaultFooterSettings.legal_links,
+        });
       }
     } catch (error) {
       console.error("Error fetching about page:", error);

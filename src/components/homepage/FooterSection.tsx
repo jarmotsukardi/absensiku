@@ -22,6 +22,8 @@ const isValidLink = (url?: string) => {
 export function FooterSection({ settings }: FooterSectionProps) {
   const [showTermsDialog, setShowTermsDialog] = useState(false);
   const [termsContent, setTermsContent] = useState<{ title: string; content: string } | null>(null);
+  const quickLinks = Array.isArray(settings.quick_links) ? settings.quick_links : [];
+  const legalLinks = Array.isArray(settings.legal_links) ? settings.legal_links : [];
 
   // Handler untuk legal links yang butuh overlay
   const handleLegalLinkClick = (link: { label: string; url: string; content?: string }) => {
@@ -67,7 +69,7 @@ export function FooterSection({ settings }: FooterSectionProps) {
             <div>
               <h4 className="font-semibold mb-4">Menu Cepat</h4>
               <ul className="space-y-2 text-sm text-muted-foreground">
-                {settings.quick_links.map((link) => (
+                {quickLinks.map((link) => (
                   <li key={link.id}>
                     {!isValidLink(link.url) ? (
                       <span className="text-muted-foreground/60">{link.label}</span>
@@ -93,7 +95,7 @@ export function FooterSection({ settings }: FooterSectionProps) {
             <div>
               <h4 className="font-semibold mb-4">Legal</h4>
               <ul className="space-y-2 text-sm text-muted-foreground">
-                {settings.legal_links.map((link) => (
+                {legalLinks.map((link) => (
                   <li key={link.id}>
                     {link.content ? (
                       <button
