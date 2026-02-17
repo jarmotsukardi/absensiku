@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -50,6 +50,7 @@ export default function ActiveEmployees() {
   const [employees, setEmployees] = useState<(Employee & { opd?: OPD; office?: Office })[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [officeList, setOfficeList] = useState<Office[]>([]);
+  const [totalEmployees, setTotalEmployees] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterOpd, setFilterOpd] = useState<string>("all");
@@ -74,38 +75,73 @@ export default function ActiveEmployees() {
     nik: "",
   });
 
-  const fetchData = async () => {
+  const fetchMasterData = async () => {
     try {
-      setIsLoading(true);
-      setLoadError(null);
-      
-      const [opdResult, officeResult, employeeResult] = await Promise.all([
+      const [opdResult, officeResult] = await Promise.all([
         supabase.from("opd").select("*").order("name"),
         supabase.from("offices").select("*").order("name"),
-        supabase.from("employees").select("*, opd:opd_id(*), office:office_id(*)").eq("is_active", true).order("name"),
       ]);
 
       if (opdResult.error) throw opdResult.error;
       if (officeResult.error) throw officeResult.error;
-      if (employeeResult.error) throw employeeResult.error;
 
       setOpdList(opdResult.data || []);
       setOfficeList(officeResult.data || []);
-      setEmployees(employeeResult.data || []);
     } catch (error) {
-      const errorRef = reportError(error, "admin.active_employees.fetch_data");
+      const errorRef = reportError(error, "admin.active_employees.fetch_master_data");
+      const message = appendErrorReference("Gagal memuat data referensi pegawai", errorRef);
+      toast.error(message);
+      setLoadError(message);
+    }
+  };
+
+  const fetchEmployees = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setLoadError(null);
+      const page = Math.max(1, currentPage);
+      const from = (page - 1) * ITEMS_PER_PAGE;
+      const to = from + ITEMS_PER_PAGE - 1;
+
+      let query = supabase
+        .from("employees")
+        .select("*, opd:opd_id(*), office:office_id(*)", { count: "exact" })
+        .eq("is_active", true);
+
+      if (filterOpd !== "all") {
+        query = query.eq("opd_id", filterOpd);
+      }
+      if (searchTerm.trim()) {
+        const escaped = searchTerm.trim().replace(/[%_]/g, "\\$&");
+        query = query.or(`name.ilike.%${escaped}%,nip.ilike.%${escaped}%,email.ilike.%${escaped}%`);
+      }
+
+      const { data, error, count } = await query
+        .order("name")
+        .range(from, to);
+
+      if (error) throw error;
+      setEmployees(data || []);
+      setTotalEmployees(count || 0);
+    } catch (error) {
+      const errorRef = reportError(error, "admin.active_employees.fetch_employees");
       const message = appendErrorReference("Gagal memuat data pegawai aktif", errorRef);
       toast.error(message);
       setLoadError(message);
       setEmployees([]);
+      setTotalEmployees(0);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [currentPage, filterOpd, searchTerm]);
 
   useEffect(() => {
-    fetchData();
+    void fetchMasterData();
   }, []);
+
+  useEffect(() => {
+    void fetchEmployees();
+  }, [fetchEmployees]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -153,7 +189,7 @@ export default function ActiveEmployees() {
       setIsDialogOpen(false);
       setEditingEmployee(null);
       resetForm();
-      fetchData();
+      void fetchEmployees();
     } catch (error) {
       const errorRef = reportError(error, "admin.active_employees.save_employee", {
         employee_id: editingEmployee?.id || null,
@@ -216,7 +252,7 @@ export default function ActiveEmployees() {
 
       if (error) throw error;
       toast.success("Pegawai berhasil dinonaktifkan");
-      fetchData();
+      void fetchEmployees();
     } catch (error) {
       const errorRef = reportError(error, "admin.active_employees.deactivate", { employee_id: id });
       const message = appendErrorReference("Gagal menonaktifkan pegawai", errorRef);
@@ -225,18 +261,7 @@ export default function ActiveEmployees() {
     }
   };
 
-  const filteredEmployees = employees.filter((emp) => {
-    const matchesSearch = emp.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      emp.nip?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      emp.email.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesOpd = filterOpd === "all" || emp.opd_id === filterOpd;
-    return matchesSearch && matchesOpd;
-  });
-  const totalPages = Math.max(1, Math.ceil(filteredEmployees.length / ITEMS_PER_PAGE));
-  const paginatedEmployees = filteredEmployees.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
-  );
+  const totalPages = Math.max(1, Math.ceil(totalEmployees / ITEMS_PER_PAGE));
   const pageStart = Math.max(1, Math.min(currentPage - 1, totalPages - 2));
   const visiblePages = Array.from({ length: Math.min(3, totalPages) }, (_, idx) => pageStart + idx).filter(
     (page) => page <= totalPages
@@ -244,7 +269,14 @@ export default function ActiveEmployees() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, filterOpd, employees.length]);
+  }, [searchTerm, filterOpd]);
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(totalEmployees / ITEMS_PER_PAGE));
+    if (currentPage > maxPage) {
+      setCurrentPage(maxPage);
+    }
+  }, [currentPage, totalEmployees]);
 
   return (
     <SuperAdminLayout>
@@ -486,7 +518,7 @@ export default function ActiveEmployees() {
               Daftar Pegawai Aktif
             </CardTitle>
             <CardDescription>
-              Total {filteredEmployees.length} pegawai aktif
+              Total {totalEmployees} pegawai aktif
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -536,14 +568,14 @@ export default function ActiveEmployees() {
                         Memuat data...
                       </TableCell>
                     </TableRow>
-                  ) : filteredEmployees.length === 0 ? (
+                  ) : employees.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center py-8">
                         Tidak ada data pegawai
                       </TableCell>
                     </TableRow>
                   ) : (
-                    paginatedEmployees.map((emp, index) => (
+                    employees.map((emp, index) => (
                       <TableRow key={emp.id}>
                         <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
                         <TableCell className="font-mono text-sm">{emp.nip || "-"}</TableCell>
@@ -567,7 +599,7 @@ export default function ActiveEmployees() {
                 </TableBody>
               </Table>
             </div>
-            {!isLoading && filteredEmployees.length > 0 && (
+            {!isLoading && totalEmployees > 0 && (
               <div className="mt-4 flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">
                   Halaman {currentPage} dari {totalPages}

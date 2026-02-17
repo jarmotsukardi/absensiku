@@ -7,13 +7,75 @@ const corsHeaders = {
 };
 
 interface WhatsAppGatewayConfig {
+  apiKey?: string;
   api_key?: string;
   provider?: string;
+  apiUrl?: string;
+  baseUrl?: string;
+  senderNumber?: string;
+  sender?: string;
+  isEnabled?: boolean;
+  enabled?: boolean;
+}
+
+interface GatewaySettingRow {
+  key: string;
+  value: WhatsAppGatewayConfig | null;
+}
+
+type WhatsAppPayload = Record<string, unknown>;
+
+interface ProviderConfig {
+  url: string;
+  buildPayload: (to: string, message: string, apiKey: string, sender?: string) => WhatsAppPayload;
+  headers: (apiKey: string) => Record<string, string>;
 }
 
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) return error.message;
   return "Terjadi kesalahan internal";
+};
+
+const toStringSafe = (value: unknown): string => (typeof value === "string" ? value : "");
+
+const toBooleanSafe = (value: unknown): boolean => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return value.toLowerCase() === "true";
+  return false;
+};
+
+const normalizePhone = (phone: string): string => {
+  let digits = phone.replace(/[^0-9]/g, "");
+  if (digits.startsWith("0")) digits = `62${digits.slice(1)}`;
+  return digits;
+};
+
+const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
+  fonnte: {
+    url: "https://api.fonnte.com/send",
+    buildPayload: (to, message) => ({ target: to, message }),
+    headers: (apiKey) => ({ Authorization: apiKey, "Content-Type": "application/json" }),
+  },
+  wablas: {
+    url: "https://pati.wablas.com/api/send-message",
+    buildPayload: (to, message) => ({ phone: to, message }),
+    headers: (apiKey) => ({ Authorization: apiKey, "Content-Type": "application/json" }),
+  },
+  whacenter: {
+    url: "https://app.whacenter.com/api/send",
+    buildPayload: (to, message, _apiKey, sender) => ({ device_id: sender, number: to, message }),
+    headers: (apiKey) => ({ Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }),
+  },
+  dripsender: {
+    url: "https://api.dripsender.id/send",
+    buildPayload: (to, message, apiKey) => ({ api_key: apiKey, phone: to, text: message }),
+    headers: () => ({ "Content-Type": "application/json" }),
+  },
+};
+
+const pickGateway = (rows: GatewaySettingRow[]): WhatsAppGatewayConfig | null => {
+  const selected = rows.find((row) => row.key === "whatsapp_gateway") || rows.find((row) => row.key === "wa_gateway");
+  return selected?.value ?? null;
 };
 
 Deno.serve(async (req) => {
@@ -96,44 +158,58 @@ Deno.serve(async (req) => {
     // Try sending via WhatsApp gateway
     let demoOtp = null;
     if (whatsapp) {
-      const { data: waSettings } = await supabase
+      const { data: waSettings, error: waSettingsError } = await supabase
         .from("system_settings")
-        .select("value")
-        .eq("key", "wa_gateway")
-        .maybeSingle();
+        .select("key, value")
+        .in("key", ["whatsapp_gateway", "wa_gateway"]);
 
-      const waConfig = (waSettings?.value as WhatsAppGatewayConfig | null) ?? null;
-      if (waConfig?.api_key && waConfig?.provider) {
+      if (waSettingsError) {
+        logTraceError(traceId, "Gagal membaca konfigurasi WhatsApp gateway", waSettingsError);
+      }
+
+      const waConfig = pickGateway((waSettings || []) as GatewaySettingRow[]);
+      const apiKey = toStringSafe(waConfig?.apiKey ?? waConfig?.api_key);
+      const provider = toStringSafe(waConfig?.provider) || (toStringSafe(waConfig?.apiUrl ?? waConfig?.baseUrl) ? "custom" : "fonnte");
+      const apiUrl = toStringSafe(waConfig?.apiUrl ?? waConfig?.baseUrl);
+      const senderNumber = toStringSafe(waConfig?.senderNumber ?? waConfig?.sender);
+      const isEnabled = toBooleanSafe(waConfig?.isEnabled ?? waConfig?.enabled);
+
+      if (isEnabled && apiKey) {
         const modeLabel = new_mode === "individual" ? "Billing Mandiri" : "Billing Terpusat";
         const message = `[AbsensiKu] Kode OTP untuk perubahan ke ${modeLabel}: ${otp}\n\nKode berlaku 10 menit. Jangan bagikan kode ini.`;
 
         try {
-          let apiUrl = "";
-          let payload: Record<string, unknown> = {};
-          const cleanNumber = whatsapp.replace(/\D/g, "");
+          const cleanNumber = normalizePhone(whatsapp);
+          let fetchUrl = "";
+          let fetchPayload: WhatsAppPayload = {};
+          let fetchHeaders: Record<string, string> = {};
 
-          switch (waConfig.provider) {
-            case "fonnte":
-              apiUrl = "https://api.fonnte.com/send";
-              payload = { target: cleanNumber, message, countryCode: "62" };
-              break;
-            case "wablas":
-              apiUrl = "https://pati.wablas.com/api/send-message";
-              payload = { phone: cleanNumber, message };
-              break;
-            default:
-              apiUrl = "https://api.fonnte.com/send";
-              payload = { target: cleanNumber, message };
+          if (provider === "custom" && apiUrl) {
+            fetchUrl = apiUrl;
+            fetchPayload = { to: cleanNumber, message };
+            fetchHeaders = {
+              Authorization: `Bearer ${apiKey}`,
+              "Content-Type": "application/json",
+            };
+          } else {
+            const providerConfig = PROVIDER_CONFIGS[provider];
+            if (!providerConfig) {
+              throw new Error(`Provider WhatsApp '${provider}' tidak didukung`);
+            }
+            fetchUrl = providerConfig.url;
+            fetchPayload = providerConfig.buildPayload(cleanNumber, message, apiKey, senderNumber || undefined);
+            fetchHeaders = providerConfig.headers(apiKey);
           }
 
-          await fetch(apiUrl, {
+          const waResponse = await fetch(fetchUrl, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: waConfig.api_key,
-            },
-            body: JSON.stringify(payload),
+            headers: fetchHeaders,
+            body: JSON.stringify(fetchPayload),
           });
+
+          if (!waResponse.ok) {
+            throw new Error(await waResponse.text());
+          }
         } catch (waError) {
           logTraceError(traceId, "WA send error", waError);
           demoOtp = otp;

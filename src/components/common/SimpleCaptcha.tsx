@@ -60,13 +60,17 @@ export function SimpleCaptcha({ onVerify, className = "" }: SimpleCaptchaProps) 
           size="icon"
           onClick={generateCaptcha}
           title="Refresh captcha"
+          aria-label="Refresh captcha"
         >
           <RefreshCcw className="h-4 w-4" />
         </Button>
       </div>
       <Input
+        id="captcha-input"
         type="text"
         placeholder="Masukkan kode captcha"
+        aria-label="Masukkan kode captcha"
+        autoComplete="off"
         value={userInput}
         onChange={(e) => handleInputChange(e.target.value)}
         className={isValid === null ? "" : isValid ? "border-success" : "border-destructive"}

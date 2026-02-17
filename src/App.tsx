@@ -18,7 +18,6 @@ const ResetPassword = lazy(() => import("./pages/auth/ResetPassword"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const FAQPage = lazy(() => import("./pages/FAQ"));
 const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"));
-const TenantDashboard = lazy(() => import("./pages/admin/TenantDashboard"));
 const Organizations = lazy(() => import("./pages/admin/Organizations"));
 const OrganizationForm = lazy(() => import("./pages/admin/OrganizationForm"));
 const OrganizationDetail = lazy(() => import("./pages/admin/OrganizationDetail"));
@@ -137,7 +136,7 @@ const App = () => (
               {/* Super Admin Routes */}
               <Route path="/admin/login" element={<SuperAdminLogin />} />
               <Route path="/admin" element={<AdminDashboard />} />
-              <Route path="/admin/dashboard" element={<TenantDashboard />} />
+              <Route path="/admin/dashboard" element={<AdminDashboard />} />
               <Route path="/admin/organizations" element={<Organizations />} />
               <Route path="/admin/organizations/new" element={<OrganizationForm />} />
               <Route path="/admin/organizations/:id" element={<OrganizationDetail />} />
@@ -157,6 +156,7 @@ const App = () => (
               <Route path="/admin/leave-approvals" element={<LeaveApprovals />} />
               <Route path="/admin/notifications" element={<NotificationManagement />} />
               <Route path="/admin/database" element={<DatabaseManagement />} />
+              <Route path="/admin/database-management" element={<Navigate to="/admin/database" replace />} />
               <Route path="/admin/partition-monitoring" element={<PartitionMonitoring />} />
               <Route path="/admin/faq" element={<FAQManagement />} />
               <Route path="/admin/org-type-settings" element={<OrganizationTypeSettings />} />
@@ -220,6 +220,7 @@ const App = () => (
               <Route path="/org/help" element={<OrgHelp />} />
               <Route path="/org/audit-log" element={<OrgAuditLog />} />
               {/* Employee Routes */}
+              <Route path="/employee" element={<Navigate to="/employee/login" replace />} />
               <Route path="/employee/login" element={<EmployeeLogin />} />
               <Route path="/employee/dashboard" element={<EmployeeDashboardNew />} />
               <Route path="/employee/profile" element={<EmployeeProfile />} />

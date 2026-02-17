@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
@@ -21,6 +21,8 @@ import {
   Wrench
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { toast } from "sonner";
 
 interface Stats {
   totalTenants: number;
@@ -38,6 +40,12 @@ interface Stats {
   openFeedbacks: number;
   openBugs: number;
   lockedOtpUsers: number;
+  trends: {
+    tenants: { label: string; trendUp: boolean };
+    employees: { label: string; trendUp: boolean };
+    subscriptions: { label: string; trendUp: boolean };
+    attendance: { label: string; trendUp: boolean };
+  };
 }
 
 export function DashboardWidgets() {
@@ -58,18 +66,37 @@ export function DashboardWidgets() {
     openFeedbacks: 0,
     openBugs: 0,
     lockedOtpUsers: 0,
+    trends: {
+      tenants: { label: "0% vs 30 hari lalu", trendUp: true },
+      employees: { label: "0% vs 30 hari lalu", trendUp: true },
+      subscriptions: { label: "0% vs 30 hari lalu", trendUp: true },
+      attendance: { label: "0% vs kemarin", trendUp: true },
+    },
   });
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
 
   useEffect(() => {
     fetchStats();
   }, []);
 
-  const fetchStats = async () => {
+  const fetchStats = async (options?: { silent?: boolean }) => {
+    const isSilent = options?.silent ?? false;
     try {
+      if (isSilent) {
+        setIsRefreshing(true);
+      } else {
+        setIsLoading(true);
+      }
+      setLoadError(null);
       const today = new Date().toISOString().split('T')[0];
       const nowIso = new Date().toISOString();
       const dayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const thirtyDaysAgoIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+      const sixtyDaysAgoIso = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split("T")[0];
 
       const [
         tenantsRes,
@@ -88,32 +115,99 @@ export function DashboardWidgets() {
         openFeedbackRes,
         openBugsRes,
         lockedOtpRes,
+        tenantsNew30Res,
+        tenantsPrev30Res,
+        employeesNew30Res,
+        employeesPrev30Res,
+        activeSubsNew30Res,
+        activeSubsPrev30Res,
+        attendanceYesterdayRes,
       ] = await Promise.all([
-        supabase.from("tenants").select("id", { count: "exact" }),
-        supabase.from("tenants").select("id", { count: "exact" }).eq("is_active", true),
-        supabase.from("employees").select("id", { count: "exact" }).eq("is_active", true),
-        supabase.from("subscriptions").select("id", { count: "exact" }).eq("status", "active"),
-        supabase.from("subscriptions").select("id", { count: "exact" }).eq("status", "trial"),
-        supabase.from("subscriptions").select("id", { count: "exact" }).eq("status", "expired"),
-        supabase.from("attendance_records_partitioned").select("id", { count: "exact" }).eq("date", today),
-        supabase.from("leave_requests").select("id", { count: "exact" }).eq("status", "menunggu"),
-        supabase.from("stability_streaks").select("id", { count: "exact" }).eq("status", "ready_for_invoicing"),
-        supabase.from("invoices").select("id", { count: "exact" }).eq("status", "PENDING"),
-        supabase.from("invoices").select("id", { count: "exact" }).eq("status", "AWAITING_VERIFICATION"),
+        supabase.from("tenants").select("id", { count: "exact", head: true }),
+        supabase.from("tenants").select("id", { count: "exact", head: true }).eq("is_active", true),
+        supabase.from("employees").select("id", { count: "exact", head: true }).eq("is_active", true),
+        supabase.from("subscriptions").select("id", { count: "exact", head: true }).eq("status", "active"),
+        supabase.from("subscriptions").select("id", { count: "exact", head: true }).eq("status", "trial"),
+        supabase.from("subscriptions").select("id", { count: "exact", head: true }).eq("status", "expired"),
+        supabase.from("attendance_records_partitioned").select("id", { count: "exact", head: true }).eq("date", today),
+        supabase.from("leave_requests").select("id", { count: "exact", head: true }).eq("status", "menunggu"),
+        supabase.from("stability_streaks").select("id", { count: "exact", head: true }).eq("status", "ready_for_invoicing"),
+        supabase.from("invoices").select("id", { count: "exact", head: true }).eq("status", "PENDING"),
+        supabase.from("invoices").select("id", { count: "exact", head: true }).eq("status", "AWAITING_VERIFICATION"),
         supabase
           .from("invoices")
-          .select("id", { count: "exact" })
+          .select("id", { count: "exact", head: true })
           .in("status", ["PENDING", "AWAITING_VERIFICATION"])
           .lt("due_date", today),
         supabase
           .from("cron_job_logs")
-          .select("id", { count: "exact" })
+          .select("id", { count: "exact", head: true })
           .gte("started_at", dayAgoIso)
           .or("status.ilike.%fail%,status.ilike.%error%"),
-        supabase.from("feedback_reports").select("id", { count: "exact" }).eq("status", "open"),
-        supabase.from("feedback_reports").select("id", { count: "exact" }).eq("status", "open").eq("feedback_type", "bug"),
-        supabase.from("rate_limit_otp").select("id", { count: "exact" }).gt("locked_until", nowIso),
+        supabase.from("feedback_reports").select("id", { count: "exact", head: true }).eq("status", "open"),
+        supabase.from("feedback_reports").select("id", { count: "exact", head: true }).eq("status", "open").eq("feedback_type", "bug"),
+        supabase.from("rate_limit_otp").select("id", { count: "exact", head: true }).gt("locked_until", nowIso),
+        supabase.from("tenants").select("id", { count: "exact", head: true }).gte("created_at", thirtyDaysAgoIso),
+        supabase.from("tenants").select("id", { count: "exact", head: true }).gte("created_at", sixtyDaysAgoIso).lt("created_at", thirtyDaysAgoIso),
+        supabase.from("employees").select("id", { count: "exact", head: true }).gte("created_at", thirtyDaysAgoIso),
+        supabase.from("employees").select("id", { count: "exact", head: true }).gte("created_at", sixtyDaysAgoIso).lt("created_at", thirtyDaysAgoIso),
+        supabase.from("subscriptions").select("id", { count: "exact", head: true }).eq("status", "active").gte("created_at", thirtyDaysAgoIso),
+        supabase.from("subscriptions").select("id", { count: "exact", head: true }).eq("status", "active").gte("created_at", sixtyDaysAgoIso).lt("created_at", thirtyDaysAgoIso),
+        supabase.from("attendance_records_partitioned").select("id", { count: "exact", head: true }).eq("date", yesterday),
       ]);
+
+      const queryErrors = [
+        tenantsRes.error,
+        activeTenantsRes.error,
+        employeesRes.error,
+        activeSubsRes.error,
+        trialSubsRes.error,
+        expiredSubsRes.error,
+        attendanceRes.error,
+        leavesRes.error,
+        readyForInvoicingRes.error,
+        pendingInvoicesRes.error,
+        awaitingInvoicesRes.error,
+        overdueInvoicesRes.error,
+        failedCronRunsRes.error,
+        openFeedbackRes.error,
+        openBugsRes.error,
+        lockedOtpRes.error,
+        tenantsNew30Res.error,
+        tenantsPrev30Res.error,
+        employeesNew30Res.error,
+        employeesPrev30Res.error,
+        activeSubsNew30Res.error,
+        activeSubsPrev30Res.error,
+        attendanceYesterdayRes.error,
+      ].filter(Boolean);
+
+      if (queryErrors.length > 0) {
+        throw queryErrors[0];
+      }
+
+      const pctTrend = (current: number, previous: number): { label: string; trendUp: boolean } => {
+        if (current === 0 && previous === 0) return { label: "0% vs periode lalu", trendUp: true };
+        if (previous === 0) return { label: `+${current} baru`, trendUp: true };
+        const diffPct = ((current - previous) / previous) * 100;
+        const rounded = Math.abs(diffPct).toFixed(1);
+        return {
+          label: `${diffPct >= 0 ? "+" : "-"}${rounded}% vs periode lalu`,
+          trendUp: diffPct >= 0,
+        };
+      };
+
+      const attendanceTrend = (() => {
+        const todayCount = attendanceRes.count || 0;
+        const yesterdayCount = attendanceYesterdayRes.count || 0;
+        if (todayCount === 0 && yesterdayCount === 0) return { label: "0% vs kemarin", trendUp: true };
+        if (yesterdayCount === 0) return { label: `+${todayCount} vs kemarin`, trendUp: true };
+        const diffPct = ((todayCount - yesterdayCount) / yesterdayCount) * 100;
+        return {
+          label: `${diffPct >= 0 ? "+" : "-"}${Math.abs(diffPct).toFixed(1)}% vs kemarin`,
+          trendUp: diffPct >= 0,
+        };
+      })();
 
       setStats({
         totalTenants: tenantsRes.count || 0,
@@ -131,13 +225,33 @@ export function DashboardWidgets() {
         openFeedbacks: openFeedbackRes.count || 0,
         openBugs: openBugsRes.count || 0,
         lockedOtpUsers: lockedOtpRes.count || 0,
+        trends: {
+          tenants: pctTrend(tenantsNew30Res.count || 0, tenantsPrev30Res.count || 0),
+          employees: pctTrend(employeesNew30Res.count || 0, employeesPrev30Res.count || 0),
+          subscriptions: pctTrend(activeSubsNew30Res.count || 0, activeSubsPrev30Res.count || 0),
+          attendance: attendanceTrend,
+        },
       });
+      setLastUpdatedAt(new Date());
     } catch (error) {
-      console.error("Error fetching stats:", error);
+      const errorRef = reportError(error, "admin.dashboard.widgets.fetch_stats");
+      const message = appendErrorReference("Gagal memuat widget dashboard", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
+      setIsRefreshing(false);
     }
   };
+
+  const lastUpdatedLabel = useMemo(() => {
+    if (!lastUpdatedAt) return "Belum tersinkron";
+    return `Terakhir sinkron ${lastUpdatedAt.toLocaleTimeString("id-ID", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    })}`;
+  }, [lastUpdatedAt]);
 
   const widgets = [
     {
@@ -145,8 +259,8 @@ export function DashboardWidgets() {
       value: stats.totalTenants,
       subtitle: `${stats.activeTenants} aktif`,
       icon: Building2,
-      trend: "+12%",
-      trendUp: true,
+      trend: stats.trends.tenants.label,
+      trendUp: stats.trends.tenants.trendUp,
       color: "text-blue-500",
       bgColor: "bg-blue-500/10",
     },
@@ -155,8 +269,8 @@ export function DashboardWidgets() {
       value: stats.totalEmployees,
       subtitle: "Semua organisasi",
       icon: Users,
-      trend: "+8%",
-      trendUp: true,
+      trend: stats.trends.employees.label,
+      trendUp: stats.trends.employees.trendUp,
       color: "text-green-500",
       bgColor: "bg-green-500/10",
     },
@@ -165,8 +279,8 @@ export function DashboardWidgets() {
       value: stats.activeSubscriptions,
       subtitle: `${stats.trialSubscriptions} trial`,
       icon: CreditCard,
-      trend: "+5%",
-      trendUp: true,
+      trend: stats.trends.subscriptions.label,
+      trendUp: stats.trends.subscriptions.trendUp,
       color: "text-purple-500",
       bgColor: "bg-purple-500/10",
     },
@@ -175,8 +289,8 @@ export function DashboardWidgets() {
       value: stats.todayAttendance,
       subtitle: "Check-in tercatat",
       icon: Activity,
-      trend: "Live",
-      trendUp: true,
+      trend: stats.trends.attendance.label,
+      trendUp: stats.trends.attendance.trendUp,
       color: "text-amber-500",
       bgColor: "bg-amber-500/10",
     },
@@ -202,7 +316,26 @@ export function DashboardWidgets() {
 
   return (
     <div className="space-y-6">
-      {/* Main Stats */}
+      {loadError && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {loadError}
+        </div>
+      )}
+      <div className="flex flex-col gap-2 rounded-lg border bg-card px-4 py-3 text-sm text-muted-foreground md:flex-row md:items-center md:justify-between">
+        <p>{lastUpdatedLabel}</p>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={isRefreshing}
+          onClick={() => fetchStats({ silent: true })}
+        >
+          {isRefreshing ? "Menyegarkan..." : "Refresh Data"}
+        </Button>
+      </div>
+      <div className="space-y-1">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">KPI Utama</p>
+        <h2 className="text-lg font-semibold">Ringkasan performa hari ini</h2>
+      </div>
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {widgets.map((widget) => (
           <Card key={widget.title} className="relative overflow-hidden">
@@ -235,9 +368,11 @@ export function DashboardWidgets() {
         ))}
       </div>
 
-      {/* Secondary Stats */}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {/* Subscription Overview */}
+      <div className="space-y-1">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Insight Operasional</p>
+        <h2 className="text-lg font-semibold">Area prioritas untuk tindak lanjut</h2>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Status Langganan</CardTitle>
@@ -286,7 +421,6 @@ export function DashboardWidgets() {
           </CardContent>
         </Card>
 
-        {/* Quick Alerts */}
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Perlu Perhatian</CardTitle>
@@ -335,29 +469,6 @@ export function DashboardWidgets() {
           </CardContent>
         </Card>
 
-        {/* System Health */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Kesehatan Sistem</CardTitle>
-            <CardDescription>Status layanan platform</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-              <span className="text-sm">Database</span>
-              <Badge variant="default" className="bg-green-500">Online</Badge>
-            </div>
-            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-              <span className="text-sm">API Server</span>
-              <Badge variant="default" className="bg-green-500">Online</Badge>
-            </div>
-            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
-              <span className="text-sm">Storage</span>
-              <Badge variant="default" className="bg-green-500">Online</Badge>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Streak & Billing */}
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Streak & Billing</CardTitle>
@@ -388,7 +499,6 @@ export function DashboardWidgets() {
           </CardContent>
         </Card>
 
-        {/* Operations & Security */}
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Operasional & Security</CardTitle>
@@ -418,14 +528,15 @@ export function DashboardWidgets() {
             </div>
           </CardContent>
         </Card>
+      </div>
 
-        {/* Quick Actions */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Aksi Cepat Super Admin</CardTitle>
-            <CardDescription>Pintasan ke area prioritas operasional</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-2">
+      <div className="space-y-1">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Aksi & Status Layanan</p>
+        <h2 className="text-lg font-semibold">Pintasan cepat dan kesehatan platform</h2>
+      </div>
+      <Card>
+        <CardContent className="grid gap-4 p-4 lg:grid-cols-[1.2fr_1fr]">
+          <div className="grid gap-2 sm:grid-cols-2">
             <Button variant="outline" className="justify-start" onClick={() => navigate("/admin/streak-monitoring")}>
               <Flame className="h-4 w-4 mr-2" />
               Buka Streak Monitoring
@@ -442,13 +553,27 @@ export function DashboardWidgets() {
               <MessageSquare className="h-4 w-4 mr-2" />
               Kelola Feedback & Bug
             </Button>
-            <Button variant="outline" className="justify-start" onClick={() => navigate("/admin/attendance-security")}>
+            <Button variant="outline" className="justify-start sm:col-span-2" onClick={() => navigate("/admin/attendance-security")}>
               <ShieldAlert className="h-4 w-4 mr-2" />
               Validasi Keamanan
             </Button>
-          </CardContent>
-        </Card>
-      </div>
+          </div>
+          <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+            <div className="flex items-center justify-between rounded-md bg-background p-2">
+              <span className="text-sm">Database</span>
+              <Badge variant="default" className="bg-green-500">Online</Badge>
+            </div>
+            <div className="flex items-center justify-between rounded-md bg-background p-2">
+              <span className="text-sm">API Server</span>
+              <Badge variant="default" className="bg-green-500">Online</Badge>
+            </div>
+            <div className="flex items-center justify-between rounded-md bg-background p-2">
+              <span className="text-sm">Storage</span>
+              <Badge variant="default" className="bg-green-500">Online</Badge>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

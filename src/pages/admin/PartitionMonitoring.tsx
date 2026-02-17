@@ -165,7 +165,7 @@ const PARTITION_GLOSSARY: GlossaryItem[] = [
   { term: "Buat Partisi", description: "Aksi membuat partisi bulan berikutnya agar insert absensi tidak gagal saat pergantian bulan.", category: "Aksi" },
   { term: "Cleanup GPS", description: "Aksi menghapus kolom/jejak lokasi lama (di atas batas retensi) agar ukuran tabel tetap terkendali.", category: "Aksi" },
   { term: "VACUUM ANALYZE", description: "Perintah optimasi untuk merapikan storage dan memperbarui statistik query planner.", category: "Aksi" },
-  { term: "Cleanup Audit Log", description: "Aksi pembersihan log audit lama sesuai retensi untuk menekan pertumbuhan data historis.", category: "Aksi" },
+  { term: "Cleanup Audit Log", description: "Aksi pembersihan log audit lama sesuai retensi hot 60 hari untuk menekan pertumbuhan data historis.", category: "Aksi" },
   { term: "Jalankan Semua", description: "Menjalankan seluruh aksi maintenance berurutan: cleanup GPS, create partition, analyze, cleanup audit.", category: "Aksi" },
   { term: "Row Count", description: "Jumlah baris data pada suatu partisi.", category: "Ukuran" },
   { term: "Table Size", description: "Ukuran fisik data utama tabel (tanpa index).", category: "Ukuran" },

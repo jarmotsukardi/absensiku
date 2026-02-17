@@ -51,6 +51,8 @@ interface FeedbackBugSettings {
   suggestions_enabled: boolean;
 }
 
+type FeedbackQueryBuilder = ReturnType<typeof supabase.from<"feedback_reports", FeedbackItem>>;
+
 const escapeHtml = (text: string) =>
   text
     .replaceAll("&", "&amp;")
@@ -95,6 +97,31 @@ export default function FeedbackManagement() {
 
   // Stats
   const [stats, setStats] = useState({ total: 0, avgRating: 0, openBugs: 0 });
+
+  const applyFeedbackFilters = useCallback((query: FeedbackQueryBuilder): FeedbackQueryBuilder => {
+    let nextQuery = query;
+
+    if (activeTab === "admin") {
+      nextQuery = nextQuery.eq("reporter_role", "admin_organisasi");
+    } else if (activeTab === "pegawai") {
+      nextQuery = nextQuery.eq("reporter_role", "pegawai");
+    }
+
+    if (filterRating !== "all") {
+      nextQuery = nextQuery.eq("rating", Number(filterRating));
+    }
+
+    if (filterType !== "all") {
+      nextQuery = nextQuery.eq("feedback_type", filterType);
+    }
+
+    if (searchQuery.trim()) {
+      const escaped = searchQuery.trim().replace(/[%_]/g, "\\$&");
+      nextQuery = nextQuery.or(`message.ilike.%${escaped}%,reporter_name.ilike.%${escaped}%`);
+    }
+
+    return nextQuery;
+  }, [activeTab, filterRating, filterType, searchQuery]);
 
   const fetchAccessRole = async () => {
     try {
@@ -199,29 +226,55 @@ export default function FeedbackManagement() {
     setIsLoading(true);
     setLoadError(null);
     try {
-      let query = supabase
+      const pagedQuery = applyFeedbackFilters(
+        supabase
         .from("feedback_reports")
         .select("*, tenants(name)", { count: "exact" })
         .order("created_at", { ascending: false })
-        .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
+        .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1)
+      );
 
-      if (activeTab === "admin") {
-        query = query.eq("reporter_role", "admin_organisasi");
-      } else if (activeTab === "pegawai") {
-        query = query.eq("reporter_role", "pegawai");
-      }
-      if (filterRating !== "all") {
-        query = query.eq("rating", Number(filterRating));
-      }
-      if (filterType !== "all") {
-        query = query.eq("feedback_type", filterType);
-      }
-      if (searchQuery.trim()) {
-        const escaped = searchQuery.trim().replace(/[%_]/g, "\\$&");
-        query = query.or(`message.ilike.%${escaped}%,reporter_name.ilike.%${escaped}%`);
-      }
+      const openBugCountQuery = applyFeedbackFilters(
+        supabase
+          .from("feedback_reports")
+          .select("id", { count: "exact", head: true })
+          .eq("feedback_type", "bug")
+          .eq("status", "open")
+      );
 
-      const { data, error, count } = await query;
+      const ratingRowsQuery = applyFeedbackFilters(
+        supabase
+          .from("feedback_reports")
+          .select("rating")
+          .not("rating", "is", null)
+      );
+
+      const reporterRoleFilter =
+        activeTab === "admin"
+          ? "admin_organisasi"
+          : activeTab === "pegawai"
+            ? "pegawai"
+            : null;
+      const feedbackTypeFilter = filterType !== "all" ? filterType : null;
+      const ratingFilter = filterRating !== "all" ? Number(filterRating) : null;
+      const searchFilter = searchQuery.trim() ? searchQuery.trim() : null;
+
+      const [
+        { data, error, count },
+        { count: openBugCount, error: openBugCountError },
+        { data: ratingRows, error: ratingRowsError },
+        { data: statsRows, error: statsRpcError },
+      ] = await Promise.all([
+        pagedQuery,
+        openBugCountQuery,
+        ratingRowsQuery,
+        supabase.rpc("get_feedback_stats_filtered", {
+          p_reporter_role: reporterRoleFilter,
+          p_feedback_type: feedbackTypeFilter,
+          p_rating: ratingFilter,
+          p_search: searchFilter,
+        }),
+      ]);
 
       if (error) throw error;
       setTotalCount(count || 0);
@@ -230,11 +283,28 @@ export default function FeedbackManagement() {
       setFeedbacks(items);
 
       // Calculate stats
-      const total = items.length;
-      const ratings = items.filter(f => f.rating).map(f => f.rating!);
-      const avgRating = ratings.length > 0 ? ratings.reduce((a, b) => a + b, 0) / ratings.length : 0;
-      const openBugs = items.filter(f => f.feedback_type === "bug" && f.status === "open").length;
-      setStats({ total, avgRating: Math.round(avgRating * 10) / 10, openBugs });
+      if (!statsRpcError && Array.isArray(statsRows) && statsRows.length > 0) {
+        const row = statsRows[0] as {
+          total_count: number | null;
+          avg_rating: number | null;
+          open_bug_count: number | null;
+        };
+        setStats({
+          total: Number(row.total_count || 0),
+          avgRating: Number(row.avg_rating || 0),
+          openBugs: Number(row.open_bug_count || 0),
+        });
+      } else {
+        if (openBugCountError) throw openBugCountError;
+        if (ratingRowsError) throw ratingRowsError;
+        const total = count || 0;
+        const ratings = (ratingRows || [])
+          .map((row) => row.rating)
+          .filter((rating): rating is number => typeof rating === "number");
+        const avgRating = ratings.length > 0 ? ratings.reduce((a, b) => a + b, 0) / ratings.length : 0;
+        const openBugs = openBugCount || 0;
+        setStats({ total, avgRating: Math.round(avgRating * 10) / 10, openBugs });
+      }
     } catch (error) {
       const errorRef = reportError(error, "admin.feedback.fetch_reports", {
         tab: activeTab,
@@ -251,7 +321,7 @@ export default function FeedbackManagement() {
     } finally {
       setIsLoading(false);
     }
-  }, [activeTab, currentPage, filterRating, filterType, searchQuery]);
+  }, [activeTab, applyFeedbackFilters, currentPage, filterRating, filterType, searchQuery]);
 
   useEffect(() => {
     void fetchFeedbackSettings();
@@ -297,26 +367,12 @@ export default function FeedbackManagement() {
   };
 
   const fetchAllFilteredFeedbacks = async (): Promise<FeedbackItem[]> => {
-    let query = supabase
+    const query = applyFeedbackFilters(
+      supabase
       .from("feedback_reports")
       .select("*, tenants(name)")
-      .order("created_at", { ascending: false });
-
-    if (activeTab === "admin") {
-      query = query.eq("reporter_role", "admin_organisasi");
-    } else if (activeTab === "pegawai") {
-      query = query.eq("reporter_role", "pegawai");
-    }
-    if (filterRating !== "all") {
-      query = query.eq("rating", Number(filterRating));
-    }
-    if (filterType !== "all") {
-      query = query.eq("feedback_type", filterType);
-    }
-    if (searchQuery.trim()) {
-      const escaped = searchQuery.trim().replace(/[%_]/g, "\\$&");
-      query = query.or(`message.ilike.%${escaped}%,reporter_name.ilike.%${escaped}%`);
-    }
+      .order("created_at", { ascending: false })
+    );
 
     const { data, error } = await query;
     if (error) throw error;

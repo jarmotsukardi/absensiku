@@ -119,6 +119,17 @@ export default function AuditLogs() {
       const endDate = endOfMonth(new Date(year, month - 1));
 
       const escapedQuery = searchQuery.trim().replace(/[%_]/g, "\\$&");
+      const isUuidQuery = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        escapedQuery
+      );
+      const searchParts = [
+        `action.ilike.%${escapedQuery}%`,
+        `table_name.ilike.%${escapedQuery}%`,
+        `ip_address.ilike.%${escapedQuery}%`,
+      ];
+      if (isUuidQuery) {
+        searchParts.push(`record_id.eq.${escapedQuery}`);
+      }
 
       let countQuery = supabase
         .from("audit_logs")
@@ -135,9 +146,7 @@ export default function AuditLogs() {
       }
 
       if (escapedQuery) {
-        countQuery = countQuery.or(
-          `action.ilike.%${escapedQuery}%,table_name.ilike.%${escapedQuery}%,record_id.ilike.%${escapedQuery}%,ip_address.ilike.%${escapedQuery}%`
-        );
+        countQuery = countQuery.or(searchParts.join(","));
       }
 
       const { count, error: countError } = await countQuery;
@@ -171,9 +180,7 @@ export default function AuditLogs() {
       }
 
       if (escapedQuery) {
-        dataQuery = dataQuery.or(
-          `action.ilike.%${escapedQuery}%,table_name.ilike.%${escapedQuery}%,record_id.ilike.%${escapedQuery}%,ip_address.ilike.%${escapedQuery}%`
-        );
+        dataQuery = dataQuery.or(searchParts.join(","));
       }
 
       const { data, error } = await dataQuery;
@@ -324,7 +331,7 @@ export default function AuditLogs() {
                       <div className="flex-1 min-w-0">
                         <div className="flex items-start justify-between gap-4">
                           <div>
-                            <p className="font-medium">
+                            <div className="font-medium">
                               {log.employee?.name || "System"}
                               <span className="text-muted-foreground font-normal">
                                 {" "}melakukan {actionStyle?.label || log.action} pada{" "}
@@ -332,7 +339,7 @@ export default function AuditLogs() {
                               <Badge variant="outline" className="ml-1">
                                 {tableLabels[log.table_name] || log.table_name}
                               </Badge>
-                            </p>
+                            </div>
                             {log.tenant && (
                               <p className="text-sm text-muted-foreground mt-1">
                                 Organisasi: {log.tenant.name}

@@ -14,8 +14,10 @@ import {
   Activity
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { format, formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow } from "date-fns";
 import { id } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { toast } from "sonner";
 
 interface AuditLog {
   id: string;
@@ -39,8 +41,12 @@ const tableLabels: Record<string, string> = {
   subscriptions: "Langganan",
   leave_requests: "Pengajuan Cuti",
   attendance_records: "Absensi",
+  attendance_records_partitioned: "Absensi",
   offices: "Kantor",
   holidays: "Hari Libur",
+  cron_job_logs: "Cron Job",
+  invoices: "Invoice",
+  feedback_reports: "Feedback",
 };
 
 const actionLabels: Record<string, string> = {
@@ -52,6 +58,7 @@ const actionLabels: Record<string, string> = {
 export function RecentActivity() {
   const [activities, setActivities] = useState<AuditLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchActivities();
@@ -59,6 +66,7 @@ export function RecentActivity() {
 
   const fetchActivities = async () => {
     try {
+      setLoadError(null);
       const { data, error } = await supabase
         .from("audit_logs")
         .select(`
@@ -74,7 +82,11 @@ export function RecentActivity() {
       if (error) throw error;
       setActivities((data as unknown as AuditLog[]) || []);
     } catch (error) {
-      console.error("Error fetching activities:", error);
+      const errorRef = reportError(error, "admin.dashboard.recent_activity.fetch");
+      const message = appendErrorReference("Gagal memuat aktivitas terkini", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setActivities([]);
     } finally {
       setIsLoading(false);
     }
@@ -105,11 +117,19 @@ export function RecentActivity() {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Aktivitas Terkini</CardTitle>
+      <CardHeader className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="text-base">Aktivitas Terkini</CardTitle>
+          <Badge variant="outline">{activities.length} log</Badge>
+        </div>
         <CardDescription>Log aktivitas sistem terbaru</CardDescription>
       </CardHeader>
       <CardContent>
+        {loadError && (
+          <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+            {loadError}
+          </div>
+        )}
         {activities.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground">
             <Activity className="h-12 w-12 mx-auto mb-3 opacity-50" />
@@ -117,16 +137,22 @@ export function RecentActivity() {
           </div>
         ) : (
           <ScrollArea className="h-[400px] pr-4">
-            <div className="space-y-4">
+            <div className="space-y-2.5">
               {activities.map((activity) => {
                 const Icon = actionIcons[activity.action] || Activity;
                 const actionColor = 
                   activity.action === "INSERT" ? "text-green-500 bg-green-500/10" :
                   activity.action === "DELETE" ? "text-red-500 bg-red-500/10" :
                   "text-blue-500 bg-blue-500/10";
+                const actionBadgeVariant =
+                  activity.action === "DELETE"
+                    ? "destructive"
+                    : activity.action === "INSERT"
+                      ? "default"
+                      : "secondary";
 
                 return (
-                  <div key={activity.id} className="flex items-start gap-3">
+                  <div key={activity.id} className="flex items-start gap-3 rounded-lg border bg-card p-3">
                     <div className={`p-2 rounded-full ${actionColor}`}>
                       <Icon className="h-4 w-4" />
                     </div>
@@ -144,12 +170,20 @@ export function RecentActivity() {
                           {tableLabels[activity.table_name] || activity.table_name}
                         </span>
                       </p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {formatDistanceToNow(new Date(activity.created_at), { 
-                          addSuffix: true, 
-                          locale: id 
-                        })}
-                      </p>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        <Badge variant={actionBadgeVariant} className="text-[10px]">
+                          {activity.action}
+                        </Badge>
+                        <Badge variant="outline" className="text-[10px]">
+                          {tableLabels[activity.table_name] || activity.table_name}
+                        </Badge>
+                        <p className="text-xs text-muted-foreground">
+                          {formatDistanceToNow(new Date(activity.created_at), {
+                            addSuffix: true,
+                            locale: id,
+                          })}
+                        </p>
+                      </div>
                     </div>
                   </div>
                 );

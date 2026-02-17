@@ -5,6 +5,7 @@ interface SecuritySettings {
   block_desktop_browser: boolean;
   require_realtime_location: boolean;
   block_all_browsers: boolean;
+  allow_iphone_safari: boolean;
   enable_device_binding: boolean;
   max_device_reset_count: number;
   require_password_change_for_reset: boolean;
@@ -50,7 +51,17 @@ const isDesktopBrowser = (): boolean => {
 const isAndroidWebView = (): boolean => {
   const ua = navigator.userAgent.toLowerCase();
   // Android WebView biasanya memiliki "wv" di user agent atau custom header
-  return ua.includes("android") && (ua.includes("wv") || ua.includes("webview"));
+  const hasAndroidBridge = Boolean(getAndroidBridge());
+  return ua.includes("android") && (ua.includes("wv") || ua.includes("webview") || hasAndroidBridge);
+};
+
+// Deteksi Safari murni di iPhone (bukan Chrome/Firefox/Edge iOS)
+const isIPhoneSafari = (): boolean => {
+  const ua = navigator.userAgent;
+  const isIphone = /iPhone/i.test(ua);
+  const hasSafari = /Safari/i.test(ua);
+  const isOtherIosBrowser = /(CriOS|FxiOS|EdgiOS|OPiOS|YaBrowser|GSA)/i.test(ua);
+  return isIphone && hasSafari && !isOtherIosBrowser;
 };
 
 // Deteksi apakah mobile browser
@@ -95,6 +106,7 @@ const parseAndroidVersionFromUA = (): number | null => {
 export function useSecurityCheck(tenantId?: string) {
   const [isLoading, setIsLoading] = useState(true);
   const [settings, setSettings] = useState<SecuritySettings | null>(null);
+  const [settingsFetchFailed, setSettingsFetchFailed] = useState(false);
   const [securityResult, setSecurityResult] = useState<SecurityCheckResult>({
     isBlocked: false,
     reason: null,
@@ -125,7 +137,19 @@ export function useSecurityCheck(tenantId?: string) {
   );
 
   const fetchSettings = useCallback(async () => {
+    const defaults: SecuritySettings = {
+      block_desktop_browser: false,
+      require_realtime_location: true,
+      block_all_browsers: false,
+      allow_iphone_safari: true,
+      enable_device_binding: true,
+      max_device_reset_count: 3,
+      require_password_change_for_reset: true,
+      min_android_version: 7,
+    };
+
     try {
+      setSettingsFetchFailed(false);
       const { data, error } = await supabase
         .from("system_settings")
         .select("value")
@@ -134,11 +158,26 @@ export function useSecurityCheck(tenantId?: string) {
 
       if (error) throw error;
 
-      if (data?.value && typeof data.value === "object") {
-        setSettings(data.value as unknown as SecuritySettings);
+      if (data?.value && typeof data.value === "object" && !Array.isArray(data.value)) {
+        const saved = data.value as Record<string, unknown>;
+        setSettings({
+          ...defaults,
+          block_desktop_browser: typeof saved.block_desktop_browser === "boolean" ? saved.block_desktop_browser : defaults.block_desktop_browser,
+          require_realtime_location: typeof saved.require_realtime_location === "boolean" ? saved.require_realtime_location : defaults.require_realtime_location,
+          block_all_browsers: typeof saved.block_all_browsers === "boolean" ? saved.block_all_browsers : defaults.block_all_browsers,
+          allow_iphone_safari: typeof saved.allow_iphone_safari === "boolean" ? saved.allow_iphone_safari : defaults.allow_iphone_safari,
+          enable_device_binding: typeof saved.enable_device_binding === "boolean" ? saved.enable_device_binding : defaults.enable_device_binding,
+          max_device_reset_count: typeof saved.max_device_reset_count === "number" ? saved.max_device_reset_count : defaults.max_device_reset_count,
+          require_password_change_for_reset: typeof saved.require_password_change_for_reset === "boolean" ? saved.require_password_change_for_reset : defaults.require_password_change_for_reset,
+          min_android_version: typeof saved.min_android_version === "number" ? saved.min_android_version : defaults.min_android_version,
+        });
+      } else {
+        setSettings(defaults);
       }
     } catch (error) {
       console.error("Error fetching security settings:", error);
+      setSettingsFetchFailed(true);
+      setSettings(defaults);
     } finally {
       setIsLoading(false);
     }
@@ -152,20 +191,39 @@ export function useSecurityCheck(tenantId?: string) {
   useEffect(() => {
     if (isLoading || !settings) return;
 
+    // Jika konfigurasi gagal dimuat, jangan blokir login untuk menghindari false positive.
+    if (settingsFetchFailed) {
+      setSecurityResult({
+        isBlocked: false,
+        reason: null,
+        isDesktop: isDesktopBrowser(),
+        isMobile: isMobileBrowser(),
+        isAndroidApp: isAndroidWebView(),
+        isBrowserBlocked: false,
+        userAgent: navigator.userAgent,
+      });
+      return;
+    }
+
     const ua = navigator.userAgent;
     const isDesktop = isDesktopBrowser();
     const isMobile = isMobileBrowser();
     const isAndroidApp = isAndroidWebView();
+    const isIphoneSafari = isIPhoneSafari();
 
     let isBlocked = false;
     let reason: string | null = null;
     let isBrowserBlocked = false;
 
     // Cek apakah block semua browser diaktifkan
-    if (settings.block_all_browsers && !isAndroidApp) {
+    if (
+      settings.block_all_browsers &&
+      !isAndroidApp &&
+      !(settings.allow_iphone_safari && isIphoneSafari)
+    ) {
       isBlocked = true;
       isBrowserBlocked = true;
-      reason = "Absensi hanya dapat dilakukan melalui aplikasi mobile internal. Browser tidak diperbolehkan.";
+      reason = "Absensi hanya diizinkan melalui WebView aplikasi internal atau Safari iPhone.";
     }
     // Cek apakah block desktop browser diaktifkan
     else if (settings.block_desktop_browser && isDesktop) {
@@ -191,11 +249,12 @@ export function useSecurityCheck(tenantId?: string) {
       isBrowserBlocked,
       userAgent: ua,
     });
-  }, [isLoading, settings]);
+  }, [isLoading, settings, settingsFetchFailed]);
 
   return {
     isLoading,
     settings,
+    settingsFetchFailed,
     securityResult,
     validateLocationSecurity,
     refetch: fetchSettings,

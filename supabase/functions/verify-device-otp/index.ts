@@ -16,6 +16,12 @@ interface VerifyDeviceOTPRequest {
   newAndroidId?: string;
 }
 
+interface AttendanceSecuritySettings {
+  enable_device_binding: boolean;
+  max_device_reset_count: number;
+  require_password_change_for_reset: boolean;
+}
+
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) return error.message;
   return "Terjadi kesalahan internal";
@@ -28,6 +34,12 @@ const hashOTP = async (otp: string): Promise<string> => {
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+};
+
+const getMonthKeyUtc = (date: Date): string => {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
 };
 
 serve(async (req: Request): Promise<Response> => {
@@ -104,25 +116,93 @@ serve(async (req: Request): Promise<Response> => {
       );
     }
 
-    // Mark OTP as used
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const currentMonthKey = getMonthKeyUtc(now);
+
+    let resetEmployeeUserId: string | null = null;
+    let deviceUpdatePayload: { android_id: string | null; device_id_last_reset: string; device_id_reset_count?: number } | null = null;
+
+    // Validasi kebijakan reset device di backend agar tidak bisa bypass dari client.
+    if (employeeId && newAndroidId !== undefined) {
+      const [settingsRes, employeeRes] = await Promise.all([
+        supabase
+          .from("system_settings")
+          .select("value")
+          .eq("key", "attendance_security")
+          .maybeSingle(),
+        supabase
+          .from("employees")
+          .select("id, user_id, device_id_reset_count, device_id_last_reset")
+          .eq("id", employeeId)
+          .maybeSingle(),
+      ]);
+
+      if (employeeRes.error || !employeeRes.data) {
+        return new Response(
+          JSON.stringify(withTrace({ error: "Pegawai tidak ditemukan", code: "EMPLOYEE_NOT_FOUND" }, traceId)),
+          { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const rawSettings = settingsRes.data?.value as Record<string, unknown> | null;
+      const bindingSettings: AttendanceSecuritySettings = {
+        enable_device_binding: (rawSettings?.enable_device_binding as boolean) ?? false,
+        max_device_reset_count: (rawSettings?.max_device_reset_count as number) ?? 3,
+        require_password_change_for_reset: (rawSettings?.require_password_change_for_reset as boolean) ?? true,
+      };
+
+      if (bindingSettings.require_password_change_for_reset && !newPassword) {
+        return new Response(
+          JSON.stringify(withTrace({ error: "Reset device wajib disertai ganti password", code: "PASSWORD_REQUIRED" }, traceId)),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const employee = employeeRes.data;
+      resetEmployeeUserId = employee.user_id;
+
+      const lastResetAt = employee.device_id_last_reset ? new Date(employee.device_id_last_reset) : null;
+      const isSameMonth = lastResetAt ? getMonthKeyUtc(lastResetAt) === currentMonthKey : false;
+      const baseResetCount = isSameMonth ? (employee.device_id_reset_count || 0) : 0;
+
+      if (bindingSettings.enable_device_binding && baseResetCount >= bindingSettings.max_device_reset_count) {
+        return new Response(
+          JSON.stringify(
+            withTrace(
+              {
+                error: "Kuota reset device bulan ini sudah habis",
+                code: "RESET_LIMIT_EXCEEDED",
+                max_reset_count: bindingSettings.max_device_reset_count,
+              },
+              traceId
+            )
+          ),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Saat month rollover, counter dimulai lagi dari 1 pada reset pertama bulan berjalan.
+      const nextResetCount = bindingSettings.enable_device_binding ? baseResetCount + 1 : employee.device_id_reset_count || 0;
+      deviceUpdatePayload = {
+        android_id: newAndroidId || null,
+        device_id_last_reset: nowIso,
+        device_id_reset_count: nextResetCount,
+      };
+    }
+
+    // Mark OTP as used setelah seluruh precheck lolos.
     await supabase
       .from("password_reset_otps")
-      .update({ is_used: true, verified_at: new Date().toISOString() })
+      .update({ is_used: true, verified_at: nowIso })
       .eq("id", otpRecord.id);
 
     // If password change is requested
     if (newPassword && employeeId) {
-      // Get employee to find user_id
-      const { data: employee } = await supabase
-        .from("employees")
-        .select("user_id")
-        .eq("id", employeeId)
-        .maybeSingle();
-
-      if (employee?.user_id) {
+      if (resetEmployeeUserId) {
         // Update password
         const { error: pwError } = await supabase.auth.admin.updateUserById(
-          employee.user_id,
+          resetEmployeeUserId,
           { password: newPassword }
         );
 
@@ -137,13 +217,10 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     // If device ID update is requested
-    if (employeeId && newAndroidId !== undefined) {
+    if (employeeId && newAndroidId !== undefined && deviceUpdatePayload) {
       const { error: deviceError } = await supabase
         .from("employees")
-        .update({ 
-          android_id: newAndroidId || null,
-          device_id_last_reset: new Date().toISOString()
-        })
+        .update(deviceUpdatePayload)
         .eq("id", employeeId);
 
       if (deviceError) {

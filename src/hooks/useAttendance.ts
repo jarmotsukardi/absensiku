@@ -26,6 +26,7 @@ import {
 import { loadScalabilityConfig } from "@/lib/scalabilityConfig";
 import { useAttendanceSync } from "./useAttendanceSync";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { buildAttendanceClientContext } from "@/lib/attendanceClientContext";
 
 type AttendanceRecord = Tables<"attendance_records">;
 type Office = Tables<"offices">;
@@ -68,6 +69,7 @@ interface RpcResult {
 
 async function syncCheckInToServer(entry: AttendanceEntry, retryCount: number = 0): Promise<RpcResult> {
   const timeout = getAdaptiveTimeout(retryCount);
+  const clientContext = buildAttendanceClientContext();
   const rpcCall = supabase.rpc('process_check_in', {
     p_employee_id: entry.employeeId,
     p_office_id: entry.officeId,
@@ -76,6 +78,7 @@ async function syncCheckInToServer(entry: AttendanceEntry, retryCount: number = 
     p_distance_meters: entry.distanceMeters,
     p_date: entry.date,
     p_idempotency_key: entry.idempotencyKey,
+    p_client_context: clientContext as unknown as Record<string, unknown>,
   });
 
   const { data, error } = await withTimeout(
@@ -90,6 +93,7 @@ async function syncCheckInToServer(entry: AttendanceEntry, retryCount: number = 
 
 async function syncCheckOutToServer(entry: AttendanceEntry, retryCount: number = 0): Promise<RpcResult> {
   const timeout = getAdaptiveTimeout(retryCount);
+  const clientContext = buildAttendanceClientContext();
   const rpcCall = supabase.rpc('process_check_out', {
     p_employee_id: entry.employeeId,
     p_office_id: entry.officeId,
@@ -98,6 +102,7 @@ async function syncCheckOutToServer(entry: AttendanceEntry, retryCount: number =
     p_distance_meters: entry.distanceMeters,
     p_date: entry.date,
     p_idempotency_key: entry.idempotencyKey,
+    p_client_context: clientContext as unknown as Record<string, unknown>,
   });
 
   const { data, error } = await withTimeout(

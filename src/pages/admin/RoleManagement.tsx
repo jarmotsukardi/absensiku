@@ -82,6 +82,12 @@ interface RoleDef {
   permissions: string[];
 }
 
+interface RoleGlossaryItem {
+  term: string;
+  description: string;
+  reference?: string;
+}
+
 const ROLE_DEFS: RoleDef[] = [
   {
     id: "super_admin",
@@ -125,6 +131,70 @@ const ROLE_LABEL: Record<AppRole, string> = {
 };
 
 const PAGE_SIZE = 15;
+const GLOSSARY_PAGE_SIZE = 6;
+
+const ROLE_GLOSSARY: RoleGlossaryItem[] = [
+  {
+    term: "Role Assignment",
+    description:
+      "Pemetaan antara user dan role tertentu yang menentukan halaman/fungsi apa saja yang bisa diakses.",
+    reference: "Tabel: user_roles",
+  },
+  {
+    term: "Super Admin",
+    description:
+      "Role tertinggi platform dengan akses lintas tenant, termasuk pengaturan global, billing, role, dan audit.",
+    reference: "Role ID: super_admin",
+  },
+  {
+    term: "Admin Instansi",
+    description:
+      "Role pengelola tenant/organisasi. Dapat mengelola pegawai, master data, pengajuan, laporan, dan pengaturan tenant.",
+    reference: "Role ID: admin_instansi",
+  },
+  {
+    term: "Atasan",
+    description:
+      "Role supervisi untuk approval dan pemantauan tim pada tenant terkait, dengan akses terbatas sesuai kebijakan.",
+    reference: "Role ID: atasan",
+  },
+  {
+    term: "Pegawai",
+    description:
+      "Role pengguna akhir untuk absensi, pengajuan, riwayat, profil, dan notifikasi milik akun tersebut.",
+    reference: "Role ID: pegawai",
+  },
+  {
+    term: "Tenant Scope",
+    description:
+      "Batas data per organisasi. Untuk role non-super-admin, tenant_id wajib diisi agar akses tidak lintas tenant.",
+    reference: "Kolom: user_roles.tenant_id",
+  },
+  {
+    term: "Tanpa Tenant",
+    description:
+      "Kondisi assignment tanpa tenant. Umumnya hanya valid untuk Super Admin.",
+    reference: "UI: opsi \"Tanpa Tenant\"",
+  },
+  {
+    term: "Lookup Email",
+    description:
+      "Fitur pencarian user_id dari tabel employees berdasarkan email agar assignment role lebih cepat dan akurat.",
+    reference: "Aksi: Cari email -> isi User ID",
+  },
+  {
+    term: "RLS (Row Level Security)",
+    description:
+      "Kebijakan database yang memastikan data yang ditampilkan/diubah tetap sesuai role dan tenant pengguna.",
+    reference: "Supabase RLS Policies",
+  },
+  {
+    term: "Permission Matrix",
+    description:
+      "Ringkasan kemampuan per role (lihat, tambah, ubah, hapus, approval, konfigurasi) sebagai panduan otorisasi.",
+    reference: "Kartu role pada halaman ini",
+  },
+];
 
 const formatDateTime = (value?: string | null) => {
   if (!value) return "-";
@@ -161,6 +231,8 @@ export default function RoleManagement() {
   const [formUserId, setFormUserId] = useState("");
   const [formRole, setFormRole] = useState<AppRole>("pegawai");
   const [formTenantId, setFormTenantId] = useState<string>("none");
+  const [glossaryQuery, setGlossaryQuery] = useState("");
+  const [glossaryPage, setGlossaryPage] = useState(1);
 
   const tenantNameMap = useMemo(() => {
     return new Map(tenants.map((t) => [t.id, t.name]));
@@ -292,6 +364,30 @@ export default function RoleManagement() {
     }
     return [currentPage - 2, currentPage - 1, currentPage, currentPage + 1, currentPage + 2];
   }, [currentPage, totalPages]);
+
+  const filteredGlossary = useMemo(() => {
+    const q = glossaryQuery.trim().toLowerCase();
+    if (!q) return ROLE_GLOSSARY;
+    return ROLE_GLOSSARY.filter((item) =>
+      [item.term, item.description, item.reference || ""].join(" ").toLowerCase().includes(q)
+    );
+  }, [glossaryQuery]);
+
+  const glossaryTotalPages = Math.max(1, Math.ceil(filteredGlossary.length / GLOSSARY_PAGE_SIZE));
+  const paginatedGlossary = filteredGlossary.slice(
+    (glossaryPage - 1) * GLOSSARY_PAGE_SIZE,
+    glossaryPage * GLOSSARY_PAGE_SIZE
+  );
+
+  useEffect(() => {
+    setGlossaryPage(1);
+  }, [glossaryQuery]);
+
+  useEffect(() => {
+    if (glossaryPage > glossaryTotalPages) {
+      setGlossaryPage(glossaryTotalPages);
+    }
+  }, [glossaryPage, glossaryTotalPages]);
 
   const openAddDialog = () => {
     resetForm();
@@ -595,6 +691,84 @@ export default function RoleManagement() {
                         if (currentPage < totalPages) setCurrentPage((p) => p + 1);
                       }}
                       className={currentPage >= totalPages ? "pointer-events-none opacity-50 cursor-pointer" : "cursor-pointer"}
+                    />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Glosarium Role & Permission</CardTitle>
+            <CardDescription>
+              Penjelasan istilah penting untuk memastikan konfigurasi akses dilakukan secara konsisten.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="relative max-w-md">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                className="pl-9"
+                placeholder="Cari istilah glosarium..."
+                value={glossaryQuery}
+                onChange={(e) => setGlossaryQuery(e.target.value)}
+              />
+            </div>
+
+            <div className="rounded-md border divide-y">
+              {paginatedGlossary.length === 0 ? (
+                <div className="px-4 py-6 text-sm text-muted-foreground text-center">
+                  Tidak ada istilah yang cocok.
+                </div>
+              ) : (
+                paginatedGlossary.map((item) => (
+                  <div key={item.term} className="px-4 py-3">
+                    <p className="font-medium">{item.term}</p>
+                    <p className="text-sm text-muted-foreground mt-1">{item.description}</p>
+                    {item.reference ? (
+                      <p className="text-xs text-muted-foreground mt-1">{item.reference}</p>
+                    ) : null}
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-muted-foreground">
+                Menampilkan {paginatedGlossary.length} dari {filteredGlossary.length} istilah
+              </p>
+              <Pagination className="mx-0 w-auto justify-end">
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious
+                      onClick={() => {
+                        if (glossaryPage > 1) setGlossaryPage((p) => p - 1);
+                      }}
+                      className={glossaryPage <= 1 ? "pointer-events-none opacity-50 cursor-pointer" : "cursor-pointer"}
+                    />
+                  </PaginationItem>
+                  {Array.from({ length: glossaryTotalPages }, (_, i) => i + 1).slice(
+                    Math.max(0, glossaryPage - 3),
+                    Math.max(0, glossaryPage - 3) + 5
+                  ).map((page) => (
+                    <PaginationItem key={`glossary-page-${page}`}>
+                      <PaginationLink
+                        onClick={() => setGlossaryPage(page)}
+                        isActive={glossaryPage === page}
+                        className="cursor-pointer"
+                      >
+                        {page}
+                      </PaginationLink>
+                    </PaginationItem>
+                  ))}
+                  <PaginationItem>
+                    <PaginationNext
+                      onClick={() => {
+                        if (glossaryPage < glossaryTotalPages) setGlossaryPage((p) => p + 1);
+                      }}
+                      className={glossaryPage >= glossaryTotalPages ? "pointer-events-none opacity-50 cursor-pointer" : "cursor-pointer"}
                     />
                   </PaginationItem>
                 </PaginationContent>

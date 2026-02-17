@@ -22,6 +22,11 @@ interface FAQ {
   sort_order: number;
 }
 
+interface FAQSettingsValue {
+  items?: FAQ[];
+  banner_image_url?: string;
+}
+
 const ITEMS_PER_PAGE = 10;
 
 export default function FAQManagement() {
@@ -35,6 +40,7 @@ export default function FAQManagement() {
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [legacyFaqValue, setLegacyFaqValue] = useState<FAQSettingsValue | null>(null);
 
   useEffect(() => {
     fetchFAQs();
@@ -61,11 +67,31 @@ export default function FAQManagement() {
         .eq("key", "faq_settings")
         .maybeSingle();
       
-      if (data?.value && Array.isArray(data.value)) {
-        const sortedFaqs = (data.value as unknown as FAQ[]).sort((a, b) => a.sort_order - b.sort_order);
-        setFaqs(sortedFaqs);
-        setFilteredFaqs(sortedFaqs);
+      if (!data?.value) {
+        setFaqs([]);
+        setFilteredFaqs([]);
+        setLegacyFaqValue(null);
+        return;
       }
+
+      const value = data.value as unknown;
+      let faqItems: FAQ[] = [];
+      let storedObject: FAQSettingsValue | null = null;
+
+      if (Array.isArray(value)) {
+        faqItems = value as FAQ[];
+      } else if (value && typeof value === "object") {
+        const parsed = value as FAQSettingsValue;
+        storedObject = parsed;
+        if (Array.isArray(parsed.items)) {
+          faqItems = parsed.items;
+        }
+      }
+
+      const sortedFaqs = faqItems.sort((a, b) => a.sort_order - b.sort_order);
+      setLegacyFaqValue(storedObject);
+      setFaqs(sortedFaqs);
+      setFilteredFaqs(sortedFaqs);
     } catch (error) {
       const errorRef = reportError(error, "admin.faq.fetch");
       const message = appendErrorReference("Gagal memuat data FAQ", errorRef);
@@ -89,16 +115,22 @@ export default function FAQManagement() {
         .maybeSingle();
 
       const jsonValue = JSON.parse(JSON.stringify(faqs));
+      const nextValue = legacyFaqValue
+        ? {
+            ...legacyFaqValue,
+            items: jsonValue,
+          }
+        : jsonValue;
       
       if (existing) {
         await supabase
           .from("system_settings")
-          .update({ value: jsonValue, updated_at: new Date().toISOString() })
+          .update({ value: nextValue, updated_at: new Date().toISOString() })
           .eq("key", "faq_settings");
       } else {
         await supabase
           .from("system_settings")
-          .insert({ key: "faq_settings", value: jsonValue });
+          .insert({ key: "faq_settings", value: nextValue });
       }
       
       toast.success("FAQ berhasil disimpan");

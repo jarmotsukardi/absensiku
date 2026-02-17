@@ -6,18 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EmployeeFloatingWhatsApp } from "@/components/employee/EmployeeFloatingWhatsApp";
-import { EmployeeActivationPage } from "@/components/employee/EmployeeActivationPage";
-import { LeaveRequestForm } from "@/components/employee/LeaveRequestForm";
-import { LeaveRequestList } from "@/components/employee/LeaveRequestList";
-import { WfhRequestForm } from "@/components/employee/WfhRequestForm";
-import { WfhRequestList } from "@/components/employee/WfhRequestList";
-import { OvertimeRequestForm } from "@/components/employee/OvertimeRequestForm";
-import { OvertimeRequestList } from "@/components/employee/OvertimeRequestList";
-import { FlexibleAttendanceRequestForm } from "@/components/employee/FlexibleAttendanceRequestForm";
-import { FlexibleAttendanceRequestList } from "@/components/employee/FlexibleAttendanceRequestList";
-import { MutationSection } from "@/components/employee/MutationSection";
+import { ReadonlyHomeTab } from "@/components/dashboard/readonly/ReadonlyHomeTab";
+import { ReadonlyHistoryTab } from "@/components/dashboard/readonly/ReadonlyHistoryTab";
+import { ReadonlyHelpTab } from "@/components/dashboard/readonly/ReadonlyHelpTab";
+import { ReadonlyNotificationsTab } from "@/components/dashboard/readonly/ReadonlyNotificationsTab";
+import { ReadonlyActivationTab } from "@/components/dashboard/readonly/ReadonlyActivationTab";
+import { ReadonlyRequestsTab } from "@/components/dashboard/readonly/ReadonlyRequestsTab";
+import { ReadonlyProfileTab } from "@/components/dashboard/readonly/ReadonlyProfileTab";
 import EmployeeNewsArticles from "@/pages/employee/EmployeeNewsArticles";
 import EmployeeAnnouncements from "@/pages/employee/EmployeeAnnouncements";
 import { useLeaveRequests } from "@/hooks/useLeaveRequests";
@@ -32,17 +28,14 @@ import {
   Megaphone,
   Newspaper,
   ShieldCheck,
-  Timer,
   User2,
   Zap,
-  Home as HomeIcon,
-  MapPinOff,
-  ChevronRight,
 } from "lucide-react";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import type { Tables } from "@/integrations/supabase/types";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type DashboardTab = "home" | "history" | "requests" | "news" | "articles" | "announcements" | "notifications" | "help" | "profile" | "activation";
 
@@ -238,10 +231,10 @@ export default function EmployeeDashboardReadonly() {
         return;
       }
 
-      const [tenantRes, attendanceRes, leaveRes, wfhRes, overtimeRes, flexibleRes, notifRes, articleRes, annRes, faqRes] = await Promise.all([
+      const [tenantRes, attendanceRes, leaveRes, wfhRes, overtimeRes, flexibleRes, notifRes, articleRes, annRes, faqRes] = await Promise.allSettled([
         supabase.from("tenants").select("id,name,logo_url,timezone,billing_mode").eq("id", emp.tenant_id).maybeSingle(),
         supabase
-          .from("attendance")
+          .from("attendance_records")
           .select("id,date,check_in_time,check_out_time,status")
           .eq("employee_id", emp.id)
           .order("date", { ascending: false })
@@ -298,35 +291,78 @@ export default function EmployeeDashboardReadonly() {
           .limit(20),
       ]);
 
-      setTenant((tenantRes.data as TenantProfile) || null);
-      setAttendanceItems((attendanceRes.data as AttendanceItem[]) || []);
+      const failedScopes: string[] = [];
+      const resolveQuery = <T,>(
+        result: PromiseSettledResult<{ data: T | null; error: unknown }>,
+        scope: string
+      ): T | null => {
+        if (result.status === "rejected") {
+          failedScopes.push(scope);
+          reportError(result.reason, "employee.dashboard.readonly.load_data.query_rejected", { scope });
+          return null;
+        }
+        if (result.value.error) {
+          failedScopes.push(scope);
+          reportError(result.value.error, "employee.dashboard.readonly.load_data.query_error", { scope });
+          return null;
+        }
+        return result.value.data ?? null;
+      };
+
+      const tenantData = resolveQuery<TenantProfile>(tenantRes, "tenant");
+      const attendanceData = resolveQuery<AttendanceItem[]>(attendanceRes, "attendance");
+      const leaveData = resolveQuery<Array<{ id: string; created_at: string; status?: string | null; reason?: string | null }>>(leaveRes, "leave_requests");
+      const wfhData = resolveQuery<Array<{ id: string; created_at: string; status?: string | null; reason?: string | null }>>(wfhRes, "wfh_requests");
+      const overtimeData = resolveQuery<Array<{ id: string; created_at: string; status?: string | null; reason?: string | null }>>(overtimeRes, "overtime_requests");
+      const flexibleData = resolveQuery<Array<{ id: string; created_at: string; status?: string | null; reason?: string | null }>>(flexibleRes, "flexible_attendance_requests");
+      const notifData = resolveQuery<NotificationItem[]>(notifRes, "notifications");
+      const articleData = resolveQuery<Array<{ id: string; title: string; category?: string | null; created_at: string }>>(articleRes, "articles");
+      const annData = resolveQuery<Array<{ id: string; title: string; created_at: string }>>(annRes, "announcements");
+      const faqData = resolveQuery<Array<{ id: string; question: string; answer?: string | null }>>(faqRes, "faqs");
+
+      setTenant(tenantData || null);
+      setAttendanceItems(attendanceData || []);
 
       type RequestRow = { id: string; created_at: string; status?: string | null; reason?: string | null };
       const req: ReqItem[] = [];
-      ((leaveRes.data || []) as RequestRow[]).forEach((i) => req.push({ id: i.id, type: "Izin/Cuti", date: i.created_at, status: i.status || "pending", reason: i.reason }));
-      ((wfhRes.data || []) as RequestRow[]).forEach((i) => req.push({ id: i.id, type: "WFH", date: i.created_at, status: i.status || "pending", reason: i.reason }));
-      ((overtimeRes.data || []) as RequestRow[]).forEach((i) => req.push({ id: i.id, type: "Lembur", date: i.created_at, status: i.status || "pending", reason: i.reason }));
-      ((flexibleRes.data || []) as RequestRow[]).forEach((i) => req.push({ id: i.id, type: "Absen Fleksibel", date: i.created_at, status: i.status || "pending", reason: i.reason }));
+      ((leaveData || []) as RequestRow[]).forEach((i) => req.push({ id: i.id, type: "Izin/Cuti", date: i.created_at, status: i.status || "pending", reason: i.reason }));
+      ((wfhData || []) as RequestRow[]).forEach((i) => req.push({ id: i.id, type: "WFH", date: i.created_at, status: i.status || "pending", reason: i.reason }));
+      ((overtimeData || []) as RequestRow[]).forEach((i) => req.push({ id: i.id, type: "Lembur", date: i.created_at, status: i.status || "pending", reason: i.reason }));
+      ((flexibleData || []) as RequestRow[]).forEach((i) => req.push({ id: i.id, type: "Absen Fleksibel", date: i.created_at, status: i.status || "pending", reason: i.reason }));
       req.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setRequestItems(req.slice(0, 25));
 
-      setNotificationItems((notifRes.data as NotificationItem[]) || []);
+      setNotificationItems(notifData || []);
 
-      const articleRows = (articleRes.data || []) as Array<{ id: string; title: string; category?: string | null; created_at: string }>;
+      const articleRows = (articleData || []) as Array<{ id: string; title: string; category?: string | null; created_at: string }>;
       const mappedArticles: HomeNews[] = articleRows.map((a) => ({
         id: a.id,
         title: a.title,
         created_at: a.created_at,
         source: (a.category || "").toLowerCase().trim() === "berita" ? "news" : "article",
       }));
-      const annRows = (annRes.data || []) as Array<{ id: string; title: string; created_at: string }>;
+      const annRows = (annData || []) as Array<{ id: string; title: string; created_at: string }>;
       const mappedAnn: HomeNews[] = annRows.map((a) => ({ id: a.id, title: `[Pengumuman] ${a.title}`, created_at: a.created_at, source: "news" }));
       setNewsItems([...mappedArticles, ...mappedAnn].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()).slice(0, 8));
 
-      const fetchedFaqs = (faqRes.data as Array<{ id: string; question: string; answer?: string | null }>) || [];
+      const fetchedFaqs = faqData || [];
       setFaqItems(fetchedFaqs.length > 0 ? fetchedFaqs : DEFAULT_HELP_FAQS);
+
+      if (failedScopes.length > 0) {
+        const partialRef = reportError(
+          new Error("Readonly dashboard partial data load"),
+          "employee.dashboard.readonly.load_data_partial",
+          {
+            scopes: failedScopes,
+            employee_id: emp.id,
+            tenant_id: emp.tenant_id,
+          }
+        );
+        toast.error(appendErrorReference("Sebagian data dashboard gagal dimuat. Silakan muat ulang.", partialRef));
+      }
     } catch (error) {
-      console.error("Error loading /dashboard:", error);
+      const errorRef = reportError(error, "employee.dashboard.readonly.load_data");
+      toast.error(appendErrorReference("Gagal memuat data dashboard.", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -409,8 +445,22 @@ export default function EmployeeDashboardReadonly() {
   );
 
   const markNotificationRead = async (id: string) => {
-    setNotificationItems((prev) => prev.map((n) => (n.id === id ? { ...n, is_read: true } : n)));
-    await supabase.from("notifications").update({ is_read: true }).eq("id", id);
+    let previousItems: NotificationItem[] = [];
+    setNotificationItems((prev) => {
+      previousItems = prev;
+      return prev.map((n) => (n.id === id ? { ...n, is_read: true } : n));
+    });
+
+    try {
+      const { error } = await supabase.from("notifications").update({ is_read: true }).eq("id", id);
+      if (error) throw error;
+    } catch (error) {
+      setNotificationItems(previousItems);
+      const errorRef = reportError(error, "employee.dashboard.readonly.mark_notification_read", {
+        notification_id: id,
+      });
+      toast.error(appendErrorReference("Gagal memperbarui status notifikasi.", errorRef));
+    }
   };
 
   const logout = async () => {
@@ -431,7 +481,8 @@ export default function EmployeeDashboardReadonly() {
       if (error) throw error;
       setWfhRequests(data || []);
     } catch (error) {
-      console.error("Error fetching WFH requests:", error);
+      const errorRef = reportError(error, "employee.dashboard.readonly.fetch_wfh_requests");
+      toast.error(appendErrorReference("Gagal memuat pengajuan WFH.", errorRef));
     } finally {
       setIsWfhLoading(false);
     }
@@ -483,8 +534,8 @@ export default function EmployeeDashboardReadonly() {
       toast.success(`${newDates.length} pengajuan WFH berhasil dikirim`);
       return true;
     } catch (error) {
-      console.error("Error submitting WFH request:", error);
-      toast.error("Gagal mengirim pengajuan WFH");
+      const errorRef = reportError(error, "employee.dashboard.readonly.submit_wfh_request");
+      toast.error(appendErrorReference("Gagal mengirim pengajuan WFH.", errorRef));
       return false;
     }
   };
@@ -508,7 +559,7 @@ export default function EmployeeDashboardReadonly() {
       const endDateExclusive = `${nextYear}-${nextMonth}-01`;
 
       const { data, error } = await supabase
-        .from("attendance")
+        .from("attendance_records")
         .select("id,date,check_in_time,check_out_time,status")
         .eq("employee_id", employee.id)
         .gte("date", startDate)
@@ -518,7 +569,10 @@ export default function EmployeeDashboardReadonly() {
       if (error) throw error;
       setHistoryItems((data as AttendanceItem[]) || []);
     } catch (error) {
-      console.error("Error fetching monthly history:", error);
+      const errorRef = reportError(error, "employee.dashboard.readonly.fetch_history_by_month", {
+        history_month: historyMonth,
+      });
+      toast.error(appendErrorReference("Gagal memuat riwayat kehadiran.", errorRef));
       setHistoryItems([]);
     } finally {
       setHistoryLoading(false);
@@ -656,206 +710,56 @@ export default function EmployeeDashboardReadonly() {
           ) : null}
 
           {!isLoading && activeTab === "home" && (
-            <>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <Card className={compactStatCardClass}>
-                  <CardHeader className="pb-2">
-                    <CardDescription>Status Hari Ini</CardDescription>
-                    <CardTitle className="text-base">{todayAttendance?.status || "Belum ada data"}</CardTitle>
-                  </CardHeader>
-                  <CardContent className="text-sm text-slate-600">
-                    <p>Masuk: {todayAttendance?.check_in_time || "-"}</p>
-                    <p>Pulang: {todayAttendance?.check_out_time || "-"}</p>
-                  </CardContent>
-                </Card>
-                <Card className={compactStatCardClass}>
-                  <CardHeader className="pb-2">
-                    <CardDescription>Pengajuan Pending</CardDescription>
-                    <CardTitle className="text-2xl">{pendingRequests}</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <Button variant="outline" size="sm" className="hover:border-blue-300 hover:bg-blue-50" onClick={() => setTab("requests")}>
-                      Lihat Pengajuan
-                    </Button>
-                  </CardContent>
-                </Card>
-                <Card className={compactStatCardClass}>
-                  <CardHeader className="pb-2">
-                    <CardDescription>Notifikasi Belum Dibaca</CardDescription>
-                    <CardTitle className="text-2xl">{unreadCount}</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <Button variant="outline" size="sm" className="hover:border-blue-300 hover:bg-blue-50" onClick={() => setTab("notifications")}>
-                      Buka Notifikasi
-                    </Button>
-                  </CardContent>
-                </Card>
-                <Card className={compactStatCardClass}>
-                  <CardHeader className="pb-2">
-                    <CardDescription>Akses Absensi</CardDescription>
-                    <CardTitle className="text-base">Aplikasi Mobile</CardTitle>
-                  </CardHeader>
-                  <CardContent className="text-sm text-slate-600">
-                    Fitur absen hanya tersedia di <code>/employee/dashboard</code>.
-                  </CardContent>
-                </Card>
-              </div>
-
-              <Card className={panelClass}>
-                <CardHeader>
-                  <CardTitle className="text-lg">Update Terbaru</CardTitle>
-                  <CardDescription>Berita, artikel, dan pengumuman terbaru</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {newsItems.length === 0 ? (
-                    <p className="text-sm text-slate-600">Belum ada update terbaru.</p>
-                  ) : (
-                    newsItems.map((n) => (
-                      <div key={`${n.source}-${n.id}`} className="flex items-start justify-between rounded-2xl border border-slate-200/90 bg-white/90 p-3 shadow-sm transition hover:border-blue-300 hover:bg-blue-50/50">
-                        <div>
-                          <p className="font-medium">{n.title}</p>
-                          <p className="text-xs text-slate-500">{format(new Date(n.created_at), "dd MMM yyyy HH:mm", { locale: localeId })}</p>
-                        </div>
-                        <Badge variant="outline">{n.source === "news" ? "Berita" : "Artikel"}</Badge>
-                      </div>
-                    ))
-                  )}
-                </CardContent>
-              </Card>
-            </>
+            <ReadonlyHomeTab
+              todayAttendance={todayAttendance}
+              pendingRequests={pendingRequests}
+              unreadCount={unreadCount}
+              newsItems={newsItems}
+              panelClass={panelClass}
+              compactStatCardClass={compactStatCardClass}
+              onOpenRequests={() => setTab("requests")}
+              onOpenNotifications={() => setTab("notifications")}
+            />
           )}
 
           {!isLoading && activeTab === "history" && (
-            <Card className={panelClass}>
-              <CardHeader>
-                <CardTitle>Riwayat Kehadiran</CardTitle>
-                <CardDescription>Riwayat absen per bulan</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex items-center gap-2">
-                    <label className="text-sm text-slate-600">Periode:</label>
-                    <Select
-                      value={selectedMonth}
-                      onValueChange={(month) => setHistoryMonth(`${selectedYear || new Date().getFullYear()}-${month}`)}
-                    >
-                      <SelectTrigger className="w-[150px] bg-white">
-                        <SelectValue placeholder="Pilih Bulan" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {MONTH_OPTIONS.map((m) => (
-                          <SelectItem key={`history-month-${m.value}`} value={m.value}>
-                            {m.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-
-                    <Select
-                      value={selectedYear}
-                      onValueChange={(year) => setHistoryMonth(`${year}-${selectedMonth || "01"}`)}
-                    >
-                      <SelectTrigger className="w-[110px] bg-white">
-                        <SelectValue placeholder="Tahun" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {yearOptions.map((year) => (
-                          <SelectItem key={`history-year-${year}`} value={year}>
-                            {year}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <Button variant="outline" size="sm" className="hover:border-blue-300 hover:bg-blue-50" onClick={fetchHistoryByMonth}>
-                    Refresh
-                  </Button>
-                </div>
-
-                {historyLoading ? (
-                  <div className="space-y-2">
-                    {[1, 2, 3].map((i) => (
-                      <Skeleton key={`history-skeleton-${i}`} className="h-14 w-full" />
-                    ))}
-                  </div>
-                ) : historyItems.length === 0 ? (
-                  <p className="text-sm text-slate-600">Belum ada riwayat absensi pada bulan ini.</p>
-                ) : (
-                  historyItems.map((item) => (
-                    <div key={item.id} className="grid grid-cols-4 gap-2 rounded-2xl border border-slate-200/90 bg-white/95 p-3 text-sm shadow-sm">
-                      <div>{item.date}</div>
-                      <div>{item.check_in_time || "-"}</div>
-                      <div>{item.check_out_time || "-"}</div>
-                      <div><Badge variant="secondary">{item.status || "-"}</Badge></div>
-                    </div>
-                  ))
-                )}
-              </CardContent>
-            </Card>
+            <ReadonlyHistoryTab
+              panelClass={panelClass}
+              selectedMonth={selectedMonth}
+              selectedYear={selectedYear}
+              monthOptions={MONTH_OPTIONS}
+              yearOptions={yearOptions}
+              historyLoading={historyLoading}
+              historyItems={historyItems}
+              onChangeMonth={(month) => setHistoryMonth(`${selectedYear || new Date().getFullYear()}-${month}`)}
+              onChangeYear={(year) => setHistoryMonth(`${year}-${selectedMonth || "01"}`)}
+              onRefresh={fetchHistoryByMonth}
+            />
           )}
 
           {!isLoading && activeTab === "requests" && (
-            <Card className={panelClass}>
-              <CardHeader>
-                <CardTitle>Pengajuan</CardTitle>
-                <CardDescription>Izin/cuti, WFH, lembur, dan absen fleksibel. Semua pengajuan dapat dilakukan dari sini.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex flex-wrap gap-2">
-                  <Button size="sm" variant={activeRequestType === "leave" ? "default" : "outline"} className={activeRequestType === "leave" ? "" : "hover:border-blue-300 hover:bg-blue-50"} onClick={() => setActiveRequestType("leave")}>
-                    <FileText className="mr-1 h-4 w-4" /> Cuti/Izin
-                  </Button>
-                  <Button size="sm" variant={activeRequestType === "wfh" ? "default" : "outline"} className={activeRequestType === "wfh" ? "" : "hover:border-blue-300 hover:bg-blue-50"} onClick={() => setActiveRequestType("wfh")}>
-                    <HomeIcon className="mr-1 h-4 w-4" /> WFH
-                  </Button>
-                  <Button size="sm" variant={activeRequestType === "overtime" ? "default" : "outline"} className={activeRequestType === "overtime" ? "" : "hover:border-blue-300 hover:bg-blue-50"} onClick={() => setActiveRequestType("overtime")}>
-                    <Timer className="mr-1 h-4 w-4" /> Lembur
-                  </Button>
-                  <Button size="sm" variant={activeRequestType === "flexible" ? "default" : "outline"} className={activeRequestType === "flexible" ? "" : "hover:border-blue-300 hover:bg-blue-50"} onClick={() => setActiveRequestType("flexible")}>
-                    <MapPinOff className="mr-1 h-4 w-4" /> Absensi Khusus
-                  </Button>
-                </div>
-
-                {activeRequestType === "leave" && (
-                  <div className="space-y-4">
-                    <LeaveRequestForm onSubmit={createLeaveRequest} isSubmitting={leaveSubmitting} />
-                    <LeaveRequestList requests={leaveRequests} isLoading={leaveLoading} onCancel={cancelLeaveRequest} />
-                  </div>
-                )}
-
-                {activeRequestType === "wfh" && (
-                  <div className="space-y-4">
-                    <WfhRequestForm onSubmit={handleSubmitWfh} />
-                    <WfhRequestList requests={wfhRequestsNormalized} isLoading={isWfhLoading} />
-                  </div>
-                )}
-
-                {activeRequestType === "overtime" && employee?.id && employee?.tenant_id && (
-                  <div className="space-y-4">
-                    <OvertimeRequestForm
-                      employeeId={employee.id}
-                      tenantId={employee.tenant_id}
-                      settings={overtimeSettings || overtimeSettingsFallback}
-                    />
-                    <OvertimeRequestList employeeId={employee.id} />
-                  </div>
-                )}
-
-                {activeRequestType === "flexible" && employee?.id && employee?.tenant_id && (
-                  <div className="space-y-4">
-                    <FlexibleAttendanceRequestForm
-                      employeeId={employee.id}
-                      tenantId={employee.tenant_id}
-                      onSuccess={() => {
-                        setRefreshFlexible((prev) => prev + 1);
-                        refetchLeave();
-                      }}
-                    />
-                    <FlexibleAttendanceRequestList employeeId={employee.id} refreshTrigger={refreshFlexible} />
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+            <ReadonlyRequestsTab
+              panelClass={panelClass}
+              activeRequestType={activeRequestType}
+              onChangeRequestType={setActiveRequestType}
+              createLeaveRequest={createLeaveRequest}
+              leaveSubmitting={leaveSubmitting}
+              leaveRequests={leaveRequests}
+              leaveLoading={leaveLoading}
+              cancelLeaveRequest={cancelLeaveRequest}
+              handleSubmitWfh={handleSubmitWfh}
+              wfhRequestsNormalized={wfhRequestsNormalized}
+              isWfhLoading={isWfhLoading}
+              employeeId={employee?.id}
+              tenantId={employee?.tenant_id}
+              overtimeSettings={overtimeSettings}
+              overtimeSettingsFallback={overtimeSettingsFallback}
+              refreshFlexible={refreshFlexible}
+              onFlexibleSuccess={() => {
+                setRefreshFlexible((prev) => prev + 1);
+                refetchLeave();
+              }}
+            />
           )}
 
           {!isLoading && activeTab === "news" && <EmployeeNewsArticles onBack={() => setTab("home")} contentType="news" />}
@@ -863,156 +767,33 @@ export default function EmployeeDashboardReadonly() {
           {!isLoading && activeTab === "announcements" && <EmployeeAnnouncements tenantId={employee?.tenant_id || undefined} onBack={() => setTab("home")} />}
 
           {!isLoading && activeTab === "notifications" && (
-            <Card className={panelClass}>
-              <CardHeader>
-                <CardTitle>Notifikasi</CardTitle>
-                <CardDescription>Daftar notifikasi akun Anda</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                {notificationItems.length === 0 ? (
-                  <p className="text-sm text-slate-600">Belum ada notifikasi.</p>
-                ) : (
-                  notificationItems.map((n) => (
-                    <div key={n.id} className={`rounded-2xl border p-3 transition ${n.is_read ? "border-slate-200/90 bg-white/90" : "border-blue-300 bg-blue-50/70 shadow-sm"}`}>
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <p className="font-medium">{n.title}</p>
-                          <p className="text-sm text-slate-700">{n.message}</p>
-                          <p className="mt-1 text-xs text-slate-500">{format(new Date(n.created_at), "dd MMM yyyy HH:mm", { locale: localeId })}</p>
-                        </div>
-                        {!n.is_read ? <Button size="sm" variant="outline" onClick={() => markNotificationRead(n.id)}>Tandai</Button> : null}
-                      </div>
-                    </div>
-                  ))
-                )}
-              </CardContent>
-            </Card>
+            <ReadonlyNotificationsTab
+              panelClass={panelClass}
+              notificationItems={notificationItems}
+              onMarkRead={markNotificationRead}
+            />
           )}
 
           {!isLoading && activeTab === "help" && (
-            <Card className={panelClass}>
-              <CardHeader>
-                <CardTitle>Bantuan</CardTitle>
-                <CardDescription>Pertanyaan yang sering diajukan</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                  Absensi dilakukan melalui aplikasi mobile di <code>/employee/dashboard</code>. Halaman ini untuk monitoring dan pengelolaan data pribadi.
-                </div>
-                {faqItems.length === 0 ? (
-                  <p className="text-sm text-slate-600">Belum ada FAQ.</p>
-                ) : (
-                  faqItems.map((f) => (
-                    <div key={f.id} className="overflow-hidden rounded-xl border border-slate-200">
-                      <button
-                        className="flex w-full items-center justify-between p-3 text-left hover:bg-slate-50"
-                        onClick={() => setExpandedFaqId((prev) => (prev === f.id ? null : f.id))}
-                      >
-                        <p className="font-medium">{f.question}</p>
-                        <ChevronRight
-                          className={`h-4 w-4 text-slate-500 transition-transform ${expandedFaqId === f.id ? "rotate-90" : ""}`}
-                        />
-                      </button>
-                      {expandedFaqId === f.id && (
-                        <div className="border-t border-slate-200 bg-slate-50/70 p-3">
-                          <p className="text-sm text-slate-700">{f.answer || "Jawaban belum tersedia."}</p>
-                        </div>
-                      )}
-                    </div>
-                  ))
-                )}
-              </CardContent>
-            </Card>
+            <ReadonlyHelpTab
+              panelClass={panelClass}
+              faqItems={faqItems}
+              expandedFaqId={expandedFaqId}
+              onToggleFaq={(id) => setExpandedFaqId((prev) => (prev === id ? null : id))}
+            />
           )}
 
           {!isLoading && activeTab === "profile" && (
-            <div className="space-y-4">
-              <Card className={panelClass}>
-                <CardHeader>
-                  <CardTitle>Profil Pegawai</CardTitle>
-                  <CardDescription>Informasi akun dan identitas</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-5">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="outline">{employee?.is_active === false ? "Nonaktif" : "Aktif"}</Badge>
-                    {employee?.employee_category ? <Badge variant="secondary">{employee.employee_category}</Badge> : null}
-                    {employee?.golongan ? <Badge variant="secondary">Gol. {employee.golongan}</Badge> : null}
-                  </div>
-
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <InfoItem label="Nama" value={employee?.name} />
-                    <InfoItem label="Email" value={employee?.email} />
-                    <InfoItem label="NIP" value={employee?.nip} />
-                    <InfoItem label="WhatsApp" value={employee?.whatsapp} />
-                    <InfoItem label="No. Telepon" value={employee?.phone} />
-                    <InfoItem label="Jenis Kelamin" value={employee?.gender} />
-                    <InfoItem label="Alamat" value={employee?.address} />
-                  </div>
-
-                  <div className="rounded-xl border border-slate-200 p-3">
-                    <p className="mb-2 text-xs uppercase tracking-wide text-slate-500">Informasi Kepegawaian</p>
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <InfoItem label="Jabatan" value={employee?.position} />
-                      <InfoItem label="Instansi/OPD" value={employee?.opd?.name} />
-                      <InfoItem label="Unit Kerja" value={employee?.work_unit?.name} />
-                      <InfoItem label="Kantor" value={employee?.offices?.name} />
-                      <InfoItem label="Alamat Kantor" value={employee?.offices?.address} />
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2 pt-2">
-                    <Button variant="outline" className="hover:border-blue-300 hover:bg-blue-50" onClick={() => navigate("/auth/forgot-password")}>Ganti Password</Button>
-                    <Button variant="outline" className="hover:border-blue-300 hover:bg-blue-50" onClick={() => loadData()}>Refresh Data</Button>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <MutationSection
-                employee={employee ? {
-                  id: employee.id,
-                  tenant_id: employee.tenant_id || undefined,
-                  name: employee.name,
-                  nip: employee.nip || undefined,
-                  nik: employee.nik || "",
-                  email: employee.email,
-                  phone: employee.phone || undefined,
-                  whatsapp: employee.whatsapp || undefined,
-                  address: employee.address || undefined,
-                  gender: employee.gender || undefined,
-                  golongan: employee.golongan || undefined,
-                  position: employee.position || undefined,
-                  employee_category: employee.employee_category || undefined,
-                  opd_id: employee.opd_id || undefined,
-                  work_unit_id: employee.work_unit_id || undefined,
-                  office_id: employee.office_id || undefined,
-                  opd: employee.opd ? {
-                    id: employee.opd.id || undefined,
-                    name: employee.opd.name || "",
-                    code: employee.opd.code || undefined,
-                  } : null,
-                  work_unit: employee.work_unit ? {
-                    id: employee.work_unit.id || undefined,
-                    name: employee.work_unit.name || "",
-                  } : null,
-                  offices: employee.offices ? {
-                    id: employee.offices.id || undefined,
-                    name: employee.offices.name || "",
-                  } : null,
-                } : null}
-                onRefresh={loadData}
-              />
-            </div>
+            <ReadonlyProfileTab
+              panelClass={panelClass}
+              employee={employee}
+              onForgotPassword={() => navigate("/auth/forgot-password")}
+              onRefreshData={loadData}
+            />
           )}
 
           {!isLoading && activeTab === "activation" && employee?.tenant_id && (
-            <Card className={panelClass}>
-              <CardHeader>
-                <CardTitle>Aktivasi</CardTitle>
-                <CardDescription>Status aktivasi akun individual</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <EmployeeActivationPage tenantId={employee.tenant_id} />
-              </CardContent>
-            </Card>
+            <ReadonlyActivationTab panelClass={panelClass} tenantId={employee.tenant_id} />
           )}
           </main>
         </div>
@@ -1087,15 +868,6 @@ export default function EmployeeDashboardReadonly() {
       )}
 
       <EmployeeFloatingWhatsApp tenantId={employee?.tenant_id} />
-    </div>
-  );
-}
-
-function InfoItem({ label, value }: { label: string; value?: string | null }) {
-  return (
-    <div className="rounded-2xl border border-slate-200/90 bg-white/90 p-3 shadow-sm">
-      <p className="text-xs text-slate-500">{label}</p>
-      <p className="font-medium text-slate-900">{value || "-"}</p>
     </div>
   );
 }

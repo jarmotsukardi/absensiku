@@ -147,6 +147,7 @@ export default function OrgNationalHolidaysManagement() {
   const [searchParams] = useSearchParams();
   const queryTenantId = searchParams.get("tenant_id");
   const [holidays, setHolidays] = useState<NationalHoliday[]>([]);
+  const [totalHolidays, setTotalHolidays] = useState(0);
   const [fallbackPreviewHolidays, setFallbackPreviewHolidays] = useState<NationalHoliday[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isPulling, setIsPulling] = useState(false);
@@ -157,20 +158,29 @@ export default function OrgNationalHolidaysManagement() {
   const itemsPerPage = 15;
 
   const fetchHolidays = useCallback(async () => {
+    setIsLoading(true);
     try {
       setLoadError(null);
       let query = supabase
         .from("national_holidays")
-        .select("*")
-        .order("date", { ascending: true });
+        .select("*", { count: "exact" });
       if (filterYear !== "all") {
         query = query.eq("year", parseInt(filterYear));
       }
+      if (searchTerm.trim()) {
+        const escaped = searchTerm.trim().replace(/[%_]/g, "\\$&");
+        query = query.or(`name.ilike.%${escaped}%,description.ilike.%${escaped}%`);
+      }
+      const from = (currentPage - 1) * itemsPerPage;
+      const to = from + itemsPerPage - 1;
 
-      const { data, error } = await query;
+      const { data, error, count } = await query
+        .order("date", { ascending: true })
+        .range(from, to);
 
       if (error) throw error;
       setHolidays((data as NationalHoliday[]) || []);
+      setTotalHolidays(count || 0);
     } catch (error) {
       const errorRef = reportError(error, "org.national_holidays.fetch", {
         year: filterYear,
@@ -179,10 +189,11 @@ export default function OrgNationalHolidaysManagement() {
       setLoadError(message);
       toast.error(message);
       setHolidays([]);
+      setTotalHolidays(0);
     } finally {
       setIsLoading(false);
     }
-  }, [filterYear]);
+  }, [currentPage, filterYear, searchTerm]);
 
   useEffect(() => {
     void fetchHolidays();
@@ -404,29 +415,18 @@ export default function OrgNationalHolidaysManagement() {
     setCurrentPage(1);
   };
 
-  const mergedMap = new Map<string, NationalHoliday>();
-  holidays.forEach((holiday) => {
-    mergedMap.set(holiday.date, holiday);
-  });
-  fallbackPreviewHolidays.forEach((holiday) => {
-    if (!mergedMap.has(holiday.date)) {
-      mergedMap.set(holiday.date, holiday);
+  const totalPages = Math.max(1, Math.ceil(totalHolidays / itemsPerPage));
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, filterYear]);
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(totalHolidays / itemsPerPage));
+    if (currentPage > maxPage) {
+      setCurrentPage(maxPage);
     }
-  });
-  const displayHolidays = Array.from(mergedMap.values()).sort((a, b) => a.date.localeCompare(b.date));
-
-  const filteredHolidays = displayHolidays.filter((holiday) => {
-    const matchesSearch = holiday.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      holiday.description?.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesYear = filterYear === "all" || holiday.year === parseInt(filterYear);
-    return matchesSearch && matchesYear;
-  });
-
-  const totalPages = Math.ceil(filteredHolidays.length / itemsPerPage);
-  const paginatedHolidays = filteredHolidays.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
-  );
+  }, [currentPage, totalHolidays]);
 
   const formatDate = (dateStr: string) => {
     try {
@@ -458,6 +458,12 @@ export default function OrgNationalHolidaysManagement() {
         {loadError && (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
             {loadError}
+          </div>
+        )}
+
+        {fallbackPreviewHolidays.length > 0 && (
+          <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Preview sumber fallback aktif: {fallbackPreviewHolidays.length} hari ditampilkan saat proses tarik. Daftar utama tetap dari database.
           </div>
         )}
 
@@ -512,14 +518,14 @@ export default function OrgNationalHolidaysManagement() {
                       <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto"></div>
                     </TableCell>
                   </TableRow>
-                ) : paginatedHolidays.length === 0 ? (
+                ) : holidays.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
                       Belum ada data libur nasional
                     </TableCell>
                   </TableRow>
                 ) : (
-                  paginatedHolidays.map((holiday, index) => (
+                  holidays.map((holiday, index) => (
                     <TableRow key={holiday.id}>
                       <TableCell>{(currentPage - 1) * itemsPerPage + index + 1}</TableCell>
                       <TableCell className="font-medium">{holiday.name}</TableCell>
@@ -536,10 +542,10 @@ export default function OrgNationalHolidaysManagement() {
               </TableBody>
             </Table>
 
-            {totalPages > 1 && (
+            {totalHolidays > 0 && (
               <div className="flex items-center justify-between mt-4">
                 <p className="text-sm text-muted-foreground">
-                  Menampilkan {(currentPage - 1) * itemsPerPage + 1} - {Math.min(currentPage * itemsPerPage, filteredHolidays.length)} dari {filteredHolidays.length} data
+                  Menampilkan {(currentPage - 1) * itemsPerPage + 1} - {Math.min(currentPage * itemsPerPage, totalHolidays)} dari {totalHolidays} data
                 </p>
                 <Pagination>
                   <PaginationContent>

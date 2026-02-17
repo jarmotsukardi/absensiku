@@ -125,6 +125,23 @@ const resolveFetchMethod = (input: RequestInfo | URL, init?: RequestInit): strin
   return "GET";
 };
 
+const resolveFetchSignal = (input: RequestInfo | URL, init?: RequestInit): AbortSignal | undefined => {
+  if (init?.signal) return init.signal;
+  if (typeof Request !== "undefined" && input instanceof Request) return input.signal;
+  return undefined;
+};
+
+const isAbortLikeError = (error: unknown): boolean => {
+  if (error instanceof DOMException && error.name === "AbortError") return true;
+  if (error instanceof Error) {
+    const message = (error.message || "").toLowerCase();
+    if (error.name === "AbortError") return true;
+    if (message.includes("aborted") || message.includes("aborterror")) return true;
+    if (message.includes("signal is aborted")) return true;
+  }
+  return false;
+};
+
 const isNoisyUrl = (url: string): boolean => {
   return (
     url.includes("/@vite/") ||
@@ -161,6 +178,7 @@ export const installFetchErrorLogging = () => {
     const startedAt = Date.now();
     const url = resolveFetchUrl(input);
     const method = resolveFetchMethod(input, init);
+    const signal = resolveFetchSignal(input, init);
 
     try {
       const response = await originalFetch(input, init);
@@ -177,6 +195,10 @@ export const installFetchErrorLogging = () => {
       }
       return response;
     } catch (error) {
+      if (signal?.aborted || isAbortLikeError(error)) {
+        throw error;
+      }
+
       if (!isNoisyUrl(url)) {
         reportError(error, "fetch.network_error", {
           url,
@@ -205,6 +227,7 @@ export const installGlobalErrorLogging = () => {
   });
 
   window.addEventListener("unhandledrejection", (event) => {
+    if (isAbortLikeError(event.reason)) return;
     reportError(event.reason || "Unhandled promise rejection", "window.unhandledrejection");
   });
 

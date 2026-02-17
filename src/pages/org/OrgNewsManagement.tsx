@@ -53,6 +53,7 @@ interface NewsItem {
 
 export default function OrgNewsManagement() {
   const [news, setNews] = useState<NewsItem[]>([]);
+  const [totalNews, setTotalNews] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -83,24 +84,42 @@ export default function OrgNewsManagement() {
     setIsLoading(true);
     setLoadError(null);
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("announcements")
-        .select("*")
-        .eq("tenant_id", tid)
+        .select("*", { count: "exact" })
+        .eq("tenant_id", tid);
+
+      if (filterStatus === "published") {
+        query = query.eq("is_published", true);
+      } else if (filterStatus === "draft") {
+        query = query.eq("is_published", false);
+      }
+      if (searchQuery.trim()) {
+        const escaped = searchQuery.trim().replace(/[%_]/g, "\\$&");
+        query = query.or(`title.ilike.%${escaped}%,content.ilike.%${escaped}%`);
+      }
+
+      const from = (currentPage - 1) * itemsPerPage;
+      const to = from + itemsPerPage - 1;
+      const { data, error, count } = await query
         .order("is_pinned", { ascending: false })
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        .range(from, to);
 
       if (error) throw error;
       setNews(data || []);
+      setTotalNews(count || 0);
     } catch (error) {
       const errorRef = reportError(error, "org.news.fetch", { tenant_id: tid });
       const message = appendErrorReference("Gagal memuat daftar pengumuman", errorRef);
       setLoadError(message);
       toast.error(message);
+      setNews([]);
+      setTotalNews(0);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [currentPage, filterStatus, itemsPerPage, searchQuery]);
 
   const fetchTenantAndNews = useCallback(async () => {
     try {
@@ -115,7 +134,6 @@ export default function OrgNewsManagement() {
 
       if (roleData?.tenant_id) {
         setTenantId(roleData.tenant_id);
-        await fetchNews(roleData.tenant_id);
       }
     } catch (error) {
       const errorRef = reportError(error, "org.news.fetch_tenant_and_news");
@@ -123,11 +141,17 @@ export default function OrgNewsManagement() {
       setLoadError(message);
       toast.error(message);
     }
-  }, [fetchNews]);
+  }, []);
 
   useEffect(() => {
     void fetchTenantAndNews();
   }, [fetchTenantAndNews]);
+
+  useEffect(() => {
+    if (tenantId) {
+      void fetchNews(tenantId);
+    }
+  }, [fetchNews, tenantId]);
 
   const handleSubmit = async () => {
     if (!formData.title.trim() || !formData.content.trim()) {
@@ -169,7 +193,7 @@ export default function OrgNewsManagement() {
 
       setIsFormOpen(false);
       resetForm();
-      if (tenantId) fetchNews(tenantId);
+      if (tenantId) void fetchNews(tenantId);
     } catch (error) {
       console.error("Error saving news:", error);
       toast.error("Gagal menyimpan pengumuman");
@@ -202,7 +226,7 @@ export default function OrgNewsManagement() {
       toast.success("Pengumuman berhasil dihapus");
       setDeleteDialogOpen(false);
       setDeletingId(null);
-      if (tenantId) fetchNews(tenantId);
+      if (tenantId) void fetchNews(tenantId);
     } catch (error) {
       console.error("Error deleting news:", error);
       toast.error("Gagal menghapus pengumuman");
@@ -218,7 +242,7 @@ export default function OrgNewsManagement() {
 
       if (error) throw error;
       toast.success(currentStatus ? "Pengumuman disembunyikan" : "Pengumuman dipublikasikan");
-      if (tenantId) fetchNews(tenantId);
+      if (tenantId) void fetchNews(tenantId);
     } catch (error) {
       toast.error("Gagal mengubah status");
     }
@@ -236,22 +260,18 @@ export default function OrgNewsManagement() {
     setEditingId(null);
   };
 
-  // Filter and search
-  const filteredNews = news.filter((item) => {
-    const matchesSearch = item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      item.content.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesFilter = filterStatus === "all" ||
-      (filterStatus === "published" && item.is_published) ||
-      (filterStatus === "draft" && !item.is_published);
-    return matchesSearch && matchesFilter;
-  });
+  const totalPages = Math.max(1, Math.ceil(totalNews / itemsPerPage));
 
-  // Pagination
-  const totalPages = Math.ceil(filteredNews.length / itemsPerPage);
-  const paginatedNews = filteredNews.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
-  );
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, filterStatus]);
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(totalNews / itemsPerPage));
+    if (currentPage > maxPage) {
+      setCurrentPage(maxPage);
+    }
+  }, [currentPage, totalNews]);
 
   // Strip HTML untuk preview
   const stripHtml = (html: string) => {
@@ -407,14 +427,14 @@ export default function OrgNewsManagement() {
         {/* Announcements Table */}
         <Card>
           <CardHeader>
-            <CardTitle>Daftar Pengumuman ({filteredNews.length})</CardTitle>
+            <CardTitle>Daftar Pengumuman ({totalNews})</CardTitle>
           </CardHeader>
           <CardContent>
             {isLoading ? (
               <div className="flex justify-center py-8">
                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
               </div>
-            ) : paginatedNews.length === 0 ? (
+            ) : news.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">
                 {searchQuery || filterStatus !== "all" 
                   ? "Tidak ada pengumuman yang sesuai filter"
@@ -433,7 +453,7 @@ export default function OrgNewsManagement() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {paginatedNews.map((item) => (
+                    {news.map((item) => (
                       <TableRow key={item.id}>
                         <TableCell>
                           <NewsThumbnailPreview 
@@ -496,7 +516,7 @@ export default function OrgNewsManagement() {
                 </Table>
 
                 {/* Pagination */}
-                {totalPages > 1 && (
+                {totalNews > 0 && (
                   <div className="flex justify-center gap-2 mt-4">
                     <Button
                       variant="outline"

@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -66,6 +66,7 @@ export default function OrgActiveEmployees() {
   const [offices, setOffices] = useState<Office[]>([]);
   const [workUnits, setWorkUnits] = useState<WorkUnit[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
+  const [totalEmployees, setTotalEmployees] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterOpd, setFilterOpd] = useState<string>("all");
@@ -97,43 +98,88 @@ export default function OrgActiveEmployees() {
   });
 
   useEffect(() => {
-    fetchData();
-  }, []);
-
-  useEffect(() => {
     setCurrentPage(1);
   }, [searchTerm, filterOpd, filterCategory, filterWorkUnit, filterAccountStatus]);
 
-  const fetchData = async () => {
+  const fetchMasterData = async () => {
     setLoadError(null);
     try {
-      const [employeesRes, opdsRes, officesRes, workUnitsRes, positionsRes] = await Promise.all([
-        supabase.from("employees").select("*, opd(*), offices:office_id(*), work_unit:work_unit_id(*), position_rel:position_id(*)").eq("is_active", true).order("name"),
+      const [opdsRes, officesRes, workUnitsRes, positionsRes] = await Promise.all([
         supabase.from("opd").select("*").eq("is_active", true).order("name"),
         supabase.from("offices").select("*").eq("is_active", true).order("name"),
         supabase.from("work_units").select("*").eq("is_active", true).order("name"),
         supabase.from("positions").select("*").eq("is_active", true).order("name"),
       ]);
 
-      if (employeesRes.error) throw employeesRes.error;
       if (opdsRes.error) throw opdsRes.error;
       if (officesRes.error) throw officesRes.error;
       if (workUnitsRes.error) throw workUnitsRes.error;
       if (positionsRes.error) throw positionsRes.error;
-      setEmployees(employeesRes.data || []);
       setOpds(opdsRes.data || []);
       setOffices(officesRes.data || []);
       setWorkUnits(workUnitsRes.data || []);
       setPositions(positionsRes.data || []);
     } catch (error) {
+      const errorRef = reportError(error, "org.employees.active.fetch_master_data");
+      const message = appendErrorReference("Gagal memuat data referensi pegawai", errorRef);
+      setLoadError(message);
+      toast.error(message);
+    }
+  };
+
+  const fetchData = useCallback(async () => {
+    setLoadError(null);
+    setIsLoading(true);
+    try {
+      let query = supabase
+        .from("employees")
+        .select("*, opd(*), office:office_id(*), work_unit:work_unit_id(*), position_rel:position_id(*)", { count: "exact" })
+        .eq("is_active", true);
+
+      if (filterOpd !== "all") query = query.eq("opd_id", filterOpd);
+      if (filterCategory !== "all") query = query.eq("employee_category", filterCategory);
+      if (filterWorkUnit !== "all") query = query.eq("work_unit_id", filterWorkUnit);
+      if (filterAccountStatus === "active") query = query.not("user_id", "is", null);
+      if (filterAccountStatus === "inactive") query = query.is("user_id", null);
+      if (searchTerm.trim()) {
+        const escaped = searchTerm.trim().replace(/[%_]/g, "\\$&");
+        query = query.or(`name.ilike.%${escaped}%,email.ilike.%${escaped}%,nip.ilike.%${escaped}%`);
+      }
+
+      const from = (currentPage - 1) * ITEMS_PER_PAGE;
+      const to = from + ITEMS_PER_PAGE - 1;
+      const { data, error, count } = await query.order("name").range(from, to);
+      if (error) throw error;
+
+      setEmployees((data || []) as EmployeeWithRelations[]);
+      setTotalEmployees(count || 0);
+      setLoadError(null);
+    } catch (error) {
       const errorRef = reportError(error, "org.employees.active.fetch");
       const message = appendErrorReference("Gagal memuat data pegawai aktif", errorRef);
       setLoadError(message);
       toast.error(message);
+      setEmployees([]);
+      setTotalEmployees(0);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [currentPage, filterAccountStatus, filterCategory, filterOpd, filterWorkUnit, searchTerm]);
+
+  useEffect(() => {
+    void fetchMasterData();
+  }, []);
+
+  useEffect(() => {
+    void fetchData();
+  }, [fetchData]);
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(totalEmployees / ITEMS_PER_PAGE));
+    if (currentPage > maxPage) {
+      setCurrentPage(maxPage);
+    }
+  }, [currentPage, totalEmployees]);
 
   // Filtered dropdown options based on cascade selection
   const filteredWorkUnits = useMemo(() => {
@@ -429,25 +475,7 @@ export default function OrgActiveEmployees() {
     setCurrentPage(1);
   };
 
-  const filteredEmployees = employees.filter(emp => {
-    const matchSearch = emp.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                        emp.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                        (emp.nip && emp.nip.includes(searchTerm));
-    const matchOpd = filterOpd === "all" || emp.opd_id === filterOpd;
-    const matchCategory = filterCategory === "all" || emp.employee_category === filterCategory;
-    const matchWorkUnit = filterWorkUnit === "all" || emp.work_unit_id === filterWorkUnit;
-    const matchAccountStatus = filterAccountStatus === "all" || 
-                               (filterAccountStatus === "active" && emp.user_id) ||
-                               (filterAccountStatus === "inactive" && !emp.user_id);
-    return matchSearch && matchOpd && matchCategory && matchWorkUnit && matchAccountStatus;
-  });
-
-  // Pagination
-  const totalPages = Math.ceil(filteredEmployees.length / ITEMS_PER_PAGE);
-  const paginatedEmployees = filteredEmployees.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
-  );
+  const totalPages = Math.max(1, Math.ceil(totalEmployees / ITEMS_PER_PAGE));
 
   const getFullName = (emp: EmployeeWithRelations) => {
     const parts = [emp.gelar_depan, emp.name, emp.gelar_belakang].filter(Boolean);
@@ -711,7 +739,7 @@ export default function OrgActiveEmployees() {
           <CardHeader>
             <CardTitle>Daftar Pegawai Aktif</CardTitle>
             <CardDescription>
-              Menampilkan {paginatedEmployees.length} dari {filteredEmployees.length} pegawai
+              Menampilkan {employees.length} dari {totalEmployees} pegawai
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -805,16 +833,16 @@ export default function OrgActiveEmployees() {
                       <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto"></div>
                     </TableCell>
                   </TableRow>
-                ) : paginatedEmployees.length === 0 ? (
+                ) : employees.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
-                      {filteredEmployees.length === 0 && (searchTerm || filterOpd !== "all" || filterCategory !== "all" || filterWorkUnit !== "all")
+                      {totalEmployees === 0 && (searchTerm || filterOpd !== "all" || filterCategory !== "all" || filterWorkUnit !== "all" || filterAccountStatus !== "all")
                         ? "Tidak ada data yang sesuai filter"
                         : "Belum ada data pegawai"}
                     </TableCell>
                   </TableRow>
                 ) : (
-                  paginatedEmployees.map((emp, index) => (
+                  employees.map((emp, index) => (
                     <TableRow key={emp.id}>
                       <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
                       <TableCell className="font-mono text-xs">{emp.nip}</TableCell>

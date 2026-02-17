@@ -13,9 +13,89 @@ interface SendOrgTypeOTPRequest {
   whatsapp: string;
 }
 
+type JsonValue = Record<string, unknown> | null;
+
+interface GatewaySettingRow {
+  key: string;
+  value: JsonValue;
+}
+
+interface WhatsAppGatewayConfig {
+  provider: string;
+  apiKey: string;
+  apiUrl?: string;
+  senderNumber?: string;
+  isEnabled: boolean;
+}
+
+type WhatsAppPayload = Record<string, unknown>;
+
+interface WhatsAppProviderConfig {
+  url: string;
+  buildPayload: (to: string, message: string, apiKey: string, sender?: string) => WhatsAppPayload;
+  headers: (apiKey: string) => Record<string, string>;
+}
+
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) return error.message;
   return "Terjadi kesalahan internal";
+};
+
+const toStringSafe = (value: unknown): string => (typeof value === "string" ? value : "");
+
+const toBooleanSafe = (value: unknown): boolean => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return value.toLowerCase() === "true";
+  return false;
+};
+
+const normalizePhone = (phone: string): string => {
+  let digits = phone.replace(/[^0-9]/g, "");
+  if (digits.startsWith("0")) digits = `62${digits.slice(1)}`;
+  return digits;
+};
+
+const PROVIDER_CONFIGS: Record<string, WhatsAppProviderConfig> = {
+  fonnte: {
+    url: "https://api.fonnte.com/send",
+    buildPayload: (to, message) => ({ target: to, message }),
+    headers: (apiKey) => ({ Authorization: apiKey, "Content-Type": "application/json" }),
+  },
+  wablas: {
+    url: "https://pati.wablas.com/api/send-message",
+    buildPayload: (to, message) => ({ phone: to, message }),
+    headers: (apiKey) => ({ Authorization: apiKey, "Content-Type": "application/json" }),
+  },
+  whacenter: {
+    url: "https://app.whacenter.com/api/send",
+    buildPayload: (to, message, _apiKey, sender) => ({ device_id: sender, number: to, message }),
+    headers: (apiKey) => ({ Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }),
+  },
+  dripsender: {
+    url: "https://api.dripsender.id/send",
+    buildPayload: (to, message, apiKey) => ({ api_key: apiKey, phone: to, text: message }),
+    headers: () => ({ "Content-Type": "application/json" }),
+  },
+};
+
+const pickGatewayConfig = (rows: GatewaySettingRow[]): WhatsAppGatewayConfig | null => {
+  const selected = rows.find((row) => row.key === "whatsapp_gateway") || rows.find((row) => row.key === "wa_gateway");
+  if (!selected?.value || typeof selected.value !== "object") return null;
+
+  const raw = selected.value as Record<string, unknown>;
+  const apiKey = toStringSafe(raw.apiKey ?? raw.api_key);
+  const provider = toStringSafe(raw.provider) || (toStringSafe(raw.apiUrl ?? raw.baseUrl) ? "custom" : "fonnte");
+  const isEnabled = toBooleanSafe(raw.isEnabled ?? raw.enabled);
+  const apiUrl = toStringSafe(raw.apiUrl ?? raw.baseUrl) || undefined;
+  const senderNumber = toStringSafe(raw.senderNumber ?? raw.sender) || undefined;
+
+  return {
+    provider,
+    apiKey,
+    apiUrl,
+    senderNumber,
+    isEnabled,
+  };
 };
 
 // Generate 6-digit OTP
@@ -82,45 +162,59 @@ serve(async (req: Request): Promise<Response> => {
       );
     }
 
-    // Get WhatsApp gateway settings
-    const { data: waSettings } = await supabase
+    // Get WhatsApp gateway settings (support key baru & legacy)
+    const { data: waSettings, error: waSettingsError } = await supabase
       .from("system_settings")
-      .select("value")
-      .eq("key", "whatsapp_gateway")
-      .maybeSingle();
+      .select("key, value")
+      .in("key", ["whatsapp_gateway", "wa_gateway"]);
 
     let otpSentViaWhatsApp = false;
     const message = `Kode OTP untuk mengubah jenis organisasi Anda adalah: ${otpCode}\n\nKode berlaku selama 10 menit.\nJangan bagikan kode ini kepada siapapun.`;
+    const normalizedPhone = normalizePhone(whatsapp);
 
-    if (waSettings?.value) {
-      const wa = waSettings.value as {
-        baseUrl: string;
-        apiKey: string;
-        sender: string;
-        isEnabled: boolean;
-      };
+    if (waSettingsError) {
+      logTraceError(traceId, "Failed to load WhatsApp settings", waSettingsError);
+    }
 
-      if (wa.isEnabled && wa.baseUrl && wa.apiKey) {
-        try {
-          const response = await fetch(`${wa.baseUrl}/send-message`, {
+    const wa = pickGatewayConfig((waSettings || []) as GatewaySettingRow[]);
+
+    if (wa?.isEnabled && wa.apiKey && normalizedPhone) {
+      try {
+        let fetchUrl = "";
+        let fetchPayload: WhatsAppPayload = {};
+        let fetchHeaders: Record<string, string> = {};
+
+        if (wa.provider === "custom" && wa.apiUrl) {
+          fetchUrl = wa.apiUrl;
+          fetchPayload = { to: normalizedPhone, message };
+          fetchHeaders = { Authorization: `Bearer ${wa.apiKey}`, "Content-Type": "application/json" };
+        } else {
+          const config = PROVIDER_CONFIGS[wa.provider];
+          if (!config) {
+            logTraceError(traceId, `Unsupported WA provider: ${wa.provider}`, wa);
+          } else {
+            fetchUrl = config.url;
+            fetchPayload = config.buildPayload(normalizedPhone, message, wa.apiKey, wa.senderNumber);
+            fetchHeaders = config.headers(wa.apiKey);
+          }
+        }
+
+        if (fetchUrl) {
+          const response = await fetch(fetchUrl, {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${wa.apiKey}`,
-            },
-            body: JSON.stringify({
-              phone: whatsapp,
-              message: message,
-            }),
+            headers: fetchHeaders,
+            body: JSON.stringify(fetchPayload),
           });
 
           if (response.ok) {
             otpSentViaWhatsApp = true;
-            console.log("OTP sent via WhatsApp to:", whatsapp);
+            console.log("OTP sent via WhatsApp to:", normalizedPhone);
+          } else {
+            logTraceError(traceId, "WhatsApp send failed", await response.text());
           }
-        } catch (waError) {
-          logTraceError(traceId, "WhatsApp send error", waError);
         }
+      } catch (waError) {
+        logTraceError(traceId, "WhatsApp send error", waError);
       }
     }
 

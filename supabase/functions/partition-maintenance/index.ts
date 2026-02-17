@@ -13,7 +13,7 @@ const corsHeaders = {
  * 1. Cleanup GPS data > 7 hari (per partisi untuk menghindari locking)
  * 2. Auto-create partisi bulan berikutnya
  * 3. VACUUM ANALYZE setelah cleanup
- * 4. Cleanup audit log > 45 hari
+ * 4. Cleanup audit log > 60 hari (hot retention)
  * 
  * Actions:
  * - cleanup_gps: Bersihkan data GPS lama

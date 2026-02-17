@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { NavigationBar } from "@/components/homepage/NavigationBar";
@@ -9,7 +9,17 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { Loader2, Search, ChevronLeft, ChevronRight, HelpCircle, ArrowLeft } from "lucide-react";
+import {
+  Loader2,
+  Search,
+  ChevronLeft,
+  ChevronRight,
+  HelpCircle,
+  ArrowLeft,
+  Sparkles,
+  MessageCircle,
+} from "lucide-react";
+import type { FooterSettings } from "@/hooks/useHomepageData";
 
 interface FAQ {
   id: string;
@@ -19,41 +29,93 @@ interface FAQ {
   sort_order: number;
 }
 
+interface FAQSettingsObject {
+  items?: FAQ[];
+  banner_image_url?: string;
+}
+
 const ITEMS_PER_PAGE = 10;
+
+const defaultFooterSettings: FooterSettings = {
+  company_name: "AbsensiKu",
+  company_description: "Sistem absensi GPS modern untuk pemerintah dan perusahaan.",
+  copyright_text: "© 2024 AbsensiKu. Hak cipta dilindungi.",
+  address: "",
+  email: "",
+  phone: "",
+  whatsapp: "",
+  quick_links: [],
+  legal_links: [],
+  social_facebook: "",
+  social_instagram: "",
+  social_twitter: "",
+  social_youtube: "",
+};
+
+const isFaq = (value: unknown): value is FAQ => {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Record<string, unknown>;
+  return (
+    typeof item.id === "string" &&
+    typeof item.question === "string" &&
+    typeof item.answer === "string" &&
+    typeof item.category === "string" &&
+    typeof item.sort_order === "number"
+  );
+};
+
+const asFaqArray = (value: unknown): FAQ[] => {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isFaq).sort((a, b) => a.sort_order - b.sort_order);
+};
 
 export default function FAQPage() {
   const [faqs, setFaqs] = useState<FAQ[]>([]);
-  const [filteredFaqs, setFilteredFaqs] = useState<FAQ[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [bannerImageUrl, setBannerImageUrl] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
+  const [footerSettings, setFooterSettings] = useState<FooterSettings>(defaultFooterSettings);
 
   useEffect(() => {
     fetchFAQs();
   }, []);
 
-  useEffect(() => {
-    filterFAQs();
-  }, [faqs, searchQuery, selectedCategory]);
-
   const fetchFAQs = async () => {
     try {
-      const { data } = await supabase
+      const { data: faqData } = await supabase
         .from("system_settings")
         .select("value")
         .eq("key", "faq_settings")
         .maybeSingle();
 
-      if (data?.value) {
-        const val = data.value as any;
+      if (faqData?.value) {
+        const val = faqData.value as unknown;
         if (Array.isArray(val)) {
-          setFaqs(val.sort((a: FAQ, b: FAQ) => a.sort_order - b.sort_order));
-        } else if (val.items && Array.isArray(val.items)) {
-          setFaqs(val.items.sort((a: FAQ, b: FAQ) => a.sort_order - b.sort_order));
-          setBannerImageUrl(val.banner_image_url || "");
+          setFaqs(asFaqArray(val));
+        } else if (val && typeof val === "object") {
+          const faqSettings = val as FAQSettingsObject;
+          if (Array.isArray(faqSettings.items)) {
+            setFaqs(asFaqArray(faqSettings.items));
+          }
+          setBannerImageUrl(
+            typeof faqSettings.banner_image_url === "string" ? faqSettings.banner_image_url : ""
+          );
         }
+      }
+
+      const { data: footerData } = await supabase
+        .from("system_settings")
+        .select("value")
+        .eq("key", "footer_settings")
+        .maybeSingle();
+
+      if (footerData?.value) {
+        setFooterSettings({
+          ...defaultFooterSettings,
+          ...(footerData.value as Partial<FooterSettings>),
+        });
       }
     } catch (error) {
       console.error("Error fetching FAQs:", error);
@@ -62,12 +124,12 @@ export default function FAQPage() {
     }
   };
 
-  const filterFAQs = () => {
+  const filteredFaqs = useMemo(() => {
     let result = [...faqs];
     
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
-      result = result.filter(faq => 
+      result = result.filter((faq) =>
         faq.question.toLowerCase().includes(query) ||
         faq.answer.toLowerCase().includes(query) ||
         faq.category.toLowerCase().includes(query)
@@ -75,14 +137,17 @@ export default function FAQPage() {
     }
     
     if (selectedCategory !== "all") {
-      result = result.filter(faq => faq.category === selectedCategory);
+      result = result.filter((faq) => faq.category === selectedCategory);
     }
-    
-    setFilteredFaqs(result);
-    setCurrentPage(1);
-  };
 
-  const categories = ["all", ...new Set(faqs.map(f => f.category))];
+    return result;
+  }, [faqs, searchQuery, selectedCategory]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, selectedCategory, faqs]);
+
+  const categories = ["all", ...new Set(faqs.map((f) => f.category))];
   const totalPages = Math.ceil(filteredFaqs.length / ITEMS_PER_PAGE);
   const paginatedFaqs = filteredFaqs.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
@@ -101,37 +166,50 @@ export default function FAQPage() {
     <div className="min-h-screen bg-background">
       <NavigationBar />
       
-      <main className="pt-20 pb-16">
+      <main className="pt-20 pb-16 relative overflow-hidden">
+        <div className="pointer-events-none absolute inset-0 -z-10">
+          <div className="absolute -top-24 -left-24 h-72 w-72 rounded-full bg-primary/10 blur-3xl" />
+          <div className="absolute top-1/3 -right-24 h-72 w-72 rounded-full bg-accent/15 blur-3xl" />
+          <div className="absolute bottom-0 left-1/3 h-64 w-64 rounded-full bg-info/10 blur-3xl" />
+        </div>
+
         {/* Banner Image */}
         {bannerImageUrl && (
           <div className="w-full h-48 md:h-64 overflow-hidden rounded-b-2xl mb-8">
             <img src={bannerImageUrl} alt="FAQ Banner" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
           </div>
         )}
-        <div className="container mx-auto px-4">
-          {/* Header */}
-          <div className="text-center mb-8">
-            <Link to="/" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground mb-4">
+        <div className="container mx-auto px-4 max-w-6xl">
+          {/* Hero */}
+          <section className="rounded-2xl border bg-card/70 backdrop-blur-sm p-6 md:p-10 mb-8 animate-fade-in">
+            <div className="text-center">
+              <Link to="/" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground mb-4">
               <ArrowLeft className="w-4 h-4" />
               Kembali ke Beranda
-            </Link>
-            <h1 className="text-3xl md:text-4xl font-bold text-foreground mb-3 flex items-center justify-center gap-3">
-              <HelpCircle className="w-8 h-8 text-primary" />
-              Pusat Bantuan FAQ
-            </h1>
-            <p className="text-muted-foreground max-w-2xl mx-auto">
-              Temukan jawaban untuk pertanyaan yang sering diajukan seputar layanan AbsensiKu.
-            </p>
-          </div>
+              </Link>
+              <div className="inline-flex items-center gap-2 rounded-full border px-3 py-1 mb-4 text-sm text-muted-foreground">
+                <Sparkles className="h-4 w-4 text-accent" />
+                Pusat Bantuan AbsensiKu
+              </div>
+              <h1 className="text-3xl md:text-5xl font-bold text-foreground mb-3">
+                Pertanyaan yang Sering Ditanyakan
+              </h1>
+              <p className="text-muted-foreground max-w-2xl mx-auto text-base md:text-lg">
+                Cari jawaban secara cepat berdasarkan kategori, lalu temukan solusi untuk penggunaan
+                layanan AbsensiKu sehari-hari.
+              </p>
+            </div>
+          </section>
 
           {/* Search & Filter */}
-          <Card className="mb-6">
+          <Card className="mb-6 animate-slide-up">
             <CardContent className="p-4">
               <div className="flex flex-col md:flex-row gap-4">
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
                     placeholder="Cari pertanyaan..."
+                    aria-label="Cari pertanyaan FAQ"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="pl-10"
@@ -154,7 +232,7 @@ export default function FAQPage() {
           </Card>
 
           {/* FAQ Stats */}
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-4 animate-fade-in">
             <p className="text-sm text-muted-foreground">
               Menampilkan {paginatedFaqs.length} dari {filteredFaqs.length} pertanyaan
             </p>
@@ -167,7 +245,7 @@ export default function FAQPage() {
 
           {/* FAQ List */}
           {paginatedFaqs.length === 0 ? (
-            <Card>
+            <Card className="animate-scale-in">
               <CardContent className="p-8 text-center">
                 <HelpCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
                 <p className="text-muted-foreground">
@@ -177,11 +255,12 @@ export default function FAQPage() {
             </Card>
           ) : (
             <Accordion type="single" collapsible className="space-y-3">
-              {paginatedFaqs.map((faq) => (
+              {paginatedFaqs.map((faq, index) => (
                 <AccordionItem
                   key={faq.id}
                   value={faq.id}
-                  className="bg-card border border-border/50 rounded-lg px-6"
+                  className="bg-card border border-border/50 rounded-lg px-6 animate-fade-in"
+                  style={{ animationDelay: `${60 + index * 40}ms` }}
                 >
                   <AccordionTrigger className="text-left hover:no-underline py-4">
                     <div className="flex items-start gap-3 flex-1 pr-4">
@@ -207,7 +286,7 @@ export default function FAQPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                 disabled={currentPage === 1}
               >
                 <ChevronLeft className="w-4 h-4" />
@@ -244,7 +323,7 @@ export default function FAQPage() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                 disabled={currentPage === totalPages}
               >
                 Berikutnya
@@ -254,7 +333,7 @@ export default function FAQPage() {
           )}
 
           {/* Contact CTA */}
-          <Card className="mt-12 bg-primary/5 border-primary/20">
+          <Card className="mt-12 bg-primary/5 border-primary/20 animate-slide-up">
             <CardContent className="p-6 text-center">
               <h3 className="text-lg font-semibold mb-2">Tidak menemukan jawaban?</h3>
               <p className="text-muted-foreground text-sm mb-4">
@@ -266,6 +345,7 @@ export default function FAQPage() {
                 </Button>
                 <Button variant="gold" asChild>
                   <a href="https://wa.me/6281234567890" target="_blank" rel="noopener noreferrer">
+                    <MessageCircle className="w-4 h-4 mr-2" />
                     WhatsApp
                   </a>
                 </Button>
@@ -275,14 +355,7 @@ export default function FAQPage() {
         </div>
       </main>
 
-      <FooterSection settings={{
-        company_name: "AbsensiKu",
-        company_description: "Sistem absensi GPS modern untuk pemerintah dan perusahaan.",
-        copyright_text: "© 2024 AbsensiKu. Hak cipta dilindungi.",
-        address: "", email: "", phone: "", whatsapp: "",
-        quick_links: [], legal_links: [],
-        social_facebook: "", social_instagram: "", social_twitter: "", social_youtube: "",
-      }} />
+      <FooterSection settings={footerSettings} />
       
       <FloatingWhatsApp />
     </div>

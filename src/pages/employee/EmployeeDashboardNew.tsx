@@ -149,6 +149,13 @@ interface WorkHourRow {
   time_out: string;
 }
 
+interface DashboardLoadIssue {
+  ref: string;
+  mode: "fatal" | "partial";
+  reason: string;
+  scopes: string[];
+}
+
 type EmployeeTab = "home" | "history" | "requests" | "help" | "profile" | "news" | "articles" | "announcements" | "notifications" | "activation";
 
 // Pending state type untuk optimistic UI
@@ -230,6 +237,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   const [showMapOverlay, setShowMapOverlay] = useState(false);
   const [mapOverlayCoords, setMapOverlayCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [showSidebar, setShowSidebar] = useState(false);
+  const [dashboardLoadIssue, setDashboardLoadIssue] = useState<DashboardLoadIssue | null>(null);
   
   // Selected shift untuk auto-shift
   const [selectedShiftId, setSelectedShiftId] = useState<string | null>(null);
@@ -488,8 +496,8 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   // Setelah background sync selesai, refresh data server agar UI konsisten.
   useEffect(() => {
     if (!offlineSyncStats.lastSyncAt || offlineSyncStats.syncedCount <= 0) return;
-    void fetchData();
-  }, [fetchData, offlineSyncStats.lastSyncAt, offlineSyncStats.syncedCount]);
+    void fetchDataRef.current();
+  }, [offlineSyncStats.lastSyncAt, offlineSyncStats.syncedCount]);
 
   // Terapkan metadata absensi (shift/flexible) setelah record berhasil sinkron ke server.
   useEffect(() => {
@@ -533,11 +541,11 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       }
 
       setPendingAttendanceMeta(null);
-      void fetchData();
+      void fetchDataRef.current();
     };
 
     void applyMetadata();
-  }, [fetchData, pendingAttendanceMeta, todayAttendance?.id, todayAttendance?.date]);
+  }, [pendingAttendanceMeta, todayAttendance?.id, todayAttendance?.date]);
 
   // Get current device ID menggunakan utility tunggal
   const getCurrentDeviceId = useCallback((): string => {
@@ -653,12 +661,20 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   }, []);
 
   const fetchData = useCallback(async () => {
+    let stage = "init";
     try {
+      const resolvedUserId = user?.id || session?.user?.id;
+      const effectiveUserId = resolvedUserId || (await supabase.auth.getUser()).data.user?.id || null;
+      if (!effectiveUserId) {
+        throw new Error("Sesi pengguna tidak ditemukan untuk memuat dashboard");
+      }
+
+      stage = "fetch_employees";
       // Fetch ALL employee records for this user (multi-organisasi support)
       const { data: allEmpData, error: empError } = await supabase
         .from("employees")
         .select("*, opd(*), work_unit:work_unit_id(*), offices:office_id(*), tenants:tenant_id(name, logo_url)")
-        .eq("user_id", user?.id)
+        .eq("user_id", effectiveUserId)
         .eq("is_active", true);
 
       if (empError) throw empError;
@@ -704,6 +720,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       const todayDayOfWeek = new Date().getDay() === 0 ? 7 : new Date().getDay();
 
       // Semua promise independen dijalankan bersamaan
+      stage = "fetch_batch_primary";
       const [tenantResult, deviceUpdateResult, scalabilityResult] = await Promise.all([
         // 1. Fetch tenant info
         supabase
@@ -745,6 +762,11 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       ]);
 
       const tenantData = tenantResult.data;
+      const partialScopes: string[] = [];
+      if (tenantResult.error) partialScopes.push("tenant");
+      if (deviceUpdateResult && typeof deviceUpdateResult === "object" && "error" in deviceUpdateResult && deviceUpdateResult.error) {
+        partialScopes.push("device_update");
+      }
       if (tenantData) {
         setTenantInfo(tenantData);
         setTimezone(tenantData.timezone || "Asia/Jakarta");
@@ -763,6 +785,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       const institutionType = tenantData?.organization_type === "pemerintah_daerah" || tenantData?.organization_type === "instansi_pemerintah" 
         ? "pemerintahan" : tenantData?.organization_type || null;
 
+      stage = "fetch_batch_secondary";
       const [attResult, workHourResult] = await Promise.all([
         // 3. Fetch absensi hari ini
         supabase
@@ -770,7 +793,9 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
           .select("*")
           .eq("employee_id", empData.id)
           .eq("date", today)
-          .maybeSingle(),
+          .order("check_in_time", { ascending: false, nullsFirst: false })
+          .order("created_at", { ascending: false })
+          .limit(1),
 
         // 4. Fetch jadwal kerja hari ini
         supabase
@@ -781,12 +806,13 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
           .eq("is_active", true)
           .or(institutionType ? `institution_type.eq.${institutionType},institution_type.is.null` : "institution_type.is.null")
           .order("institution_type", { ascending: false, nullsFirst: false })
-          .limit(1)
-          .maybeSingle(),
+          .limit(1),
       ]);
+      if (attResult.error) partialScopes.push("today_attendance");
+      if (workHourResult.error) partialScopes.push("work_hours_today");
 
       // Process attendance result (anti-flicker)
-      const attData = attResult.data;
+      const attData = (attResult.data && attResult.data.length > 0 ? attResult.data[0] : null) as AttendanceRecord | null;
       const currentAtt = todayAttendanceRef.current;
       const isDataDifferent = 
         (!currentAtt && attData) ||
@@ -800,12 +826,33 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       }
 
       // Process work hours
-      if (workHourResult.data) {
-        setTodayWorkSchedule({ time_in: workHourResult.data.time_in, time_out: workHourResult.data.time_out });
+      const workHourData = workHourResult.data && workHourResult.data.length > 0 ? workHourResult.data[0] : null;
+      if (workHourData) {
+        setTodayWorkSchedule({ time_in: workHourData.time_in, time_out: workHourData.time_out });
       }
 
       // 5. Cek hari libur (berisi beberapa sub-query, tapi non-blocking untuk UI)
       checkTodayHoliday(tenantId, tenantData?.organization_type);
+
+      if (partialScopes.length > 0) {
+        const partialRef = reportError(new Error("Employee dashboard partial data load"), "employee.dashboard.fetch_data_partial", {
+          user_id: user?.id ?? null,
+          employee_id: empData.id,
+          tenant_id: tenantId ?? null,
+          scopes: partialScopes,
+          tenant_error: tenantResult.error ? String((tenantResult.error as { message?: string }).message || "unknown") : null,
+          attendance_error: attResult.error ? String((attResult.error as { message?: string }).message || "unknown") : null,
+          work_hours_error: workHourResult.error ? String((workHourResult.error as { message?: string }).message || "unknown") : null,
+        });
+        setDashboardLoadIssue({
+          ref: partialRef,
+          mode: "partial",
+          reason: "Sebagian data dashboard tidak dapat dimuat.",
+          scopes: partialScopes,
+        });
+      } else {
+        setDashboardLoadIssue(null);
+      }
 
       // 6. Fetch news secara non-blocking (tidak menghalangi loading utama)
       (async () => {
@@ -853,14 +900,27 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
         }
       })();
     } catch (error) {
+      const err = error as { message?: string; code?: string; details?: string; hint?: string; status?: number };
       const errorRef = reportError(error, "employee.dashboard.fetch_data", {
-        user_id: user?.id ?? null,
+        user_id: user?.id ?? session?.user?.id ?? null,
+        stage,
+        supabase_code: err?.code ?? null,
+        supabase_details: err?.details ?? null,
+        supabase_hint: err?.hint ?? null,
+        supabase_status: err?.status ?? null,
+        reason: err?.message ?? "unknown",
+      });
+      setDashboardLoadIssue({
+        ref: errorRef,
+        mode: "fatal",
+        reason: err?.message || "Gagal memuat data dashboard",
+        scopes: [stage],
       });
       toast.error(appendErrorReference("Gagal memuat data dashboard", errorRef));
     } finally {
       setIsLoading(false);
     }
-  }, [checkTodayHoliday, getCurrentDeviceId, selectedEmployeeId, timezone, user?.id]);
+  }, [checkTodayHoliday, getCurrentDeviceId, selectedEmployeeId, timezone, user?.id, session?.user?.id]);
 
   useEffect(() => {
     fetchDataRef.current = fetchData;
@@ -1201,6 +1261,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       <DesktopBlockedMessage 
         organizationName={tenantInfo?.name}
         apkUrl={null}
+        reason={securityCheck.securityResult.reason}
       />
     );
   }
@@ -1426,11 +1487,27 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
 
       {/* Main Content */}
       <div className="px-4 -mt-16 relative z-20">
+        {dashboardLoadIssue && (
+          <Card className="mb-4 border-amber-500/50 bg-amber-500/5 shadow-large">
+            <CardContent className="p-3">
+              <p className="text-sm font-semibold text-amber-700">
+                Debug Load Dashboard ({dashboardLoadIssue.mode})
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Ref: <span className="font-mono">{dashboardLoadIssue.ref}</span>
+              </p>
+              <p className="text-xs text-muted-foreground">{dashboardLoadIssue.reason}</p>
+              <p className="text-xs text-muted-foreground">
+                Scope: {dashboardLoadIssue.scopes.join(", ")}
+              </p>
+            </CardContent>
+          </Card>
+        )}
         {activeTab === "home" && (
           <div className="space-y-4">
             {/* Attendance Card */}
             <Card className="shadow-large">
-              <CardContent className="p-6">
+              <CardContent className="p-4 sm:p-6">
                 <div className="flex items-center justify-between mb-4">
                   <div>
                     <p className="text-sm text-muted-foreground">Status Hari Ini</p>
@@ -1551,48 +1628,50 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
                   const disableCheckOut = isSubmitting || !hasCheckedIn || hasCheckedOut || !!attendanceError || isPending || isOptimisticPending;
                   
                   return (
-                    <div className="grid grid-cols-2 gap-3">
-                      <Button
-                        size="lg"
-                        className="h-14 text-lg"
-                        disabled={disableCheckIn}
-                        onClick={handleCheckIn}
-                      >
-                        {(isSubmitting && pendingState.type === 'check_in') || (pendingState.status === 'processing' && pendingState.type === 'check_in') ? (
-                          <Loader2 className="w-5 h-5 animate-spin" />
-                        ) : hasCheckedIn ? (
-                          <>
-                            <CheckCircle2 className="w-5 h-5 mr-2 text-green-400" />
-                            Sudah Absen
-                          </>
-                        ) : (
-                          <>
-                            <LogIn className="w-5 h-5 mr-2" />
-                            Absen Masuk
-                          </>
-                        )}
-                      </Button>
-                      <Button
-                        size="lg"
-                        variant="outline"
-                        className="h-14 text-lg"
-                        disabled={disableCheckOut}
-                        onClick={openCheckoutConfirm}
-                      >
-                        {(isSubmitting && pendingState.type === 'check_out') || (pendingState.status === 'processing' && pendingState.type === 'check_out') ? (
-                          <Loader2 className="w-5 h-5 animate-spin" />
-                        ) : hasCheckedOut ? (
-                          <>
-                            <CheckCircle2 className="w-5 h-5 mr-2 text-green-400" />
-                            Sudah Pulang
-                          </>
-                        ) : (
-                          <>
-                            <LogOut className="w-5 h-5 mr-2" />
-                            Absen Pulang
-                          </>
-                        )}
-                      </Button>
+                    <div className="sticky bottom-[calc(env(safe-area-inset-bottom)+5rem)] z-20 -mx-1 rounded-xl border border-border/60 bg-card/95 p-2 backdrop-blur supports-[backdrop-filter]:bg-card/80 sm:static sm:mx-0 sm:rounded-none sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none">
+                      <div className="grid grid-cols-2 gap-3">
+                        <Button
+                          size="lg"
+                          className="h-14 text-lg"
+                          disabled={disableCheckIn}
+                          onClick={handleCheckIn}
+                        >
+                          {(isSubmitting && pendingState.type === 'check_in') || (pendingState.status === 'processing' && pendingState.type === 'check_in') ? (
+                            <Loader2 className="w-5 h-5 animate-spin" />
+                          ) : hasCheckedIn ? (
+                            <>
+                              <CheckCircle2 className="w-5 h-5 mr-2 text-green-400" />
+                              Sudah Absen
+                            </>
+                          ) : (
+                            <>
+                              <LogIn className="w-5 h-5 mr-2" />
+                              Absen Masuk
+                            </>
+                          )}
+                        </Button>
+                        <Button
+                          size="lg"
+                          variant="outline"
+                          className="h-14 text-lg"
+                          disabled={disableCheckOut}
+                          onClick={openCheckoutConfirm}
+                        >
+                          {(isSubmitting && pendingState.type === 'check_out') || (pendingState.status === 'processing' && pendingState.type === 'check_out') ? (
+                            <Loader2 className="w-5 h-5 animate-spin" />
+                          ) : hasCheckedOut ? (
+                            <>
+                              <CheckCircle2 className="w-5 h-5 mr-2 text-green-400" />
+                              Sudah Pulang
+                            </>
+                          ) : (
+                            <>
+                              <LogOut className="w-5 h-5 mr-2" />
+                              Absen Pulang
+                            </>
+                          )}
+                        </Button>
+                      </div>
                     </div>
                   );
                 })()}
@@ -1682,7 +1761,10 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       </div>
 
       {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-card border-t border-border z-50">
+      <nav
+        className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-card"
+        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      >
         <div className="grid grid-cols-5 h-16">
           {[
             { id: "home", icon: Home, label: "Beranda" },
@@ -2827,7 +2909,7 @@ const ProfileTab = React.memo(function ProfileTab({ employee, onLogout, deviceBi
                   <span className="text-muted-foreground">Status</span>
                   {!deviceInfo?.android_id ? (
                     <Badge variant="secondary">Belum Terdaftar</Badge>
-                  ) : deviceInfo.android_id === currentDeviceId ? (
+                  ) : deviceBinding.isDeviceValid ? (
                     <Badge className="bg-green-500 hover:bg-green-600">Cocok</Badge>
                   ) : (
                     <Badge variant="destructive">Tidak Cocok</Badge>
@@ -2840,7 +2922,7 @@ const ProfileTab = React.memo(function ProfileTab({ employee, onLogout, deviceBi
                   </span>
                 </div>
               </div>
-              {deviceInfo?.android_id && deviceInfo.android_id !== currentDeviceId && (
+              {deviceInfo?.android_id && !deviceBinding.isDeviceValid && (
                 <div className="mt-3 p-3 bg-warning/10 border border-warning/30 rounded-lg text-sm">
                   <p className="text-warning font-medium">Perangkat berbeda terdeteksi</p>
                   <p className="text-xs text-muted-foreground mt-1">

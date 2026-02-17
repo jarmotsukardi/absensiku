@@ -129,10 +129,6 @@ export function DeviceResetDialog({
         
         if (lastReset.getMonth() !== now.getMonth() || lastReset.getFullYear() !== now.getFullYear()) {
           setEffectiveResetCount(0);
-          await supabase
-            .from("employees")
-            .update({ device_id_reset_count: 0 })
-            .eq("id", employeeId);
         } else {
           setEffectiveResetCount(empData.device_id_reset_count || 0);
         }

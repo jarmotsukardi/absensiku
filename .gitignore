@@ -29,3 +29,4 @@ dist-ssr
 supabase/.temp/
 artifacts/
 ops/*.local.json
+ops/*.local.jsonl

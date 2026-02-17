@@ -4256,6 +4256,19 @@ export type Database = {
           tugas_luar: number
         }[]
       }
+      get_feedback_stats_filtered: {
+        Args: {
+          p_feedback_type?: string | null
+          p_rating?: number | null
+          p_reporter_role?: string | null
+          p_search?: string | null
+        }
+        Returns: {
+          avg_rating: number | null
+          open_bug_count: number | null
+          total_count: number | null
+        }[]
+      }
       get_partition_creation_logs: {
         Args: { limit_count?: number }
         Returns: {

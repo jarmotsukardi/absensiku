@@ -28,26 +28,29 @@ export function useEmployee(user: User | null) {
           .from("employees")
           .select("*")
           .eq("user_id", user.id)
-          .single();
+          .order("updated_at", { ascending: false })
+          .limit(1);
 
         if (employeeError) {
-          if (employeeError.code === "PGRST116") {
-            // No employee record found
+          throw employeeError;
+        } else {
+          const selectedEmployee = (employeeData && employeeData.length > 0) ? employeeData[0] : null;
+          if (!selectedEmployee) {
             setEmployee(null);
             setError("Data pegawai tidak ditemukan");
-          } else {
-            throw employeeError;
+            setOffice(null);
+            return;
           }
-        } else {
-          setEmployee(employeeData);
+
+          setEmployee(selectedEmployee);
 
           // Fetch office if employee has one
-          if (employeeData.office_id) {
+          if (selectedEmployee.office_id) {
             const { data: officeData, error: officeError } = await supabase
               .from("offices")
               .select("*")
-              .eq("id", employeeData.office_id)
-              .single();
+              .eq("id", selectedEmployee.office_id)
+              .maybeSingle();
 
             if (!officeError && officeData) {
               setOffice(officeData);

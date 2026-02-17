@@ -28,6 +28,7 @@ interface SecuritySettings {
   // Device Validation
   block_desktop_browser: boolean;
   block_all_browsers: boolean;
+  allow_iphone_safari: boolean;
   // Device Binding Settings
   enable_device_binding: boolean;
   max_device_reset_count: number;
@@ -46,6 +47,7 @@ export default function AttendanceSecuritySettings() {
     // Device Validation
     block_desktop_browser: true,
     block_all_browsers: false,
+    allow_iphone_safari: true,
     // Device Binding
     enable_device_binding: true,
     max_device_reset_count: 3,
@@ -78,6 +80,7 @@ export default function AttendanceSecuritySettings() {
           // Device Validation
           block_desktop_browser: typeof savedSettings.block_desktop_browser === 'boolean' ? savedSettings.block_desktop_browser : prev.block_desktop_browser,
           block_all_browsers: typeof savedSettings.block_all_browsers === 'boolean' ? savedSettings.block_all_browsers : prev.block_all_browsers,
+          allow_iphone_safari: typeof savedSettings.allow_iphone_safari === 'boolean' ? savedSettings.allow_iphone_safari : prev.allow_iphone_safari,
           // Device Binding
           enable_device_binding: typeof savedSettings.enable_device_binding === 'boolean' ? savedSettings.enable_device_binding : prev.enable_device_binding,
           max_device_reset_count: typeof savedSettings.max_device_reset_count === 'number' ? savedSettings.max_device_reset_count : prev.max_device_reset_count,
@@ -130,6 +133,7 @@ export default function AttendanceSecuritySettings() {
       const errorRef = reportError(error, "admin.attendance_security.save_settings", {
         block_all_browsers: settings.block_all_browsers,
         block_desktop_browser: settings.block_desktop_browser,
+        allow_iphone_safari: settings.allow_iphone_safari,
         require_realtime_location: settings.require_realtime_location,
       });
       const message = appendErrorReference("Gagal menyimpan pengaturan keamanan", errorRef);
@@ -253,8 +257,7 @@ export default function AttendanceSecuritySettings() {
                   <div className="space-y-1">
                     <Label className="font-medium">Blokir Semua Browser</Label>
                     <p className="text-sm text-muted-foreground">
-                      Halaman /employee/login tidak dapat diakses dari browser apapun (Desktop & Mobile).
-                      Pegawai harus menggunakan aplikasi mobile internal.
+                      Memblokir akses absensi dari browser (desktop & mobile) dan memaksa penggunaan aplikasi mobile internal.
                     </p>
                   </div>
                   <Switch
@@ -276,6 +279,19 @@ export default function AttendanceSecuritySettings() {
                   />
                 </div>
 
+                <div className="flex items-center justify-between">
+                  <div className="space-y-1">
+                    <Label className="font-medium">Izinkan Safari iPhone</Label>
+                    <p className="text-sm text-muted-foreground">
+                      Saat "Blokir Semua Browser" aktif, Safari iPhone dapat dikecualikan untuk rute absensi berbasis browser.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={settings.allow_iphone_safari}
+                    onCheckedChange={(checked) => updateSetting("allow_iphone_safari", checked)}
+                  />
+                </div>
+
                 <div className="p-4 bg-warning/10 border border-warning/30 rounded-lg">
                   <div className="flex items-start gap-3">
                     <AlertTriangle className="h-5 w-5 text-warning mt-0.5" />
@@ -283,6 +299,7 @@ export default function AttendanceSecuritySettings() {
                       <h4 className="font-medium text-warning">Catatan Penting</h4>
                       <ul className="text-sm text-muted-foreground mt-2 space-y-1 list-disc list-inside">
                         <li>"Blokir Semua Browser" akan memaksa pegawai menggunakan aplikasi mobile internal</li>
+                        <li>Jika dimatikan, /employee/login dapat diakses sesuai kebijakan blokir lainnya</li>
                         <li>Pastikan aplikasi internal sudah tersedia sebelum mengaktifkan fitur ini</li>
                         <li>Admin tetap bisa mengakses halaman via browser</li>
                       </ul>
@@ -322,7 +339,7 @@ export default function AttendanceSecuritySettings() {
                   <div className="space-y-1">
                     <Label className="font-medium">Maks. Reset Device ID</Label>
                     <p className="text-sm text-muted-foreground">
-                      Batas maksimal berapa kali pegawai bisa reset device ID secara mandiri
+                      Batas maksimal reset device mandiri per pegawai dalam 1 bulan berjalan (dienforce di backend).
                     </p>
                   </div>
                   <Input
@@ -339,7 +356,7 @@ export default function AttendanceSecuritySettings() {
                   <div className="space-y-1">
                     <Label className="font-medium">Wajib Ganti Password Saat Reset</Label>
                     <p className="text-sm text-muted-foreground">
-                      Pegawai wajib mengganti password saat melakukan reset device ID
+                      Jika aktif, reset device mandiri wajib disertai penggantian password (divalidasi di backend).
                     </p>
                   </div>
                   <Switch
@@ -356,8 +373,8 @@ export default function AttendanceSecuritySettings() {
                       <ul className="text-sm text-muted-foreground mt-2 space-y-1 list-disc list-inside">
                         <li>Saat pertama kali absen, Android ID akan otomatis tersimpan</li>
                         <li>Absen selanjutnya harus dari perangkat dengan Android ID yang sama</li>
-                        <li>Jika ganti HP, pegawai bisa reset mandiri dengan ganti password</li>
-                        <li>Admin bisa reset device ID pegawai kapan saja</li>
+                        <li>Jika ganti HP, pegawai bisa reset mandiri via OTP (dan wajib ganti password jika pengaturan di bawah diaktifkan)</li>
+                        <li>Admin dapat reset device ID pegawai melalui menu manajemen pegawai</li>
                       </ul>
                     </div>
                   </div>

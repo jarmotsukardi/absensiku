@@ -19,7 +19,6 @@ import { HeroSettings } from "@/components/admin/settings/HeroSettings";
 import { FeaturesSettings } from "@/components/admin/settings/FeaturesSettings";
 import { PricingSettings } from "@/components/admin/settings/PricingSettings";
 import { TestimonialsSettings } from "@/components/admin/settings/TestimonialsSettings";
-import { FAQSettings } from "@/components/admin/settings/FAQSettings";
 import { PaymentMethodsSettings } from "@/components/admin/settings/PaymentMethodsSettings";
 import { CTASettings } from "@/components/admin/settings/CTASettings";
 import { FooterSettings } from "@/components/admin/settings/FooterSettings";
@@ -33,6 +32,7 @@ import { QuickLinksSettings } from "@/components/admin/settings/QuickLinksSettin
 import { AppDownloadSettings } from "@/components/admin/settings/AppDownloadSettings";
 import { PromoSidebarSettings } from "@/components/admin/settings/PromoSidebarSettings";
 import { TargetSegmentSettings } from "@/components/admin/settings/TargetSegmentSettings";
+import { useNavigate } from "react-router-dom";
 
 interface HomepageSection {
   id: string;
@@ -51,6 +51,7 @@ const sectionIcons: Record<string, ComponentType<{ className?: string }>> = {
 };
 
 export default function HomepageLayoutSettings() {
+  const navigate = useNavigate();
   const [sections, setSections] = useState<HomepageSection[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -189,7 +190,22 @@ export default function HomepageLayoutSettings() {
           <TabsContent value="articles" className="mt-6"><Card><CardHeader><CardTitle>Pengaturan Artikel</CardTitle></CardHeader><CardContent><ArticlesSettings /></CardContent></Card></TabsContent>
           <TabsContent value="pricing" className="mt-6"><Card><CardHeader><CardTitle>Pengaturan Harga</CardTitle></CardHeader><CardContent><PricingSettings /></CardContent></Card></TabsContent>
           <TabsContent value="testimonials" className="mt-6"><Card><CardHeader><CardTitle>Pengaturan Testimoni</CardTitle></CardHeader><CardContent><TestimonialsSettings /></CardContent></Card></TabsContent>
-          <TabsContent value="faq" className="mt-6"><Card><CardHeader><CardTitle>Pengaturan FAQ</CardTitle></CardHeader><CardContent><FAQSettings /></CardContent></Card></TabsContent>
+          <TabsContent value="faq" className="mt-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>FAQ Halaman Publik</CardTitle>
+                <CardDescription>
+                  Pengelolaan item FAQ dipusatkan di satu halaman agar tidak duplikat.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+                  Kelola daftar pertanyaan, jawaban, kategori, dan urutan FAQ melalui menu Manajemen FAQ.
+                </div>
+                <Button onClick={() => navigate("/admin/faq")}>Buka Manajemen FAQ</Button>
+              </CardContent>
+            </Card>
+          </TabsContent>
           <TabsContent value="payment" className="mt-6"><Card><CardHeader><CardTitle>Metode Pembayaran</CardTitle></CardHeader><CardContent><PaymentMethodsSettings /></CardContent></Card></TabsContent>
           <TabsContent value="cta" className="mt-6"><Card><CardHeader><CardTitle>Pengaturan CTA</CardTitle></CardHeader><CardContent><CTASettings /></CardContent></Card></TabsContent>
           <TabsContent value="footer" className="mt-6"><Card><CardHeader><CardTitle>Pengaturan Footer</CardTitle></CardHeader><CardContent><FooterSettings /></CardContent></Card></TabsContent>

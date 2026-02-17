@@ -16,6 +16,8 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { toast } from "sonner";
 
 interface Organization {
   id: string;
@@ -45,6 +47,7 @@ export function RecentOrganizations() {
   const navigate = useNavigate();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchOrganizations();
@@ -52,6 +55,7 @@ export function RecentOrganizations() {
 
   const fetchOrganizations = async () => {
     try {
+      setLoadError(null);
       const { data, error } = await supabase
         .from("tenants")
         .select("*")
@@ -61,7 +65,11 @@ export function RecentOrganizations() {
       if (error) throw error;
       setOrganizations(data || []);
     } catch (error) {
-      console.error("Error fetching organizations:", error);
+      const errorRef = reportError(error, "admin.dashboard.recent_organizations.fetch");
+      const message = appendErrorReference("Gagal memuat organisasi terbaru", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setOrganizations([]);
     } finally {
       setIsLoading(false);
     }
@@ -103,19 +111,30 @@ export function RecentOrganizations() {
         </Button>
       </CardHeader>
       <CardContent>
+        {loadError && (
+          <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+            {loadError}
+          </div>
+        )}
         {organizations.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground">
             <Building2 className="h-12 w-12 mx-auto mb-3 opacity-50" />
             <p>Belum ada organisasi terdaftar</p>
           </div>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline">{organizations.length} terbaru</Badge>
+              <Badge variant="outline">
+                {organizations.filter((org) => org.is_active).length} aktif
+              </Badge>
+            </div>
             {organizations.map((org) => {
               const Icon = orgTypeIcons[org.organization_type] || Building2;
               return (
                 <div
                   key={org.id}
-                  className="flex items-center gap-4 p-3 rounded-lg hover:bg-muted/50 cursor-pointer transition-colors"
+                  className="flex items-center gap-4 rounded-lg border bg-card p-3 hover:bg-muted/50 cursor-pointer transition-colors"
                   onClick={() => navigate(`/admin/organizations/${org.id}`)}
                 >
                   <Avatar className="h-10 w-10">
@@ -125,10 +144,14 @@ export function RecentOrganizations() {
                   </Avatar>
                   <div className="flex-1 min-w-0">
                     <p className="font-medium truncate">{org.name}</p>
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <span>{orgTypeLabels[org.organization_type] || org.organization_type}</span>
-                      <span>•</span>
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                      <Badge variant="secondary" className="text-[10px]">
+                        {orgTypeLabels[org.organization_type] || org.organization_type}
+                      </Badge>
                       <span>{format(new Date(org.created_at), "d MMM yyyy", { locale: id })}</span>
+                      {org.code ? (
+                        <span className="font-mono text-[10px] text-muted-foreground/80">#{org.code}</span>
+                      ) : null}
                     </div>
                   </div>
                   <Badge variant={org.is_active ? "default" : "secondary"}>

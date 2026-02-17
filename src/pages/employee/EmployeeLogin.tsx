@@ -187,6 +187,7 @@ export default function EmployeeLogin() {
   
   // Dialog overlay penjelasan tab daftar
   const [showRegisterInfoDialog, setShowRegisterInfoDialog] = useState<"email" | "invite" | null>(null);
+  const [apkUrl, setApkUrl] = useState<string | null>(null);
 
   // Handler ketika loading screen selesai
   const handleLoadingComplete = useCallback(() => {
@@ -253,6 +254,48 @@ export default function EmployeeLogin() {
       void fetchInvitation();
     }
   }, [invitationCode, activeTab, registerMode, fetchInvitation]);
+
+  const fetchApkUrl = useCallback(async () => {
+    try {
+      const [globalApkRes, appDownloadRes] = await Promise.all([
+        supabase
+          .from("system_settings")
+          .select("value")
+          .eq("key", "global_apk")
+          .maybeSingle(),
+        supabase
+          .from("system_settings")
+          .select("value")
+          .eq("key", "app_download_settings")
+          .maybeSingle(),
+      ]);
+
+      let resolvedUrl: string | null = null;
+
+      if (globalApkRes.data?.value && typeof globalApkRes.data.value === "object" && !Array.isArray(globalApkRes.data.value)) {
+        const globalApk = globalApkRes.data.value as Record<string, unknown>;
+        if (typeof globalApk.url === "string" && globalApk.url.trim().length > 0) {
+          resolvedUrl = globalApk.url.trim();
+        }
+      }
+
+      if (!resolvedUrl && appDownloadRes.data?.value && typeof appDownloadRes.data.value === "object" && !Array.isArray(appDownloadRes.data.value)) {
+        const appDownload = appDownloadRes.data.value as Record<string, unknown>;
+        if (typeof appDownload.apk_url === "string" && appDownload.apk_url.trim().length > 0) {
+          resolvedUrl = appDownload.apk_url.trim();
+        }
+      }
+
+      setApkUrl(resolvedUrl);
+    } catch (error) {
+      console.error("Error fetching APK URL:", error);
+      setApkUrl(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchApkUrl();
+  }, [fetchApkUrl]);
 
   const refreshForgotCaptcha = () => {
     setForgotCaptcha(generateCaptcha());
@@ -936,9 +979,9 @@ export default function EmployeeLogin() {
     );
   }
 
-  // Blokir browser desktop
+  // Proteksi login mengikuti pengaturan /admin/attendance-security.
   if (securityCheck.securityResult.isBlocked) {
-    return <DesktopBlockedMessage />;
+    return <DesktopBlockedMessage reason={securityCheck.securityResult.reason} apkUrl={apkUrl} />;
   }
 
   return (
@@ -974,6 +1017,15 @@ export default function EmployeeLogin() {
               {/* Login Tab */}
               <TabsContent value="login">
                 <form onSubmit={handleLogin} className="space-y-4" autoComplete="on">
+                  {securityCheck.settingsFetchFailed && (
+                    <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2 text-sm text-amber-700 dark:text-amber-300">
+                      <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+                      <span>
+                        Kebijakan keamanan absensi sedang tidak dapat dimuat. Login tetap diizinkan sementara.
+                      </span>
+                    </div>
+                  )}
+
                   {isEnabled && isLocked && (
                     <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/20 flex items-center gap-2 text-sm text-destructive">
                       <AlertTriangle className="w-4 h-4 flex-shrink-0" />

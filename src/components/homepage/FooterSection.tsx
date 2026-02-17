@@ -10,6 +10,15 @@ interface FooterSectionProps {
   settings: FooterSettings;
 }
 
+const isValidLink = (url?: string) => {
+  if (!url) return false;
+  const trimmedUrl = url.trim();
+  if (!trimmedUrl || trimmedUrl === "#" || trimmedUrl.toLowerCase().startsWith("javascript:")) {
+    return false;
+  }
+  return true;
+};
+
 export function FooterSection({ settings }: FooterSectionProps) {
   const [showTermsDialog, setShowTermsDialog] = useState(false);
   const [termsContent, setTermsContent] = useState<{ title: string; content: string } | null>(null);
@@ -29,8 +38,14 @@ export function FooterSection({ settings }: FooterSectionProps) {
   const hasContactInfo = settings.address || settings.email || settings.phone || settings.whatsapp;
 
   // Check if social media is available
-  const hasSocialMedia = settings.social_facebook || settings.social_instagram || settings.social_twitter || 
-    settings.social_youtube || settings.social_linkedin || settings.social_tiktok || settings.social_telegram;
+  const hasSocialMedia =
+    isValidLink(settings.social_facebook) ||
+    isValidLink(settings.social_instagram) ||
+    isValidLink(settings.social_twitter) ||
+    isValidLink(settings.social_youtube) ||
+    isValidLink(settings.social_linkedin) ||
+    isValidLink(settings.social_tiktok) ||
+    isValidLink(settings.social_telegram);
 
   return (
     <>
@@ -54,7 +69,9 @@ export function FooterSection({ settings }: FooterSectionProps) {
               <ul className="space-y-2 text-sm text-muted-foreground">
                 {settings.quick_links.map((link) => (
                   <li key={link.id}>
-                    {link.url.startsWith("/") ? (
+                    {!isValidLink(link.url) ? (
+                      <span className="text-muted-foreground/60">{link.label}</span>
+                    ) : link.url.startsWith("/") ? (
                       <Link to={link.url} className="hover:text-foreground transition-colors">
                         {link.label}
                       </Link>
@@ -85,6 +102,8 @@ export function FooterSection({ settings }: FooterSectionProps) {
                       >
                         {link.label}
                       </button>
+                    ) : !isValidLink(link.url) ? (
+                      <span className="text-muted-foreground/60">{link.label}</span>
                     ) : link.url.startsWith("/") ? (
                       <Link to={link.url} className="hover:text-foreground transition-colors">
                         {link.label}
@@ -150,37 +169,37 @@ export function FooterSection({ settings }: FooterSectionProps) {
                 <div>
                   <h4 className="font-semibold mb-4">Ikuti Kami</h4>
                   <div className="flex gap-3 flex-wrap">
-                    {settings.social_facebook && (
+                    {isValidLink(settings.social_facebook) && (
                       <a href={settings.social_facebook} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="Facebook">
                         <Facebook className="w-5 h-5" />
                       </a>
                     )}
-                    {settings.social_instagram && (
+                    {isValidLink(settings.social_instagram) && (
                       <a href={settings.social_instagram} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="Instagram">
                         <Instagram className="w-5 h-5" />
                       </a>
                     )}
-                    {settings.social_twitter && (
+                    {isValidLink(settings.social_twitter) && (
                       <a href={settings.social_twitter} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="Twitter">
                         <Twitter className="w-5 h-5" />
                       </a>
                     )}
-                    {settings.social_youtube && (
+                    {isValidLink(settings.social_youtube) && (
                       <a href={settings.social_youtube} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="YouTube">
                         <Youtube className="w-5 h-5" />
                       </a>
                     )}
-                    {settings.social_linkedin && (
+                    {isValidLink(settings.social_linkedin) && (
                       <a href={settings.social_linkedin} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="LinkedIn">
                         <Linkedin className="w-5 h-5" />
                       </a>
                     )}
-                    {settings.social_tiktok && (
+                    {isValidLink(settings.social_tiktok) && (
                       <a href={settings.social_tiktok} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="TikTok">
                         <MessageCircle className="w-5 h-5" />
                       </a>
                     )}
-                    {settings.social_telegram && (
+                    {isValidLink(settings.social_telegram) && (
                       <a href={settings.social_telegram} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="Telegram">
                         <Send className="w-5 h-5" />
                       </a>

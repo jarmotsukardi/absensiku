@@ -184,7 +184,7 @@ const Auth = () => {
   };
 
   return (
-    <div className="min-h-screen hero-gradient flex items-center justify-center p-4 relative overflow-hidden">
+    <main className="min-h-screen hero-gradient flex items-center justify-center p-4 relative overflow-hidden">
       {/* Background Elements */}
       <div className="absolute inset-0 opacity-10">
         <div className="absolute top-20 left-10 w-72 h-72 bg-accent rounded-full blur-3xl" />
@@ -192,6 +192,7 @@ const Auth = () => {
       </div>
 
       <div className="w-full max-w-md relative z-10">
+        <h1 className="sr-only">Login Pegawai AbsensiKu</h1>
         {/* Back to Home */}
         <Link
           to="/"
@@ -238,6 +239,7 @@ const Auth = () => {
                     id="login-email"
                     type="email"
                     placeholder="nama@instansi.go.id"
+                    autoComplete="username"
                     value={loginEmail}
                     onChange={(e) => setLoginEmail(e.target.value)}
                     className="pl-10"
@@ -255,6 +257,7 @@ const Auth = () => {
                     id="login-password"
                     type={showPassword ? "text" : "password"}
                     placeholder="••••••••"
+                    autoComplete="current-password"
                     value={loginPassword}
                     onChange={(e) => setLoginPassword(e.target.value)}
                     className="pl-10 pr-10"
@@ -264,6 +267,7 @@ const Auth = () => {
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    aria-label={showPassword ? "Sembunyikan password" : "Tampilkan password"}
                   >
                     {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
@@ -335,7 +339,7 @@ const Auth = () => {
           loginType="employee"
         />
       </div>
-    </div>
+    </main>
   );
 };
 

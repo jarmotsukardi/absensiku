@@ -5,9 +5,10 @@ import { Button } from "@/components/ui/button";
 interface DesktopBlockedMessageProps {
   organizationName?: string;
   apkUrl?: string | null;
+  reason?: string | null;
 }
 
-export function DesktopBlockedMessage({ organizationName, apkUrl }: DesktopBlockedMessageProps) {
+export function DesktopBlockedMessage({ organizationName, apkUrl, reason }: DesktopBlockedMessageProps) {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-muted/50 to-background p-4">
       <Card className="w-full max-w-md">
@@ -17,7 +18,7 @@ export function DesktopBlockedMessage({ organizationName, apkUrl }: DesktopBlock
           </div>
           <CardTitle className="text-xl">Akses Ditolak</CardTitle>
           <CardDescription className="text-base">
-            Lakukan absensi melalui aplikasi mobile internal
+            {reason || "Lakukan absensi melalui aplikasi mobile internal"}
           </CardDescription>
         </CardHeader>
         
@@ -28,7 +29,7 @@ export function DesktopBlockedMessage({ organizationName, apkUrl }: DesktopBlock
               <div>
                 <h4 className="font-medium text-sm">Gunakan Aplikasi Android</h4>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Absensi hanya dapat dilakukan melalui aplikasi mobile internal yang terpasang di perangkat Android Anda.
+                  Absensi hanya dapat dilakukan melalui WebView aplikasi internal. Jika diizinkan organisasi, Safari iPhone dapat digunakan.
                 </p>
               </div>
             </div>

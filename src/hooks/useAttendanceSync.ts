@@ -34,6 +34,7 @@ import { loadScalabilityConfig, saveScalabilityConfig, type ScalabilityTier } fr
 import { useOnlineStatus } from './useOnlineStatus';
 import { supabase } from '@/integrations/supabase/client';
 import { reportError } from '@/lib/errorLogger';
+import { buildAttendanceClientContext } from '@/lib/attendanceClientContext';
 
 export interface SyncStats {
   pendingCount: number;
@@ -70,6 +71,7 @@ function normalizeBatchItem(item: any): BatchSyncResult {
 
 async function syncBatchToServer(entries: AttendanceEntry[]): Promise<BatchSyncResult[]> {
   const timeout = getAdaptiveTimeout(Math.max(...entries.map((entry) => entry.syncAttempts), 0));
+  const clientContext = buildAttendanceClientContext();
   const payload = entries.map((entry) => ({
     buffer_id: entry.bufferId,
     idempotency_key: entry.idempotencyKey,
@@ -80,6 +82,9 @@ async function syncBatchToServer(entries: AttendanceEntry[]): Promise<BatchSyncR
     longitude: entry.longitude,
     distance_meters: entry.distanceMeters,
     date: entry.date,
+    timestamp: entry.timestamp,
+    local_timezone_offset: entry.localTimezoneOffset,
+    client_context: clientContext,
   }));
 
   const invokeCall = supabase.functions.invoke('batch-attendance', {

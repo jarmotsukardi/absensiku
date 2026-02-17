@@ -62,6 +62,10 @@ interface WorkUnitOption {
   is_active: boolean | null;
 }
 
+interface TenantAdminRole {
+  user_id: string | null;
+}
+
 export default function OrgNotificationManagement() {
   const PAGE_SIZE = 20;
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -199,69 +203,85 @@ export default function OrgNotificationManagement() {
 
   const fetchNotifications = useCallback(async (tid: string) => {
     try {
-    setLoadError(null);
-    const activeEmployees = await fetchActiveEmployees(tid);
-    const recipients = activeEmployees.filter((employee) => !!employee.user_id);
+      setLoadError(null);
+      const [activeEmployees, tenantAdminsRes] = await Promise.all([
+        fetchActiveEmployees(tid),
+        supabase
+          .from("user_roles")
+          .select("user_id")
+          .eq("tenant_id", tid)
+          .eq("role", "admin_instansi"),
+      ]);
 
-    if (!recipients || recipients.length === 0) {
-      setNotifications([]);
-      setTotalCount(0);
-      setReadCount(0);
-      setUnreadCount(0);
-      return;
-    }
+      if (tenantAdminsRes.error) throw tenantAdminsRes.error;
+      const recipients = activeEmployees.filter((employee) => !!employee.user_id);
+      const userNameMap = new Map<string, string>();
+      for (const recipient of recipients) {
+        if (recipient.user_id) userNameMap.set(recipient.user_id, recipient.name);
+      }
 
-    const userIds = recipients.map(e => e.user_id).filter(Boolean) as string[];
-    if (userIds.length === 0) {
-      setNotifications([]);
-      return;
-    }
-    const userNameMap = new Map(recipients.map(e => [e.user_id, e.name]));
+      const adminUserIds = ((tenantAdminsRes.data || []) as TenantAdminRole[])
+        .map((row) => row.user_id)
+        .filter((id): id is string => Boolean(id));
+      for (const adminUserId of adminUserIds) {
+        if (!userNameMap.has(adminUserId)) {
+          userNameMap.set(adminUserId, "Admin Organisasi");
+        }
+      }
 
-    const pagedQuery = applyNotificationFilters(
-      supabase
-        .from('notifications')
-        .select('*', { count: "exact" })
-        .in('user_id', userIds)
-        .order('created_at', { ascending: false })
-        .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1)
-    );
+      const userIds = Array.from(new Set([...recipients.map((e) => e.user_id).filter(Boolean) as string[], ...adminUserIds]));
+      if (userIds.length === 0) {
+        setNotifications([]);
+        setTotalCount(0);
+        setReadCount(0);
+        setUnreadCount(0);
+        return;
+      }
 
-    const readCountQuery = applyNotificationFilters(
-      supabase
-        .from("notifications")
-        .select("id", { count: "exact", head: true })
-        .in("user_id", userIds)
-        .eq("is_read", true)
-    );
+      const pagedQuery = applyNotificationFilters(
+        supabase
+          .from("notifications")
+          .select("*", { count: "exact" })
+          .in("user_id", userIds)
+          .order("created_at", { ascending: false })
+          .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1)
+      );
 
-    const unreadCountQuery = applyNotificationFilters(
-      supabase
-        .from("notifications")
-        .select("id", { count: "exact", head: true })
-        .in("user_id", userIds)
-        .eq("is_read", false)
-    );
+      const readCountQuery = applyNotificationFilters(
+        supabase
+          .from("notifications")
+          .select("id", { count: "exact", head: true })
+          .in("user_id", userIds)
+          .eq("is_read", true)
+      );
 
-    const [{ data, error, count }, readRes, unreadRes] = await Promise.all([
-      pagedQuery,
-      readCountQuery,
-      unreadCountQuery,
-    ]);
+      const unreadCountQuery = applyNotificationFilters(
+        supabase
+          .from("notifications")
+          .select("id", { count: "exact", head: true })
+          .in("user_id", userIds)
+          .eq("is_read", false)
+      );
 
-    if (!error && data) {
-      if (readRes.error) throw readRes.error;
-      if (unreadRes.error) throw unreadRes.error;
-      const enriched = data.map(n => ({
-        ...n,
-        employee_name: userNameMap.get(n.user_id) || "Unknown"
-      }));
-      setNotifications(enriched);
-      setTotalCount(count || 0);
-      setReadCount(readRes.count || 0);
-      setUnreadCount(unreadRes.count || 0);
-      return;
-    }
+      const [{ data, error, count }, readRes, unreadRes] = await Promise.all([
+        pagedQuery,
+        readCountQuery,
+        unreadCountQuery,
+      ]);
+
+      if (!error && data) {
+        if (readRes.error) throw readRes.error;
+        if (unreadRes.error) throw unreadRes.error;
+        const enriched = data.map((n) => ({
+          ...n,
+          employee_name: userNameMap.get(n.user_id) || "Unknown",
+        }));
+        setNotifications(enriched);
+        setTotalCount(count || 0);
+        setReadCount(readRes.count || 0);
+        setUnreadCount(unreadRes.count || 0);
+        return;
+      }
 
       if (error) throw error;
     } catch (error) {

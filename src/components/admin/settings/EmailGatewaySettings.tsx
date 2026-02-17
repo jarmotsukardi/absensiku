@@ -8,6 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Mail, Save, Send, Loader2, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { useSystemSettings } from "@/hooks/useSystemSettings";
+import { supabase } from "@/integrations/supabase/client";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 const SMTP_PRESETS = {
   gmail: {
@@ -91,38 +93,93 @@ export function EmailGatewaySettings() {
     setIsTesting(true);
     
     try {
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-test-email`,
-        {
+      const { data: sessionData } = await supabase.auth.getSession();
+      let accessToken = sessionData.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      if (!sessionData.session?.access_token) {
+        const { data: refreshData } = await supabase.auth.refreshSession();
+        if (refreshData.session?.access_token) {
+          accessToken = refreshData.session.access_token;
+        }
+      }
+
+      const payload = {
+        to: testEmail,
+        smtpHost: settings.smtpHost,
+        smtpPort: settings.smtpPort,
+        smtpUser: settings.smtpUser,
+        smtpPassword: settings.smtpPassword,
+        senderEmail: settings.senderEmail,
+        senderName: settings.senderName,
+        useTLS: settings.useTLS,
+      };
+
+      const invokeTest = (token: string) =>
+        fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-test-email`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+            "Authorization": `Bearer ${token}`,
+            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
           },
-          body: JSON.stringify({
-            to: testEmail,
-            smtpHost: settings.smtpHost,
-            smtpPort: settings.smtpPort,
-            smtpUser: settings.smtpUser,
-            smtpPassword: settings.smtpPassword,
-            senderEmail: settings.senderEmail,
-            senderName: settings.senderName,
-            useTLS: settings.useTLS,
-          }),
+          body: JSON.stringify(payload),
+        });
+
+      const readJsonSafe = async (response: Response): Promise<Record<string, unknown>> => {
+        try {
+          return await response.json();
+        } catch {
+          const raw = await response.text().catch(() => "");
+          return { raw };
         }
-      );
+      };
 
-      const data = await response.json();
+      let response = await invokeTest(accessToken);
+      let data = await readJsonSafe(response);
 
-      if (!response.ok) {
-        throw new Error(data.error || "Gagal mengirim email");
+      if (
+        response.status === 401 &&
+        String(data?.message || "").toLowerCase().includes("invalid jwt")
+      ) {
+        const { data: refreshData } = await supabase.auth.refreshSession();
+        const retryToken = refreshData.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+        response = await invokeTest(retryToken);
+        data = await readJsonSafe(response);
       }
 
-      toast.success(`Email tes berhasil dikirim ke ${testEmail}!`);
+      if (!response.ok) {
+        const baseError =
+          typeof data?.error === "string"
+            ? data.error
+            : typeof data?.message === "string"
+            ? data.message
+            : "Gagal mengirim email";
+        const hint = typeof data?.error_hint === "string" ? ` (${data.error_hint})` : "";
+        const detailRaw = typeof data?.details === "string"
+          ? data.details
+          : (data?.details || data?.raw)
+          ? JSON.stringify(data.details || data.raw)
+          : "";
+        const detail = detailRaw ? ` Detail: ${detailRaw.slice(0, 300)}` : "";
+        throw new Error(
+          appendErrorReference(`${baseError}${hint}${detail}`, typeof data?.trace_id === "string" ? data.trace_id : null)
+        );
+      }
+
+      toast.success(
+        appendErrorReference(
+          `Email tes berhasil dikirim ke ${testEmail}!`,
+          typeof data?.trace_id === "string" ? data.trace_id : null
+        )
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Gagal mengirim email tes";
-      console.error("Test email error:", error);
-      toast.error(message);
+      const logId = reportError(error, "admin.settings.email_gateway.test_email", {
+        test_email: testEmail,
+        provider: settings.provider,
+        smtp_host: settings.smtpHost,
+        smtp_port: settings.smtpPort,
+      });
+      toast.error(appendErrorReference(message, logId));
     } finally {
       setIsTesting(false);
     }

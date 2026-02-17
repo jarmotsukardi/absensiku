@@ -15,6 +15,7 @@ type AnimationEffect = "pulse" | "glow" | "wobble" | "ripple";
 interface FloatingWhatsappValue {
   enabled: boolean;
   phone_number: string;
+  icon_url: string;
   default_message: string;
   position: "bottom-right" | "bottom-left" | "right" | "left";
   welcome_text: string;
@@ -26,6 +27,7 @@ interface FloatingWhatsappValue {
 const defaultSetting: FloatingWhatsappValue = {
   enabled: false,
   phone_number: "",
+  icon_url: "",
   default_message: "Halo, saya ingin bertanya tentang layanan AbsensiKu.",
   position: "bottom-right",
   welcome_text: "Ada yang bisa kami bantu?",
@@ -183,7 +185,7 @@ export function FloatingWhatsappSettings() {
                 />
               </div>
 
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="grid gap-4 md:grid-cols-3">
                 <div className="space-y-2">
                   <Label>Nomor WhatsApp</Label>
                   <Input
@@ -192,6 +194,15 @@ export function FloatingWhatsappSettings() {
                     placeholder="6281234567890"
                   />
                   <p className="text-xs text-muted-foreground">Format: 62xxx (tanpa + atau 0).</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>URL Logo Kustom</Label>
+                  <Input
+                    value={channel.value.icon_url}
+                    onChange={(e) => handleChange(channel.key, "icon_url", e.target.value)}
+                    placeholder="https://.../logo-whatsapp.png"
+                  />
+                  <p className="text-xs text-muted-foreground">Opsional. Kosongkan untuk ikon default.</p>
                 </div>
                 <div className="space-y-2">
                   <Label>Efek Animasi</Label>
@@ -255,7 +266,11 @@ export function FloatingWhatsappSettings() {
 
               <div className="flex items-center gap-4 p-4 rounded-lg bg-muted/50">
                 <div className="w-14 h-14 bg-green-500 rounded-full flex items-center justify-center shadow-lg">
-                  <MessageCircle className="h-7 w-7 text-white" />
+                  {channel.value.icon_url?.trim() ? (
+                    <img src={channel.value.icon_url} alt="Logo WhatsApp" className="h-7 w-7 object-contain" />
+                  ) : (
+                    <MessageCircle className="h-7 w-7 text-white" />
+                  )}
                 </div>
                 <div className="flex-1">
                   <p className="text-sm font-medium">Preview Target</p>

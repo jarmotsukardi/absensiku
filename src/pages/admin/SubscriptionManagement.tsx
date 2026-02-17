@@ -374,6 +374,13 @@ export default function SubscriptionManagement() {
     setCurrentPage(1);
   }, [searchQuery, statusFilter]);
 
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+    if (currentPage > maxPage) {
+      setCurrentPage(maxPage);
+    }
+  }, [currentPage, totalCount]);
+
   const updateSubscriptionStatus = async (
     subId: string,
     newStatus: string,
@@ -486,6 +493,61 @@ export default function SubscriptionManagement() {
     }).format(amount);
   };
 
+  const exportSubscriptionsCsv = () => {
+    try {
+      const headers = [
+        "nama_organisasi",
+        "kode_organisasi",
+        "status_langganan",
+        "kebijakan_streak",
+        "pegawai",
+        "mulai",
+        "berakhir",
+      ];
+
+      const rows = subscriptions.map((sub) => {
+        const normalizedStatus = isSubscriptionStatus(sub.status) ? sub.status : DEFAULT_SUBSCRIPTION_STATUS;
+        const streakLabel = streakPolicyLabels[sub.streak_policy_status || "unknown"].label;
+        const startLabel = sub.start_date
+          ? format(new Date(sub.start_date), "yyyy-MM-dd")
+          : "-";
+        const endLabel = getPolicyEndDateLabel(sub, policyGraceDays);
+
+        return [
+          sub.tenant?.name || "-",
+          sub.tenant?.code || "-",
+          statusLabels[normalizedStatus].label,
+          streakLabel,
+          String(sub.employees_count ?? 0),
+          startLabel,
+          endLabel,
+        ];
+      });
+
+      const csvEscape = (value: string) => `"${value.replace(/"/g, '""')}"`;
+      const csv = [headers, ...rows]
+        .map((row) => row.map((cell) => csvEscape(cell)).join(","))
+        .join("\n");
+
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `subscriptions-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      URL.revokeObjectURL(url);
+
+      toast.success(`Export berhasil (${rows.length} baris)`);
+    } catch (error) {
+      const errorRef = reportError(error, "admin.subscriptions.export_csv", {
+        rows: subscriptions.length,
+      });
+      toast.error(appendErrorReference("Gagal export data langganan", errorRef));
+    }
+  };
+
   return (
     <SuperAdminLayout
       title="Manajemen Langganan"
@@ -571,7 +633,7 @@ export default function SubscriptionManagement() {
                   )}
                   Sinkron Kebijakan Streak
                 </Button>
-                <Button variant="outline">
+                <Button variant="outline" onClick={exportSubscriptionsCsv} disabled={isLoading}>
                   <Download className="h-4 w-4 mr-2" />
                   Export
                 </Button>
@@ -716,6 +778,10 @@ export default function SubscriptionManagement() {
             )}
             {totalPages > 1 && (
               <div className="mt-4">
+                <p className="mb-2 text-sm text-muted-foreground">
+                  Menampilkan {totalCount === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1} -{" "}
+                  {Math.min(currentPage * PAGE_SIZE, totalCount)} dari {totalCount} langganan
+                </p>
                 <Pagination>
                   <PaginationContent>
                     <PaginationItem>

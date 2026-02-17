@@ -5,6 +5,7 @@ import { SuperAdminSidebar } from "./SuperAdminSidebar";
 import { SuperAdminHeader } from "./SuperAdminHeader";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface SuperAdminLayoutProps {
   children: React.ReactNode;
@@ -37,63 +38,58 @@ export function SuperAdminLayout({ children, title, subtitle }: SuperAdminLayout
         }
 
         // Check if user is super_admin using RPC function
-        const { data: isSuperAdminResult, error } = await supabase
-          .rpc('is_super_admin', { _user_id: session.user.id });
+        const { data: isSuperAdminResult, error: rpcError } = await supabase
+          .rpc("is_super_admin", { _user_id: session.user.id });
 
         if (!isMounted) return;
 
-        if (error) {
-          console.error("Error checking super admin status:", error);
-          // Fallback: check user_roles table directly
-          const { data: roleData } = await supabase
-            .from("user_roles")
-            .select("role")
-            .eq("user_id", session.user.id)
-            .eq("role", "super_admin")
-            .maybeSingle();
-
-          if (!roleData) {
-            // Bukan super admin - cek role lain untuk redirect yang tepat
-            const { data: roles } = await supabase
-              .from("user_roles")
-              .select("role")
-              .eq("user_id", session.user.id);
-
-            const isAdminInstansi = roles?.some((r) => r.role === "admin_instansi");
-            
-            if (isAdminInstansi) {
-              toast.info("Anda dialihkan ke panel Admin Organisasi.");
-              navigate("/org", { replace: true });
-            } else {
-              toast.info("Anda dialihkan ke dashboard pegawai.");
-              navigate("/employee/dashboard", { replace: true });
-            }
-            return;
-          }
+        if (isSuperAdminResult === true) {
           setIsSuperAdmin(true);
-        } else if (!isSuperAdminResult) {
-          // Bukan super admin - redirect tanpa logout
-          const { data: roles } = await supabase
-            .from("user_roles")
-            .select("role")
-            .eq("user_id", session.user.id);
-
-          const isAdminInstansi = roles?.some((r) => r.role === "admin_instansi");
-          
-          if (isAdminInstansi) {
-            toast.info("Anda dialihkan ke panel Admin Organisasi.");
-            navigate("/org", { replace: true });
-          } else {
-            toast.info("Anda dialihkan ke dashboard pegawai.");
-            navigate("/employee/dashboard", { replace: true });
-          }
           return;
-        } else {
+        }
+
+        // Fallback: check user_roles table directly
+        const { data: roles, error: rolesError } = await supabase
+          .from("user_roles")
+          .select("role")
+          .eq("user_id", session.user.id);
+
+        if (!isMounted) return;
+
+        const hasSuperAdminRole = roles?.some((r) => r.role === "super_admin");
+        if (hasSuperAdminRole) {
           setIsSuperAdmin(true);
+          return;
+        }
+
+        if (rpcError || rolesError) {
+          const errorRef = reportError(rpcError || rolesError, "superadmin.layout.check_admin_access", {
+            user_id: session.user.id,
+            rpc_error: rpcError?.message ?? null,
+            roles_error: rolesError?.message ?? null,
+          });
+          toast.error(appendErrorReference("Gagal memverifikasi role Super Admin", errorRef));
+          navigate("/admin/login", { replace: true });
+          return;
+        }
+
+        const isAdminInstansi = roles?.some((r) => r.role === "admin_instansi");
+        const isPegawai = roles?.some((r) => r.role === "pegawai");
+
+        if (isAdminInstansi) {
+          toast.info("Anda dialihkan ke panel Admin Organisasi.");
+          navigate("/org", { replace: true });
+        } else if (isPegawai) {
+          toast.info("Anda dialihkan ke dashboard pegawai.");
+          navigate("/employee/dashboard", { replace: true });
+        } else {
+          toast.info("Akun ini belum memiliki role Super Admin.");
+          navigate("/admin/login", { replace: true });
         }
       } catch (error) {
-        console.error("Error checking admin access:", error);
         if (isMounted) {
+          const errorRef = reportError(error, "superadmin.layout.check_admin_access.unexpected");
+          toast.error(appendErrorReference("Verifikasi akses admin gagal", errorRef));
           navigate("/admin/login", { replace: true });
         }
       } finally {

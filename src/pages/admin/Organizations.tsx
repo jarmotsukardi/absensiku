@@ -89,11 +89,11 @@ const orgTypeLabels: Record<string, string> = {
 export default function Organizations() {
   const navigate = useNavigate();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [filteredOrgs, setFilteredOrgs] = useState<Organization[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState("all");
   const [currentPage, setCurrentPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [mainView, setMainView] = useState<"organizations" | "institution-types">("organizations");
   
@@ -104,6 +104,9 @@ export default function Organizations() {
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [editingOrg, setEditingOrg] = useState<Organization | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
+  const [deletingOrg, setDeletingOrg] = useState<Organization | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [editForm, setEditForm] = useState({
     name: "",
     code: "",
@@ -113,55 +116,54 @@ export default function Organizations() {
     is_active: true,
   });
 
-  useEffect(() => {
-    fetchOrganizations();
-  }, []);
-
-  const fetchOrganizations = async () => {
+  const fetchOrganizations = useCallback(async () => {
     setLoadError(null);
     try {
-      const { data, error } = await supabase
+      setIsLoading(true);
+
+      const from = (currentPage - 1) * ITEMS_PER_PAGE;
+      const to = from + ITEMS_PER_PAGE - 1;
+      const escapedQuery = searchQuery.trim().replace(/[%_]/g, "\\$&");
+
+      let query = supabase
         .from("tenants")
-        .select("*")
-        .order("created_at", { ascending: false });
+        .select("*", { count: "exact" })
+        .order("created_at", { ascending: false })
+        .range(from, to);
+
+      if (activeTab !== "all") {
+        query = query.eq("organization_type", activeTab as Organization["organization_type"]);
+      }
+
+      if (escapedQuery) {
+        query = query.or(`name.ilike.%${escapedQuery}%,code.ilike.%${escapedQuery}%,email.ilike.%${escapedQuery}%`);
+      }
+
+      const { data, count, error } = await query;
 
       if (error) throw error;
       setOrganizations(data || []);
+      setTotalCount(count || 0);
     } catch (error) {
       const errorRef = reportError(error, "admin.organizations.fetch");
       const message = appendErrorReference("Gagal memuat daftar organisasi", errorRef);
       toast.error(message);
       setLoadError(message);
       setOrganizations([]);
-      setFilteredOrgs([]);
+      setTotalCount(0);
     } finally {
       setIsLoading(false);
     }
-  };
-
-  const filterOrganizations = useCallback(() => {
-    let filtered = [...organizations];
-
-    if (activeTab !== "all") {
-      filtered = filtered.filter(org => org.organization_type === activeTab);
-    }
-
-    if (searchQuery) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(org =>
-        org.name.toLowerCase().includes(query) ||
-        org.code.toLowerCase().includes(query) ||
-        (org.email && org.email.toLowerCase().includes(query))
-      );
-    }
-
-    setFilteredOrgs(filtered);
-    setCurrentPage(1);
-  }, [organizations, searchQuery, activeTab]);
+  }, [activeTab, currentPage, searchQuery]);
 
   useEffect(() => {
-    filterOrganizations();
-  }, [filterOrganizations]);
+    if (mainView !== "organizations") return;
+    void fetchOrganizations();
+  }, [fetchOrganizations, mainView]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, activeTab]);
 
   const openEditDialog = (org: Organization) => {
     setEditingOrg(org);
@@ -209,6 +211,42 @@ export default function Organizations() {
     }
   };
 
+  const openDeleteDialog = (org: Organization) => {
+    setDeletingOrg(org);
+    setIsDeleteOpen(true);
+  };
+
+  const handleDeleteOrganization = async () => {
+    if (!deletingOrg) return;
+    setIsDeleting(true);
+    setLoadError(null);
+    try {
+      const { error } = await supabase
+        .from("tenants")
+        .delete()
+        .eq("id", deletingOrg.id);
+
+      if (error) throw error;
+
+      toast.success("Organisasi berhasil dihapus");
+      setIsDeleteOpen(false);
+      setDeletingOrg(null);
+      if (selectedOrgId === deletingOrg.id) {
+        setSelectedOrgId(null);
+      }
+      void fetchOrganizations();
+    } catch (error) {
+      const errorRef = reportError(error, "admin.organizations.delete", {
+        tenant_id: deletingOrg.id,
+      });
+      const message = appendErrorReference("Gagal menghapus organisasi", errorRef);
+      toast.error(message);
+      setLoadError(message);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const tabs = [
     { id: "all", label: "Semua", icon: Building2 },
     { id: "pemerintah_daerah", label: "Pemda", icon: Landmark },
@@ -218,11 +256,7 @@ export default function Organizations() {
   ];
 
   // Pagination
-  const totalPages = Math.ceil(filteredOrgs.length / ITEMS_PER_PAGE);
-  const paginatedOrgs = filteredOrgs.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
-  );
+  const totalPages = Math.max(1, Math.ceil(totalCount / ITEMS_PER_PAGE));
 
   return (
     <SuperAdminLayout title="Organisasi" subtitle="Kelola semua organisasi terdaftar">
@@ -294,7 +328,7 @@ export default function Organizations() {
                   </div>
                 ))}
               </div>
-            ) : filteredOrgs.length === 0 ? (
+            ) : organizations.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
                 <Building2 className="h-12 w-12 mx-auto mb-3 opacity-50" />
                 <p>Tidak ada organisasi ditemukan</p>
@@ -313,7 +347,7 @@ export default function Organizations() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {paginatedOrgs.map((org) => {
+                    {organizations.map((org) => {
                       const Icon = orgTypeIcons[org.organization_type] || Building2;
                       return (
                         <TableRow key={org.id}>
@@ -360,7 +394,10 @@ export default function Organizations() {
                                   <Edit className="h-4 w-4 mr-2" />
                                   Edit
                                 </DropdownMenuItem>
-                                <DropdownMenuItem className="text-destructive">
+                                <DropdownMenuItem
+                                  className="text-destructive"
+                                  onClick={() => openDeleteDialog(org)}
+                                >
                                   <Trash2 className="h-4 w-4 mr-2" />
                                   Hapus
                                 </DropdownMenuItem>
@@ -377,7 +414,7 @@ export default function Organizations() {
                 {totalPages > 1 && (
                   <div className="flex items-center justify-between mt-4">
                     <p className="text-sm text-muted-foreground">
-                      Menampilkan {((currentPage - 1) * ITEMS_PER_PAGE) + 1} - {Math.min(currentPage * ITEMS_PER_PAGE, filteredOrgs.length)} dari {filteredOrgs.length} organisasi
+                      Menampilkan {totalCount === 0 ? 0 : ((currentPage - 1) * ITEMS_PER_PAGE) + 1} - {Math.min(((currentPage - 1) * ITEMS_PER_PAGE) + organizations.length, totalCount)} dari {totalCount} organisasi
                     </p>
                     <Pagination>
                       <PaginationContent>
@@ -488,6 +525,42 @@ export default function Organizations() {
               <Button onClick={handleSaveEdit} disabled={isSaving}>
                 {isSaving && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
                 Simpan
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete Dialog */}
+        <Dialog
+          open={isDeleteOpen}
+          onOpenChange={(open) => {
+            if (!isDeleting) {
+              setIsDeleteOpen(open);
+              if (!open) setDeletingOrg(null);
+            }
+          }}
+        >
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Hapus Organisasi</DialogTitle>
+              <DialogDescription>
+                Tindakan ini akan menghapus organisasi{deletingOrg ? ` "${deletingOrg.name}"` : ""}. Aksi ini tidak dapat dibatalkan.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setIsDeleteOpen(false);
+                  setDeletingOrg(null);
+                }}
+                disabled={isDeleting}
+              >
+                Batal
+              </Button>
+              <Button variant="destructive" onClick={handleDeleteOrganization} disabled={isDeleting}>
+                {isDeleting && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                Hapus
               </Button>
             </DialogFooter>
           </DialogContent>

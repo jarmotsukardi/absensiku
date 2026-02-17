@@ -19,31 +19,44 @@ const ITEMS_PER_PAGE = 10;
 
 export default function OrgInactiveEmployees() {
   const [employees, setEmployees] = useState<(Employee & { opd?: OPD | null; position_rel?: Position | null })[]>([]);
+  const [totalEmployees, setTotalEmployees] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
+    setIsLoading(true);
     setLoadError(null);
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("employees")
-        .select("*, opd(*), position_rel:position_id(*)")
-        .eq("is_active", false)
-        .order("name");
+        .select("*, opd(*), position_rel:position_id(*)", { count: "exact" })
+        .eq("is_active", false);
+
+      if (searchTerm.trim()) {
+        const escaped = searchTerm.trim().replace(/[%_]/g, "\\$&");
+        query = query.or(`name.ilike.%${escaped}%,email.ilike.%${escaped}%,nip.ilike.%${escaped}%`);
+      }
+
+      const from = (currentPage - 1) * ITEMS_PER_PAGE;
+      const to = from + ITEMS_PER_PAGE - 1;
+      const { data, error, count } = await query.order("name").range(from, to);
 
       if (error) throw error;
       setEmployees(data || []);
+      setTotalEmployees(count || 0);
     } catch (error) {
       const errorRef = reportError(error, "org.employees.inactive.fetch");
       const message = appendErrorReference("Gagal memuat data pegawai non-aktif", errorRef);
       setLoadError(message);
       toast.error(message);
+      setEmployees([]);
+      setTotalEmployees(0);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [currentPage, searchTerm]);
 
   useEffect(() => {
     void fetchData();
@@ -62,18 +75,18 @@ export default function OrgInactiveEmployees() {
     }
   };
 
-  const filteredEmployees = employees.filter(emp =>
-    emp.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    emp.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (emp.nip && emp.nip.includes(searchTerm))
-  );
+  const totalPages = Math.max(1, Math.ceil(totalEmployees / ITEMS_PER_PAGE));
 
-  // Pagination
-  const totalPages = Math.ceil(filteredEmployees.length / ITEMS_PER_PAGE);
-  const paginatedEmployees = filteredEmployees.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
-  );
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm]);
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(totalEmployees / ITEMS_PER_PAGE));
+    if (currentPage > maxPage) {
+      setCurrentPage(maxPage);
+    }
+  }, [currentPage, totalEmployees]);
 
   const getFullName = (emp: Employee) => {
     const parts = [emp.gelar_depan, emp.name, emp.gelar_belakang].filter(Boolean);
@@ -102,7 +115,7 @@ export default function OrgInactiveEmployees() {
         <Card>
           <CardHeader>
             <CardTitle>Daftar Pegawai Non-Aktif</CardTitle>
-            <CardDescription>Total {filteredEmployees.length} pegawai non-aktif</CardDescription>
+            <CardDescription>Total {totalEmployees} pegawai non-aktif</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-4 mb-4">
@@ -111,7 +124,7 @@ export default function OrgInactiveEmployees() {
                 <Input
                   placeholder="Cari nama, email, NIP..."
                   value={searchTerm}
-                  onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
+                  onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10"
                 />
               </div>
@@ -139,15 +152,15 @@ export default function OrgInactiveEmployees() {
                         <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto"></div>
                       </TableCell>
                     </TableRow>
-                  ) : paginatedEmployees.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
-                        Tidak ada pegawai non-aktif
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    paginatedEmployees.map((emp, index) => (
-                      <TableRow key={emp.id}>
+                ) : employees.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                      Tidak ada pegawai non-aktif
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  employees.map((emp, index) => (
+                    <TableRow key={emp.id}>
                         <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
                         <TableCell className="font-mono text-sm">{emp.nip || "-"}</TableCell>
                         <TableCell className="font-medium">{getFullName(emp)}</TableCell>
@@ -176,10 +189,10 @@ export default function OrgInactiveEmployees() {
             </div>
 
             {/* Pagination */}
-            {totalPages > 1 && (
+            {totalEmployees > 0 && (
               <div className="flex items-center justify-between mt-4">
                 <p className="text-sm text-muted-foreground">
-                  Menampilkan {(currentPage - 1) * ITEMS_PER_PAGE + 1} - {Math.min(currentPage * ITEMS_PER_PAGE, filteredEmployees.length)} dari {filteredEmployees.length}
+                  Menampilkan {(currentPage - 1) * ITEMS_PER_PAGE + 1} - {Math.min(currentPage * ITEMS_PER_PAGE, totalEmployees)} dari {totalEmployees}
                 </p>
                 <div className="flex gap-2">
                   <Button

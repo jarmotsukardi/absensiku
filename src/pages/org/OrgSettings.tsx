@@ -281,7 +281,7 @@ export default function OrgSettings() {
           <TabsList className="flex flex-wrap h-auto gap-1 w-full lg:w-[900px] p-1">
             <TabsTrigger value="general" className="flex items-center gap-2 flex-1 min-w-[80px]">
               <Building2 className="h-4 w-4" />
-              <span className="hidden sm:inline">Umum</span>
+              <span className="hidden sm:inline">Profil Organisasi</span>
             </TabsTrigger>
             <TabsTrigger value="branding" className="flex items-center gap-2 flex-1 min-w-[80px]">
               <Image className="h-4 w-4" />
@@ -805,7 +805,7 @@ export default function OrgSettings() {
               <div className="p-4 rounded-lg bg-destructive/10 border border-destructive/30 flex items-start gap-2">
                 <AlertTriangle className="h-5 w-5 text-destructive mt-0.5" />
                 <p className="text-sm text-destructive">
-                  Nomor WhatsApp belum diatur. Silakan simpan nomor WhatsApp terlebih dahulu di tab Umum.
+                  Nomor WhatsApp belum diatur. Silakan simpan nomor WhatsApp terlebih dahulu di tab Profil Organisasi.
                 </p>
               </div>
             )}
@@ -900,7 +900,7 @@ export default function OrgSettings() {
               <div className="p-4 rounded-lg bg-destructive/10 border border-destructive/30 flex items-start gap-2">
                 <AlertTriangle className="h-5 w-5 text-destructive mt-0.5" />
                 <p className="text-sm text-destructive">
-                  Nomor WhatsApp belum diatur. Silakan simpan nomor WhatsApp terlebih dahulu di tab Umum.
+                  Nomor WhatsApp belum diatur. Silakan simpan nomor WhatsApp terlebih dahulu di tab Profil Organisasi.
                 </p>
               </div>
             )}

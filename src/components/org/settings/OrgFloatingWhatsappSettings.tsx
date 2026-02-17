@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -16,9 +17,14 @@ interface OrgFloatingWhatsappSettingsProps {
 
 interface FloatingWhatsappSettingValue {
   enabled: boolean;
-  phone: string;
-  message: string;
+  phone_number: string;
+  icon_url: string;
+  default_message: string;
+  welcome_text: string;
   position: string;
+  show_on_mobile: boolean;
+  show_on_desktop: boolean;
+  animation_effect: "pulse" | "glow" | "wobble" | "ripple";
 }
 
 const DEFAULT_MESSAGE = "Halo, saya butuh bantuan terkait aplikasi absensi.";
@@ -33,11 +39,17 @@ const toJsonObject = (value: Json): Record<string, Json> | null => {
 export function OrgFloatingWhatsappSettings({ tenantId }: OrgFloatingWhatsappSettingsProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isLegacySchema, setIsLegacySchema] = useState(false);
   const [settings, setSettings] = useState<FloatingWhatsappSettingValue>({
     enabled: false,
-    phone: "",
-    message: DEFAULT_MESSAGE,
+    phone_number: "",
+    icon_url: "",
+    default_message: DEFAULT_MESSAGE,
+    welcome_text: "Ada yang bisa kami bantu?",
     position: "bottom-right",
+    show_on_mobile: true,
+    show_on_desktop: true,
+    animation_effect: "pulse",
   });
 
   const fetchSettings = useCallback(async () => {
@@ -53,17 +65,41 @@ export function OrgFloatingWhatsappSettings({ tenantId }: OrgFloatingWhatsappSet
 
       if (data?.setting_value) {
         const value = toJsonObject(data.setting_value);
+        const hasLegacyKey = Boolean(value && (typeof value.phone === "string" || typeof value.message === "string"));
+        const hasStandardKey = Boolean(
+          value &&
+            (typeof value.phone_number === "string" ||
+              typeof value.default_message === "string" ||
+              typeof value.welcome_text === "string")
+        );
+        setIsLegacySchema(hasLegacyKey && !hasStandardKey);
+
         const enabled = value?.enabled;
-        const phone = value?.phone;
-        const message = value?.message;
+        const phoneNumber = value?.phone_number ?? value?.phone;
+        const iconUrl = value?.icon_url;
+        const defaultMessage = value?.default_message ?? value?.message;
+        const welcomeText = value?.welcome_text ?? value?.welcome_message;
         const position = value?.position;
+        const showOnMobile = value?.show_on_mobile;
+        const showOnDesktop = value?.show_on_desktop;
+        const animationEffect = value?.animation_effect;
 
         setSettings({
           enabled: typeof enabled === "boolean" ? enabled : false,
-          phone: typeof phone === "string" ? phone : "",
-          message: typeof message === "string" ? message : DEFAULT_MESSAGE,
+          phone_number: typeof phoneNumber === "string" ? phoneNumber : "",
+          icon_url: typeof iconUrl === "string" ? iconUrl : "",
+          default_message: typeof defaultMessage === "string" ? defaultMessage : DEFAULT_MESSAGE,
+          welcome_text: typeof welcomeText === "string" ? welcomeText : "Ada yang bisa kami bantu?",
           position: typeof position === "string" ? position : "bottom-right",
+          show_on_mobile: typeof showOnMobile === "boolean" ? showOnMobile : true,
+          show_on_desktop: typeof showOnDesktop === "boolean" ? showOnDesktop : true,
+          animation_effect:
+            animationEffect === "pulse" || animationEffect === "glow" || animationEffect === "wobble" || animationEffect === "ripple"
+              ? animationEffect
+              : "pulse",
         });
+      } else {
+        setIsLegacySchema(false);
       }
     } catch (error) {
       console.error("Error fetching floating WA settings:", error);
@@ -77,7 +113,7 @@ export function OrgFloatingWhatsappSettings({ tenantId }: OrgFloatingWhatsappSet
   }, [fetchSettings]);
 
   const handleSave = async () => {
-    if (settings.enabled && !settings.phone) {
+    if (settings.enabled && !settings.phone_number) {
       toast.error("Nomor WhatsApp wajib diisi jika fitur diaktifkan");
       return;
     }
@@ -107,6 +143,7 @@ export function OrgFloatingWhatsappSettings({ tenantId }: OrgFloatingWhatsappSet
         });
       }
 
+      setIsLegacySchema(false);
       toast.success("Pengaturan Floating WhatsApp berhasil disimpan");
     } catch (error) {
       console.error("Error saving settings:", error);
@@ -132,10 +169,18 @@ export function OrgFloatingWhatsappSettings({ tenantId }: OrgFloatingWhatsappSet
         <CardTitle className="flex items-center gap-2">
           <MessageSquare className="h-5 w-5 text-green-600" />
           Floating WhatsApp
+          <Badge variant={isLegacySchema ? "secondary" : "outline"}>
+            {isLegacySchema ? "Schema Legacy" : "Schema Standar"}
+          </Badge>
         </CardTitle>
         <CardDescription>
           Tampilkan tombol WhatsApp mengambang di dashboard pegawai organisasi Anda
         </CardDescription>
+        {isLegacySchema && (
+          <p className="text-xs text-amber-600">
+            Data lama terdeteksi (`phone`/`message`). Simpan ulang untuk normalisasi ke schema standar.
+          </p>
+        )}
       </CardHeader>
       <CardContent className="space-y-6">
         <div className="flex items-center justify-between">
@@ -161,9 +206,9 @@ export function OrgFloatingWhatsappSettings({ tenantId }: OrgFloatingWhatsappSet
                 Nomor WhatsApp
               </Label>
               <Input
-                value={settings.phone}
+                value={settings.phone_number}
                 onChange={(e) =>
-                  setSettings({ ...settings, phone: e.target.value })
+                  setSettings({ ...settings, phone_number: e.target.value })
                 }
                 placeholder="6281234567890"
               />
@@ -173,14 +218,39 @@ export function OrgFloatingWhatsappSettings({ tenantId }: OrgFloatingWhatsappSet
             </div>
 
             <div className="space-y-2">
+              <Label>URL Logo Kustom</Label>
+              <Input
+                value={settings.icon_url}
+                onChange={(e) =>
+                  setSettings({ ...settings, icon_url: e.target.value })
+                }
+                placeholder="https://.../logo-whatsapp.png"
+              />
+              <p className="text-xs text-muted-foreground">
+                Opsional. Kosongkan jika ingin pakai ikon default.
+              </p>
+            </div>
+
+            <div className="space-y-2">
               <Label>Pesan Default</Label>
               <Textarea
-                value={settings.message}
+                value={settings.default_message}
                 onChange={(e) =>
-                  setSettings({ ...settings, message: e.target.value })
+                  setSettings({ ...settings, default_message: e.target.value })
                 }
                 placeholder="Pesan yang akan muncul saat klik tombol WhatsApp"
                 rows={3}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Teks Selamat Datang</Label>
+              <Input
+                value={settings.welcome_text}
+                onChange={(e) =>
+                  setSettings({ ...settings, welcome_text: e.target.value })
+                }
+                placeholder="Ada yang bisa kami bantu?"
               />
             </div>
           </>

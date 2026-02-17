@@ -4,10 +4,10 @@ project_id = "zrhgqpjbeyzwpgywelcr"
 verify_jwt = true
 
 [functions.send-test-whatsapp]
-verify_jwt = true
+verify_jwt = false
 
 [functions.send-test-email]
-verify_jwt = true
+verify_jwt = false
 
 [functions.send-reset-password]
 verify_jwt = false

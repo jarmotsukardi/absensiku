@@ -8,72 +8,41 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious, PaginationEllipsis } from "@/components/ui/pagination";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+  PaginationEllipsis,
+} from "@/components/ui/pagination";
 import { FileSpreadsheet, Download, Search, Printer } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import type { Tables } from "@/integrations/supabase/types";
-import { calculateKeterangan, type AttendanceKeterangan } from "@/hooks/useWorkHours";
-import { toWorkDayOfWeek } from "@/lib/workday";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type OPD = Tables<"opd">;
-type AttendanceRecord = Tables<"attendance_records_partitioned">;
-type AttendanceEmployee = {
+
+type AttendanceReportRecord = {
   id: string;
-  name: string;
-  nip: string | null;
-  opd: Pick<Tables<"opd">, "id" | "code" | "name"> | null;
-};
-type AttendanceOffice = Pick<Tables<"offices">, "id" | "name">;
-type AttendanceReportRecord = AttendanceRecord & {
-  employees: AttendanceEmployee | null;
-  offices: AttendanceOffice | null;
-};
-
-interface WorkHoursInfo {
-  time_in: string;
-  time_out: string;
-  day_of_week: number;
-  institution_type: string;
-}
-
-// Get day of week dari date dalam format DB (1=Monday ... 7=Sunday)
-const getDayOfWeek = (dateStr: string): number => toWorkDayOfWeek(dateStr);
-
-const getStatusBadge = (status: string) => {
-  const variants: Record<string, { variant: "default" | "secondary" | "destructive" | "outline"; className: string }> = {
-    "Hadir": { variant: "default", className: "bg-green-500 hover:bg-green-600" },
-    "Izin": { variant: "outline", className: "border-blue-500 text-blue-600" },
-    "Cuti": { variant: "outline", className: "border-purple-500 text-purple-600" },
-    "Sakit": { variant: "outline", className: "border-pink-500 text-pink-600" },
-    "Tugas Luar": { variant: "outline", className: "border-cyan-500 text-cyan-600" },
-    "Tidak Hadir": { variant: "destructive", className: "" },
-  };
-
-  const style = variants[status] || { variant: "outline" as const, className: "" };
-  return <Badge variant={style.variant} className={style.className}>{status}</Badge>;
-};
-
-const getKeteranganBadge = (keterangan: string) => {
-  if (keterangan === "-") return <span className="text-muted-foreground">-</span>;
-  
-  const variants: Record<string, { variant: "default" | "secondary" | "destructive" | "outline"; className: string }> = {
-    "Hadir": { variant: "default", className: "bg-green-500 hover:bg-green-600" },
-    "Telat": { variant: "secondary", className: "bg-yellow-500 text-black hover:bg-yellow-600" },
-    "Pulang Cepat": { variant: "secondary", className: "bg-orange-500 hover:bg-orange-600" },
-    "Telat + Pulang Cepat": { variant: "destructive", className: "bg-red-500 hover:bg-red-600" },
-    "Tidak Absen Pulang": { variant: "outline", className: "border-orange-500 text-orange-600" },
-    "Telat (Belum Pulang)": { variant: "outline", className: "border-yellow-500 text-yellow-600" },
-  };
-
-  const style = variants[keterangan] || { variant: "outline" as const, className: "" };
-  return <Badge variant={style.variant} className={style.className}>{keterangan}</Badge>;
+  date: string;
+  check_in_time: string | null;
+  check_out_time: string | null;
+  raw_status: string | null;
+  employee_id: string;
+  employee_name: string;
+  employee_nip: string | null;
+  employee_opd_code: string | null;
+  office_name: string | null;
+  status_label: string;
+  keterangan: string;
 };
 
 const STATUS_OPTIONS = ["Hadir", "Izin", "Cuti", "Sakit", "Tugas Luar", "Tidak Hadir"];
-const KETERANGAN_OPTIONS = ["Hadir", "Telat", "Pulang Cepat", "Telat + Pulang Cepat", "Tidak Absen Pulang"];
+const KETERANGAN_OPTIONS = ["Hadir", "Telat", "Pulang Cepat", "Telat + Pulang Cepat", "Tidak Absen Pulang", "Telat (Belum Pulang)"];
 
 const escapeHtml = (value: string): string =>
   value
@@ -83,10 +52,36 @@ const escapeHtml = (value: string): string =>
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 
+const getStatusBadge = (status: string) => {
+  const variants: Record<string, { variant: "default" | "secondary" | "destructive" | "outline"; className: string }> = {
+    Hadir: { variant: "default", className: "bg-green-500 hover:bg-green-600" },
+    Izin: { variant: "outline", className: "border-blue-500 text-blue-600" },
+    Cuti: { variant: "outline", className: "border-purple-500 text-purple-600" },
+    Sakit: { variant: "outline", className: "border-pink-500 text-pink-600" },
+    "Tugas Luar": { variant: "outline", className: "border-cyan-500 text-cyan-600" },
+    "Tidak Hadir": { variant: "destructive", className: "" },
+  };
+  const style = variants[status] || { variant: "outline" as const, className: "" };
+  return <Badge variant={style.variant} className={style.className}>{status}</Badge>;
+};
+
+const getKeteranganBadge = (keterangan: string) => {
+  if (keterangan === "-") return <span className="text-muted-foreground">-</span>;
+  const variants: Record<string, { variant: "default" | "secondary" | "destructive" | "outline"; className: string }> = {
+    Hadir: { variant: "default", className: "bg-green-500 hover:bg-green-600" },
+    Telat: { variant: "secondary", className: "bg-yellow-500 text-black hover:bg-yellow-600" },
+    "Pulang Cepat": { variant: "secondary", className: "bg-orange-500 hover:bg-orange-600" },
+    "Telat + Pulang Cepat": { variant: "destructive", className: "bg-red-500 hover:bg-red-600" },
+    "Tidak Absen Pulang": { variant: "outline", className: "border-orange-500 text-orange-600" },
+    "Telat (Belum Pulang)": { variant: "outline", className: "border-yellow-500 text-yellow-600" },
+  };
+  const style = variants[keterangan] || { variant: "outline" as const, className: "" };
+  return <Badge variant={style.variant} className={style.className}>{keterangan}</Badge>;
+};
+
 export default function OrgAttendanceReport() {
   const [records, setRecords] = useState<AttendanceReportRecord[]>([]);
   const [opds, setOpds] = useState<OPD[]>([]);
-  const [workHours, setWorkHours] = useState<WorkHoursInfo[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [filterOpd, setFilterOpd] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<string>("all");
@@ -96,14 +91,18 @@ export default function OrgAttendanceReport() {
   const [searchTerm, setSearchTerm] = useState("");
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  
-  // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
+  const [totalRecords, setTotalRecords] = useState(0);
+  const [hasQueried, setHasQueried] = useState(false);
   const itemsPerPage = 20;
 
-  const fetchOpds = useCallback(async () => {
+  const fetchOpds = useCallback(async (tid: string) => {
     try {
-      const { data, error } = await supabase.from("opd").select("*").order("name");
+      const { data, error } = await supabase
+        .from("opd")
+        .select("*")
+        .eq("tenant_id", tid)
+        .order("name");
       if (error) throw error;
       setOpds(data || []);
     } catch (error) {
@@ -115,138 +114,66 @@ export default function OrgAttendanceReport() {
     }
   }, []);
 
-  const fetchWorkHours = useCallback(async (tid: string) => {
-    try {
-      const { data, error } = await supabase
-        .from("work_hours")
-        .select("time_in, time_out, day_of_week, institution_type")
-        .eq("tenant_id", tid)
-        .eq("is_active", true);
-      if (error) throw error;
-      setWorkHours(data || []);
-    } catch (error) {
-      const errorRef = reportError(error, "org.reports.attendance.fetch_work_hours", { tenant_id: tid });
-      const message = appendErrorReference("Gagal memuat konfigurasi jam kerja", errorRef);
-      toast.error(message);
-      setLoadError(message);
-      setWorkHours([]);
-    }
-  }, []);
-
   const fetchInitialData = useCallback(async () => {
     try {
-      // Dapatkan tenant_id dari user
+      setLoadError(null);
       const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
+      if (!user) return;
+
+      let resolvedTenantId: string | null = null;
+      const { data: roleRows, error: roleError } = await supabase
+        .from("user_roles")
+        .select("role, tenant_id")
+        .eq("user_id", user.id)
+        .eq("role", "admin_instansi");
+      if (roleError) throw roleError;
+      resolvedTenantId = roleRows?.find((row) => row.tenant_id)?.tenant_id ?? null;
+
+      if (!resolvedTenantId) {
         const { data: empData, error: empError } = await supabase
           .from("employees")
           .select("tenant_id")
           .eq("user_id", user.id)
           .maybeSingle();
         if (empError) throw empError;
-
-        if (empData?.tenant_id) {
-          setTenantId(empData.tenant_id);
-          await fetchWorkHours(empData.tenant_id);
-        }
+        resolvedTenantId = empData?.tenant_id ?? null;
       }
 
-      await fetchOpds();
+      if (!resolvedTenantId) return;
+      setTenantId(resolvedTenantId);
+      await fetchOpds(resolvedTenantId);
     } catch (error) {
       const errorRef = reportError(error, "org.reports.attendance.fetch_initial_data");
       const message = appendErrorReference("Gagal memuat data awal laporan", errorRef);
       toast.error(message);
       setLoadError(message);
     }
-  }, [fetchOpds, fetchWorkHours]);
+  }, [fetchOpds]);
 
   useEffect(() => {
     void fetchInitialData();
   }, [fetchInitialData]);
 
-  // Helper untuk mendapatkan jam kerja berdasarkan hari dan jenis instansi
-  const getWorkHoursForRecord = (record: AttendanceReportRecord): WorkHoursInfo | null => {
-    const dayOfWeek = getDayOfWeek(record.date);
-    // Default ke pemerintahan, bisa di-extend untuk jenis lain
-    return workHours.find(wh => wh.day_of_week === dayOfWeek && wh.institution_type === "pemerintahan") || null;
-  };
-
-  // Menghitung status dan keterangan untuk record
-  const getRecordKeterangan = (record: AttendanceReportRecord): AttendanceKeterangan => {
-    const wh = getWorkHoursForRecord(record);
-    return calculateKeterangan(record, wh);
-  };
-
-  const fetchReport = async () => {
-    if (!startDate || !endDate) {
-      toast.error("Pilih rentang tanggal");
-      return;
-    }
-
+  const fetchReportPage = useCallback(async (page: number) => {
+    if (!startDate || !endDate || !tenantId) return;
     setIsLoading(true);
     try {
       setLoadError(null);
-      // Fetch attendance dan employees terpisah karena tabel partitioned tidak punya FK
-      const [attendanceResult, employeesResult, officesResult] = await Promise.all([
-        supabase
-          .from("attendance_records_partitioned")
-          .select("*")
-          .gte("date", startDate)
-          .lte("date", endDate)
-          .order("date", { ascending: false }),
-        supabase
-          .from("employees")
-          .select("id, name, nip, opd:opd_id(id, code, name)")
-          .eq("is_active", true),
-        supabase
-          .from("offices")
-          .select("id, name")
-      ]);
-
-      if (attendanceResult.error) throw attendanceResult.error;
-      if (employeesResult.error) throw employeesResult.error;
-      if (officesResult.error) throw officesResult.error;
-
-      const attendanceRows = (attendanceResult.data || []) as AttendanceRecord[];
-      const employeeRows = (employeesResult.data || []) as Array<{
-        id: string;
-        name: string;
-        nip: string | null;
-        opd: Pick<Tables<"opd">, "id" | "code" | "name">
-          | Array<Pick<Tables<"opd">, "id" | "code" | "name">>
-          | null;
-      }>;
-      const officeRows = (officesResult.data || []) as AttendanceOffice[];
-
-      // Build lookup maps
-      const employeeMap = new Map<string, AttendanceEmployee>();
-      employeeRows.forEach((emp) => {
-        const opd = Array.isArray(emp.opd) ? (emp.opd[0] || null) : emp.opd;
-        employeeMap.set(emp.id, {
-          id: emp.id,
-          name: emp.name,
-          nip: emp.nip,
-          opd,
-        });
+      const { data, error } = await supabase.rpc("org_get_attendance_report_page", {
+        p_start_date: startDate,
+        p_end_date: endDate,
+        p_opd_id: filterOpd === "all" ? null : filterOpd,
+        p_search: searchTerm.trim() || null,
+        p_status: filterStatus === "all" ? null : filterStatus,
+        p_keterangan: filterKeterangan === "all" ? null : filterKeterangan,
+        p_page: page,
+        p_page_size: itemsPerPage,
       });
+      if (error) throw error;
 
-      const officeMap = new Map<string, AttendanceOffice>();
-      officeRows.forEach((office) => {
-        officeMap.set(office.id, office);
-      });
-
-      // Join data di client
-      const data: AttendanceReportRecord[] = attendanceRows.map((att) => ({
-        ...att,
-        employees: employeeMap.get(att.employee_id) || null,
-        offices: officeMap.get(att.office_id) || null,
-      }));
-
-      let filtered = data;
-      if (filterOpd !== "all") {
-        filtered = filtered.filter((r) => r.employees?.opd?.id === filterOpd);
-      }
-      setRecords(filtered);
+      const rows = (data || []) as Array<AttendanceReportRecord & { total_count: number }>;
+      setRecords(rows.map(({ total_count: _ignore, ...rest }) => rest));
+      setTotalRecords(rows[0]?.total_count ?? 0);
     } catch (error) {
       const errorRef = reportError(error, "org.reports.attendance.fetch_report", {
         tenant_id: tenantId,
@@ -258,151 +185,195 @@ export default function OrgAttendanceReport() {
       toast.error(message);
       setLoadError(message);
       setRecords([]);
+      setTotalRecords(0);
     } finally {
       setIsLoading(false);
     }
+  }, [endDate, filterKeterangan, filterOpd, filterStatus, itemsPerPage, searchTerm, startDate, tenantId]);
+
+  const fetchAllForOutput = useCallback(async (): Promise<AttendanceReportRecord[]> => {
+    const pageSize = 200;
+    let page = 1;
+    let allRows: AttendanceReportRecord[] = [];
+
+    while (true) {
+      const { data, error } = await supabase.rpc("org_get_attendance_report_page", {
+        p_start_date: startDate,
+        p_end_date: endDate,
+        p_opd_id: filterOpd === "all" ? null : filterOpd,
+        p_search: searchTerm.trim() || null,
+        p_status: filterStatus === "all" ? null : filterStatus,
+        p_keterangan: filterKeterangan === "all" ? null : filterKeterangan,
+        p_page: page,
+        p_page_size: pageSize,
+      });
+      if (error) throw error;
+
+      const rows = (data || []) as Array<AttendanceReportRecord & { total_count: number }>;
+      allRows = allRows.concat(rows.map(({ total_count: _ignore, ...rest }) => rest));
+      const total = rows[0]?.total_count ?? 0;
+      if (allRows.length >= total || rows.length === 0) break;
+      page += 1;
+    }
+
+    return allRows;
+  }, [endDate, filterKeterangan, filterOpd, filterStatus, searchTerm, startDate]);
+
+  const fetchReport = async () => {
+    if (!startDate || !endDate) {
+      toast.error("Pilih rentang tanggal");
+      return;
+    }
+    if (!tenantId) {
+      toast.error("Tenant organisasi belum terdeteksi. Muat ulang halaman.");
+      return;
+    }
+    setCurrentPage(1);
+    setHasQueried(true);
+    await fetchReportPage(1);
   };
 
-  const handleExport = () => {
-    if (filteredRecords.length === 0) {
-      toast.error("Tidak ada data untuk diexport");
+  useEffect(() => {
+    if (hasQueried) {
+      void fetchReportPage(currentPage);
+    }
+  }, [currentPage, hasQueried, fetchReportPage]);
+
+  useEffect(() => {
+    if (!hasQueried) return;
+    setCurrentPage(1);
+    void fetchReportPage(1);
+  }, [searchTerm, filterStatus, filterKeterangan, filterOpd, hasQueried, fetchReportPage]);
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(totalRecords / itemsPerPage));
+    if (currentPage > maxPage) {
+      setCurrentPage(maxPage);
+    }
+  }, [currentPage, totalRecords]);
+
+  const totalPages = Math.max(1, Math.ceil(totalRecords / itemsPerPage));
+
+  const handleExport = async () => {
+    if (!hasQueried) {
+      toast.error("Klik Tampilkan terlebih dahulu");
       return;
     }
 
-    const csv = [
-      ["No", "Tanggal", "NIP", "Nama", "OPD", "Lokasi", "Jam Masuk", "Jam Keluar", "Status", "Keterangan"].join(","),
-      ...filteredRecords.map((r, i) => {
-        const ket = getRecordKeterangan(r);
-        return [
+    try {
+      const outputRows = await fetchAllForOutput();
+      if (outputRows.length === 0) {
+        toast.error("Tidak ada data untuk diexport");
+        return;
+      }
+
+      const csv = [
+        ["No", "Tanggal", "NIP", "Nama", "OPD", "Lokasi", "Jam Masuk", "Jam Keluar", "Status", "Keterangan"].join(","),
+        ...outputRows.map((r, i) => [
           i + 1,
           r.date,
-          r.employees?.nip || "",
-          `"${r.employees?.name || ""}"`,
-          r.employees?.opd?.code || "",
-          `"${r.offices?.name || ""}"`,
+          r.employee_nip || "",
+          `"${r.employee_name || ""}"`,
+          r.employee_opd_code || "",
+          `"${r.office_name || ""}"`,
           r.check_in_time ? format(new Date(r.check_in_time), "HH:mm") : "",
           r.check_out_time ? format(new Date(r.check_out_time), "HH:mm") : "",
-          ket.status,
-          ket.keterangan
-        ].join(",");
-      })
-    ].join("\n");
+          r.status_label,
+          r.keterangan,
+        ].join(",")),
+      ].join("\n");
 
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `laporan-absensi-${startDate}-${endDate}.csv`;
-    a.click();
-    toast.success("Export berhasil");
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `laporan-absensi-${startDate}-${endDate}.csv`;
+      a.click();
+      toast.success("Export berhasil");
+    } catch (error) {
+      const errorRef = reportError(error, "org.reports.attendance.export");
+      toast.error(appendErrorReference("Gagal export data laporan", errorRef));
+    }
   };
 
-  const handlePrintPdf = () => {
-    if (filteredRecords.length === 0) {
-      toast.error("Tidak ada data untuk dicetak");
+  const handlePrintPdf = async () => {
+    if (!hasQueried) {
+      toast.error("Klik Tampilkan terlebih dahulu");
       return;
     }
 
-    const periodLabel = startDate && endDate ? `${startDate} s/d ${endDate}` : "Semua periode";
-    const printedAt = format(new Date(), "d MMMM yyyy HH:mm", { locale: id });
-    const rowsHtml = filteredRecords
-      .map((r, i) => {
-        const ket = getRecordKeterangan(r);
-        return `
+    try {
+      const outputRows = await fetchAllForOutput();
+      if (outputRows.length === 0) {
+        toast.error("Tidak ada data untuk dicetak");
+        return;
+      }
+
+      const periodLabel = startDate && endDate ? `${startDate} s/d ${endDate}` : "Semua periode";
+      const printedAt = format(new Date(), "d MMMM yyyy HH:mm", { locale: id });
+      const rowsHtml = outputRows
+        .map((r, i) => `
           <tr>
             <td>${i + 1}</td>
             <td>${escapeHtml(format(new Date(r.date), "d MMM yyyy", { locale: id }))}</td>
-            <td>${escapeHtml(r.employees?.nip || "-")}</td>
-            <td>${escapeHtml(r.employees?.name || "-")}</td>
-            <td>${escapeHtml(r.employees?.opd?.code || "-")}</td>
+            <td>${escapeHtml(r.employee_nip || "-")}</td>
+            <td>${escapeHtml(r.employee_name || "-")}</td>
+            <td>${escapeHtml(r.employee_opd_code || "-")}</td>
             <td>${escapeHtml(r.check_in_time ? format(new Date(r.check_in_time), "HH:mm") : "-")}</td>
             <td>${escapeHtml(r.check_out_time ? format(new Date(r.check_out_time), "HH:mm") : "-")}</td>
-            <td>${escapeHtml(ket.status)}</td>
-            <td>${escapeHtml(ket.keterangan)}</td>
+            <td>${escapeHtml(r.status_label)}</td>
+            <td>${escapeHtml(r.keterangan)}</td>
           </tr>
-        `;
-      })
-      .join("");
+        `)
+        .join("");
 
-    const printWindow = window.open("", "_blank", "width=1200,height=800");
-    if (!printWindow) {
-      toast.error("Popup diblokir browser. Izinkan popup untuk cetak PDF.");
-      return;
+      const printWindow = window.open("", "_blank", "width=1200,height=800");
+      if (!printWindow) {
+        toast.error("Popup diblokir browser. Izinkan popup untuk cetak PDF.");
+        return;
+      }
+
+      printWindow.document.write(`
+        <!DOCTYPE html>
+        <html>
+          <head>
+            <meta charset="UTF-8" />
+            <title>Laporan Absensi</title>
+            <style>
+              body { font-family: Arial, sans-serif; margin: 24px; color: #111; }
+              h1 { margin: 0 0 8px; font-size: 20px; }
+              .meta { margin: 0 0 16px; font-size: 12px; color: #444; }
+              table { width: 100%; border-collapse: collapse; font-size: 12px; }
+              th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
+              th { background: #f3f4f6; }
+              .footer { margin-top: 12px; font-size: 11px; color: #666; }
+            </style>
+          </head>
+          <body>
+            <h1>Laporan Absensi Pegawai</h1>
+            <p class="meta">Periode: ${escapeHtml(periodLabel)} | Total: ${outputRows.length} data | Dicetak: ${escapeHtml(printedAt)}</p>
+            <table>
+              <thead>
+                <tr>
+                  <th>No</th><th>Tanggal</th><th>NIP</th><th>Nama</th><th>OPD</th><th>Masuk</th><th>Keluar</th><th>Status</th><th>Keterangan</th>
+                </tr>
+              </thead>
+              <tbody>${rowsHtml}</tbody>
+            </table>
+            <p class="footer">Sumber: AbsensiKu /org/reports/attendance</p>
+          </body>
+        </html>
+      `);
+      printWindow.document.close();
+      printWindow.onload = () => {
+        printWindow.focus();
+        printWindow.print();
+      };
+    } catch (error) {
+      const errorRef = reportError(error, "org.reports.attendance.print");
+      toast.error(appendErrorReference("Gagal menyiapkan print PDF", errorRef));
     }
-
-    printWindow.document.write(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="UTF-8" />
-          <title>Laporan Absensi</title>
-          <style>
-            body { font-family: Arial, sans-serif; margin: 24px; color: #111; }
-            h1 { margin: 0 0 8px; font-size: 20px; }
-            .meta { margin: 0 0 16px; font-size: 12px; color: #444; }
-            table { width: 100%; border-collapse: collapse; font-size: 12px; }
-            th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
-            th { background: #f3f4f6; }
-            .footer { margin-top: 12px; font-size: 11px; color: #666; }
-            @media print {
-              body { margin: 12mm; }
-              h1 { font-size: 18px; }
-            }
-          </style>
-        </head>
-        <body>
-          <h1>Laporan Absensi Pegawai</h1>
-          <p class="meta">Periode: ${escapeHtml(periodLabel)} | Total: ${filteredRecords.length} data | Dicetak: ${escapeHtml(printedAt)}</p>
-          <table>
-            <thead>
-              <tr>
-                <th>No</th>
-                <th>Tanggal</th>
-                <th>NIP</th>
-                <th>Nama</th>
-                <th>OPD</th>
-                <th>Masuk</th>
-                <th>Keluar</th>
-                <th>Status</th>
-                <th>Keterangan</th>
-              </tr>
-            </thead>
-            <tbody>${rowsHtml}</tbody>
-          </table>
-          <p class="footer">Sumber: AbsensiKu /org/reports/attendance</p>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
-
-    const printAction = () => {
-      printWindow.focus();
-      printWindow.print();
-    };
-    printWindow.onload = printAction;
-    setTimeout(printAction, 250);
   };
-
-  // Filter by search, status, and keterangan
-  const filteredRecords = records.filter(r => {
-    const matchSearch = (r.employees?.name || "").toLowerCase().includes(searchTerm.toLowerCase());
-    const ket = getRecordKeterangan(r);
-    const matchStatus = filterStatus === "all" || ket.status === filterStatus;
-    const matchKeterangan = filterKeterangan === "all" || ket.keterangan === filterKeterangan;
-    return matchSearch && matchStatus && matchKeterangan;
-  });
-
-  // Pagination calculations
-  const totalPages = Math.ceil(filteredRecords.length / itemsPerPage);
-  const paginatedRecords = filteredRecords.slice(
-    (currentPage - 1) * itemsPerPage,
-    currentPage * itemsPerPage
-  );
-
-  // Reset page when filter changes
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [searchTerm, filterStatus, filterKeterangan, records]);
 
   return (
     <OrganizationLayout>
@@ -416,10 +387,10 @@ export default function OrgAttendanceReport() {
             <p className="text-muted-foreground">Laporan absensi pegawai berdasarkan jadwal jam kerja</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={handlePrintPdf} disabled={filteredRecords.length === 0}>
+            <Button variant="outline" onClick={handlePrintPdf} disabled={totalRecords === 0 || isLoading}>
               <Printer className="mr-2 h-4 w-4" /> Print PDF
             </Button>
-            <Button variant="outline" onClick={handleExport} disabled={filteredRecords.length === 0}>
+            <Button variant="outline" onClick={handleExport} disabled={totalRecords === 0 || isLoading}>
               <Download className="mr-2 h-4 w-4" /> Export CSV
             </Button>
           </div>
@@ -440,12 +411,10 @@ export default function OrgAttendanceReport() {
               <div className="grid gap-2">
                 <Label>OPD</Label>
                 <Select value={filterOpd} onValueChange={setFilterOpd}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Semua OPD" />
-                  </SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder="Semua OPD" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Semua OPD</SelectItem>
-                    {opds.map(opd => (
+                    {opds.map((opd) => (
                       <SelectItem key={opd.id} value={opd.id}>{opd.code}</SelectItem>
                     ))}
                   </SelectContent>
@@ -462,12 +431,10 @@ export default function OrgAttendanceReport() {
               <div className="grid gap-2">
                 <Label>Status</Label>
                 <Select value={filterStatus} onValueChange={setFilterStatus}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Semua Status" />
-                  </SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder="Semua Status" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Semua Status</SelectItem>
-                    {STATUS_OPTIONS.map(s => (
+                    {STATUS_OPTIONS.map((s) => (
                       <SelectItem key={s} value={s}>{s}</SelectItem>
                     ))}
                   </SelectContent>
@@ -476,12 +443,10 @@ export default function OrgAttendanceReport() {
               <div className="grid gap-2">
                 <Label>Keterangan</Label>
                 <Select value={filterKeterangan} onValueChange={setFilterKeterangan}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Semua Keterangan" />
-                  </SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder="Semua Keterangan" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Semua Keterangan</SelectItem>
-                    {KETERANGAN_OPTIONS.map(k => (
+                    {KETERANGAN_OPTIONS.map((k) => (
                       <SelectItem key={k} value={k}>{k}</SelectItem>
                     ))}
                   </SelectContent>
@@ -499,13 +464,13 @@ export default function OrgAttendanceReport() {
         <Card>
           <CardHeader>
             <CardTitle>Hasil Laporan</CardTitle>
-            <CardDescription>Total {filteredRecords.length} data absensi</CardDescription>
+            <CardDescription>Total {totalRecords} data absensi</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-4 mb-4">
               <div className="relative flex-1 max-w-sm">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input placeholder="Cari nama..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-10" />
+                <Input placeholder="Cari nama / NIP..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-10" />
               </div>
             </div>
 
@@ -527,85 +492,52 @@ export default function OrgAttendanceReport() {
                 <TableBody>
                   {isLoading ? (
                     <TableRow><TableCell colSpan={9} className="text-center py-8"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto"></div></TableCell></TableRow>
-                  ) : paginatedRecords.length === 0 ? (
+                  ) : records.length === 0 ? (
                     <TableRow><TableCell colSpan={9} className="text-center py-8 text-muted-foreground">Pilih filter dan klik Tampilkan</TableCell></TableRow>
                   ) : (
-                    paginatedRecords.map((r, i) => {
-                      const ket = getRecordKeterangan(r);
-                      return (
-                        <TableRow key={r.id}>
-                          <TableCell>{(currentPage - 1) * itemsPerPage + i + 1}</TableCell>
-                          <TableCell>{format(new Date(r.date), "d MMM yyyy", { locale: id })}</TableCell>
-                          <TableCell className="font-mono text-sm">{r.employees?.nip || "-"}</TableCell>
-                          <TableCell>{r.employees?.name}</TableCell>
-                          <TableCell>{r.employees?.opd?.code || "-"}</TableCell>
-                          <TableCell>{r.check_in_time ? format(new Date(r.check_in_time), "HH:mm") : "-"}</TableCell>
-                          <TableCell>{r.check_out_time ? format(new Date(r.check_out_time), "HH:mm") : "-"}</TableCell>
-                          <TableCell>{getStatusBadge(ket.status)}</TableCell>
-                          <TableCell>{getKeteranganBadge(ket.keterangan)}</TableCell>
-                        </TableRow>
-                      );
-                    })
+                    records.map((r, i) => (
+                      <TableRow key={r.id}>
+                        <TableCell>{(currentPage - 1) * itemsPerPage + i + 1}</TableCell>
+                        <TableCell>{format(new Date(r.date), "d MMM yyyy", { locale: id })}</TableCell>
+                        <TableCell className="font-mono text-sm">{r.employee_nip || "-"}</TableCell>
+                        <TableCell>{r.employee_name}</TableCell>
+                        <TableCell>{r.employee_opd_code || "-"}</TableCell>
+                        <TableCell>{r.check_in_time ? format(new Date(r.check_in_time), "HH:mm") : "-"}</TableCell>
+                        <TableCell>{r.check_out_time ? format(new Date(r.check_out_time), "HH:mm") : "-"}</TableCell>
+                        <TableCell>{getStatusBadge(r.status_label)}</TableCell>
+                        <TableCell>{getKeteranganBadge(r.keterangan)}</TableCell>
+                      </TableRow>
+                    ))
                   )}
                 </TableBody>
               </Table>
             </div>
 
-            {/* Pagination */}
-            {totalPages > 1 && (
+            {totalRecords > 0 && (
               <div className="mt-4 flex items-center justify-between">
                 <p className="text-sm text-muted-foreground">
-                  Menampilkan {(currentPage - 1) * itemsPerPage + 1} - {Math.min(currentPage * itemsPerPage, filteredRecords.length)} dari {filteredRecords.length} data
+                  Menampilkan {(currentPage - 1) * itemsPerPage + 1} - {Math.min(currentPage * itemsPerPage, totalRecords)} dari {totalRecords} data
                 </p>
                 <Pagination>
                   <PaginationContent>
                     <PaginationItem>
-                      <PaginationPrevious 
-                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                        className={currentPage === 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
-                      />
+                      <PaginationPrevious onClick={() => setCurrentPage((p) => Math.max(1, p - 1))} className={currentPage === 1 ? "pointer-events-none opacity-50" : "cursor-pointer"} />
                     </PaginationItem>
-                    
-                    {/* First page */}
-                    {currentPage > 2 && (
-                      <PaginationItem>
-                        <PaginationLink onClick={() => setCurrentPage(1)} className="cursor-pointer">1</PaginationLink>
-                      </PaginationItem>
-                    )}
-                    
-                    {currentPage > 3 && <PaginationItem><PaginationEllipsis /></PaginationItem>}
-                    
-                    {/* Current page range */}
+                    {currentPage > 2 && (<PaginationItem><PaginationLink onClick={() => setCurrentPage(1)} className="cursor-pointer">1</PaginationLink></PaginationItem>)}
+                    {currentPage > 3 && (<PaginationItem><PaginationEllipsis /></PaginationItem>)}
                     {Array.from({ length: Math.min(3, totalPages) }, (_, idx) => {
                       const pageNum = Math.max(1, Math.min(currentPage - 1, totalPages - 2)) + idx;
                       if (pageNum > totalPages) return null;
                       return (
                         <PaginationItem key={pageNum}>
-                          <PaginationLink 
-                            isActive={pageNum === currentPage}
-                            onClick={() => setCurrentPage(pageNum)}
-                            className="cursor-pointer"
-                          >
-                            {pageNum}
-                          </PaginationLink>
+                          <PaginationLink isActive={pageNum === currentPage} onClick={() => setCurrentPage(pageNum)} className="cursor-pointer">{pageNum}</PaginationLink>
                         </PaginationItem>
                       );
                     })}
-                    
-                    {currentPage < totalPages - 2 && <PaginationItem><PaginationEllipsis /></PaginationItem>}
-                    
-                    {/* Last page */}
-                    {currentPage < totalPages - 1 && totalPages > 3 && (
-                      <PaginationItem>
-                        <PaginationLink onClick={() => setCurrentPage(totalPages)} className="cursor-pointer">{totalPages}</PaginationLink>
-                      </PaginationItem>
-                    )}
-                    
+                    {currentPage < totalPages - 2 && (<PaginationItem><PaginationEllipsis /></PaginationItem>)}
+                    {currentPage < totalPages - 1 && totalPages > 3 && (<PaginationItem><PaginationLink onClick={() => setCurrentPage(totalPages)} className="cursor-pointer">{totalPages}</PaginationLink></PaginationItem>)}
                     <PaginationItem>
-                      <PaginationNext 
-                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                        className={currentPage === totalPages ? "pointer-events-none opacity-50" : "cursor-pointer"}
-                      />
+                      <PaginationNext onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))} className={currentPage === totalPages ? "pointer-events-none opacity-50" : "cursor-pointer"} />
                     </PaginationItem>
                   </PaginationContent>
                 </Pagination>

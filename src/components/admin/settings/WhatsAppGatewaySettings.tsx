@@ -9,6 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { MessageCircle, Save, Send, Loader2, CheckCircle2, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { useSystemSettings } from "@/hooks/useSystemSettings";
+import { supabase } from "@/integrations/supabase/client";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 const PROVIDERS = [
   { value: "fonnte", label: "Fonnte", url: "https://fonnte.com" },
@@ -59,35 +61,88 @@ export function WhatsAppGatewaySettings() {
     setIsTesting(true);
     
     try {
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-test-whatsapp`,
-        {
+      const { data: sessionData } = await supabase.auth.getSession();
+      let accessToken = sessionData.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      if (!sessionData.session?.access_token) {
+        const { data: refreshData } = await supabase.auth.refreshSession();
+        if (refreshData.session?.access_token) {
+          accessToken = refreshData.session.access_token;
+        }
+      }
+
+      const payload = {
+        to: testPhone,
+        provider: settings.provider,
+        apiKey: settings.apiKey,
+        apiUrl: settings.apiUrl,
+        senderNumber: settings.senderNumber,
+      };
+
+      const invokeTest = (token: string) =>
+        fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-test-whatsapp`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+            "Authorization": `Bearer ${token}`,
+            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
           },
-          body: JSON.stringify({
-            to: testPhone,
-            provider: settings.provider,
-            apiKey: settings.apiKey,
-            apiUrl: settings.apiUrl,
-            senderNumber: settings.senderNumber,
-          }),
+          body: JSON.stringify(payload),
+        });
+
+      const readJsonSafe = async (response: Response): Promise<Record<string, unknown>> => {
+        try {
+          return await response.json();
+        } catch {
+          const raw = await response.text().catch(() => "");
+          return { raw };
         }
-      );
+      };
 
-      const data = await response.json();
+      let response = await invokeTest(accessToken);
+      let data = await readJsonSafe(response);
 
-      if (!response.ok) {
-        throw new Error(data.error || "Gagal mengirim pesan");
+      if (
+        response.status === 401 &&
+        String(data?.message || "").toLowerCase().includes("invalid jwt")
+      ) {
+        const { data: refreshData } = await supabase.auth.refreshSession();
+        const retryToken = refreshData.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+        response = await invokeTest(retryToken);
+        data = await readJsonSafe(response);
       }
 
-      toast.success(`Pesan tes berhasil dikirim ke ${testPhone}!`);
+      if (!response.ok) {
+        const baseError =
+          typeof data?.error === "string"
+            ? data.error
+            : typeof data?.message === "string"
+            ? data.message
+            : "Gagal mengirim pesan";
+        const hint = typeof data?.error_hint === "string" ? ` (${data.error_hint})` : "";
+        const detailRaw = typeof data?.details === "string"
+          ? data.details
+          : (data?.details || data?.raw)
+          ? JSON.stringify(data.details || data.raw)
+          : "";
+        const detail = detailRaw ? ` Detail: ${detailRaw.slice(0, 300)}` : "";
+        throw new Error(
+          appendErrorReference(`${baseError}${hint}${detail}`, typeof data?.trace_id === "string" ? data.trace_id : null)
+        );
+      }
+
+      toast.success(
+        appendErrorReference(
+          `Pesan tes berhasil dikirim ke ${testPhone}!`,
+          typeof data?.trace_id === "string" ? data.trace_id : null
+        )
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Gagal mengirim pesan tes";
-      console.error("Test WhatsApp error:", error);
-      toast.error(message);
+      const logId = reportError(error, "admin.settings.whatsapp_gateway.test_message", {
+        provider: settings.provider,
+        target_phone: testPhone,
+      });
+      toast.error(appendErrorReference(message, logId));
     } finally {
       setIsTesting(false);
     }

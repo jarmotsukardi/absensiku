@@ -47,10 +47,22 @@ interface InvoiceRow {
 interface TenantRow {
   id: string;
   name: string;
+  billing_mode: string | null;
   email: string | null;
   phone: string | null;
   whatsapp: string | null;
   pic_whatsapp: string | null;
+}
+
+interface EmployeeRecipientRow {
+  tenant_id: string;
+  user_id: string | null;
+  name: string | null;
+}
+
+interface AdminRecipientRow {
+  tenant_id: string | null;
+  user_id: string;
 }
 
 interface BillingLogRow {
@@ -406,6 +418,19 @@ const normalizeReason = (value: string): NotificationReason => {
   return "GRACE_PERIOD_ENTERED";
 };
 
+const mapReasonToInAppType = (reason: NotificationReason): "info" | "warning" | "error" => {
+  if (reason === "GRACE_PERIOD_EXPIRED") return "error";
+  if (reason === "GRACE_PERIOD_LAST_DAY" || reason === "GRACE_PERIOD_REMINDER") return "warning";
+  return "info";
+};
+
+const mapReasonToInAppTitle = (reason: NotificationReason): string => {
+  if (reason === "GRACE_PERIOD_EXPIRED") return "Grace Period Berakhir";
+  if (reason === "GRACE_PERIOD_LAST_DAY") return "Hari Terakhir Grace Period";
+  if (reason === "GRACE_PERIOD_REMINDER") return "Pengingat Pembayaran Grace Period";
+  return "Tenant Masuk Grace Period";
+};
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -506,7 +531,7 @@ serve(async (req) => {
     }
 
     const tenantIds = Array.from(new Set(streaks.map((item) => item.tenant_id)));
-    const [invoiceRes, tenantRes, gatewayRes] = await Promise.all([
+    const [invoiceRes, tenantRes, gatewayRes, recipientRes, tenantAdminRes] = await Promise.all([
       supabase
         .from("invoices")
         .select(
@@ -517,12 +542,23 @@ serve(async (req) => {
         .order("created_at", { ascending: false }),
       supabase
         .from("tenants")
-        .select("id, name, email, phone, whatsapp, pic_whatsapp")
+        .select("id, name, billing_mode, email, phone, whatsapp, pic_whatsapp")
         .in("id", tenantIds),
       supabase
         .from("system_settings")
         .select("key, value")
         .in("key", ["email_gateway", "whatsapp_gateway"]),
+      supabase
+        .from("employees")
+        .select("tenant_id, user_id, name")
+        .in("tenant_id", tenantIds)
+        .eq("is_active", true)
+        .not("user_id", "is", null),
+      supabase
+        .from("user_roles")
+        .select("tenant_id, user_id")
+        .in("tenant_id", tenantIds)
+        .eq("role", "admin_instansi"),
     ]);
 
     if (invoiceRes.error) {
@@ -546,15 +582,44 @@ serve(async (req) => {
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
+    if (recipientRes.error) {
+      logTraceError(traceId, "Failed to load in-app recipients", recipientRes.error);
+      return new Response(
+        JSON.stringify(withTrace({ error: "Gagal memuat penerima notifikasi in-app" }, traceId)),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+    if (tenantAdminRes.error) {
+      logTraceError(traceId, "Failed to load tenant admin recipients", tenantAdminRes.error);
+      return new Response(
+        JSON.stringify(withTrace({ error: "Gagal memuat admin organisasi penerima notifikasi" }, traceId)),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
 
     let invoices = (invoiceRes.data ?? []) as InvoiceRow[];
     const tenants = (tenantRes.data ?? []) as TenantRow[];
     const gatewayRows = (gatewayRes.data ?? []) as GatewaySettingRow[];
+    const employeeRecipients = (recipientRes.data ?? []) as EmployeeRecipientRow[];
+    const tenantAdmins = (tenantAdminRes.data ?? []) as AdminRecipientRow[];
     const emailGateway = getGatewaySetting(gatewayRows, "email_gateway");
     const waGateway = getGatewaySetting(gatewayRows, "whatsapp_gateway");
 
     const tenantMap = new Map(tenants.map((tenant) => [tenant.id, tenant]));
     const streakMap = new Map(streaks.map((streak) => [streak.tenant_id, streak]));
+    const recipientMap = new Map<string, EmployeeRecipientRow[]>();
+    for (const recipient of employeeRecipients) {
+      const list = recipientMap.get(recipient.tenant_id) ?? [];
+      list.push(recipient);
+      recipientMap.set(recipient.tenant_id, list);
+    }
+    const tenantAdminMap = new Map<string, string[]>();
+    for (const row of tenantAdmins) {
+      if (!row.tenant_id) continue;
+      const list = tenantAdminMap.get(row.tenant_id) ?? [];
+      if (!list.includes(row.user_id)) list.push(row.user_id);
+      tenantAdminMap.set(row.tenant_id, list);
+    }
 
     const tenantWithoutOpenInvoice = tenantIds.filter((tenantId) =>
       !invoices.some((item) => item.tenant_id === tenantId),
@@ -864,6 +929,74 @@ serve(async (req) => {
           lastSentAtMap.set(waChannelKey, Date.now());
         } else {
           failed += 1;
+        }
+      }
+
+      if (!dryRun) {
+        const emailOk = Boolean((channelResults.email as Record<string, unknown> | undefined)?.ok);
+        const waOk = Boolean((channelResults.whatsapp as Record<string, unknown> | undefined)?.ok);
+        if (emailOk || waOk) {
+          const reason = (toStringSafe(
+            (channelResults.email as Record<string, unknown> | undefined)?.notification_reason ??
+              (channelResults.whatsapp as Record<string, unknown> | undefined)?.notification_reason,
+          ) || "GRACE_PERIOD_ENTERED") as NotificationReason;
+          const inAppType = mapReasonToInAppType(reason);
+          const inAppTitle = mapReasonToInAppTitle(reason);
+          const inAppMessage = [
+            `${tenant.name} - ${invoiceNumber}`,
+            `Tagihan: ${amountText}`,
+            `Batas grace: ${dueDateText}`,
+            `Status: ${reason.replaceAll("_", " ")}`,
+          ].join(" | ");
+
+          const isCentralized = (tenant.billing_mode ?? "centralized") === "centralized";
+          const userIds = isCentralized
+            ? (tenantAdminMap.get(tenant.id) ?? [])
+            : Array.from(
+              new Set(
+                (recipientMap.get(tenant.id) ?? [])
+                  .map((r) => r.user_id)
+                  .filter((id): id is string => Boolean(id)),
+              ),
+            );
+
+          if (userIds.length > 0) {
+            const notificationRows = userIds.map((userId) => ({
+              user_id: userId,
+              title: inAppTitle,
+              message: inAppMessage,
+              type: inAppType,
+              is_read: false,
+              link: "/org/subscription",
+              metadata: {
+                source: "billing_grace_notifier",
+                trace_id: traceId,
+                invoice_id: invoice.id,
+                invoice_number: invoiceNumber,
+                reason,
+                email_sent: emailOk,
+                whatsapp_sent: waOk,
+              },
+            }));
+
+            const { error: inAppError } = await supabase.from("notifications").insert(notificationRows);
+            if (inAppError) {
+              logTraceError(traceId, `Failed to write in-app notifications for tenant ${tenant.id}`, inAppError);
+            } else {
+              tenantResult.in_app_notifications = {
+                inserted: notificationRows.length,
+                reason,
+                recipient_scope: isCentralized ? "tenant_admin_only" : "active_employees",
+              };
+            }
+          } else {
+            tenantResult.in_app_notifications = {
+              inserted: 0,
+              reason,
+              recipient_scope: isCentralized ? "tenant_admin_only" : "active_employees",
+              skipped_reason: "NO_RECIPIENTS",
+            };
+          }
         }
       }
 

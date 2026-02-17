@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { 
   Users, 
   MapPin,
@@ -71,6 +72,14 @@ interface ApkInfo {
   updated_at: string;
 }
 
+interface BillingAlertNotification {
+  id: string;
+  title: string | null;
+  message: string | null;
+  created_at: string;
+  metadata: Record<string, unknown> | null;
+}
+
 const DASHBOARD_FETCH_TIMEOUT_MS = 15000;
 const DASHBOARD_LOADING_WATCHDOG_MS = 25000;
 const ORG_ACTIVE_TENANT_STORAGE_KEY = "org_active_tenant_id";
@@ -101,18 +110,16 @@ export default function OrgDashboard() {
     approvedCount: 0,
     rejectedCount: 0,
   });
+  const [billingAlerts, setBillingAlerts] = useState<BillingAlertNotification[]>([]);
+  const [isBillingOverlayOpen, setIsBillingOverlayOpen] = useState(false);
+  const [billingAlertsErrorRef, setBillingAlertsErrorRef] = useState<string | null>(null);
+  const [billingAlertsErrorReason, setBillingAlertsErrorReason] = useState<string | null>(null);
+  const [dashboardPartialRef, setDashboardPartialRef] = useState<string | null>(null);
+  const [dashboardPartialScopes, setDashboardPartialScopes] = useState<string[]>([]);
 
   const fetchDashboardData = useCallback(async () => {
     let resolvedTenantIdForLog: string | null = null;
     try {
-      const cachedTenantId = (() => {
-        try {
-          return sessionStorage.getItem(ORG_ACTIVE_TENANT_STORAGE_KEY);
-        } catch {
-          return null;
-        }
-      })();
-
       const { data: { user } } = await withTimeout(
         Promise.resolve(supabase.auth.getUser()),
         DASHBOARD_FETCH_TIMEOUT_MS,
@@ -126,26 +133,23 @@ export default function OrgDashboard() {
 
       // Resolve tenant context from roles and optional query param.
       let isSuperAdmin = false;
-      let resolvedTenantId = cachedTenantId;
+      let resolvedTenantId: string | null = null;
+      const { data: roleRows, error: roleRowsError } = await withTimeout(
+        Promise.resolve(
+          supabase
+            .from("user_roles")
+            .select("role, tenant_id")
+            .eq("user_id", user.id)
+            .in("role", ["admin_instansi", "super_admin"])
+        ),
+        DASHBOARD_FETCH_TIMEOUT_MS,
+        "Timeout membaca role pengguna organisasi"
+      );
+      if (roleRowsError) throw roleRowsError;
 
-      if (!resolvedTenantId || queryTenantId) {
-        const { data: roleRows, error: roleRowsError } = await withTimeout(
-          Promise.resolve(
-            supabase
-              .from("user_roles")
-              .select("role, tenant_id")
-              .eq("user_id", user.id)
-              .in("role", ["admin_instansi", "super_admin"])
-          ),
-          DASHBOARD_FETCH_TIMEOUT_MS,
-          "Timeout membaca role pengguna organisasi"
-        );
-        if (roleRowsError) throw roleRowsError;
-
-        const adminRole = roleRows?.find((r) => r.role === "admin_instansi" && r.tenant_id);
-        isSuperAdmin = roleRows?.some((r) => r.role === "super_admin") || false;
-        resolvedTenantId = adminRole?.tenant_id || (isSuperAdmin ? queryTenantId : null);
-      }
+      const adminRole = roleRows?.find((r) => r.role === "admin_instansi" && r.tenant_id);
+      isSuperAdmin = roleRows?.some((r) => r.role === "super_admin") || false;
+      resolvedTenantId = adminRole?.tenant_id || (isSuperAdmin ? queryTenantId : null);
       resolvedTenantIdForLog = resolvedTenantId;
 
       if (!resolvedTenantId) {
@@ -174,15 +178,18 @@ export default function OrgDashboard() {
             .from("subscriptions")
             .select("*")
             .eq("tenant_id", resolvedTenantId)
-            .maybeSingle()
+            .order("created_at", { ascending: false })
+            .limit(1)
         ),
         DASHBOARD_FETCH_TIMEOUT_MS,
         "Timeout membaca data langganan organisasi"
       );
-      if (subError) throw subError;
-
-      if (subData) {
-        setSubscription(subData);
+      if (subError) {
+        const subRef = reportError(subError, "org.dashboard.fetch_subscription", { tenant_id: resolvedTenantId });
+        toast.warning(appendErrorReference("Data langganan belum dapat dimuat penuh.", subRef));
+        setSubscription(null);
+      } else {
+        setSubscription((subData as SubscriptionInfo[] | null)?.[0] || null);
       }
 
       // Fetch display name (tenant name for super admin context, otherwise employee name).
@@ -208,14 +215,20 @@ export default function OrgDashboard() {
               .select("name")
               .eq("user_id", user.id)
               .eq("tenant_id", resolvedTenantId)
-              .maybeSingle()
+              .order("updated_at", { ascending: false })
+              .limit(1)
           ),
           DASHBOARD_FETCH_TIMEOUT_MS,
           "Timeout membaca profil admin organisasi"
         );
-        if (empDataError) throw empDataError;
-        if (empData?.name) {
-          setUserName(empData.name);
+        if (empDataError) {
+          const empRef = reportError(empDataError, "org.dashboard.fetch_org_admin_profile", { tenant_id: resolvedTenantId });
+          toast.warning(appendErrorReference("Profil admin organisasi belum sinkron.", empRef));
+          setUserName("Admin Organisasi");
+        } else if ((empData as Array<{ name?: string }> | null)?.[0]?.name) {
+          setUserName(((empData as Array<{ name?: string }>)[0].name as string) || "Admin Organisasi");
+        } else {
+          setUserName("Admin Organisasi");
         }
       }
 
@@ -236,7 +249,10 @@ export default function OrgDashboard() {
         DASHBOARD_FETCH_TIMEOUT_MS,
         "Timeout membaca daftar kantor organisasi"
       );
-      if (officeRowsError) throw officeRowsError;
+      if (officeRowsError) {
+        const officeRef = reportError(officeRowsError, "org.dashboard.fetch_offices", { tenant_id: resolvedTenantId });
+        toast.warning(appendErrorReference("Sebagian data lokasi belum dapat dimuat.", officeRef));
+      }
       const officeIds = (officeRows || []).map((row) => row.id);
       const attendancePromise = officeIds.length > 0
         ? supabase
@@ -253,6 +269,43 @@ export default function OrgDashboard() {
           .gte("date", sevenDaysAgo)
           .lte("date", today)
         : Promise.resolve({ data: [] as { date: string }[], error: null });
+
+      const { data: tenantEmployeeRows, error: tenantEmployeeRowsError } = await supabase
+        .from("employees")
+        .select("id")
+        .eq("tenant_id", resolvedTenantId);
+      if (tenantEmployeeRowsError) {
+        throw tenantEmployeeRowsError;
+      }
+      const tenantEmployeeIds = (tenantEmployeeRows || []).map((row) => row.id);
+      const leavePendingPromise = tenantEmployeeIds.length > 0
+        ? supabase
+          .from("leave_requests")
+          .select("id", { count: "exact", head: true })
+          .in("employee_id", tenantEmployeeIds)
+          .eq("status", "menunggu")
+        : Promise.resolve({ count: 0 as number | null, error: null });
+      const wfhPendingPromise = tenantEmployeeIds.length > 0
+        ? supabase
+          .from("wfh_requests")
+          .select("id", { count: "exact", head: true })
+          .in("employee_id", tenantEmployeeIds)
+          .eq("status", "menunggu")
+        : Promise.resolve({ count: 0 as number | null, error: null });
+      const leaveApprovalsPromise = tenantEmployeeIds.length > 0
+        ? supabase
+          .from("leave_requests")
+          .select("created_at, approved_at, status")
+          .in("employee_id", tenantEmployeeIds)
+          .gte("created_at", thirtyDaysAgoIso)
+        : Promise.resolve({ data: [] as { created_at: string | null; approved_at: string | null; status: string | null }[], error: null });
+      const wfhApprovalsPromise = tenantEmployeeIds.length > 0
+        ? supabase
+          .from("wfh_requests")
+          .select("created_at, approved_at, status")
+          .in("employee_id", tenantEmployeeIds)
+          .gte("created_at", thirtyDaysAgoIso)
+        : Promise.resolve({ data: [] as { created_at: string | null; approved_at: string | null; status: string | null }[], error: null });
 
       const [employeesRes, linkedEmployeesRes, officesRes, attendanceRes, attendanceTrendRes, leavesRes, wfhRes, overtimeRes, leaveApprovalsRes, wfhApprovalsRes, overtimeApprovalsRes, invitationsRes, apkSettings] = await withTimeout(
         Promise.all([
@@ -274,31 +327,15 @@ export default function OrgDashboard() {
             .eq("is_active", true),
           attendancePromise,
           attendanceTrendPromise,
-          supabase
-            .from("leave_requests")
-            .select("id", { count: "exact", head: true })
-            .eq("tenant_id", resolvedTenantId)
-            .eq("status", "menunggu"),
-          supabase
-            .from("wfh_requests")
-            .select("id", { count: "exact", head: true })
-            .eq("tenant_id", resolvedTenantId)
-            .eq("status", "pending"),
+          leavePendingPromise,
+          wfhPendingPromise,
           supabase
             .from("overtime_requests")
             .select("id", { count: "exact", head: true })
             .eq("tenant_id", resolvedTenantId)
             .eq("status", "pending"),
-          supabase
-            .from("leave_requests")
-            .select("created_at, approved_at, status")
-            .eq("tenant_id", resolvedTenantId)
-            .gte("created_at", thirtyDaysAgoIso),
-          supabase
-            .from("wfh_requests")
-            .select("created_at, approved_at, status")
-            .eq("tenant_id", resolvedTenantId)
-            .gte("created_at", thirtyDaysAgoIso),
+          leaveApprovalsPromise,
+          wfhApprovalsPromise,
           supabase
             .from("overtime_requests")
             .select("created_at, approved_at, status")
@@ -320,46 +357,45 @@ export default function OrgDashboard() {
         "Timeout memuat statistik dashboard organisasi"
       );
 
-      if (
-        employeesRes.error ||
-        linkedEmployeesRes.error ||
-        officesRes.error ||
-        attendanceRes.error ||
-        attendanceTrendRes.error ||
-        leavesRes.error ||
-        wfhRes.error ||
-        overtimeRes.error ||
-        leaveApprovalsRes.error ||
-        wfhApprovalsRes.error ||
-        overtimeApprovalsRes.error ||
-        invitationsRes.error ||
-        apkSettings.error
-      ) {
-        throw (
-          employeesRes.error ||
-          linkedEmployeesRes.error ||
-          officesRes.error ||
-          attendanceRes.error ||
-          attendanceTrendRes.error ||
-          leavesRes.error ||
-          wfhRes.error ||
-          overtimeRes.error ||
-          leaveApprovalsRes.error ||
-          wfhApprovalsRes.error ||
-          overtimeApprovalsRes.error ||
-          invitationsRes.error ||
-          apkSettings.error
-        );
+      const queryScopes: Array<[string, unknown]> = [
+        ["employees", employeesRes.error],
+        ["linked_employees", linkedEmployeesRes.error],
+        ["offices", officesRes.error],
+        ["attendance_today", attendanceRes.error],
+        ["attendance_trend", attendanceTrendRes.error],
+        ["leave_requests", leavesRes.error],
+        ["wfh_requests", wfhRes.error],
+        ["overtime_requests", overtimeRes.error],
+        ["leave_approvals", leaveApprovalsRes.error],
+        ["wfh_approvals", wfhApprovalsRes.error],
+        ["overtime_approvals", overtimeApprovalsRes.error],
+        ["expired_invitations", invitationsRes.error],
+        ["apk_settings", apkSettings.error],
+      ];
+      const failedScopes = queryScopes
+        .filter(([, error]) => Boolean(error))
+        .map(([scope]) => scope);
+
+      if (failedScopes.length > 0) {
+        const partialRef = reportError(new Error("Partial org dashboard data failure"), "org.dashboard.fetch_partial", {
+          tenant_id: resolvedTenantId,
+          failed_scopes: failedScopes,
+        });
+        setDashboardPartialRef(partialRef);
+        setDashboardPartialScopes(failedScopes);
+      } else {
+        setDashboardPartialRef(null);
+        setDashboardPartialScopes([]);
       }
 
-      const totalEmployees = employeesRes.count || 0;
-      const linkedEmployees = linkedEmployeesRes.count || 0;
-      const totalOffices = officesRes.count || 0;
-      const todayPresent = attendanceRes.count || 0;
-      const pendingOvertime = overtimeRes.count || 0;
-      const pendingLeaves = leavesRes.count || 0;
-      const pendingWfh = wfhRes.count || 0;
-      const expiredInvitations = invitationsRes.count || 0;
+      const totalEmployees = employeesRes.error ? 0 : (employeesRes.count || 0);
+      const linkedEmployees = linkedEmployeesRes.error ? 0 : (linkedEmployeesRes.count || 0);
+      const totalOffices = officesRes.error ? 0 : (officesRes.count || 0);
+      const todayPresent = attendanceRes.error ? 0 : (attendanceRes.count || 0);
+      const pendingOvertime = overtimeRes.error ? 0 : (overtimeRes.count || 0);
+      const pendingLeaves = leavesRes.error ? 0 : (leavesRes.count || 0);
+      const pendingWfh = wfhRes.error ? 0 : (wfhRes.count || 0);
+      const expiredInvitations = invitationsRes.error ? 0 : (invitationsRes.count || 0);
 
       setStats({
         totalEmployees,
@@ -373,7 +409,7 @@ export default function OrgDashboard() {
       });
 
       const attendanceByDate = new Map<string, number>();
-      for (const row of attendanceTrendRes.data || []) {
+      for (const row of attendanceTrendRes.error ? [] : (attendanceTrendRes.data || [])) {
         const dateKey = row.date;
         attendanceByDate.set(dateKey, (attendanceByDate.get(dateKey) || 0) + 1);
       }
@@ -401,9 +437,9 @@ export default function OrgDashboard() {
       const approvedStatuses = new Set(["approved", "disetujui"]);
       const rejectedStatuses = new Set(["rejected", "ditolak"]);
       const approvalRows = [
-        ...(leaveApprovalsRes.data || []),
-        ...(wfhApprovalsRes.data || []),
-        ...(overtimeApprovalsRes.data || []),
+        ...(leaveApprovalsRes.error ? [] : (leaveApprovalsRes.data || [])),
+        ...(wfhApprovalsRes.error ? [] : (wfhApprovalsRes.data || [])),
+        ...(overtimeApprovalsRes.error ? [] : (overtimeApprovalsRes.data || [])),
       ] as { created_at: string | null; approved_at: string | null; status: string | null }[];
 
       let approvedCount = 0;
@@ -433,7 +469,7 @@ export default function OrgDashboard() {
       });
 
       // Set APK info
-      if (apkSettings?.data?.value && typeof apkSettings.data.value === 'object') {
+      if (!apkSettings.error && apkSettings?.data?.value && typeof apkSettings.data.value === "object") {
         const apkData = apkSettings.data.value as Record<string, unknown>;
         if (apkData.url) {
           setApkInfo({
@@ -447,6 +483,10 @@ export default function OrgDashboard() {
     } catch (error) {
       const errorRef = reportError(error, "org.dashboard.fetch", {
         tenant_id: resolvedTenantIdForLog ?? queryTenantId ?? null,
+        reason: (error as { message?: string; code?: string; details?: string; hint?: string })?.message ?? null,
+        supabase_code: (error as { code?: string })?.code ?? null,
+        supabase_details: (error as { details?: string })?.details ?? null,
+        supabase_hint: (error as { hint?: string })?.hint ?? null,
       });
       toast.error(appendErrorReference("Gagal memuat data dashboard", errorRef));
     } finally {
@@ -454,9 +494,96 @@ export default function OrgDashboard() {
     }
   }, [navigate, queryTenantId]);
 
+  const fetchBillingAlerts = useCallback(async () => {
+    if (!tenantId) return;
+    try {
+      setBillingAlertsErrorRef(null);
+      setBillingAlertsErrorReason(null);
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData.user?.id;
+      if (!userId) return;
+
+      const { data, error } = await supabase
+        .from("notifications")
+        .select("id, title, message, created_at, metadata")
+        .eq("user_id", userId)
+        .eq("is_read", false)
+        .order("created_at", { ascending: false })
+        .limit(15);
+      if (error) throw error;
+
+      const filtered = (data || []).filter((row) => {
+        const metadata = (row.metadata && typeof row.metadata === "object")
+          ? (row.metadata as Record<string, unknown>)
+          : null;
+        const source = String(metadata?.source || "").toLowerCase();
+        const title = String(row.title || "").toLowerCase();
+        const message = String(row.message || "").toLowerCase();
+        return source === "billing_grace_notifier"
+          || title.includes("tagihan")
+          || title.includes("grace")
+          || message.includes("tagihan")
+          || message.includes("grace")
+          || message.includes("pembayaran");
+      }) as BillingAlertNotification[];
+
+      setBillingAlerts(filtered);
+      if (filtered.length > 0) {
+        const sessionKey = `org_billing_overlay_seen_${tenantId}_${format(new Date(), "yyyy-MM-dd")}`;
+        const hasSeenToday = sessionStorage.getItem(sessionKey);
+        if (!hasSeenToday) {
+          setIsBillingOverlayOpen(true);
+          sessionStorage.setItem(sessionKey, "1");
+        }
+      }
+    } catch (error) {
+      const err = error as {
+        code?: string;
+        details?: string;
+        hint?: string;
+        message?: string;
+        status?: number;
+      };
+      const reason = String(err?.message || "Unknown billing alert error");
+      const errorRef = reportError(error, "org.dashboard.billing_alerts.fetch", {
+        tenant_id: tenantId,
+        supabase_code: err?.code ?? null,
+        supabase_details: err?.details ?? null,
+        supabase_hint: err?.hint ?? null,
+        supabase_status: err?.status ?? null,
+        reason,
+      });
+      setBillingAlertsErrorRef(errorRef);
+      setBillingAlertsErrorReason(reason);
+      toast.warning(appendErrorReference("Peringatan tagihan belum dapat dimuat penuh.", errorRef));
+    }
+  }, [tenantId]);
+
+  const markBillingAlertsAsRead = useCallback(async () => {
+    if (billingAlerts.length === 0) return;
+    const ids = billingAlerts.map((row) => row.id);
+    try {
+      const { error } = await supabase
+        .from("notifications")
+        .update({ is_read: true })
+        .in("id", ids);
+      if (error) throw error;
+      setBillingAlerts([]);
+      setIsBillingOverlayOpen(false);
+      toast.success("Peringatan tagihan ditandai sudah dibaca.");
+    } catch (error) {
+      const errorRef = reportError(error, "org.dashboard.billing_alerts.mark_read", { tenant_id: tenantId, ids_count: ids.length });
+      toast.error(appendErrorReference("Gagal menandai peringatan tagihan.", errorRef));
+    }
+  }, [billingAlerts, tenantId]);
+
   useEffect(() => {
     void fetchDashboardData();
   }, [fetchDashboardData]);
+
+  useEffect(() => {
+    void fetchBillingAlerts();
+  }, [fetchBillingAlerts]);
 
   useEffect(() => {
     if (!isLoading) return;
@@ -545,6 +672,65 @@ export default function OrgDashboard() {
                   >
                     Upgrade Sekarang
                   </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {billingAlerts.length > 0 && (
+            <Card className="border-red-500/60 bg-red-500/10">
+              <CardContent className="py-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-lg bg-red-500/20 flex items-center justify-center">
+                      <AlertTriangle className="w-5 h-5 text-red-600" />
+                    </div>
+                    <div>
+                      <p className="font-semibold text-red-700">Peringatan Keras Tagihan</p>
+                      <p className="text-sm text-muted-foreground">
+                        {billingAlerts.length} notifikasi billing membutuhkan tindakan segera
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => setIsBillingOverlayOpen(true)}
+                  >
+                    Buka Overlay
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {billingAlertsErrorRef && (
+            <Card className="border-amber-500/60 bg-amber-500/10">
+              <CardContent className="py-3">
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-amber-700">Debug Notifikasi Billing</p>
+                  <p className="text-xs text-muted-foreground">
+                    Query notifikasi billing gagal. Ref: <span className="font-mono">{billingAlertsErrorRef}</span>
+                  </p>
+                  {billingAlertsErrorReason && (
+                    <p className="text-xs text-muted-foreground">Reason: {billingAlertsErrorReason}</p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {dashboardPartialRef && (
+            <Card className="border-amber-400/60 bg-amber-500/5">
+              <CardContent className="py-3">
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-amber-700">Mode Parsial Dashboard Aktif</p>
+                  <p className="text-xs text-muted-foreground">
+                    Sebagian data sedang fallback. Ref: <span className="font-mono">{dashboardPartialRef}</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Scope: {dashboardPartialScopes.join(", ")}
+                  </p>
                 </div>
               </CardContent>
             </Card>
@@ -956,6 +1142,61 @@ export default function OrgDashboard() {
           reporterRole="admin_organisasi"
         />
       )}
+
+      <Dialog open={isBillingOverlayOpen} onOpenChange={setIsBillingOverlayOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-700">
+              <AlertTriangle className="h-5 w-5" />
+              Peringatan Keras Tagihan
+            </DialogTitle>
+            <DialogDescription>
+              Notifikasi ini terkait masa tenggang/grace period pembayaran langganan. Segera tindak lanjuti agar layanan tetap aktif.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+            {billingAlerts.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Tidak ada notifikasi billing yang belum dibaca.</p>
+            ) : (
+              billingAlerts.map((row) => {
+                const metadata = row.metadata || {};
+                const reason = String(metadata.reason || metadata.trigger || "billing_alert").replaceAll("_", " ");
+                return (
+                  <div key={row.id} className="rounded-lg border border-red-200 bg-red-50/70 p-3 dark:border-red-500/30 dark:bg-red-500/10">
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <p className="text-sm font-semibold text-red-800 dark:text-red-300">
+                        {row.title || "Peringatan Tagihan"}
+                      </p>
+                      <Badge variant="outline" className="border-red-300 text-red-700 dark:border-red-500/40 dark:text-red-300">
+                        {reason}
+                      </Badge>
+                    </div>
+                    <p className="text-sm text-red-900/80 dark:text-red-200/80">{row.message || "-"}</p>
+                    <p className="mt-2 text-xs text-red-700/70 dark:text-red-300/70">
+                      {format(new Date(row.created_at), "d MMM yyyy, HH:mm", { locale: id })}
+                    </p>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-between">
+            <Button variant="outline" onClick={() => navigate("/org/notifications")}>
+              Lihat Riwayat Notifikasi
+            </Button>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => navigate("/org/activation")}>
+                Buka Aktivasi
+              </Button>
+              <Button variant="destructive" onClick={() => void markBillingAlertsAsRead()}>
+                Tandai Sudah Dibaca
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </OrganizationLayout>
   );
 }

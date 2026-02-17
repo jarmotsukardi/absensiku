@@ -13,6 +13,7 @@ interface FloatingWhatsappSettingValue {
   phone_number?: string;
   message?: string;
   default_message?: string;
+  icon_url?: string;
 }
 
 interface DragPosition {
@@ -30,6 +31,8 @@ export function EmployeeFloatingWhatsApp({ tenantId }: EmployeeFloatingWhatsAppP
   const [isVisible, setIsVisible] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState<string>("");
   const [message, setMessage] = useState("Halo, saya butuh bantuan terkait absensi.");
+  const [iconUrl, setIconUrl] = useState("");
+  const [iconLoadFailed, setIconLoadFailed] = useState(false);
   const [position, setPosition] = useState<DragPosition | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -82,10 +85,13 @@ export function EmployeeFloatingWhatsApp({ tenantId }: EmployeeFloatingWhatsAppP
       const enabled = raw.enabled === true;
       const phone = sanitizePhone(raw.phone || raw.phone_number || "");
       const defaultMessage = raw.message || raw.default_message || "Halo, saya butuh bantuan terkait absensi.";
+      const customIcon = typeof raw.icon_url === "string" ? raw.icon_url.trim() : "";
 
       setIsVisible(enabled && phone.length > 0);
       setPhoneNumber(phone);
       setMessage(defaultMessage);
+      setIconUrl(customIcon);
+      setIconLoadFailed(false);
     };
 
     void loadSettings();
@@ -184,7 +190,16 @@ export function EmployeeFloatingWhatsApp({ tenantId }: EmployeeFloatingWhatsAppP
       aria-label="Hubungi WhatsApp"
       title="Geser untuk pindah posisi. Ketuk untuk membuka WhatsApp."
     >
-      <MessageCircle className="h-6 w-6" />
+      {iconUrl && !iconLoadFailed ? (
+        <img
+          src={iconUrl}
+          alt="WhatsApp"
+          className="h-6 w-6 object-contain"
+          onError={() => setIconLoadFailed(true)}
+        />
+      ) : (
+        <MessageCircle className="h-6 w-6" />
+      )}
     </button>
   );
 }
