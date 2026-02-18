@@ -27,6 +27,8 @@ dist-ssr
 *.sw?
 .vercel
 supabase/.temp/
+chrome/
+tmp/
 artifacts/
 ops/*.local.json
 ops/*.local.jsonl
