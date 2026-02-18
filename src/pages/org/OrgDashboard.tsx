@@ -30,6 +30,7 @@ import { OrganizationLayout } from "@/components/admin/organization/Organization
 import { OverdueRequestsOverlay } from "@/components/org/OverdueRequestsOverlay";
 import { StabilityStreakWidget } from "@/components/dashboard/StabilityStreakWidget";
 import { FloatingBugReport } from "@/components/common/FloatingBugReport";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { withTimeout } from "@/lib/attendanceResilience";
 
@@ -80,14 +81,20 @@ interface BillingAlertNotification {
   metadata: Record<string, unknown> | null;
 }
 
-const DASHBOARD_FETCH_TIMEOUT_MS = 15000;
-const DASHBOARD_LOADING_WATCHDOG_MS = 25000;
+const DASHBOARD_FETCH_TIMEOUT_MS = 30000;
+const DASHBOARD_LOADING_WATCHDOG_MS = 70000;
 const ORG_ACTIVE_TENANT_STORAGE_KEY = "org_active_tenant_id";
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const sanitizeUuid = (value: string | null): string | null => {
+  if (!value) return null;
+  return UUID_PATTERN.test(value) ? value : null;
+};
 
 export default function OrgDashboard() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const queryTenantId = searchParams.get("tenant_id");
+  const queryTenantId = sanitizeUuid(searchParams.get("tenant_id"));
   const [isLoading, setIsLoading] = useState(true);
   const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -1132,6 +1139,8 @@ export default function OrgDashboard() {
             </CardContent>
           </Card>
         )}
+
+        <PageGlossarySection preset="org_dashboard" />
       </div>
 
       {/* Floating Bug Report */}

@@ -1,8 +1,10 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -33,11 +35,87 @@ import {
   calculateThroughput,
 } from "@/lib/scalabilityConfig";
 
+type ScalabilityMode = "manual" | "auto";
+
+type AttendanceScalabilitySetting = {
+  mode?: ScalabilityMode;
+  tier?: ScalabilityTier;
+  effective_tier?: ScalabilityTier;
+  measured_active_employees?: number;
+  measured_at?: string;
+  updated_at?: string;
+};
+
+const SCALABILITY_KEY = "attendance_scalability";
+const VALID_TIERS: ScalabilityTier[] = ["small", "medium", "large", "enterprise"];
+
+const isValidTier = (value: unknown): value is ScalabilityTier => {
+  return typeof value === "string" && VALID_TIERS.includes(value as ScalabilityTier);
+};
+
+type CapacityThresholds = {
+  utilizationWarn: number;
+  utilizationCritical: number;
+  queueWarn: number;
+  queueCritical: number;
+  p95Warn: number;
+  p95Critical: number;
+  pendingWarn: number;
+  pendingCritical: number;
+};
+
+const BASE_THRESHOLDS_BY_TIER: Record<ScalabilityTier, CapacityThresholds> = {
+  small: {
+    utilizationWarn: 75,
+    utilizationCritical: 90,
+    queueWarn: 500,
+    queueCritical: 1500,
+    p95Warn: 30,
+    p95Critical: 90,
+    pendingWarn: 300,
+    pendingCritical: 900,
+  },
+  medium: {
+    utilizationWarn: 80,
+    utilizationCritical: 92,
+    queueWarn: 1500,
+    queueCritical: 5000,
+    p95Warn: 60,
+    p95Critical: 150,
+    pendingWarn: 420,
+    pendingCritical: 1200,
+  },
+  large: {
+    utilizationWarn: 85,
+    utilizationCritical: 95,
+    queueWarn: 4000,
+    queueCritical: 12000,
+    p95Warn: 90,
+    p95Critical: 240,
+    pendingWarn: 600,
+    pendingCritical: 1500,
+  },
+  enterprise: {
+    utilizationWarn: 88,
+    utilizationCritical: 96,
+    queueWarn: 10000,
+    queueCritical: 30000,
+    p95Warn: 120,
+    p95Critical: 300,
+    pendingWarn: 900,
+    pendingCritical: 2400,
+  },
+};
+
 export function ScalabilitySettings() {
   const { toast } = useToast();
   const [activeProfile, setActiveProfile] = useState<ScalabilityProfile>(loadScalabilityConfig());
   const [estimatedUsers, setEstimatedUsers] = useState<string>(String(activeProfile.maxUsers));
+  const [activeTab, setActiveTab] = useState<"konfigurasi" | "kesehatan-kapasitas">("konfigurasi");
+  const [scalabilityMode, setScalabilityMode] = useState<ScalabilityMode>("manual");
+  const [activeEmployeesCount, setActiveEmployeesCount] = useState<number | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isAutoSyncing, setIsAutoSyncing] = useState(false);
   const [isHealthLoading, setIsHealthLoading] = useState(false);
   const [ingestHealth, setIngestHealth] = useState<{
     queue_depth: number;
@@ -49,10 +127,202 @@ export function ScalabilitySettings() {
     p95_lag_seconds: number;
     max_pending_age_seconds: number;
   } | null>(null);
-  const profiles = getAllProfiles();
+  const profiles = useMemo(() => getAllProfiles(), []);
 
   const recommendedTier = getRecommendedTier(parseInt(estimatedUsers) || 0);
   const throughput = calculateThroughput(activeProfile);
+  const estimatedUsersNumber = Math.max(0, parseInt(estimatedUsers) || 0);
+  const measuredUsers = (activeEmployeesCount ?? estimatedUsersNumber) || activeProfile.maxUsers;
+  const capacityThresholds = useMemo(() => {
+    const base = BASE_THRESHOLDS_BY_TIER[activeProfile.tier];
+    const processedLast5m = Math.max(0, ingestHealth?.processed_last_5m ?? 0);
+
+    // Adaptif: threshold queue menyesuaikan throughput aktual 5 menit terakhir.
+    const dynamicQueueWarn = Math.max(base.queueWarn, Math.round(processedLast5m * 0.8));
+    const dynamicQueueCritical = Math.max(base.queueCritical, Math.round(processedLast5m * 1.8));
+
+    // Adaptif: threshold lag mengikuti ekspektasi antrean tier aktif.
+    const dynamicP95Warn = Math.max(base.p95Warn, Math.round(activeProfile.estimatedQueueSeconds * 0.8));
+    const dynamicP95Critical = Math.max(base.p95Critical, Math.round(activeProfile.estimatedQueueSeconds * 2));
+    const dynamicPendingWarn = Math.max(base.pendingWarn, Math.round(activeProfile.estimatedQueueSeconds * 3));
+    const dynamicPendingCritical = Math.max(base.pendingCritical, Math.round(activeProfile.estimatedQueueSeconds * 8));
+
+    return {
+      utilizationWarn: base.utilizationWarn,
+      utilizationCritical: base.utilizationCritical,
+      queueWarn: dynamicQueueWarn,
+      queueCritical: Math.max(dynamicQueueCritical, dynamicQueueWarn + 500),
+      p95Warn: dynamicP95Warn,
+      p95Critical: Math.max(dynamicP95Critical, dynamicP95Warn + 30),
+      pendingWarn: dynamicPendingWarn,
+      pendingCritical: Math.max(dynamicPendingCritical, dynamicPendingWarn + 120),
+    };
+  }, [activeProfile.estimatedQueueSeconds, activeProfile.tier, ingestHealth?.processed_last_5m]);
+
+  const capacityHealth = useMemo(() => {
+    const maxUsers = Math.max(1, activeProfile.maxUsers);
+    const userUtilization = Math.min(999, Math.round((measuredUsers / maxUsers) * 100));
+    const queueDepth = ingestHealth?.queue_depth ?? 0;
+    const p95Lag = Math.round(ingestHealth?.p95_lag_seconds ?? 0);
+    const maxPendingAge = Math.round(ingestHealth?.max_pending_age_seconds ?? 0);
+    const failedCount = ingestHealth?.failed_count ?? 0;
+    const deadCount = ingestHealth?.dead_count ?? 0;
+    const processedLast5m = ingestHealth?.processed_last_5m ?? 0;
+
+    let score = 100;
+    const findings: string[] = [];
+    const recommendations: string[] = [];
+
+    if (userUtilization >= capacityThresholds.utilizationCritical) {
+      score -= 35;
+      findings.push(`Pemakaian kapasitas user sudah >${capacityThresholds.utilizationCritical}% dari tier aktif.`);
+      recommendations.push("Naikkan tier sekarang atau aktifkan mode otomatis.");
+    } else if (userUtilization >= capacityThresholds.utilizationWarn) {
+      score -= 20;
+      findings.push(`Pemakaian kapasitas user mendekati batas aman (>${capacityThresholds.utilizationWarn}%).`);
+      recommendations.push("Siapkan kenaikan tier sebelum jam puncak.");
+    } else if (userUtilization <= 55) {
+      findings.push("Headroom kapasitas masih longgar.");
+    }
+
+    if (queueDepth >= capacityThresholds.queueCritical) {
+      score -= 25;
+      findings.push(`Queue depth sangat tinggi (>=${capacityThresholds.queueCritical.toLocaleString()}).`);
+      recommendations.push("Naikkan tier + periksa worker/cron pemroses queue.");
+    } else if (queueDepth >= capacityThresholds.queueWarn) {
+      score -= 12;
+      findings.push(`Queue depth mulai padat (>=${capacityThresholds.queueWarn.toLocaleString()}).`);
+      recommendations.push("Pantau backlog dan jalankan sync health lebih sering.");
+    }
+
+    if (p95Lag >= capacityThresholds.p95Critical) {
+      score -= 20;
+      findings.push(`P95 lag >${capacityThresholds.p95Critical} detik, sinkronisasi melambat.`);
+      recommendations.push("Kurangi burst (jitter lebih besar) dan cek performa DB.");
+    } else if (p95Lag >= capacityThresholds.p95Warn) {
+      score -= 10;
+      findings.push(`P95 lag >${capacityThresholds.p95Warn} detik, mulai ada antrian sinkronisasi.`);
+    }
+
+    if (maxPendingAge >= capacityThresholds.pendingCritical) {
+      score -= 12;
+      findings.push(`Umur pending tertua >${capacityThresholds.pendingCritical} detik.`);
+      recommendations.push("Investigasi worker stuck atau error pada batch-attendance.");
+    } else if (maxPendingAge >= capacityThresholds.pendingWarn) {
+      score -= 6;
+      findings.push(`Umur pending tertua >${capacityThresholds.pendingWarn} detik.`);
+    }
+
+    if (deadCount > 0) {
+      score -= 15;
+      findings.push(`Ditemukan dead queue (${deadCount} item).`);
+      recommendations.push("Jalankan cleanup/retry dead queue.");
+    } else if (failedCount > 0) {
+      score -= 8;
+      findings.push(`Terdapat failed queue (${failedCount} item).`);
+    }
+
+    if (!ingestHealth) {
+      score -= 10;
+      findings.push("Data health queue belum tersedia dari RPC.");
+      recommendations.push("Pastikan migration/RPC get_attendance_ingest_health aktif.");
+    }
+
+    score = Math.max(0, Math.min(100, score));
+
+    const status = score >= 80 ? "Siap" : score >= 60 ? "Waspada" : "Kritis";
+    const statusTone =
+      status === "Siap"
+        ? "bg-green-500/10 text-green-700 border-green-500/30 dark:text-green-300"
+        : status === "Waspada"
+          ? "bg-amber-500/10 text-amber-700 border-amber-500/30 dark:text-amber-300"
+          : "bg-red-500/10 text-red-700 border-red-500/30 dark:text-red-300";
+
+    const suggestedTier = getRecommendedTier(Math.max(1, measuredUsers));
+    const peakCapacityEstimate = Math.max(1, throughput.peakReqPerSec);
+    const offpeakCapacityEstimate = Math.max(1, throughput.offpeakReqPerSec);
+    const queuePressure =
+      queueDepth === 0
+        ? "Rendah"
+        : queueDepth < capacityThresholds.queueWarn
+          ? "Normal"
+          : queueDepth < capacityThresholds.queueCritical
+            ? "Tinggi"
+            : "Sangat Tinggi";
+    const queuePressureTone =
+      queueDepth < capacityThresholds.queueWarn
+        ? "bg-green-500/10 text-green-700 border-green-500/30 dark:text-green-300"
+        : queueDepth < capacityThresholds.queueCritical
+          ? "bg-amber-500/10 text-amber-700 border-amber-500/30 dark:text-amber-300"
+          : "bg-red-500/10 text-red-700 border-red-500/30 dark:text-red-300";
+
+    return {
+      score,
+      status,
+      statusTone,
+      userUtilization,
+      measuredUsers,
+      queueDepth,
+      queuePressure,
+      queuePressureTone,
+      p95Lag,
+      maxPendingAge,
+      failedCount,
+      deadCount,
+      processedLast5m,
+      suggestedTier,
+      peakCapacityEstimate,
+      offpeakCapacityEstimate,
+      thresholds: capacityThresholds,
+      findings,
+      recommendations,
+    };
+  }, [
+    activeProfile.maxUsers,
+    capacityThresholds,
+    ingestHealth,
+    measuredUsers,
+    throughput.offpeakReqPerSec,
+    throughput.peakReqPerSec,
+  ]);
+
+  const loadActiveEmployeesCount = useCallback(async (): Promise<number> => {
+    const { count, error } = await supabase
+      .from("employees")
+      .select("id", { count: "exact", head: true })
+      .eq("is_active", true);
+
+    if (error) throw error;
+    return count ?? 0;
+  }, []);
+
+  const upsertScalabilitySetting = useCallback(async (value: AttendanceScalabilitySetting) => {
+    const { data: existing, error: existingError } = await supabase
+      .from("system_settings")
+      .select("id")
+      .eq("key", SCALABILITY_KEY)
+      .maybeSingle();
+
+    if (existingError) throw existingError;
+
+    if (existing?.id) {
+      const { error } = await supabase
+        .from("system_settings")
+        .update({ value, updated_at: new Date().toISOString() })
+        .eq("id", existing.id);
+      if (error) throw error;
+      return;
+    }
+
+    const { error } = await supabase
+      .from("system_settings")
+      .insert({
+        key: SCALABILITY_KEY,
+        value,
+        description: "Konfigurasi skalabilitas absensi untuk sinkronisasi local-first",
+      });
+    if (error) throw error;
+  }, []);
 
   const loadIngestHealth = useCallback(async () => {
     setIsHealthLoading(true);
@@ -80,25 +350,136 @@ export function ScalabilitySettings() {
     }
   }, []);
 
+  const syncAutoScalability = useCallback(
+    async (forcePersist: boolean = false) => {
+      setIsAutoSyncing(true);
+      try {
+        const count = await loadActiveEmployeesCount();
+        const nextTier = getRecommendedTier(count);
+        const nextProfile = profiles.find((p) => p.tier === nextTier) ?? activeProfile;
+
+        setActiveEmployeesCount(count);
+        setEstimatedUsers(String(count));
+        setActiveProfile(nextProfile);
+        setScalabilityMode("auto");
+        saveScalabilityConfig(nextProfile.tier);
+
+        const shouldPersist =
+          forcePersist ||
+          scalabilityMode !== "auto" ||
+          activeProfile.tier !== nextProfile.tier ||
+          activeEmployeesCount !== count;
+
+        if (shouldPersist) {
+          const now = new Date().toISOString();
+          await upsertScalabilitySetting({
+            mode: "auto",
+            tier: nextTier,
+            effective_tier: nextTier,
+            measured_active_employees: count,
+            measured_at: now,
+            updated_at: now,
+          });
+        }
+      } finally {
+        setIsAutoSyncing(false);
+      }
+    },
+    [
+      activeEmployeesCount,
+      activeProfile,
+      loadActiveEmployeesCount,
+      profiles,
+      scalabilityMode,
+      upsertScalabilitySetting,
+    ]
+  );
+
+  const handleModeToggle = useCallback(
+    async (checked: boolean) => {
+      if (checked) {
+        setScalabilityMode("auto");
+        setIsSaving(true);
+        try {
+          await syncAutoScalability(true);
+          toast({
+            title: "Mode Otomatis Aktif",
+            description: "Tier akan menyesuaikan jumlah pegawai aktif.",
+          });
+        } catch (error) {
+          console.error("Error enabling auto scalability mode:", error);
+          toast({
+            title: "Gagal Mengaktifkan Mode Otomatis",
+            description: "Periksa koneksi database lalu coba lagi.",
+            variant: "destructive",
+          });
+        } finally {
+          setIsSaving(false);
+        }
+        return;
+      }
+
+      setScalabilityMode("manual");
+      setIsSaving(true);
+      try {
+        const now = new Date().toISOString();
+        await upsertScalabilitySetting({
+          mode: "manual",
+          tier: activeProfile.tier,
+          effective_tier: activeProfile.tier,
+          measured_active_employees: activeEmployeesCount ?? undefined,
+          measured_at: activeEmployeesCount !== null ? now : undefined,
+          updated_at: now,
+        });
+        toast({
+          title: "Mode Manual Aktif",
+          description: `Tier dikunci ke ${activeProfile.label}.`,
+        });
+      } catch (error) {
+        console.error("Error enabling manual scalability mode:", error);
+        toast({
+          title: "Gagal Menyimpan Mode Manual",
+          description: "Perubahan mode belum tersimpan di server.",
+          variant: "destructive",
+        });
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [activeEmployeesCount, activeProfile, syncAutoScalability, toast, upsertScalabilitySetting]
+  );
+
   useEffect(() => {
     const loadGlobalScalability = async () => {
       try {
         const { data, error } = await supabase
           .from("system_settings")
           .select("value")
-          .eq("key", "attendance_scalability")
+          .eq("key", SCALABILITY_KEY)
           .maybeSingle();
 
         if (error) throw error;
 
-        const value = data?.value as { tier?: ScalabilityTier } | null;
-        if (!value?.tier) return;
+        const value = data?.value as AttendanceScalabilitySetting | null;
+        const savedMode = value?.mode === "auto" ? "auto" : "manual";
+        const resolvedTier = isValidTier(value?.effective_tier)
+          ? value.effective_tier
+          : isValidTier(value?.tier)
+            ? value.tier
+            : null;
+        if (!resolvedTier) return;
 
-        const profile = getAllProfiles().find((p) => p.tier === value.tier);
+        const profile = getAllProfiles().find((p) => p.tier === resolvedTier);
         if (!profile) return;
 
         setActiveProfile(profile);
-        setEstimatedUsers(String(profile.maxUsers));
+        setScalabilityMode(savedMode);
+        if (typeof value?.measured_active_employees === "number") {
+          setActiveEmployeesCount(value.measured_active_employees);
+          setEstimatedUsers(String(value.measured_active_employees));
+        } else {
+          setEstimatedUsers(String(profile.maxUsers));
+        }
         saveScalabilityConfig(profile.tier);
       } catch (error) {
         console.error("Error loading global scalability settings:", error);
@@ -114,46 +495,50 @@ export function ScalabilitySettings() {
     return () => window.clearInterval(interval);
   }, [loadIngestHealth]);
 
+  useEffect(() => {
+    if (scalabilityMode !== "auto") return;
+
+    let cancelled = false;
+    const run = async () => {
+      try {
+        await syncAutoScalability(false);
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Error refreshing auto scalability profile:", error);
+        }
+      }
+    };
+
+    run();
+    const interval = window.setInterval(run, 120000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [scalabilityMode, syncAutoScalability]);
+
   const handleApplyProfile = async (tier: ScalabilityTier) => {
     const profile = profiles.find(p => p.tier === tier)!;
+    setScalabilityMode("manual");
     setActiveProfile(profile);
     saveScalabilityConfig(tier);
 
     setIsSaving(true);
     try {
+      const now = new Date().toISOString();
       const payload = {
+        mode: "manual" as ScalabilityMode,
         tier,
-        updated_at: new Date().toISOString(),
+        effective_tier: tier,
+        measured_active_employees: activeEmployeesCount ?? undefined,
+        measured_at: activeEmployeesCount !== null ? now : undefined,
+        updated_at: now,
       };
-
-      const { data: existing, error: existingError } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "attendance_scalability")
-        .maybeSingle();
-
-      if (existingError) throw existingError;
-
-      if (existing?.id) {
-        const { error } = await supabase
-          .from("system_settings")
-          .update({ value: payload, updated_at: new Date().toISOString() })
-          .eq("id", existing.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase
-          .from("system_settings")
-          .insert({
-            key: "attendance_scalability",
-            value: payload,
-            description: "Konfigurasi skalabilitas absensi untuk sinkronisasi local-first",
-          });
-        if (error) throw error;
-      }
+      await upsertScalabilitySetting(payload);
 
       toast({
         title: "Profil Skalabilitas Diterapkan",
-        description: `Konfigurasi "${profile.label}" aktif dan tersimpan global.`,
+        description: `Konfigurasi "${profile.label}" aktif (mode manual).`,
       });
     } catch (error) {
       console.error("Error saving scalability settings:", error);
@@ -207,6 +592,69 @@ export function ScalabilitySettings() {
       {isSaving && (
         <p className="text-xs text-muted-foreground">Menyimpan konfigurasi skalabilitas global...</p>
       )}
+      {isAutoSyncing && (
+        <p className="text-xs text-muted-foreground">Mode otomatis sedang menghitung jumlah pegawai aktif...</p>
+      )}
+
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => setActiveTab(value as "konfigurasi" | "kesehatan-kapasitas")}
+        className="space-y-6"
+      >
+        <TabsList className="grid w-full max-w-md grid-cols-2">
+          <TabsTrigger value="konfigurasi">Konfigurasi</TabsTrigger>
+          <TabsTrigger value="kesehatan-kapasitas">Kesehatan Kapasitas</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="konfigurasi" className="space-y-6">
+      <Card className="border-primary/20">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <Zap className="h-4 w-4" />
+              Penyesuaian Otomatis Tier
+            </span>
+            <Switch
+              checked={scalabilityMode === "auto"}
+              onCheckedChange={(checked) => {
+                void handleModeToggle(checked);
+              }}
+              disabled={isSaving || isAutoSyncing}
+            />
+          </CardTitle>
+          <CardDescription>
+            Jika aktif, sistem menghitung jumlah pegawai aktif dan memilih tier terbaik secara otomatis.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Badge variant="outline">
+              Mode: {scalabilityMode === "auto" ? "Otomatis" : "Manual"}
+            </Badge>
+            {activeEmployeesCount !== null && (
+              <Badge variant="outline">
+                Pegawai aktif terhitung: {activeEmployeesCount.toLocaleString()}
+              </Badge>
+            )}
+            <Badge variant="outline">
+              Tier efektif: {activeProfile.label}
+            </Badge>
+          </div>
+          {scalabilityMode === "auto" && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                void syncAutoScalability(true);
+              }}
+              disabled={isSaving || isAutoSyncing}
+            >
+              Sinkronkan Ulang Sekarang
+            </Button>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Ingestion Queue Health */}
       <Card className="border-primary/20">
@@ -551,10 +999,10 @@ export function ScalabilitySettings() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Info className="h-4 w-4" />
-            Penjelasan Istilah & Mekanisme Skalabilitas
+            Penjelasan Istilah, Konfigurasi, & Kesehatan Kapasitas
           </CardTitle>
           <CardDescription>
-            Panduan lengkap mengenai istilah teknis dan cara kerja sistem resiliensi pada halaman ini.
+            Panduan istilah teknis, mode pengaturan, dan cara membaca tab baru Kesehatan Kapasitas.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -567,7 +1015,8 @@ export function ScalabilitySettings() {
             <p className="text-xs text-muted-foreground leading-relaxed">
               Sistem absensi menggunakan pendekatan <strong>Offline-First</strong>: setiap data absen disimpan secara instan ke perangkat pengguna (IndexedDB) terlebih dahulu, lalu disinkronkan ke server di latar belakang. 
               Jika server sedang sibuk atau koneksi putus, data tetap aman di perangkat dan akan otomatis dikirim ulang saat kondisi memungkinkan. 
-              Strategi ini memastikan pengalaman pengguna tetap lancar meskipun terjadi lonjakan trafik hingga ratusan ribu pengguna bersamaan.
+              Strategi ini memastikan pengalaman pengguna tetap lancar meskipun terjadi lonjakan trafik hingga ratusan ribu pengguna bersamaan. 
+              Dengan pembaruan terbaru, sistem juga mendukung <strong>Mode Otomatis</strong> dan laporan <strong>Kesehatan Kapasitas</strong> agar penyesuaian tier lebih adaptif.
             </p>
           </div>
 
@@ -683,6 +1132,53 @@ export function ScalabilitySettings() {
                 <strong>Off-peak Req/s:</strong> Request/detik di luar jam sibuk
               </div>
             </div>
+
+            {/* Auto vs Manual Mode */}
+            <div className="p-4 rounded-lg border space-y-2">
+              <h5 className="text-sm font-semibold flex items-center gap-2">
+                <Zap className="h-4 w-4 text-indigo-500" />
+                Mode Otomatis vs Manual
+              </h5>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                <strong>Mode Manual</strong> berarti admin memilih tier sendiri dan sistem mengikuti pilihan itu. 
+                <strong> Mode Otomatis</strong> berarti sistem menghitung jumlah pegawai aktif, lalu memilih tier yang paling sesuai secara berkala. 
+                Mode otomatis cocok saat jumlah pegawai berubah cepat agar kapasitas tetap proporsional.
+              </p>
+              <div className="text-xs p-2 rounded bg-muted/50">
+                <strong>Manual:</strong> kontrol penuh admin &nbsp;|&nbsp; <strong>Auto:</strong> tier adaptif berdasarkan data real
+              </div>
+            </div>
+
+            {/* Capacity Health Score */}
+            <div className="p-4 rounded-lg border space-y-2">
+              <h5 className="text-sm font-semibold flex items-center gap-2">
+                <Activity className="h-4 w-4 text-teal-500" />
+                Skor Kesehatan Kapasitas
+              </h5>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Tab <strong>Kesehatan Kapasitas</strong> merangkum kondisi sistem dalam skor 0-100. 
+                Skor dihitung dari utilisasi tier, queue depth, P95 lag, pending age, serta failed/dead queue. 
+                Status dibagi menjadi <strong>Siap</strong>, <strong>Waspada</strong>, dan <strong>Kritis</strong> untuk memudahkan keputusan operasional.
+              </p>
+              <div className="text-xs p-2 rounded bg-muted/50">
+                <strong>Siap:</strong> skor &gt;= 80 &nbsp;|&nbsp; <strong>Waspada:</strong> 60-79 &nbsp;|&nbsp; <strong>Kritis:</strong> &lt; 60
+              </div>
+            </div>
+
+            {/* Dynamic Thresholds */}
+            <div className="p-4 rounded-lg border space-y-2">
+              <h5 className="text-sm font-semibold flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-orange-500" />
+                Threshold Dinamis
+              </h5>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Ambang <em>warning/critical</em> tidak lagi statis. Nilai threshold kini menyesuaikan tier aktif dan trafik aktual (misalnya processed 5 menit terakhir). 
+                Artinya, standar penilaian ikut berubah sesuai skala operasional, bukan satu angka tetap untuk semua kondisi.
+              </p>
+              <div className="text-xs p-2 rounded bg-muted/50">
+                Contoh: threshold queue untuk Enterprise otomatis lebih longgar dibanding Small, namun tetap adaptif terhadap beban real.
+              </div>
+            </div>
           </div>
 
           {/* Alur Kerja */}
@@ -698,6 +1194,21 @@ export function ScalabilitySettings() {
               <li><strong>Kirim ke Server (RPC):</strong> Data dikirim via fungsi database atomik. Jika gagal, masuk mekanisme Exponential Backoff.</li>
               <li><strong>Sinkronisasi Berhasil:</strong> Status diperbarui menjadi <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-green-500/10 text-green-700 dark:text-green-300">Synced</Badge>. Data aman di server.</li>
               <li><strong>Re-hydration:</strong> Jika aplikasi/HP mati mendadak, saat dibuka kembali sistem memulihkan data "stuck" dari IndexedDB dan melanjutkan sinkronisasi.</li>
+            </ol>
+          </div>
+
+          {/* Cara Baca Tab Baru */}
+          <div className="p-4 rounded-lg border bg-muted/30 space-y-3">
+            <h4 className="text-sm font-semibold flex items-center gap-2">
+              <Info className="h-4 w-4 text-primary" />
+              Cara Membaca Tab Kesehatan Kapasitas
+            </h4>
+            <ol className="text-xs text-muted-foreground space-y-2 list-decimal list-inside leading-relaxed">
+              <li>Lihat <strong>Status & Skor</strong> untuk indikator cepat apakah sistem aman atau perlu tindakan.</li>
+              <li>Cek <strong>Indikator Operasional</strong> (Queue Depth, P95 Lag, Pending Age) untuk menemukan bottleneck utama.</li>
+              <li>Gunakan panel <strong>Saran Tier</strong> jika jumlah pegawai atau antrian sudah melewati batas aman.</li>
+              <li>Periksa <strong>Threshold Dinamis Aktif</strong> agar keputusan tuning sesuai konteks trafik saat ini.</li>
+              <li>Eksekusi rekomendasi pada blok <strong>Temuan & Tindakan</strong>, lalu refresh metrik untuk validasi.</li>
             </ol>
           </div>
 
@@ -737,6 +1248,186 @@ export function ScalabilitySettings() {
           </div>
         </CardContent>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="kesehatan-kapasitas" className="space-y-6">
+          <Card className="border-primary/20">
+            <CardHeader>
+              <CardTitle className="text-base flex items-center justify-between">
+                <span className="flex items-center gap-2">
+                  <Activity className="h-4 w-4" />
+                  Ringkasan Kesehatan Kapasitas
+                </span>
+                <Badge className={cn("border", capacityHealth.statusTone)}>
+                  {capacityHealth.status} ({capacityHealth.score}/100)
+                </Badge>
+              </CardTitle>
+              <CardDescription>
+                Laporan kemampuan sistem absensi berdasarkan tier aktif, jumlah pegawai, dan kesehatan queue real-time.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="p-3 rounded-md bg-muted/40">
+                <p className="text-xs text-muted-foreground">Pegawai Terukur</p>
+                <p className="text-lg font-semibold">{capacityHealth.measuredUsers.toLocaleString()}</p>
+              </div>
+              <div className="p-3 rounded-md bg-muted/40">
+                <p className="text-xs text-muted-foreground">Utilisasi Tier</p>
+                <p className="text-lg font-semibold">{capacityHealth.userUtilization}%</p>
+              </div>
+              <div className="p-3 rounded-md bg-muted/40">
+                <p className="text-xs text-muted-foreground">Kapasitas Peak (estimasi)</p>
+                <p className="text-lg font-semibold">~{capacityHealth.peakCapacityEstimate.toLocaleString()} req/s</p>
+              </div>
+              <div className="p-3 rounded-md bg-muted/40">
+                <p className="text-xs text-muted-foreground">Kapasitas Off-Peak</p>
+                <p className="text-lg font-semibold">~{capacityHealth.offpeakCapacityEstimate.toLocaleString()} req/s</p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <Card className="lg:col-span-2">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Indikator Operasional</CardTitle>
+                <CardDescription>
+                  Membaca tekanan antrean sinkronisasi saat ini dan efeknya ke user.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="p-3 rounded-md bg-muted/40">
+                  <p className="text-xs text-muted-foreground">Queue Depth</p>
+                  <p className="text-lg font-semibold">{capacityHealth.queueDepth.toLocaleString()}</p>
+                  <Badge className={cn("mt-2 border", capacityHealth.queuePressureTone)}>
+                    Tekanan: {capacityHealth.queuePressure}
+                  </Badge>
+                </div>
+                <div className="p-3 rounded-md bg-muted/40">
+                  <p className="text-xs text-muted-foreground">Processed 5 Menit</p>
+                  <p className="text-lg font-semibold">{capacityHealth.processedLast5m.toLocaleString()}</p>
+                </div>
+                <div className="p-3 rounded-md bg-muted/40">
+                  <p className="text-xs text-muted-foreground">P95 Lag</p>
+                  <p className="text-lg font-semibold">{capacityHealth.p95Lag}s</p>
+                </div>
+                <div className="p-3 rounded-md bg-muted/40">
+                  <p className="text-xs text-muted-foreground">Pending Tertua</p>
+                  <p className="text-lg font-semibold">{capacityHealth.maxPendingAge}s</p>
+                </div>
+                <div className="p-3 rounded-md bg-muted/40">
+                  <p className="text-xs text-muted-foreground">Failed Queue</p>
+                  <p className="text-lg font-semibold">{capacityHealth.failedCount.toLocaleString()}</p>
+                </div>
+                <div className="p-3 rounded-md bg-muted/40">
+                  <p className="text-xs text-muted-foreground">Dead Queue</p>
+                  <p className="text-lg font-semibold">{capacityHealth.deadCount.toLocaleString()}</p>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Saran Tier</CardTitle>
+                <CardDescription>
+                  Rekomendasi otomatis berdasarkan jumlah pegawai terukur.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="p-3 rounded-md bg-muted/40">
+                  <p className="text-xs text-muted-foreground">Tier Aktif</p>
+                  <p className="font-semibold">{activeProfile.label}</p>
+                </div>
+                <div className="p-3 rounded-md bg-muted/40">
+                  <p className="text-xs text-muted-foreground">Tier Disarankan</p>
+                  <p className="font-semibold">{profiles.find((p) => p.tier === capacityHealth.suggestedTier)?.label}</p>
+                </div>
+                {capacityHealth.suggestedTier !== activeProfile.tier && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="w-full"
+                    onClick={() => {
+                      void handleApplyProfile(capacityHealth.suggestedTier);
+                    }}
+                  >
+                    Terapkan Tier Disarankan
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Threshold Dinamis Aktif</CardTitle>
+              <CardDescription>
+                Ambang skor dituning berdasarkan tier aktif dan trafik aktual.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
+              <div className="p-3 rounded-md bg-muted/40">
+                <p className="text-xs text-muted-foreground">Utilisasi</p>
+                <p className="font-semibold">
+                  Warn {capacityHealth.thresholds.utilizationWarn}% / Critical {capacityHealth.thresholds.utilizationCritical}%
+                </p>
+              </div>
+              <div className="p-3 rounded-md bg-muted/40">
+                <p className="text-xs text-muted-foreground">Queue Depth</p>
+                <p className="font-semibold">
+                  Warn {capacityHealth.thresholds.queueWarn.toLocaleString()} / Critical {capacityHealth.thresholds.queueCritical.toLocaleString()}
+                </p>
+              </div>
+              <div className="p-3 rounded-md bg-muted/40">
+                <p className="text-xs text-muted-foreground">P95 Lag</p>
+                <p className="font-semibold">
+                  Warn {capacityHealth.thresholds.p95Warn}s / Critical {capacityHealth.thresholds.p95Critical}s
+                </p>
+              </div>
+              <div className="p-3 rounded-md bg-muted/40">
+                <p className="text-xs text-muted-foreground">Max Pending Age</p>
+                <p className="font-semibold">
+                  Warn {capacityHealth.thresholds.pendingWarn}s / Critical {capacityHealth.thresholds.pendingCritical}s
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Temuan & Rekomendasi</CardTitle>
+              <CardDescription>
+                Catatan otomatis untuk membantu admin mengambil tindakan cepat.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <p className="text-sm font-medium mb-2">Temuan</p>
+                <ul className="list-disc pl-5 text-sm text-muted-foreground space-y-1">
+                  {capacityHealth.findings.length === 0 ? (
+                    <li>Belum ada anomali berarti. Sistem terpantau stabil.</li>
+                  ) : (
+                    capacityHealth.findings.map((finding) => (
+                      <li key={finding}>{finding}</li>
+                    ))
+                  )}
+                </ul>
+              </div>
+              <div>
+                <p className="text-sm font-medium mb-2">Tindakan Disarankan</p>
+                <ul className="list-disc pl-5 text-sm text-muted-foreground space-y-1">
+                  {capacityHealth.recommendations.length === 0 ? (
+                    <li>Pertahankan konfigurasi sekarang dan lanjutkan monitoring rutin.</li>
+                  ) : (
+                    capacityHealth.recommendations.map((item) => (
+                      <li key={item}>{item}</li>
+                    ))
+                  )}
+                </ul>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

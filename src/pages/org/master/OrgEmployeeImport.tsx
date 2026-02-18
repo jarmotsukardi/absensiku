@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/pagination";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { 
   Upload, 
   Download, 
@@ -680,6 +681,8 @@ export default function OrgEmployeeImport() {
             </AlertDescription>
           </Alert>
         )}
+
+        <PageGlossarySection preset="org_master_data" />
       </div>
     </OrganizationLayout>
   );

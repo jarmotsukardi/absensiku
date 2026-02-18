@@ -16,6 +16,7 @@ import { formatDistanceToNow } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import {
   Pagination,
   PaginationContent,
@@ -611,6 +612,8 @@ export default function NotificationManagement() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="admin_notifications" />
       </div>
     </SuperAdminLayout>
   );

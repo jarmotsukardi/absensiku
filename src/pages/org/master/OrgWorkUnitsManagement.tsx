@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { Plus, Search, Edit, Trash2, Building2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 interface WorkUnit {
   id: string;
@@ -498,6 +499,8 @@ export default function OrgWorkUnitsManagement() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_master_data" />
       </div>
     </OrganizationLayout>
   );

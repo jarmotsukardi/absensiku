@@ -6,6 +6,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { MessageCircle, Save, Send, Loader2, CheckCircle2, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { useSystemSettings } from "@/hooks/useSystemSettings";
@@ -163,7 +164,7 @@ export function WhatsAppGatewaySettings() {
   }
 
   return (
-    <div className="space-y-6">
+      <div className="space-y-6">
       <div>
         <h3 className="text-lg font-semibold flex items-center gap-2">
           <MessageCircle className="h-5 w-5 text-primary" />
@@ -324,6 +325,8 @@ export function WhatsAppGatewaySettings() {
           </CardContent>
         </Card>
       </div>
+
+      <PageGlossarySection preset="settings_whatsapp_gateway" />
 
       <div className="flex justify-end">
         <Button onClick={handleSave} disabled={isSaving}>

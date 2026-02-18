@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { LocationPicker } from "@/components/maps/LocationPicker";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 type Office = Tables<"offices">;
 type OPD = Tables<"opd">;
@@ -418,6 +419,8 @@ export default function OrgWorkLocationsManagement() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_master_data" />
       </div>
     </OrganizationLayout>
   );

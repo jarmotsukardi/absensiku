@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import {
   Pagination,
   PaginationContent,
@@ -726,6 +727,8 @@ export default function FeedbackManagement() {
           )}
         </CardContent>
       </Card>
+
+      <PageGlossarySection preset="admin_feedback" />
 
       {/* Detail Dialog */}
       <Dialog open={!!selectedFeedback} onOpenChange={(open) => !open && setSelectedFeedback(null)}>

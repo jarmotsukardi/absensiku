@@ -11,6 +11,7 @@ import { BarChart3, Download, Printer } from "lucide-react";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 type OPD = Tables<"opd">;
 
@@ -454,6 +455,8 @@ export default function OrgRecapReport() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_report_recap" />
       </div>
     </OrganizationLayout>
   );

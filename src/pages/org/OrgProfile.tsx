@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import { Loader2, Mail, User as UserIcon, Lock, Eye, EyeOff, Save, ShieldCheck, Phone } from "lucide-react";
 import { toast } from "sonner";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 interface EmployeeProfileRow {
   id: string;
@@ -360,6 +361,8 @@ export default function OrgProfile() {
             </Button>
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_profile" />
       </div>
     </OrganizationLayout>
   );

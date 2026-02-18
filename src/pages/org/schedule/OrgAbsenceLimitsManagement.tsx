@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { Switch } from "@/components/ui/switch";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 interface AbsenceLimit {
   id: string;
@@ -539,6 +540,8 @@ export default function OrgAbsenceLimitsManagement() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_schedule_absence_limits" />
       </div>
     </OrganizationLayout>
   );

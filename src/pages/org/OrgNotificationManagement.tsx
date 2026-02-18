@@ -16,6 +16,7 @@ import { formatDistanceToNow, format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import {
@@ -1050,6 +1051,8 @@ export default function OrgNotificationManagement() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_notifications" />
       </div>
     </OrganizationLayout>
   );

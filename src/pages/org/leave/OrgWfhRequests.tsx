@@ -24,6 +24,7 @@ import type { User } from "@supabase/supabase-js";
 import type { LucideIcon } from "lucide-react";
 import type { Tables } from "@/integrations/supabase/types";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type WfhRequest = Tables<"wfh_requests"> & {
@@ -287,6 +288,8 @@ export default function OrgWfhRequests() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_leave_requests" />
       </div>
     </OrganizationLayout>
   );

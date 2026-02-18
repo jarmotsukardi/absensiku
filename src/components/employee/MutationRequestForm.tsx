@@ -172,6 +172,34 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
     const changes: Record<string, any> = {};
     const original: Record<string, any> = {};
 
+    if (mutationType === "transfer") {
+      if (transferData.opd_id && transferData.opd_id !== employee.opd_id) {
+        changes.opd_id = transferData.opd_id;
+        original.opd_id = employee.opd_id;
+        original.opd_name = employee.opd?.name;
+        const newOpd = opdList.find((o) => o.id === transferData.opd_id);
+        changes.opd_name = newOpd?.name;
+      }
+
+      if (transferData.work_unit_id && transferData.work_unit_id !== employee.work_unit_id) {
+        changes.work_unit_id = transferData.work_unit_id;
+        original.work_unit_id = employee.work_unit_id;
+        original.work_unit_name = employee.work_unit?.name;
+        const newWu = workUnits.find((wu) => wu.id === transferData.work_unit_id);
+        changes.work_unit_name = newWu?.name;
+      }
+
+      if (transferData.office_id && transferData.office_id !== employee.office_id) {
+        changes.office_id = transferData.office_id;
+        original.office_id = employee.office_id;
+        original.office_name = employee.offices?.name;
+        const newOffice = offices.find((o) => o.id === transferData.office_id);
+        changes.office_name = newOffice?.name;
+      }
+
+      return { changes, original };
+    }
+
     // Semua perubahan dilakukan di satu form (tidak dipisah lagi)
     // Profile fields (kecuali nama & NIP)
     const profileFields = [
@@ -686,10 +714,10 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
                   <Select
                     value={transferData.office_id}
                     onValueChange={(v) => setTransferData({ ...transferData, office_id: v })}
-                    disabled={!transferData.work_unit_id}
+                    disabled={!transferData.opd_id}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder={transferData.work_unit_id ? "Pilih Lokasi Kerja" : "Pilih Satuan Kerja terlebih dahulu"} />
+                      <SelectValue placeholder={transferData.opd_id ? "Pilih Lokasi Kerja" : "Pilih OPD terlebih dahulu"} />
                     </SelectTrigger>
                     <SelectContent>
                       {filteredOffices.map((office) => (

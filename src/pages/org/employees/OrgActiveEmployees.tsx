@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { SearchableSelect, SearchableSelectOption } from "@/components/ui/searchable-select";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 type Employee = Tables<"employees">;
 type OPD = Tables<"opd">;
@@ -1000,6 +1001,8 @@ export default function OrgActiveEmployees() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <PageGlossarySection preset="org_employee_management" />
       </div>
     </OrganizationLayout>
   );

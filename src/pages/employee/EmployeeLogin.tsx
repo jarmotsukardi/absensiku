@@ -985,7 +985,7 @@ export default function EmployeeLogin() {
   }
 
   return (
-    <div className="min-h-screen hero-gradient flex flex-col items-center justify-center p-4 relative overflow-hidden">
+    <div className="min-h-screen hero-gradient flex flex-col items-center justify-center px-4 pt-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] relative overflow-hidden">
       {/* Background Elements */}
       <div className="absolute inset-0 opacity-10">
         <div className="absolute top-20 left-10 w-72 h-72 bg-accent rounded-full blur-3xl" />
@@ -1009,9 +1009,19 @@ export default function EmployeeLogin() {
               setActiveTab(v as "login" | "register");
               if (v === "register") resetSelfRegState();
             }} className="w-full">
-              <TabsList className="grid w-full grid-cols-2 mb-6">
-                <TabsTrigger value="login" className="text-xs sm:text-sm">Masuk</TabsTrigger>
-                <TabsTrigger value="register" className="text-xs sm:text-sm">Daftar</TabsTrigger>
+              <TabsList className="mb-6 grid h-11 w-full grid-cols-2 rounded-xl bg-muted/80 p-1">
+                <TabsTrigger
+                  value="login"
+                  className="h-9 rounded-lg text-xs font-medium text-muted-foreground transition data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm sm:text-sm"
+                >
+                  Masuk
+                </TabsTrigger>
+                <TabsTrigger
+                  value="register"
+                  className="h-9 rounded-lg text-xs font-medium text-muted-foreground transition data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm sm:text-sm"
+                >
+                  Daftar
+                </TabsTrigger>
               </TabsList>
 
               {/* Login Tab */}
@@ -1051,7 +1061,7 @@ export default function EmployeeLogin() {
                         placeholder="email@instansi.go.id"
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
-                        className="pl-10"
+                        className="pl-10 placeholder:text-muted-foreground/70"
                         disabled={isLoading || (isEnabled && isLocked)}
                         autoComplete="email"
                       />
@@ -1069,17 +1079,22 @@ export default function EmployeeLogin() {
                         placeholder="••••••••"
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
-                        className="pl-10 pr-10"
+                        className="pl-10 pr-10 placeholder:text-muted-foreground/70"
                         disabled={isLoading || (isEnabled && isLocked)}
                         autoComplete="current-password"
                       />
-                      <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(!showPassword)}
+                        className="absolute right-1 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                        aria-label={showPassword ? "Sembunyikan password" : "Tampilkan password"}
+                      >
                         {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
                     </div>
                   </div>
 
-                  <Button type="submit" className="w-full" size="lg" disabled={isLoading || (isEnabled && isLocked)}>
+                  <Button type="submit" className="w-full gap-2 font-semibold" size="lg" disabled={isLoading || (isEnabled && isLocked)}>
                     {isLoading ? (
                       <><Loader2 className="w-4 h-4 animate-spin" /> Memproses...</>
                     ) : (isEnabled && isLocked) ? (
@@ -1291,7 +1306,12 @@ export default function EmployeeLogin() {
                               className="pl-10 pr-10"
                               disabled={isLoading}
                             />
-                            <button type="button" onClick={() => setShowSelfRegPassword(!showSelfRegPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                            <button
+                              type="button"
+                              onClick={() => setShowSelfRegPassword(!showSelfRegPassword)}
+                              className="absolute right-1 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                              aria-label={showSelfRegPassword ? "Sembunyikan password" : "Tampilkan password"}
+                            >
                               {showSelfRegPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                             </button>
                           </div>
@@ -1310,7 +1330,12 @@ export default function EmployeeLogin() {
                               className="pl-10 pr-10"
                               disabled={isLoading}
                             />
-                            <button type="button" onClick={() => setShowSelfRegConfirmPassword(!showSelfRegConfirmPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                            <button
+                              type="button"
+                              onClick={() => setShowSelfRegConfirmPassword(!showSelfRegConfirmPassword)}
+                              className="absolute right-1 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                              aria-label={showSelfRegConfirmPassword ? "Sembunyikan konfirmasi password" : "Tampilkan konfirmasi password"}
+                            >
                               {showSelfRegConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                             </button>
                           </div>
@@ -1465,10 +1490,11 @@ export default function EmployeeLogin() {
                               className="pl-10 pr-10"
                               disabled={isLoading}
                             />
-                            <button 
-                              type="button" 
-                              onClick={() => setShowInviteRegPassword(!showInviteRegPassword)} 
-                              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                            <button
+                              type="button"
+                              onClick={() => setShowInviteRegPassword(!showInviteRegPassword)}
+                              className="absolute right-1 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                              aria-label={showInviteRegPassword ? "Sembunyikan password" : "Tampilkan password"}
                             >
                               {showInviteRegPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                             </button>
@@ -1489,10 +1515,11 @@ export default function EmployeeLogin() {
                               className="pl-10 pr-10"
                               disabled={isLoading}
                             />
-                            <button 
-                              type="button" 
-                              onClick={() => setShowInviteRegConfirmPassword(!showInviteRegConfirmPassword)} 
-                              className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                            <button
+                              type="button"
+                              onClick={() => setShowInviteRegConfirmPassword(!showInviteRegConfirmPassword)}
+                              className="absolute right-1 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+                              aria-label={showInviteRegConfirmPassword ? "Sembunyikan konfirmasi password" : "Tampilkan konfirmasi password"}
                             >
                               {showInviteRegConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                             </button>

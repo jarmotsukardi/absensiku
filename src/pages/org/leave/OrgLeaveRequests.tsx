@@ -22,6 +22,7 @@ import { id } from "date-fns/locale";
 import type { Enums, Tables } from "@/integrations/supabase/types";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 type RequestStatus = Enums<"request_status">;
 type LeaveRequest = Tables<"leave_requests"> & {
@@ -372,6 +373,8 @@ export default function OrgLeaveRequests() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_leave_requests" />
       </div>
     </OrganizationLayout>
   );

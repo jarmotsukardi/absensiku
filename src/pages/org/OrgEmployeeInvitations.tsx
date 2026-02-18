@@ -30,6 +30,7 @@ import {
 import { addDays, format } from "date-fns";
 import type { TablesInsert } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import {
   Pagination,
   PaginationContent,
@@ -865,6 +866,8 @@ export default function OrgEmployeeInvitations() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_invitations" />
       </div>
 
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>

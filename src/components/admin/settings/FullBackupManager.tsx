@@ -6,6 +6,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from "@/components/ui/progress";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import {
@@ -688,6 +689,8 @@ CREATE POLICY "Users can insert own attendance" ON public.attendance_records FOR
           </div>
         </CardContent>
       </Card>
+
+      <PageGlossarySection preset="settings_full_backup" />
     </div>
   );
 }

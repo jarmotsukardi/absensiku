@@ -11,6 +11,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import {
   ArrowRight,
   ArrowLeft,
@@ -716,95 +717,99 @@ export function MigrationWizard() {
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={setIsOpen}>
-      <DialogTrigger asChild>
-        <Button size="lg" className="gap-2 bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70">
-          <Rocket className="h-5 w-5" />
-          Mulai Migrasi Project
-        </Button>
-      </DialogTrigger>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Database className="h-5 w-5 text-primary" />
-            Migration Wizard
-          </DialogTitle>
-          <DialogDescription>
-            Panduan langkah demi langkah untuk migrasi dari satu Supabase project ke project lainnya
-          </DialogDescription>
-        </DialogHeader>
+    <div className="space-y-4">
+      <Dialog open={isOpen} onOpenChange={setIsOpen}>
+        <DialogTrigger asChild>
+          <Button size="lg" className="gap-2 bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70">
+            <Rocket className="h-5 w-5" />
+            Mulai Migrasi Project
+          </Button>
+        </DialogTrigger>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Database className="h-5 w-5 text-primary" />
+              Migration Wizard
+            </DialogTitle>
+            <DialogDescription>
+              Panduan langkah demi langkah untuk migrasi dari satu Supabase project ke project lainnya
+            </DialogDescription>
+          </DialogHeader>
 
-        {/* Progress */}
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-sm">
-            <span>Langkah {currentStep + 1} dari {steps.length}</span>
-            <span className="font-medium">{steps[currentStep].title}</span>
+          {/* Progress */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span>Langkah {currentStep + 1} dari {steps.length}</span>
+              <span className="font-medium">{steps[currentStep].title}</span>
+            </div>
+            <Progress value={progress} className="h-2" />
+            
+            {/* Step indicators */}
+            <div className="flex justify-between">
+              {steps.map((step, i) => (
+                <div 
+                  key={step.id}
+                  className={`flex items-center gap-1 text-xs ${
+                    i === currentStep ? "text-primary font-medium" : 
+                    i < currentStep ? "text-green-600" : "text-muted-foreground"
+                  }`}
+                >
+                  {i < currentStep ? (
+                    <CheckCircle className="h-3 w-3" />
+                  ) : i === currentStep ? (
+                    <div className="h-3 w-3 rounded-full bg-primary" />
+                  ) : (
+                    <div className="h-3 w-3 rounded-full border border-muted-foreground" />
+                  )}
+                  <span className="hidden sm:inline">{step.title}</span>
+                </div>
+              ))}
+            </div>
           </div>
-          <Progress value={progress} className="h-2" />
-          
-          {/* Step indicators */}
-          <div className="flex justify-between">
-            {steps.map((step, i) => (
-              <div 
-                key={step.id}
-                className={`flex items-center gap-1 text-xs ${
-                  i === currentStep ? "text-primary font-medium" : 
-                  i < currentStep ? "text-green-600" : "text-muted-foreground"
-                }`}
+
+          <Separator />
+
+          {/* Step Content */}
+          <ScrollArea className="flex-1 pr-4">
+            <div className="py-4">
+              {renderStepContent()}
+            </div>
+          </ScrollArea>
+
+          <Separator />
+
+          {/* Navigation */}
+          <div className="flex items-center justify-between pt-2">
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={resetWizard} className="gap-1">
+                <RefreshCw className="h-4 w-4" />
+                Reset
+              </Button>
+            </div>
+            <div className="flex gap-2">
+              <Button 
+                variant="outline" 
+                onClick={prevStep} 
+                disabled={currentStep === 0}
+                className="gap-1"
               >
-                {i < currentStep ? (
-                  <CheckCircle className="h-3 w-3" />
-                ) : i === currentStep ? (
-                  <div className="h-3 w-3 rounded-full bg-primary" />
-                ) : (
-                  <div className="h-3 w-3 rounded-full border border-muted-foreground" />
-                )}
-                <span className="hidden sm:inline">{step.title}</span>
-              </div>
-            ))}
+                <ArrowLeft className="h-4 w-4" />
+                Sebelumnya
+              </Button>
+              <Button 
+                onClick={nextStep} 
+                disabled={currentStep === steps.length - 1}
+                className="gap-1"
+              >
+                Selanjutnya
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
-        </div>
+        </DialogContent>
+      </Dialog>
 
-        <Separator />
-
-        {/* Step Content */}
-        <ScrollArea className="flex-1 pr-4">
-          <div className="py-4">
-            {renderStepContent()}
-          </div>
-        </ScrollArea>
-
-        <Separator />
-
-        {/* Navigation */}
-        <div className="flex items-center justify-between pt-2">
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={resetWizard} className="gap-1">
-              <RefreshCw className="h-4 w-4" />
-              Reset
-            </Button>
-          </div>
-          <div className="flex gap-2">
-            <Button 
-              variant="outline" 
-              onClick={prevStep} 
-              disabled={currentStep === 0}
-              className="gap-1"
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Sebelumnya
-            </Button>
-            <Button 
-              onClick={nextStep} 
-              disabled={currentStep === steps.length - 1}
-              className="gap-1"
-            >
-              Selanjutnya
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
+      <PageGlossarySection preset="settings_migration_wizard" />
+    </div>
   );
 }

@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { Settings, Save, Database, Shield, Clock, AlertTriangle, Trash2, Zap, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
@@ -495,6 +496,8 @@ export function SystemSettings() {
           </CardContent>
         </Card>
       </div>
+
+      <PageGlossarySection preset="settings_system" />
 
       <div className="flex justify-end">
         <Button onClick={handleSave} disabled={isSaving}>

@@ -10,6 +10,19 @@ interface AppErrorBoundaryState {
   logId?: string;
 }
 
+const CHUNK_RELOAD_TS_KEY = "absensiku:chunk_reload_ts";
+const CHUNK_RELOAD_COOLDOWN_MS = 5 * 60 * 1000;
+
+const isChunkLoadLikeError = (error: Error): boolean => {
+  const haystack = `${error?.name || ""} ${error?.message || ""}`.toLowerCase();
+  return (
+    haystack.includes("chunkloaderror")
+    || haystack.includes("loading chunk")
+    || haystack.includes("failed to fetch dynamically imported module")
+    || haystack.includes("importing a module script failed")
+  );
+};
+
 export default class AppErrorBoundary extends React.Component<
   AppErrorBoundaryProps,
   AppErrorBoundaryState
@@ -24,6 +37,20 @@ export default class AppErrorBoundary extends React.Component<
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    if (typeof window !== "undefined" && isChunkLoadLikeError(error)) {
+      try {
+        const lastReloadAt = Number(window.sessionStorage.getItem(CHUNK_RELOAD_TS_KEY) || "0");
+        const now = Date.now();
+        if (!Number.isFinite(lastReloadAt) || now - lastReloadAt > CHUNK_RELOAD_COOLDOWN_MS) {
+          window.sessionStorage.setItem(CHUNK_RELOAD_TS_KEY, String(now));
+          window.location.reload();
+          return;
+        }
+      } catch {
+        // Fall through to standard error handling
+      }
+    }
+
     const logId = reportError(error, "react.error_boundary", {
       component_stack: errorInfo.componentStack,
     });

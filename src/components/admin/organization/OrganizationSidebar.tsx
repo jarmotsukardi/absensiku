@@ -149,6 +149,10 @@ const menuGroups: MenuGroup[] = [
     items: [
       { title: "Laporan Absensi", icon: FileSpreadsheet, path: "/org/reports/attendance" },
       { title: "Rekapitulasi", icon: BarChart3, path: "/org/reports/recap" },
+      { title: "Laporan Izin/Cuti", icon: FileText, path: "/org/reports/leave" },
+      { title: "Laporan Lembur", icon: Timer, path: "/org/reports/overtime" },
+      { title: "WFH & Absensi Khusus", icon: MapPinOff, path: "/org/reports/flexible" },
+      { title: "Riwayat Mutasi", icon: UserCog, path: "/org/reports/mutations" },
     ],
   },
   {

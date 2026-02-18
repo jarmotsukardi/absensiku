@@ -37,6 +37,7 @@ import { toast } from "sonner";
 import { addDays, format } from "date-fns";
 import { id } from "date-fns/locale";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import {
   Pagination,
@@ -817,6 +818,7 @@ export default function SubscriptionManagement() {
             )}
           </CardContent>
         </Card>
+        <PageGlossarySection preset="admin_subscription_management" />
       </div>
     </SuperAdminLayout>
   );

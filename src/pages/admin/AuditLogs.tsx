@@ -25,6 +25,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { format, startOfMonth, endOfMonth, subMonths } from "date-fns";
 import { id } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { toast } from "sonner";
 import {
   Pagination,
@@ -398,6 +399,8 @@ export default function AuditLogs() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="admin_audit_logs" />
       </div>
     </SuperAdminLayout>
   );

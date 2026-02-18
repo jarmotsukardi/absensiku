@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import {
   Pagination,
   PaginationContent,
@@ -437,7 +438,8 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
   }, [systemSettings.length]);
 
   const content = (
-    <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+    <>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
         {loadError && (
           <Card className="border-destructive/30 bg-destructive/5">
             <CardContent className="pt-6 text-sm text-destructive">
@@ -862,7 +864,10 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
             </CardContent>
           </Card>
         </TabsContent>
-    </Tabs>
+      </Tabs>
+
+      <PageGlossarySection preset="admin_database_management" />
+    </>
   );
 
   if (embedded) {

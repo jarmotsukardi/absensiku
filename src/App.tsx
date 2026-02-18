@@ -75,6 +75,10 @@ const OrgWfhRequests = lazy(() => import("./pages/org/leave/OrgWfhRequests"));
 const OrgFlexibleAttendanceRequests = lazy(() => import("./pages/org/leave/OrgFlexibleAttendanceRequests"));
 const OrgAttendanceReport = lazy(() => import("./pages/org/reports/OrgAttendanceReport"));
 const OrgRecapReport = lazy(() => import("./pages/org/reports/OrgRecapReport"));
+const OrgLeaveReport = lazy(() => import("./pages/org/reports/OrgLeaveReport"));
+const OrgOvertimeReport = lazy(() => import("./pages/org/reports/OrgOvertimeReport"));
+const OrgFlexibleReport = lazy(() => import("./pages/org/reports/OrgFlexibleReport"));
+const OrgMutationReport = lazy(() => import("./pages/org/reports/OrgMutationReport"));
 const OrgSettings = lazy(() => import("./pages/org/OrgSettings"));
 const OrgProfile = lazy(() => import("./pages/org/OrgProfile"));
 const OrgActivation = lazy(() => import("./pages/org/OrgActivation"));
@@ -208,6 +212,10 @@ const App = () => (
               <Route path="/org/schedule/overtime" element={<OrgOvertimeSettings />} />
               <Route path="/org/reports/attendance" element={<OrgAttendanceReport />} />
               <Route path="/org/reports/recap" element={<OrgRecapReport />} />
+              <Route path="/org/reports/leave" element={<OrgLeaveReport />} />
+              <Route path="/org/reports/overtime" element={<OrgOvertimeReport />} />
+              <Route path="/org/reports/flexible" element={<OrgFlexibleReport />} />
+              <Route path="/org/reports/mutations" element={<OrgMutationReport />} />
               <Route path="/org/settings" element={<OrgSettings />} />
               <Route path="/org/profile" element={<OrgProfile />} />
               <Route path="/org/subscription" element={<Navigate to="/org/activation" replace />} />

@@ -13,6 +13,7 @@ import { Plus, Pencil, Trash2, Timer, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 interface WorkHour {
   id: string;
@@ -535,6 +536,8 @@ export default function OrgWorkHoursManagement() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_schedule_work_hours" />
       </div>
     </OrganizationLayout>
   );

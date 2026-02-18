@@ -18,6 +18,7 @@ import { ConnectionTester } from "@/components/admin/settings/ConnectionTester";
 import { DataImportManager } from "@/components/admin/settings/DataImportManager";
 import { FullBackupManager } from "@/components/admin/settings/FullBackupManager";
 import { MigrationWizard } from "@/components/admin/settings/MigrationWizard";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { 
@@ -845,7 +846,8 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
   };
 
   const content = (
-    <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
+    <>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
         <TabsList className="flex flex-wrap gap-1 h-auto p-1">
           <TabsTrigger value="info" className="gap-2">
             <Server className="h-4 w-4" />
@@ -1337,7 +1339,10 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
             </CardContent>
           </Card>
         </TabsContent>
-    </Tabs>
+      </Tabs>
+
+      <PageGlossarySection preset="admin_supabase_settings" />
+    </>
   );
 
   if (embedded) {

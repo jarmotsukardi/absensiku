@@ -50,6 +50,7 @@ import {
   PaginationPrevious,
 } from "@/components/ui/pagination";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 interface OPDAdmin {
   id: string;
@@ -578,6 +579,8 @@ export default function OrgOPDAdminsManagement() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_master_data" />
       </div>
     </OrganizationLayout>
   );

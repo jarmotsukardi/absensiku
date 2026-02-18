@@ -24,6 +24,7 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
@@ -686,6 +687,8 @@ export default function OrgMutationRequests() {
             void fetchData();
           }}
         />
+
+        <PageGlossarySection preset="org_mutation_requests" />
       </div>
     </OrganizationLayout>
   );

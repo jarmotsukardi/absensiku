@@ -9,6 +9,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Save, Timer, Clock, Calendar, Percent } from "lucide-react";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
  
 export default function OrgOvertimeSettings() {
   const [tenantId, setTenantId] = useState<string | undefined>(undefined);
@@ -294,6 +295,8 @@ export default function OrgOvertimeSettings() {
              Simpan Pengaturan
            </Button>
          </div>
+
+         <PageGlossarySection preset="org_schedule_overtime_settings" />
       </div>
     </OrganizationLayout>
   );

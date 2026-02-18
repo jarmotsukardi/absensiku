@@ -19,6 +19,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { OrgFloatingWhatsappSettings } from "@/components/org/settings/OrgFloatingWhatsappSettings";
 import { AccountDeletionDialog } from "@/components/org/AccountDeletionDialog";
 import { ForgotPasswordDialog } from "@/components/auth/ForgotPasswordDialog";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 const ORGANIZATION_TYPES = [
@@ -775,6 +776,8 @@ export default function OrgSettings() {
             </Card>
           </TabsContent>
         </Tabs>
+
+        <PageGlossarySection preset="org_settings" />
       </div>
 
       {/* OTP Dialog for Organization Type Change */}

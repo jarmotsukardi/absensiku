@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { 
   Globe, 
   Link as LinkIcon, 
@@ -484,6 +485,8 @@ export default function OrgLandingSettings() {
             </Card>
           </TabsContent>
         </Tabs>
+
+        <PageGlossarySection preset="org_landing_settings" />
       </div>
     </OrganizationLayout>
   );

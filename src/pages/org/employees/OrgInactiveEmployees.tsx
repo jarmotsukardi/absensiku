@@ -10,6 +10,7 @@ import { Search, UserX, RotateCcw, ChevronLeft, ChevronRight } from "lucide-reac
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 type Employee = Tables<"employees">;
 type OPD = Tables<"opd">;
@@ -240,6 +241,8 @@ export default function OrgInactiveEmployees() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_employee_management" />
       </div>
     </OrganizationLayout>
   );

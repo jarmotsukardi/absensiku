@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Pagination,
@@ -790,6 +791,8 @@ export default function CronJobsInfo() {
             </Card>
           </TabsContent>
         </Tabs>
+
+        <PageGlossarySection preset="admin_cron_jobs" />
       </div>
     </SuperAdminLayout>
   );

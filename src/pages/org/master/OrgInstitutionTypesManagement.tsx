@@ -9,6 +9,7 @@ import { Search, Building, Hospital, GraduationCap, Landmark, Factory, Store, Ho
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { toast } from "sonner";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 interface InstitutionType {
   id: string;
@@ -210,6 +211,8 @@ export default function OrgInstitutionTypesManagement() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_master_data" />
       </div>
     </OrganizationLayout>
   );

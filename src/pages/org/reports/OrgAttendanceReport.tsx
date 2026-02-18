@@ -23,6 +23,7 @@ import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 type OPD = Tables<"opd">;
 
@@ -545,6 +546,8 @@ export default function OrgAttendanceReport() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_report_attendance" />
       </div>
     </OrganizationLayout>
   );

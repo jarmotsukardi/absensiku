@@ -143,7 +143,8 @@ export function useAttendanceSync(employeeId: string | null) {
 
         if (error) return;
 
-        const tier = (data?.value as { tier?: string } | null)?.tier;
+        const value = data?.value as { tier?: string; effective_tier?: string } | null;
+        const tier = value?.effective_tier || value?.tier;
         if (tier && ['small', 'medium', 'large', 'enterprise'].includes(tier)) {
           saveScalabilityConfig(tier as ScalabilityTier);
         }

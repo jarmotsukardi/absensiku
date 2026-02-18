@@ -7,6 +7,7 @@ import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import {
@@ -383,8 +384,9 @@ export function DataImportManager() {
   };
 
   return (
-    <Card>
-      <CardHeader>
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Upload className="h-5 w-5 text-primary" />
           Import Data JSON
@@ -707,7 +709,10 @@ export function DataImportManager() {
             </div>
           </>
         )}
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+
+      <PageGlossarySection preset="settings_data_import" />
+    </div>
   );
 }

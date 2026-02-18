@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import { Building2, User, Phone, MapPin, FileText, Upload, Loader2, CheckCircle2 } from "lucide-react";
 import { LogoUploader } from "@/components/common/LogoUploader";
 import { autoSeedOrganizationData } from "@/hooks/useAutoSeedOrganization";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 export default function OrgProfileSetup() {
   const navigate = useNavigate();
@@ -239,6 +240,9 @@ export default function OrgProfileSetup() {
           </form>
         </CardContent>
       </Card>
+      <div className="w-full max-w-2xl mt-4">
+        <PageGlossarySection preset="org_profile_setup" />
+      </div>
     </div>
   );
 }

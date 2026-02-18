@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { toast } from "sonner";
@@ -320,6 +321,8 @@ export default function OrgHelp() {
             </Button>
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_help_center" />
       </div>
     </OrganizationLayout>
   );

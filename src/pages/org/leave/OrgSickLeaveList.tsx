@@ -12,6 +12,7 @@ import { id } from "date-fns/locale";
 import type { Tables } from "@/integrations/supabase/types";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 type SickLeaveRequest = Tables<"leave_requests"> & {
   employees: {
@@ -188,6 +189,8 @@ export default function OrgSickLeaveList() {
             </div>
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_leave_requests" />
       </div>
     </OrganizationLayout>
   );

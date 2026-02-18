@@ -17,6 +17,7 @@ import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 // Mapping ikon untuk jenis alasan
 const REASON_ICONS: Record<string, React.ElementType> = {
@@ -522,6 +523,8 @@ export default function OrgFlexibleAttendanceRequests() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <PageGlossarySection preset="org_leave_requests" />
       </div>
     </OrganizationLayout>
   );

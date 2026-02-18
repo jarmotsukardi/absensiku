@@ -15,6 +15,7 @@ import { Home, Plus, Pencil, Trash2, Building2, Users, User } from "lucide-react
 import { toast } from "sonner";
 import { useEmployee } from "@/hooks/useEmployee";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import type { Tables, TablesInsert, TablesUpdate } from "@/integrations/supabase/types";
 
 type WfhSchedule = Tables<"wfh_schedules">;
@@ -561,6 +562,8 @@ export default function OrgWfhScheduleManagement() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_schedule_wfh" />
       </div>
     </OrganizationLayout>
   );

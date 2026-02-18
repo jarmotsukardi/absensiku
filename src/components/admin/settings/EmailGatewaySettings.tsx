@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { Mail, Save, Send, Loader2, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { useSystemSettings } from "@/hooks/useSystemSettings";
@@ -198,7 +199,7 @@ export function EmailGatewaySettings() {
   }
 
   return (
-    <div className="space-y-6">
+      <div className="space-y-6">
       <div>
         <h3 className="text-lg font-semibold flex items-center gap-2">
           <Mail className="h-5 w-5 text-primary" />
@@ -359,6 +360,8 @@ export function EmailGatewaySettings() {
           </CardContent>
         </Card>
       </div>
+
+      <PageGlossarySection preset="settings_email_gateway" />
 
       <div className="flex justify-end">
         <Button onClick={handleSave} disabled={isSaving}>

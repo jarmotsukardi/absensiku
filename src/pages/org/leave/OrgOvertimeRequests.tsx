@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import {
   Dialog,
   DialogContent,
@@ -360,6 +361,8 @@ export default function OrgOvertimeRequests() {
              )}
            </DialogContent>
          </Dialog>
+
+         <PageGlossarySection preset="org_leave_requests" />
       </div>
     </OrganizationLayout>
   );

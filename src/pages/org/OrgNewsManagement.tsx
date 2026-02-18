@@ -39,6 +39,7 @@ import { id } from "date-fns/locale";
 import { RichTextEditor } from "@/components/editor/RichTextEditor";
 import { NewsThumbnailPreview } from "@/components/common/NewsThumbnailPreview";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 interface NewsItem {
   id: string;
@@ -543,6 +544,8 @@ export default function OrgNewsManagement() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_news" />
       </div>
 
       {/* Delete Confirmation */}

@@ -12,6 +12,7 @@ import { id } from "date-fns/locale";
 import type { Tables } from "@/integrations/supabase/types";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 type AttendanceRecord = Tables<"attendance_records_partitioned">;
 type EmployeeSummary = {
@@ -205,6 +206,8 @@ export default function OrgAbsentWithoutNotice() {
             </div>
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_leave_requests" />
       </div>
     </OrganizationLayout>
   );

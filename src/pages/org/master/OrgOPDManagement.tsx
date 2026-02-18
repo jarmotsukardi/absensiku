@@ -13,6 +13,7 @@ import { Plus, Search, Pencil, Trash2, FolderTree, ChevronLeft, ChevronRight } f
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 type OPD = Tables<"opd">;
 
@@ -317,6 +318,8 @@ export default function OrgOPDManagement() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_master_data" />
       </div>
     </OrganizationLayout>
   );

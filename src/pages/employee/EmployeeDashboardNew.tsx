@@ -188,6 +188,14 @@ const getTodayDateString = (timezone: string): string => {
   }
 };
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const isValidUuid = (value: string | null | undefined): value is string => {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+};
+
+const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+
 interface EmployeeDashboardNewProps {
   readOnlyMode?: boolean;
 }
@@ -259,6 +267,10 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   const [multipleEmployees, setMultipleEmployees] = useState<EmployeeData[]>([]);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
   const dashboardBasePath = readOnlyMode ? "/dashboard" : "/employee/dashboard";
+  const runtimeUserAgent = typeof navigator !== "undefined" ? navigator.userAgent : "";
+  const isAndroidRuntime = /Android/i.test(runtimeUserAgent);
+  const bottomSafeAreaInset = isAndroidRuntime ? "0px" : "env(safe-area-inset-bottom)";
+  const attendanceActionStickyBottom = `calc(${bottomSafeAreaInset} + 4.25rem)`;
 
   const navigateToTab = useCallback((tab: EmployeeTab) => {
     setActiveTab(tab);
@@ -664,9 +676,36 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
     let stage = "init";
     try {
       const resolvedUserId = user?.id || session?.user?.id;
-      const effectiveUserId = resolvedUserId || (await supabase.auth.getUser()).data.user?.id || null;
+      let effectiveUserId: string | null = isValidUuid(resolvedUserId) ? resolvedUserId : null;
+
       if (!effectiveUserId) {
-        throw new Error("Sesi pengguna tidak ditemukan untuk memuat dashboard");
+        stage = "resolve_user_session";
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const { data: authData, error: authError } = await supabase.auth.getUser();
+          if (authError) {
+            if (attempt === 2) throw authError;
+          } else if (isValidUuid(authData.user?.id)) {
+            effectiveUserId = authData.user.id;
+            break;
+          }
+          await sleep(250 * (attempt + 1));
+        }
+      }
+
+      if (!effectiveUserId) {
+        const errorRef = reportError(new Error("Auth user id unavailable or invalid"), "employee.dashboard.fetch_data.auth_user_missing", {
+          resolved_user_id: resolvedUserId ?? null,
+          session_user_id: session?.user?.id ?? null,
+          retries: 3,
+        });
+        setDashboardLoadIssue({
+          ref: errorRef,
+          mode: "fatal",
+          reason: "Sesi login belum siap. Coba muat ulang sekali.",
+          scopes: ["resolve_user_session"],
+        });
+        toast.error(appendErrorReference("Sesi login belum siap. Coba muat ulang sekali.", errorRef));
+        return;
       }
 
       stage = "fetch_employees";
@@ -773,8 +812,8 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
         setBillingMode(tenantData.billing_mode || "centralized");
       }
 
-      const scalabilityValue = scalabilityResult?.data?.value as { tier?: string } | null;
-      const tier = scalabilityValue?.tier;
+      const scalabilityValue = scalabilityResult?.data?.value as { tier?: string; effective_tier?: string } | null;
+      const tier = scalabilityValue?.effective_tier || scalabilityValue?.tier;
       if (tier && ["small", "medium", "large", "enterprise"].includes(tier)) {
         saveScalabilityConfig(tier as ScalabilityTier);
       }
@@ -1628,7 +1667,10 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
                   const disableCheckOut = isSubmitting || !hasCheckedIn || hasCheckedOut || !!attendanceError || isPending || isOptimisticPending;
                   
                   return (
-                    <div className="sticky bottom-[calc(env(safe-area-inset-bottom)+5rem)] z-20 -mx-1 rounded-xl border border-border/60 bg-card/95 p-2 backdrop-blur supports-[backdrop-filter]:bg-card/80 sm:static sm:mx-0 sm:rounded-none sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none">
+                    <div
+                      className="sticky z-20 -mx-1 rounded-xl border border-border/60 bg-card/95 p-2 backdrop-blur supports-[backdrop-filter]:bg-card/80 sm:static sm:mx-0 sm:rounded-none sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none"
+                      style={{ bottom: attendanceActionStickyBottom }}
+                    >
                       <div className="grid grid-cols-2 gap-3">
                         <Button
                           size="lg"
@@ -1763,7 +1805,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       {/* Bottom Navigation */}
       <nav
         className="fixed bottom-0 left-0 right-0 z-50 border-t border-border bg-card"
-        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+        style={{ paddingBottom: bottomSafeAreaInset }}
       >
         <div className="grid grid-cols-5 h-16">
           {[
@@ -2969,10 +3011,10 @@ const ProfileTab = React.memo(function ProfileTab({ employee, onLogout, deviceBi
           golongan: employee.golongan,
           position: employee.position,
           employee_category: employee.employee_category,
-          opd_id: undefined,
+          opd_id: employee.opd_id,
           work_unit_id: employee.work_unit_id,
           office_id: employee.office_id,
-          opd: employee.opd ? { name: employee.opd.name, code: employee.opd.code } : null,
+          opd: employee.opd ? { id: employee.opd.id, name: employee.opd.name, code: employee.opd.code } : null,
           work_unit: employee.work_unit ? { id: employee.work_unit.id, name: employee.work_unit.name } : null,
           offices: employee.offices ? { id: employee.offices.id, name: employee.offices.name } : null,
         } : null}

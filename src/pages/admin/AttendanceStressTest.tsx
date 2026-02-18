@@ -11,6 +11,7 @@ import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import {
   Play,
   Square,
@@ -514,6 +515,7 @@ export default function AttendanceStressTest() {
             )}
           </>
         )}
+        <PageGlossarySection preset="admin_stress_test" />
       </div>
     </SuperAdminLayout>
   );

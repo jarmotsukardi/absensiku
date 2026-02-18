@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { supabase } from "@/integrations/supabase/client";
 import type { Json } from "@/integrations/supabase/types";
 import { formatToTimezone } from "@/lib/timezone";
@@ -393,6 +394,8 @@ export default function OrgAuditLog() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_audit_log" />
       </div>
     </OrganizationLayout>
   );

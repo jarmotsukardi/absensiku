@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 interface WorkHoliday {
   id: string;
@@ -757,6 +758,8 @@ export default function OrgHolidaysManagement() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_schedule_work_holidays" />
       </div>
     </OrganizationLayout>
   );

@@ -14,6 +14,7 @@ import { Pagination, PaginationContent, PaginationItem, PaginationLink, Paginati
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 interface NationalHoliday {
   id: string;
@@ -581,6 +582,8 @@ export default function OrgNationalHolidaysManagement() {
             )}
           </CardContent>
         </Card>
+
+        <PageGlossarySection preset="org_schedule_national_holidays" />
       </div>
     </OrganizationLayout>
   );
