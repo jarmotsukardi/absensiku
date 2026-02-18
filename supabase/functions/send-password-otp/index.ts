@@ -219,7 +219,10 @@ const hashOTP = async (otp: string): Promise<string> => {
 };
 
 // Check rate limit
-const checkRateLimit = async (supabase: AdminSupabaseClient, email: string): Promise<{ allowed: boolean; message?: string }> => {
+const checkRateLimit = async (
+  supabase: AdminSupabaseClient,
+  email: string
+): Promise<{ allowed: boolean; message?: string; retryAfterSeconds?: number; attemptCount?: number }> => {
   const { data: rateLimit } = await supabase
     .from("rate_limit_otp")
     .select("*")
@@ -233,8 +236,15 @@ const checkRateLimit = async (supabase: AdminSupabaseClient, email: string): Pro
   if (rateLimit) {
     // Check if locked
     if (rateLimit.locked_until && new Date(rateLimit.locked_until) > now) {
-      const minutesLeft = Math.ceil((new Date(rateLimit.locked_until).getTime() - now.getTime()) / 60000);
-      return { allowed: false, message: `Terlalu banyak permintaan. Coba lagi dalam ${minutesLeft} menit.` };
+      const lockMs = new Date(rateLimit.locked_until).getTime() - now.getTime();
+      const retryAfterSeconds = Math.max(1, Math.ceil(lockMs / 1000));
+      const minutesLeft = Math.ceil(retryAfterSeconds / 60);
+      return {
+        allowed: false,
+        message: `Terlalu banyak permintaan. Coba lagi dalam ${minutesLeft} menit.`,
+        retryAfterSeconds,
+        attemptCount: rateLimit.attempt_count || 0,
+      };
     }
 
     // Reset counter if > 1 hour
@@ -253,7 +263,12 @@ const checkRateLimit = async (supabase: AdminSupabaseClient, email: string): Pro
         .update({ locked_until: lockUntil.toISOString() })
         .eq("identifier", email)
         .eq("attempt_type", "send");
-      return { allowed: false, message: "Terlalu banyak permintaan OTP. Akun dikunci selama 1 jam." };
+      return {
+        allowed: false,
+        message: "Terlalu banyak permintaan OTP. Akun dikunci selama 1 jam.",
+        retryAfterSeconds: 3600,
+        attemptCount: rateLimit.attempt_count || 0,
+      };
     }
 
     // Increment counter
@@ -298,9 +313,26 @@ serve(async (req: Request): Promise<Response> => {
     // Check rate limit first
     const rateLimitCheck = await checkRateLimit(supabase, email.toLowerCase().trim());
     if (!rateLimitCheck.allowed) {
+      console.warn(`[${traceId}] RATE_LIMITED send-password-otp`, {
+        email: email.toLowerCase().trim(),
+        retry_after_seconds: rateLimitCheck.retryAfterSeconds ?? null,
+        attempt_count: rateLimitCheck.attemptCount ?? null,
+      });
+      const retryAfterHeader = rateLimitCheck.retryAfterSeconds
+        ? { "Retry-After": String(rateLimitCheck.retryAfterSeconds) }
+        : {};
       return new Response(
-        JSON.stringify(withTrace({ error: rateLimitCheck.message, code: "RATE_LIMITED" }, traceId)),
-        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify(
+          withTrace(
+            {
+              error: rateLimitCheck.message,
+              code: "RATE_LIMITED",
+              retry_after_seconds: rateLimitCheck.retryAfterSeconds,
+            },
+            traceId
+          )
+        ),
+        { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json", ...retryAfterHeader } }
       );
     }
 

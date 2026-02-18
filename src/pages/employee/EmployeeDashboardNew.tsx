@@ -2796,6 +2796,9 @@ const ProfileTab = React.memo(function ProfileTab({ employee, onLogout, deviceBi
   const settings = deviceBinding.settings;
   const currentDeviceId = deviceBinding.currentAndroidId || "";
   const isLoadingSettings = deviceBinding.isLoading;
+  const maxResetCount = settings?.max_device_reset_count || 3;
+  const usedResetCount = Math.max(0, deviceInfo?.device_id_reset_count || 0);
+  const remainingResetCount = Math.max(0, maxResetCount - usedResetCount);
 
   if (!employee) {
     return (
@@ -2918,7 +2921,13 @@ const ProfileTab = React.memo(function ProfileTab({ employee, onLogout, deviceBi
                 <div className="flex justify-between py-2 border-b">
                   <span className="text-muted-foreground">Reset Tersisa</span>
                   <span className="font-medium">
-                    {(settings?.max_device_reset_count || 3) - (deviceInfo?.device_id_reset_count || 0)} / {settings?.max_device_reset_count || 3}
+                    {remainingResetCount} / {maxResetCount}
+                  </span>
+                </div>
+                <div className="flex justify-between py-2 border-b">
+                  <span className="text-muted-foreground">Reset Terpakai (bulan ini)</span>
+                  <span className="font-medium">
+                    {usedResetCount} / {maxResetCount}
                   </span>
                 </div>
               </div>
@@ -2981,8 +2990,8 @@ const ProfileTab = React.memo(function ProfileTab({ employee, onLogout, deviceBi
           onOpenChange={setShowDeviceReset}
           employeeId={employee.id}
           employeeEmail={employee.email}
-          currentResetCount={deviceInfo?.device_id_reset_count || 0}
-          maxResetCount={settings?.max_device_reset_count || 3}
+          currentResetCount={usedResetCount}
+          maxResetCount={maxResetCount}
           requirePasswordChange={settings?.require_password_change_for_reset ?? true}
           onSuccess={() => deviceBinding.refetch()}
         />

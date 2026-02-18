@@ -13,6 +13,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Loader2, Smartphone, Lock, AlertTriangle, Mail, RotateCcw, Eye, EyeOff } from "lucide-react";
 import SingleOTPInput, { SingleOTPInputRef } from "@/components/common/SingleOTPInput";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 // Custom Password Input component - FULLY UNCONTROLLED untuk mencegah flicker
 const PasswordInput = memo(function PasswordInput({
@@ -82,12 +83,30 @@ export function DeviceResetDialog({
 }: DeviceResetDialogProps) {
   const withTrace = (message: string, traceId?: string) =>
     traceId ? `${message} (Ref: ${traceId})` : message;
+  const parseHttpError = async (
+    response: Response
+  ): Promise<{ message: string; traceId?: string; code?: string; retryAfterSeconds?: number }> => {
+    try {
+      const body = await response.clone().json();
+      const message = typeof body?.error === "string" ? body.error : `HTTP ${response.status}`;
+      const traceId = typeof body?.trace_id === "string" ? body.trace_id : undefined;
+      const code = typeof body?.code === "string" ? body.code : undefined;
+      const retryAfterSeconds = typeof body?.retry_after_seconds === "number" ? body.retry_after_seconds : undefined;
+      return { message, traceId, code, retryAfterSeconds };
+    } catch {
+      const message = (await response.clone().text()) || `HTTP ${response.status}`;
+      return { message };
+    }
+  };
 
   const [isLoading, setIsLoading] = useState(false);
   const [step, setStep] = useState<"otp" | "password">("otp");
   const [isSendingOtp, setIsSendingOtp] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
   const [otpValid, setOtpValid] = useState(false);
+  const [lastBackendTrace, setLastBackendTrace] = useState<string | null>(null);
+  const [lastBackendErrorCode, setLastBackendErrorCode] = useState<string | null>(null);
+  const [lastBackendRetryAfter, setLastBackendRetryAfter] = useState<number | null>(null);
   
   // Simpan OTP value yang sudah diverifikasi agar bisa digunakan di step password
   const [verifiedOtp, setVerifiedOtp] = useState<string>("");
@@ -131,6 +150,9 @@ export function DeviceResetDialog({
       setStep("otp");
       setOtpSent(false);
       setOtpValid(false);
+      setLastBackendTrace(null);
+      setLastBackendErrorCode(null);
+      setLastBackendRetryAfter(null);
       setVerifiedOtp(""); // Reset verified OTP
       
       // Clear refs
@@ -144,7 +166,7 @@ export function DeviceResetDialog({
     }
   }, [open, checkMonthlyReset]);
 
-  const remainingResets = maxResetCount - effectiveResetCount;
+  const remainingResets = Math.max(0, maxResetCount - effectiveResetCount);
   const canReset = remainingResets > 0;
 
   const handleSendOtp = async () => {
@@ -167,16 +189,29 @@ export function DeviceResetDialog({
         }
       );
 
-      const result = await response.json();
-
       if (!response.ok) {
-        throw new Error(withTrace(result.error || "Gagal mengirim OTP", result.trace_id));
+        const parsed = await parseHttpError(response);
+        setLastBackendTrace(parsed.traceId || null);
+        setLastBackendErrorCode(parsed.code || null);
+        setLastBackendRetryAfter(parsed.retryAfterSeconds || null);
+        const baseMessage = response.status === 429
+          ? `Terlalu banyak permintaan OTP. ${parsed.message}`
+          : parsed.message || "Gagal mengirim OTP";
+        const errMessage = withTrace(baseMessage, parsed.traceId);
+        throw new Error(errMessage);
       }
 
+      setLastBackendTrace(null);
+      setLastBackendErrorCode(null);
+      setLastBackendRetryAfter(null);
       setOtpSent(true);
       toast.success("Kode OTP terkirim ke email Anda");
     } catch (error: any) {
-      toast.error(error.message || "Gagal mengirim OTP");
+      const logRef = reportError(error, "employee.device_reset.send_otp", {
+        employee_id: employeeId,
+        employee_email: employeeEmail,
+      });
+      toast.error(appendErrorReference(error?.message || "Gagal mengirim OTP", logRef));
     } finally {
       setIsSendingOtp(false);
     }
@@ -273,10 +308,16 @@ export function DeviceResetDialog({
 
       if (error || !data?.success) {
         const traceId = data?.trace_id;
+        setLastBackendTrace(traceId || null);
+        setLastBackendErrorCode((data?.code as string) || null);
+        setLastBackendRetryAfter((data?.retry_after_seconds as number) || null);
         const fallbackMessage = error?.message || "Gagal verifikasi OTP atau reset device";
         throw new Error(withTrace(data?.error || fallbackMessage, traceId));
       }
 
+      setLastBackendTrace(null);
+      setLastBackendErrorCode(null);
+      setLastBackendRetryAfter(null);
       // NOTE: Jangan paksa update password via client di sini.
       // Saat reset device biasanya user belum punya session valid (atau session lama sudah invalid),
       // sehingga supabase.auth.updateUser() bisa gagal dengan "Session not found" dan membuat UX terlihat gagal,
@@ -321,10 +362,31 @@ export function DeviceResetDialog({
                 {remainingResets} dari {maxResetCount}
               </span>
             </div>
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Sudah dipakai bulan ini:</span>
+              <span className="font-semibold">
+                {effectiveResetCount} dari {maxResetCount}
+              </span>
+            </div>
             <p className="text-xs text-muted-foreground">
-              Reset counter akan kembali ke {maxResetCount} setiap tanggal 1 tiap bulan.
+              Kuota reset bulanan akan di-refresh setiap tanggal 1.
             </p>
           </div>
+
+          {lastBackendTrace && (
+            <div className="p-3 rounded-lg border border-amber-300 bg-amber-50/60 text-xs space-y-1">
+              <p className="font-semibold text-amber-900">Debug Reset Device</p>
+              <p className="text-amber-900">trace_id: {lastBackendTrace}</p>
+              {lastBackendErrorCode && (
+                <p className="text-amber-900">code: {lastBackendErrorCode}</p>
+              )}
+              {typeof lastBackendRetryAfter === "number" && lastBackendRetryAfter > 0 && (
+                <p className="text-amber-900">
+                  retry_after: {Math.ceil(lastBackendRetryAfter / 60)} menit
+                </p>
+              )}
+            </div>
+          )}
 
           {!canReset && (
             <div className="p-4 bg-destructive/10 border border-destructive/30 rounded-lg flex items-start gap-3">
