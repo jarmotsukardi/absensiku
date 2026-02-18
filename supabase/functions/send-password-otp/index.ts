@@ -52,6 +52,13 @@ interface UserRoleRow {
   role: string;
 }
 
+interface OtpRateLimitConfig {
+  enabled: boolean;
+  maxAttempts: number;
+  lockoutMinutes: number;
+  windowMinutes: number;
+}
+
 const ROLE_MAP: Record<string, { label: string }> = {
   admin: { label: "Super Admin" },
   org: { label: "Admin Organisasi" },
@@ -117,6 +124,52 @@ const withTrace = <T extends Record<string, unknown>>(payload: T, traceId: strin
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) return error.message;
   return "Terjadi kesalahan internal";
+};
+
+const parsePositiveNumber = (value: unknown, fallback: number): number => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  const integer = Math.floor(parsed);
+  return integer > 0 ? integer : fallback;
+};
+
+const parseBoolean = (value: unknown, fallback: boolean): boolean => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value === 1 ? true : value === 0 ? false : fallback;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
+  }
+  return fallback;
+};
+
+const loadOtpRateLimitConfig = async (supabase: AdminSupabaseClient): Promise<OtpRateLimitConfig> => {
+  const defaults: OtpRateLimitConfig = {
+    enabled: true,
+    maxAttempts: 3,
+    lockoutMinutes: 60,
+    windowMinutes: 60,
+  };
+
+  const { data } = await supabase
+    .from("system_settings")
+    .select("value")
+    .eq("key", "attendance_security")
+    .maybeSingle();
+
+  const raw = data?.value && typeof data.value === "object" && !Array.isArray(data.value)
+    ? (data.value as Record<string, unknown>)
+    : null;
+
+  if (!raw) return defaults;
+
+  return {
+    enabled: parseBoolean(raw.otp_send_rate_limit_enabled, defaults.enabled),
+    maxAttempts: parsePositiveNumber(raw.otp_send_max_attempts, defaults.maxAttempts),
+    lockoutMinutes: parsePositiveNumber(raw.otp_send_lockout_minutes, defaults.lockoutMinutes),
+    windowMinutes: parsePositiveNumber(raw.otp_send_window_minutes, defaults.windowMinutes),
+  };
 };
 
 const pickBestEmployeeCandidate = (rows: EmployeeCandidate[]): EmployeeCandidate | null => {
@@ -221,8 +274,13 @@ const hashOTP = async (otp: string): Promise<string> => {
 // Check rate limit
 const checkRateLimit = async (
   supabase: AdminSupabaseClient,
-  email: string
+  email: string,
+  config: OtpRateLimitConfig
 ): Promise<{ allowed: boolean; message?: string; retryAfterSeconds?: number; attemptCount?: number }> => {
+  if (!config.enabled) {
+    return { allowed: true };
+  }
+
   const { data: rateLimit } = await supabase
     .from("rate_limit_otp")
     .select("*")
@@ -231,7 +289,7 @@ const checkRateLimit = async (
     .maybeSingle();
 
   const now = new Date();
-  const hourAgo = new Date(now.getTime() - 3600000);
+  const windowAgo = new Date(now.getTime() - (config.windowMinutes * 60000));
 
   if (rateLimit) {
     // Check if locked
@@ -248,7 +306,7 @@ const checkRateLimit = async (
     }
 
     // Reset counter if > 1 hour
-    if (new Date(rateLimit.first_attempt_at) < hourAgo) {
+    if (new Date(rateLimit.first_attempt_at) < windowAgo) {
       await supabase.from("rate_limit_otp")
         .update({ attempt_count: 1, first_attempt_at: now.toISOString(), last_attempt_at: now.toISOString(), locked_until: null })
         .eq("identifier", email)
@@ -256,17 +314,16 @@ const checkRateLimit = async (
       return { allowed: true };
     }
 
-    // Check rate limit: max 3 per hour
-    if (rateLimit.attempt_count >= 3) {
-      const lockUntil = new Date(now.getTime() + 3600000); // 1 hour lock
+    if (rateLimit.attempt_count >= config.maxAttempts) {
+      const lockUntil = new Date(now.getTime() + (config.lockoutMinutes * 60000));
       await supabase.from("rate_limit_otp")
         .update({ locked_until: lockUntil.toISOString() })
         .eq("identifier", email)
         .eq("attempt_type", "send");
       return {
         allowed: false,
-        message: "Terlalu banyak permintaan OTP. Akun dikunci selama 1 jam.",
-        retryAfterSeconds: 3600,
+        message: `Terlalu banyak permintaan OTP. Akun dikunci selama ${config.lockoutMinutes} menit.`,
+        retryAfterSeconds: config.lockoutMinutes * 60,
         attemptCount: rateLimit.attempt_count || 0,
       };
     }
@@ -310,13 +367,16 @@ serve(async (req: Request): Promise<Response> => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+    const otpRateLimitConfig = await loadOtpRateLimitConfig(supabase);
+
     // Check rate limit first
-    const rateLimitCheck = await checkRateLimit(supabase, email.toLowerCase().trim());
+    const rateLimitCheck = await checkRateLimit(supabase, email.toLowerCase().trim(), otpRateLimitConfig);
     if (!rateLimitCheck.allowed) {
       console.warn(`[${traceId}] RATE_LIMITED send-password-otp`, {
         email: email.toLowerCase().trim(),
         retry_after_seconds: rateLimitCheck.retryAfterSeconds ?? null,
         attempt_count: rateLimitCheck.attemptCount ?? null,
+        rate_limit_config: otpRateLimitConfig,
       });
       const retryAfterHeader = rateLimitCheck.retryAfterSeconds
         ? { "Retry-After": String(rateLimitCheck.retryAfterSeconds) }

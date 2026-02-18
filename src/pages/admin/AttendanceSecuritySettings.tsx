@@ -33,6 +33,10 @@ interface SecuritySettings {
   enable_device_binding: boolean;
   max_device_reset_count: number;
   require_password_change_for_reset: boolean;
+  otp_send_rate_limit_enabled: boolean;
+  otp_send_max_attempts: number;
+  otp_send_lockout_minutes: number;
+  otp_send_window_minutes: number;
   // APK Compatibility
   min_android_version: number;
 }
@@ -52,6 +56,10 @@ export default function AttendanceSecuritySettings() {
     enable_device_binding: true,
     max_device_reset_count: 3,
     require_password_change_for_reset: true,
+    otp_send_rate_limit_enabled: true,
+    otp_send_max_attempts: 3,
+    otp_send_lockout_minutes: 60,
+    otp_send_window_minutes: 60,
     // APK Compatibility
     min_android_version: 7,
   });
@@ -85,6 +93,10 @@ export default function AttendanceSecuritySettings() {
           enable_device_binding: typeof savedSettings.enable_device_binding === 'boolean' ? savedSettings.enable_device_binding : prev.enable_device_binding,
           max_device_reset_count: typeof savedSettings.max_device_reset_count === 'number' ? savedSettings.max_device_reset_count : prev.max_device_reset_count,
           require_password_change_for_reset: typeof savedSettings.require_password_change_for_reset === 'boolean' ? savedSettings.require_password_change_for_reset : prev.require_password_change_for_reset,
+          otp_send_rate_limit_enabled: typeof savedSettings.otp_send_rate_limit_enabled === 'boolean' ? savedSettings.otp_send_rate_limit_enabled : prev.otp_send_rate_limit_enabled,
+          otp_send_max_attempts: typeof savedSettings.otp_send_max_attempts === 'number' ? savedSettings.otp_send_max_attempts : prev.otp_send_max_attempts,
+          otp_send_lockout_minutes: typeof savedSettings.otp_send_lockout_minutes === 'number' ? savedSettings.otp_send_lockout_minutes : prev.otp_send_lockout_minutes,
+          otp_send_window_minutes: typeof savedSettings.otp_send_window_minutes === 'number' ? savedSettings.otp_send_window_minutes : prev.otp_send_window_minutes,
           // APK Compatibility
           min_android_version: typeof savedSettings.min_android_version === 'number' ? savedSettings.min_android_version : prev.min_android_version,
         }));
@@ -378,6 +390,65 @@ export default function AttendanceSecuritySettings() {
                       </ul>
                     </div>
                   </div>
+                </div>
+
+                <div className="space-y-4 rounded-lg border p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-1">
+                      <Label className="font-medium">Aktifkan Lock OTP Reset Device</Label>
+                      <p className="text-sm text-muted-foreground">
+                        Membatasi pengiriman OTP reset device agar tidak disalahgunakan.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={settings.otp_send_rate_limit_enabled}
+                      onCheckedChange={(checked) => updateSetting("otp_send_rate_limit_enabled", checked)}
+                    />
+                  </div>
+
+                  {settings.otp_send_rate_limit_enabled && (
+                    <div className="grid gap-4 sm:grid-cols-3">
+                      <div className="space-y-2">
+                        <Label>Maks. kirim OTP</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={20}
+                          value={settings.otp_send_max_attempts}
+                          onChange={(e) =>
+                            setSettings(prev => ({ ...prev, otp_send_max_attempts: Math.max(1, parseInt(e.target.value) || 3) }))
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">Batas kirim OTP per window</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Window (menit)</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={240}
+                          value={settings.otp_send_window_minutes}
+                          onChange={(e) =>
+                            setSettings(prev => ({ ...prev, otp_send_window_minutes: Math.max(1, parseInt(e.target.value) || 60) }))
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">Periode hitung percobaan OTP</p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Durasi Lock (menit)</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={240}
+                          value={settings.otp_send_lockout_minutes}
+                          onChange={(e) =>
+                            setSettings(prev => ({ ...prev, otp_send_lockout_minutes: Math.max(1, parseInt(e.target.value) || 60) }))
+                          }
+                        />
+                        <p className="text-xs text-muted-foreground">Lama akun terkunci saat limit tercapai</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="p-4 bg-warning/10 border border-warning/30 rounded-lg">
