@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -38,13 +38,7 @@ export default function NewsDetail() {
   const [isLoading, setIsLoading] = useState(true);
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
-    if (id) {
-      fetchArticle();
-    }
-  }, [id]);
-
-  const fetchArticle = async () => {
+  const fetchArticle = useCallback(async () => {
     try {
       // First try to find by slug
       let { data, error } = await supabase
@@ -92,7 +86,13 @@ export default function NewsDetail() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [id]);
+
+  useEffect(() => {
+    if (id) {
+      void fetchArticle();
+    }
+  }, [id, fetchArticle]);
 
   const shareUrl = typeof window !== "undefined" ? window.location.href : "";
   

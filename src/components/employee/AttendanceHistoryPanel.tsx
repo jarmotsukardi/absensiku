@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -41,13 +41,7 @@ export function AttendanceHistoryPanel({ employeeId, isOpen, onClose }: Attendan
   const [monthFilter, setMonthFilter] = useState(format(new Date(), "yyyy-MM"));
   const [statusFilter, setStatusFilter] = useState("all");
 
-  useEffect(() => {
-    if (employeeId && isOpen) {
-      fetchHistory();
-    }
-  }, [employeeId, monthFilter, isOpen]);
-
-  const fetchHistory = async () => {
+  const fetchHistory = useCallback(async () => {
     if (!employeeId) return;
     
     setIsLoading(true);
@@ -72,7 +66,13 @@ export function AttendanceHistoryPanel({ employeeId, isOpen, onClose }: Attendan
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [employeeId, monthFilter]);
+
+  useEffect(() => {
+    if (employeeId && isOpen) {
+      void fetchHistory();
+    }
+  }, [employeeId, isOpen, fetchHistory]);
 
   const filteredRecords = statusFilter === "all" 
     ? records 

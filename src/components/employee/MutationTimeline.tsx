@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -21,8 +21,20 @@ interface MutationRecord {
   status: string;
   reason: string;
   rejection_reason?: string;
-  requested_changes: Record<string, any>;
-  original_data: Record<string, any>;
+  requested_changes: Record<string, unknown>;
+  original_data: Record<string, unknown>;
+  created_at: string;
+  approved_at?: string;
+}
+
+interface MutationRow {
+  id: string;
+  mutation_type: string;
+  status: string;
+  reason: string;
+  rejection_reason?: string;
+  requested_changes: unknown;
+  original_data: unknown;
   created_at: string;
   approved_at?: string;
 }
@@ -35,13 +47,7 @@ export function MutationTimeline({ employeeId }: MutationTimelineProps) {
   const [mutations, setMutations] = useState<MutationRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    if (employeeId) {
-      fetchMutations();
-    }
-  }, [employeeId]);
-
-  const fetchMutations = async () => {
+  const fetchMutations = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from("mutation_requests")
@@ -50,7 +56,7 @@ export function MutationTimeline({ employeeId }: MutationTimelineProps) {
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      setMutations((data || []).map((d: any) => ({
+      setMutations(((data || []) as MutationRow[]).map((d) => ({
         ...d,
         requested_changes: typeof d.requested_changes === 'object' ? d.requested_changes : {},
         original_data: typeof d.original_data === 'object' ? d.original_data : {},
@@ -60,7 +66,13 @@ export function MutationTimeline({ employeeId }: MutationTimelineProps) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [employeeId]);
+
+  useEffect(() => {
+    if (employeeId) {
+      void fetchMutations();
+    }
+  }, [employeeId, fetchMutations]);
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -99,7 +111,7 @@ export function MutationTimeline({ employeeId }: MutationTimelineProps) {
     }
   };
 
-  const formatChange = (key: string, oldVal: any, newVal: any) => {
+  const formatChange = (key: string, oldVal: unknown, newVal: unknown) => {
     const label = key
       .replace(/_id$/g, "")
       .replace(/_name$/g, "")

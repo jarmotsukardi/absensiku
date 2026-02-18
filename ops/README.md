@@ -12,6 +12,8 @@ Folder ini berisi data minimum agar eksekusi task besar bisa lebih cepat dan ter
   template akun uji per role.
 - `test-dataset.template.json`:
   template dataset uji skenario inti.
+- `orchestration-spec.template.md`:
+  template intake spec untuk `npm run orchestrate:full`.
 - `feature-sprint-template.md`:
   template workflow sprint fitur cepat (MCP-first, batch implementasi, validasi paralel).
 
@@ -37,6 +39,39 @@ npm run ops:readiness
 ```
 
 Jika output `Ops readiness: SIAP`, berarti data minimum sudah lengkap.
+
+## Mode Cepat Permanen (Lovable-like)
+
+Mode default repo ini sekarang pakai fastlane berikut:
+
+```bash
+npm run lovable -- --task "Audit dan perbaiki modul /org/notifications end-to-end"
+```
+
+Variasi:
+
+```bash
+npm run lovable -- --task "Perbaikan cepat UI /dashboard" --dry-run
+npm run lovable:full -- --task "Batch besar lintas /admin + /org"
+```
+
+Fastlane ini menjalankan:
+- intake task
+- orchestrasi model
+- autofix
+- validasi paralel (lint/test/build + smoke)
+
+Alternatif one-command lokal-native:
+
+```bash
+npm run local:orchestrate -- --task "Implementasi batch modul /org/"
+```
+
+Hasil run disimpan di:
+- `artifacts/local-orchestration/<run-id>/run.json`
+- `artifacts/local-orchestration/<run-id>/summary.md`
+
+Aturan deploy tetap sama: push/deploy manual hanya jika ada perintah eksplisit.
 
 Gunakan `ops/test-accounts.local.json` sebagai sumber kredensial tetap untuk uji login:
 

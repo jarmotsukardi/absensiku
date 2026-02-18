@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,6 +15,14 @@ interface OrganizationOption {
   office_name?: string | null;
 }
 
+interface EmployeeOrgRow {
+  id: string;
+  tenant_id: string;
+  tenants?: { name?: string | null; logo_url?: string | null } | null;
+  opd?: { name?: string | null } | null;
+  offices?: { name?: string | null } | null;
+}
+
 interface OrganizationSelectorProps {
   userId: string;
   onSelect: (employeeId: string, tenantId: string) => void;
@@ -26,11 +34,7 @@ export function OrganizationSelector({ userId, onSelect, selectedEmployeeId }: O
   const [isLoading, setIsLoading] = useState(true);
   const [selected, setSelected] = useState<string>(selectedEmployeeId || "");
 
-  useEffect(() => {
-    fetchOrganizations();
-  }, [userId]);
-
-  const fetchOrganizations = async () => {
+  const fetchOrganizations = useCallback(async () => {
     try {
       setIsLoading(true);
       
@@ -48,7 +52,7 @@ export function OrganizationSelector({ userId, onSelect, selectedEmployeeId }: O
 
       if (error) throw error;
 
-      const orgs: OrganizationOption[] = (data || []).map((emp: any) => ({
+      const orgs: OrganizationOption[] = ((data || []) as EmployeeOrgRow[]).map((emp) => ({
         employee_id: emp.id,
         tenant_id: emp.tenant_id,
         tenant_name: emp.tenants?.name || "Organisasi",
@@ -71,7 +75,11 @@ export function OrganizationSelector({ userId, onSelect, selectedEmployeeId }: O
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [onSelect, selectedEmployeeId, userId]);
+
+  useEffect(() => {
+    void fetchOrganizations();
+  }, [fetchOrganizations]);
 
   const handleSelect = (employeeId: string) => {
     setSelected(employeeId);

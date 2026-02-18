@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
 
@@ -20,11 +20,7 @@ export function BannerSidebar({ position = "homepage", className = "" }: BannerS
   const [banners, setBanners] = useState<SidebarBanner[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    fetchBanners();
-  }, [position]);
-
-  const fetchBanners = async () => {
+  const fetchBanners = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from("system_settings")
@@ -52,7 +48,11 @@ export function BannerSidebar({ position = "homepage", className = "" }: BannerS
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [position]);
+
+  useEffect(() => {
+    void fetchBanners();
+  }, [fetchBanners]);
 
   if (isLoading || banners.length === 0) return null;
 
@@ -76,7 +76,6 @@ export function BannerSidebar({ position = "homepage", className = "" }: BannerS
                 const img = e.target as HTMLImageElement;
                 if (!img.dataset.fallback) {
                   img.dataset.fallback = "1";
-                  img.crossOrigin = null as any;
                   img.src = banner.imageUrl;
                 } else {
                   img.src = '/placeholder.svg';

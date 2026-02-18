@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { MapPinOff, Clock, CheckCircle2, XCircle, Car, Users, MapPin, Briefcase, Building2 } from "lucide-react";
@@ -43,7 +43,7 @@ export function FlexibleAttendanceRequestList({ employeeId, refreshTrigger }: Fl
   const [requests, setRequests] = useState<FlexibleAttendanceRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  const fetchRequests = async () => {
+  const fetchRequests = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from("flexible_attendance_requests")
@@ -59,11 +59,11 @@ export function FlexibleAttendanceRequestList({ employeeId, refreshTrigger }: Fl
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [employeeId]);
 
   useEffect(() => {
-    fetchRequests();
-  }, [employeeId, refreshTrigger]);
+    void fetchRequests();
+  }, [fetchRequests, refreshTrigger]);
 
   const getStatusBadge = (status: string) => {
     switch (status) {

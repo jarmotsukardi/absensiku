@@ -80,6 +80,9 @@ export function DeviceResetDialog({
   requirePasswordChange,
   onSuccess,
 }: DeviceResetDialogProps) {
+  const withTrace = (message: string, traceId?: string) =>
+    traceId ? `${message} (Ref: ${traceId})` : message;
+
   const [isLoading, setIsLoading] = useState(false);
   const [step, setStep] = useState<"otp" | "password">("otp");
   const [isSendingOtp, setIsSendingOtp] = useState(false);
@@ -96,26 +99,7 @@ export function DeviceResetDialog({
 
   const [effectiveResetCount, setEffectiveResetCount] = useState(currentResetCount);
 
-  useEffect(() => {
-    if (open) {
-      // Reset state saat dialog dibuka
-      setStep("otp");
-      setOtpSent(false);
-      setOtpValid(false);
-      setVerifiedOtp(""); // Reset verified OTP
-      
-      // Clear refs
-      setTimeout(() => {
-        otpInputRef.current?.clear();
-        if (newPasswordRef.current) newPasswordRef.current.value = "";
-        if (confirmPasswordRef.current) confirmPasswordRef.current.value = "";
-      }, 100);
-      
-      checkMonthlyReset();
-    }
-  }, [open]);
-
-  const checkMonthlyReset = async () => {
+  const checkMonthlyReset = useCallback(async () => {
     try {
       const { data: empData } = await supabase
         .from("employees")
@@ -139,7 +123,26 @@ export function DeviceResetDialog({
       console.error("Error checking monthly reset:", error);
       setEffectiveResetCount(currentResetCount);
     }
-  };
+  }, [employeeId, currentResetCount]);
+
+  useEffect(() => {
+    if (open) {
+      // Reset state saat dialog dibuka
+      setStep("otp");
+      setOtpSent(false);
+      setOtpValid(false);
+      setVerifiedOtp(""); // Reset verified OTP
+      
+      // Clear refs
+      setTimeout(() => {
+        otpInputRef.current?.clear();
+        if (newPasswordRef.current) newPasswordRef.current.value = "";
+        if (confirmPasswordRef.current) confirmPasswordRef.current.value = "";
+      }, 100);
+      
+      void checkMonthlyReset();
+    }
+  }, [open, checkMonthlyReset]);
 
   const remainingResets = maxResetCount - effectiveResetCount;
   const canReset = remainingResets > 0;
@@ -167,7 +170,7 @@ export function DeviceResetDialog({
       const result = await response.json();
 
       if (!response.ok) {
-        throw new Error(result.error || "Gagal mengirim OTP");
+        throw new Error(withTrace(result.error || "Gagal mengirim OTP", result.trace_id));
       }
 
       setOtpSent(true);
@@ -269,7 +272,9 @@ export function DeviceResetDialog({
       });
 
       if (error || !data?.success) {
-        throw new Error(data?.error || "Gagal verifikasi OTP atau reset device");
+        const traceId = data?.trace_id;
+        const fallbackMessage = error?.message || "Gagal verifikasi OTP atau reset device";
+        throw new Error(withTrace(data?.error || fallbackMessage, traceId));
       }
 
       // NOTE: Jangan paksa update password via client di sini.

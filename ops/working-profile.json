@@ -3,6 +3,12 @@
   "owner": "jarmotsukardi",
   "updated_at": "2026-02-15",
   "workflow_policy": {
+    "execution_mode": "lovable_fastlane",
+    "default_commands": {
+      "normal": "npm run lovable -- --task \"<deskripsi-task>\"",
+      "quick_dry_run": "npm run lovable -- --task \"<deskripsi-task>\" --dry-run",
+      "full_gate": "npm run lovable:full -- --task \"<deskripsi-task>\""
+    },
     "priority_order": [
       "/admin",
       "/org",
@@ -16,8 +22,8 @@
       "tidak ada regresi utama"
     ],
     "parallel_limits": {
-      "max_subtasks": 4,
-      "max_files_per_edit_batch": 6
+      "max_subtasks": 5,
+      "max_files_per_edit_batch": 5
     },
     "validation_pipeline": [
       "npm run autofix",
@@ -35,4 +41,3 @@
     "deployment_rule": "push dan deploy hanya jika user perintah eksplisit pada turn itu"
   }
 }
-

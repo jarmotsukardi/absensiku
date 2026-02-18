@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,23 +34,33 @@ interface SubscriptionPackage {
   duration_months: number;
   base_price_per_month: number;
   discount_percentage: number;
-  features: any;
+  features: unknown;
   description: string | null;
+}
+
+interface InvoiceRecord {
+  id: string;
+  amount: number | null;
+  status: string | null;
+  created_at: string;
+  due_date?: string | null;
+}
+
+interface SubscriptionRecord {
+  id: string;
+  status: string | null;
+  end_date: string | null;
 }
 
 export function EmployeeActivationPage({ tenantId, employeeId, onBack }: EmployeeActivationPageProps) {
   const [packages, setPackages] = useState<SubscriptionPackage[]>([]);
-  const [invoices, setInvoices] = useState<any[]>([]);
-  const [subscription, setSubscription] = useState<any>(null);
+  const [invoices, setInvoices] = useState<InvoiceRecord[]>([]);
+  const [subscription, setSubscription] = useState<SubscriptionRecord | null>(null);
   const [selectedPkgId, setSelectedPkgId] = useState<string>("");
   const [memberCount, setMemberCount] = useState([1]);
   const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       const [pkgRes, invRes, subRes] = await Promise.all([
         supabase.from("subscription_packages").select("*").eq("is_active", true).order("sort_order"),
@@ -69,7 +79,11 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [tenantId]);
+
+  useEffect(() => {
+    void fetchData();
+  }, [fetchData]);
 
   const selectedPkg = packages.find((p) => p.id === selectedPkgId);
 
@@ -83,12 +97,13 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
   const formatCurrency = (amount: number) =>
     new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(amount);
 
-  const getStatusBadge = (status: string) => {
+  const getStatusBadge = (status: string | null) => {
+    const normalized = status ?? "UNKNOWN";
     switch (status) {
       case "PAID": return <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Lunas</Badge>;
       case "PENDING": return <Badge variant="secondary">Menunggu</Badge>;
       case "CANCELLED": return <Badge variant="destructive">Dibatalkan</Badge>;
-      default: return <Badge variant="outline">{status}</Badge>;
+      default: return <Badge variant="outline">{normalized}</Badge>;
     }
   };
 

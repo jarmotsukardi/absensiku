@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -7,11 +7,7 @@ export function useProfileCheck() {
   const [isChecking, setIsChecking] = useState(true);
   const [isProfileComplete, setIsProfileComplete] = useState(false);
 
-  useEffect(() => {
-    checkProfile();
-  }, []);
-
-  const checkProfile = async () => {
+  const checkProfile = useCallback(async () => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
@@ -57,7 +53,11 @@ export function useProfileCheck() {
     } finally {
       setIsChecking(false);
     }
-  };
+  }, [navigate]);
+
+  useEffect(() => {
+    void checkProfile();
+  }, [checkProfile]);
 
   return { isChecking, isProfileComplete };
 }

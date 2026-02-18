@@ -191,12 +191,6 @@ serve(async (req: Request): Promise<Response> => {
       };
     }
 
-    // Mark OTP as used setelah seluruh precheck lolos.
-    await supabase
-      .from("password_reset_otps")
-      .update({ is_used: true, verified_at: nowIso })
-      .eq("id", otpRecord.id);
-
     // If password change is requested
     if (newPassword && employeeId) {
       if (resetEmployeeUserId) {
@@ -230,6 +224,20 @@ serve(async (req: Request): Promise<Response> => {
           { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
+    }
+
+    // Mark OTP as used SETELAH semua update berhasil agar OTP tidak "hangus" saat update gagal.
+    const { error: otpMarkError } = await supabase
+      .from("password_reset_otps")
+      .update({ is_used: true, verified_at: nowIso })
+      .eq("id", otpRecord.id);
+
+    if (otpMarkError) {
+      logTraceError(traceId, "Error marking OTP as used", otpMarkError);
+      return new Response(
+        JSON.stringify(withTrace({ error: "Gagal menyelesaikan verifikasi OTP", code: "OTP_MARK_USED_FAILED" }, traceId)),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     return new Response(

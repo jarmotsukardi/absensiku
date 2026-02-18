@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -72,10 +72,6 @@ export default function OPDAdminsManagement() {
   });
 
   useEffect(() => {
-    fetchData();
-  }, []);
-
-  useEffect(() => {
     if (formData.opd_id) {
       const filtered = employees.filter(e => e.opd_id === formData.opd_id);
       setFilteredEmployees(filtered);
@@ -84,7 +80,7 @@ export default function OPDAdminsManagement() {
     }
   }, [formData.opd_id, employees]);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setIsLoading(true);
     setLoadError(null);
     try {
@@ -135,9 +131,7 @@ export default function OPDAdminsManagement() {
       if (employeesError) throw employeesError;
       setEmployees(employeesData || []);
     } catch (error) {
-      const errorRef = reportError(error, "admin.master.opd_admins.fetch", {
-        search: searchTerm.trim() || null,
-      });
+      const errorRef = reportError(error, "admin.master.opd_admins.fetch");
       const message = appendErrorReference("Gagal memuat data admin OPD", errorRef);
       toast.error(message);
       setLoadError(message);
@@ -148,7 +142,11 @@ export default function OPDAdminsManagement() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    void fetchData();
+  }, [fetchData]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

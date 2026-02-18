@@ -33,6 +33,7 @@ import { AppDownloadSettings } from "@/components/admin/settings/AppDownloadSett
 import { PromoSidebarSettings } from "@/components/admin/settings/PromoSidebarSettings";
 import { TargetSegmentSettings } from "@/components/admin/settings/TargetSegmentSettings";
 import { useNavigate } from "react-router-dom";
+import { reportError } from "@/lib/errorLogger";
 
 interface HomepageSection {
   id: string;
@@ -66,8 +67,8 @@ export default function HomepageLayoutSettings() {
       if (error) throw error;
       setSections(data || []);
     } catch (error) {
-      console.error("Error fetching sections:", error);
-      toast.error("Gagal memuat data");
+      const errorRef = reportError(error, "admin.homepage_layout.fetch_sections");
+      toast.error(`Gagal memuat data (Ref: ${errorRef})`);
     } finally {
       setIsLoading(false);
     }
@@ -80,7 +81,11 @@ export default function HomepageLayoutSettings() {
       setSections(prev => prev.map(s => s.id === id ? { ...s, is_enabled: isEnabled } : s));
       toast.success("Status berhasil diubah");
     } catch (error) {
-      toast.error("Gagal mengubah status");
+      const errorRef = reportError(error, "admin.homepage_layout.toggle_section", {
+        section_id: id,
+        is_enabled: isEnabled,
+      });
+      toast.error(`Gagal mengubah status (Ref: ${errorRef})`);
     }
   };
 
@@ -101,12 +106,25 @@ export default function HomepageLayoutSettings() {
   const handleSaveOrder = async () => {
     setIsSaving(true);
     try {
-      for (const section of sections) {
-        await supabase.from("homepage_sections").update({ sort_order: section.sort_order, updated_at: new Date().toISOString() }).eq("id", section.id);
+      const updatedAt = new Date().toISOString();
+      const results = await Promise.all(
+        sections.map((section) =>
+          supabase
+            .from("homepage_sections")
+            .update({ sort_order: section.sort_order, updated_at: updatedAt })
+            .eq("id", section.id),
+        ),
+      );
+      const failed = results.find((result) => result.error);
+      if (failed?.error) {
+        throw failed.error;
       }
       toast.success("Urutan berhasil disimpan");
     } catch (error) {
-      toast.error("Gagal menyimpan urutan");
+      const errorRef = reportError(error, "admin.homepage_layout.save_order", {
+        section_count: sections.length,
+      });
+      toast.error(`Gagal menyimpan urutan (Ref: ${errorRef})`);
     } finally {
       setIsSaving(false);
     }

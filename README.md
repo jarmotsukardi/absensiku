@@ -667,6 +667,110 @@ Ubah sesuai kebutuhan di `scripts/multi-model.config.json`.
 
 ---
 
+## 🏗️ Builder Mode (Generate → Validate)
+
+Mode ini untuk workflow cepat ala builder: eksekusi task, autofix, lalu validasi paralel.
+
+File:
+- `scripts/builder-mode.mjs`
+
+Jalankan cepat:
+
+```bash
+npm run builder:quick
+```
+
+Jalankan penuh:
+
+```bash
+npm run builder:full
+```
+
+Dengan task utama (akan memanggil orchestrator dulu):
+
+```bash
+npm run builder -- --profile quick --task "Audit dan perbaiki /org/notifications end-to-end"
+```
+
+Opsi penting:
+- `--max-parallel <n>`: jumlah validasi paralel (default `3`)
+- `--with-smoke`: tambah smoke checks
+- `--skip-orchestrate`: lewati tahap orchestrator
+- `--skip-autofix`: lewati `npm run autofix`
+- `--skip-validate`: hanya jalankan tahap awal
+- `--dry-run`: simulasi tanpa eksekusi command
+
+---
+
+## 🧭 Full Auto Orchestration
+
+Satu command untuk chain otomatis:
+- intake spec/task
+- model orchestration
+- builder pipeline (autofix + quality gates)
+- optional migration hook
+- optional preview hook
+- artifacts report
+
+File:
+- `scripts/full-orchestrator.mjs`
+- `ops/orchestration-spec.template.md`
+
+Contoh jalankan dengan task:
+
+```bash
+npm run orchestrate:full -- --task "Audit dan perbaiki notifikasi /org/ ke /employee end-to-end"
+```
+
+Contoh jalankan dari spec file:
+
+```bash
+npm run orchestrate:full -- --spec-file ops/orchestration-spec.template.md --profile full --with-smoke
+```
+
+Artifacts output:
+- `artifacts/full-orchestration/<run-id>/run.json`
+- `artifacts/full-orchestration/<run-id>/summary.md`
+
+Catatan:
+- Migration hook hanya dijalankan jika script `db:migrate` atau `supabase:push` tersedia.
+- Preview hook memberi status kesiapan; deploy tetap manual sesuai policy.
+
+## ⚙️ Local-Native Orchestration (One Command)
+
+Pipeline lokal terpadu untuk generate + validate + preview:
+
+- intake spec/task
+- orchestration model lokal (`--local`)
+- builder pipeline (`autofix -> lint -> test -> build`)
+- optional migration hook
+- preview server lokal + smoke check
+- artifact report
+
+Command:
+
+```bash
+npm run local:orchestrate -- --task "Implementasi fitur X end-to-end"
+```
+
+Pakai spec:
+
+```bash
+npm run local:orchestrate -- --spec-file ops/orchestration-spec.template.md
+```
+
+Dry run:
+
+```bash
+npm run local:orchestrate -- --task "Audit /org/dashboard" --dry-run
+```
+
+Artifacts output:
+- `artifacts/local-orchestration/<run-id>/run.json`
+- `artifacts/local-orchestration/<run-id>/summary.md`
+
+---
+
 ## ⚡ Ops Readiness (Agar Kerja Lebih Cepat)
 
 Untuk mempercepat pembagian task besar, siapkan data minimum berikut:

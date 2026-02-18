@@ -2934,7 +2934,7 @@ const ProfileTab = React.memo(function ProfileTab({ employee, onLogout, deviceBi
                 variant="outline" 
                 className="w-full mt-4"
                 onClick={() => setShowDeviceReset(true)}
-                disabled={(settings?.max_device_reset_count || 3) - (deviceInfo?.device_id_reset_count || 0) <= 0}
+                disabled={isLoadingSettings}
               >
                 <Smartphone className="w-4 h-4 mr-2" />
                 Reset Perangkat
