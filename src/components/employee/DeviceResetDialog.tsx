@@ -117,14 +117,28 @@ export function DeviceResetDialog({
   const confirmPasswordRef = useRef<HTMLInputElement>(null);
 
   const [effectiveResetCount, setEffectiveResetCount] = useState(currentResetCount);
+  const [employeeRecoveryPhone, setEmployeeRecoveryPhone] = useState<string | null>(null);
+
+  const normalizePhone = (value: string) => {
+    const digits = (value || "").replace(/\D/g, "");
+    if (!digits) return "";
+    if (digits.startsWith("62")) return digits;
+    if (digits.startsWith("0")) return `62${digits.slice(1)}`;
+    return digits;
+  };
 
   const checkMonthlyReset = useCallback(async () => {
     try {
       const { data: empData } = await supabase
         .from("employees")
-        .select("device_id_last_reset, device_id_reset_count")
+        .select("device_id_last_reset, device_id_reset_count, phone, whatsapp")
         .eq("id", employeeId)
         .maybeSingle();
+
+      const recoveryPhone = normalizePhone(
+        String(empData?.phone || empData?.whatsapp || "")
+      );
+      setEmployeeRecoveryPhone(recoveryPhone || null);
 
       if (empData?.device_id_last_reset) {
         const lastReset = new Date(empData.device_id_last_reset);
@@ -174,6 +188,10 @@ export function DeviceResetDialog({
       toast.error("Email tidak ditemukan. Hubungi admin.");
       return;
     }
+    if (!employeeRecoveryPhone) {
+      toast.error("No. HP/WhatsApp pegawai belum terdaftar. Hubungi admin organisasi.");
+      return;
+    }
 
     setIsSendingOtp(true);
     try {
@@ -185,7 +203,12 @@ export function DeviceResetDialog({
             "Content-Type": "application/json",
             "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
           },
-          body: JSON.stringify({ email: employeeEmail.trim() }),
+          body: JSON.stringify({
+            email: employeeEmail.trim(),
+            whatsapp: employeeRecoveryPhone,
+            method: "email",
+            login_type: "employee",
+          }),
         }
       );
 
@@ -296,23 +319,48 @@ export function DeviceResetDialog({
       })();
 
       // Verify OTP dan update device/password dalam SATU panggilan
-      const { data, error } = await supabase.functions.invoke("verify-device-otp", {
-        body: {
-          email: normalizedEmail,
-          otp: normalizedOtp,
-          newPassword: requirePasswordChange ? newPassword : undefined,
-          employeeId: employeeId,
-          newAndroidId: currentDeviceId,
-        },
-      });
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+      if (!accessToken) {
+        throw new Error("Sesi login kadaluarsa. Silakan login ulang.");
+      }
 
-      if (error || !data?.success) {
-        const traceId = data?.trace_id;
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-device-otp`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "Authorization": `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({
+            email: normalizedEmail,
+            otp: normalizedOtp,
+            newPassword: requirePasswordChange ? newPassword : undefined,
+            employeeId: employeeId,
+            newAndroidId: currentDeviceId,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const parsed = await parseHttpError(response);
+        setLastBackendTrace(parsed.traceId || null);
+        setLastBackendErrorCode(parsed.code || null);
+        setLastBackendRetryAfter(parsed.retryAfterSeconds || null);
+        throw new Error(withTrace(parsed.message || "Gagal verifikasi OTP atau reset device", parsed.traceId));
+      }
+
+      const data = await response.json();
+      if (!data?.success) {
+        const traceId = typeof data?.trace_id === "string" ? data.trace_id : undefined;
+        const code = typeof data?.code === "string" ? data.code : undefined;
+        const retryAfter = typeof data?.retry_after_seconds === "number" ? data.retry_after_seconds : undefined;
         setLastBackendTrace(traceId || null);
-        setLastBackendErrorCode((data?.code as string) || null);
-        setLastBackendRetryAfter((data?.retry_after_seconds as number) || null);
-        const fallbackMessage = error?.message || "Gagal verifikasi OTP atau reset device";
-        throw new Error(withTrace(data?.error || fallbackMessage, traceId));
+        setLastBackendErrorCode(code || null);
+        setLastBackendRetryAfter(retryAfter || null);
+        throw new Error(withTrace(data?.error || "Gagal verifikasi OTP atau reset device", traceId));
       }
 
       setLastBackendTrace(null);
@@ -327,8 +375,11 @@ export function DeviceResetDialog({
       onSuccess();
       onOpenChange(false);
     } catch (error: any) {
-      console.error("Error resetting device:", error);
-      toast.error(error.message || "Gagal reset device ID");
+      const logRef = reportError(error, "employee.device_reset.verify_and_reset", {
+        employee_id: employeeId,
+        employee_email: employeeEmail,
+      });
+      toast.error(appendErrorReference(error?.message || "Gagal reset device ID", logRef));
     } finally {
       setIsLoading(false);
     }
