@@ -134,8 +134,9 @@ export function FloatingBugReport({ tenantId, employeeId, reporterName, reporter
       setRating(0);
       setScreenshotUrl("");
       setFeedbackType("saran");
-    } catch (error: any) {
-      toast.error("Gagal mengirim feedback: " + error.message);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error("Gagal mengirim feedback: " + message);
     } finally {
       setIsSubmitting(false);
     }

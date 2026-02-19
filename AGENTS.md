@@ -37,6 +37,10 @@ Instruksi tetap untuk agent coding di repo ini.
 - Mulai dengan scan cepat konteks secara paralel.
 - Lanjut implementasi bertahap, lalu validasi paralel.
 - Jika ditemukan error yang fixable otomatis, jalankan `npm run autofix` terlebih dahulu sebelum perbaikan manual.
+- Untuk setiap perubahan/penambahan fitur, wajib tawarkan update FAQ:
+  - jalankan `npm run faq:offer` untuk menghasilkan saran FAQ.
+  - setelah FAQ benar-benar diperbarui, jalankan `npm run faq:ack`.
+  - gunakan `npm run faq:check` pada quality gate bila perlu mode ketat.
 - Tutup dengan ringkasan:
   - apa yang diubah
   - hasil validasi

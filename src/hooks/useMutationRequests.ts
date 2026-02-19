@@ -8,8 +8,8 @@ export interface MutationRequest {
   employee_id: string;
   mutation_type: "profile_change" | "transfer";
   status: "menunggu" | "disetujui" | "ditolak";
-  requested_changes: Record<string, any>;
-  original_data: Record<string, any>;
+  requested_changes: Record<string, unknown>;
+  original_data: Record<string, unknown>;
   reason: string;
   attachment_url?: string | null;
   approved_by?: string | null;
@@ -30,6 +30,11 @@ interface UseMutationRequestsOptions {
   tenantId?: string;
   status?: string;
 }
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return String(error);
+};
 
 export function useMutationRequests(options: UseMutationRequestsOptions = {}) {
   const [requests, setRequests] = useState<MutationRequest[]>([]);
@@ -79,9 +84,9 @@ export function useMutationRequests(options: UseMutationRequestsOptions = {}) {
       );
 
       setRequests(requestsWithEmployee);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error fetching mutation requests:", err);
-      setError(err.message);
+      setError(getErrorMessage(err));
     } finally {
       setIsLoading(false);
     }
@@ -95,8 +100,8 @@ export function useMutationRequests(options: UseMutationRequestsOptions = {}) {
     tenant_id: string;
     employee_id: string;
     mutation_type: "profile_change" | "transfer";
-    requested_changes: Record<string, any>;
-    original_data: Record<string, any>;
+    requested_changes: Record<string, unknown>;
+    original_data: Record<string, unknown>;
     reason: string;
     attachment_url?: string;
   }) => {
@@ -110,9 +115,9 @@ export function useMutationRequests(options: UseMutationRequestsOptions = {}) {
       toast.success("Pengajuan mutasi berhasil dikirim");
       await fetchRequests();
       return true;
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error creating mutation request:", err);
-      toast.error("Gagal mengajukan mutasi", { description: err.message });
+      toast.error("Gagal mengajukan mutasi", { description: getErrorMessage(err) });
       return false;
     }
   };
@@ -130,14 +135,14 @@ export function useMutationRequests(options: UseMutationRequestsOptions = {}) {
       toast.success("Pengajuan mutasi dibatalkan");
       await fetchRequests();
       return true;
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error canceling mutation request:", err);
-      toast.error("Gagal membatalkan pengajuan", { description: err.message });
+      toast.error("Gagal membatalkan pengajuan", { description: getErrorMessage(err) });
       return false;
     }
   };
 
-  const approveRequest = async (requestId: string, employeeId: string, changes: Record<string, any>) => {
+  const approveRequest = async (requestId: string, employeeId: string, changes: Record<string, unknown>) => {
     try {
       // Update status pengajuan
       const { error: updateError } = await supabase
@@ -161,9 +166,9 @@ export function useMutationRequests(options: UseMutationRequestsOptions = {}) {
       toast.success("Pengajuan mutasi disetujui");
       await fetchRequests();
       return true;
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error approving mutation request:", err);
-      toast.error("Gagal menyetujui pengajuan", { description: err.message });
+      toast.error("Gagal menyetujui pengajuan", { description: getErrorMessage(err) });
       return false;
     }
   };
@@ -184,9 +189,9 @@ export function useMutationRequests(options: UseMutationRequestsOptions = {}) {
       toast.success("Pengajuan mutasi ditolak");
       await fetchRequests();
       return true;
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error rejecting mutation request:", err);
-      toast.error("Gagal menolak pengajuan", { description: err.message });
+      toast.error("Gagal menolak pengajuan", { description: getErrorMessage(err) });
       return false;
     }
   };

@@ -29,6 +29,7 @@ import {
   Superscript,
   Minus,
   Type,
+  type LucideIcon,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -155,7 +156,7 @@ export function RichTextEditor({
     execCommand("insertHorizontalRule");
   }, [execCommand]);
 
-  const ToolbarButton = ({ icon: Icon, onClick, title }: { icon: any; onClick: () => void; title: string }) => (
+  const ToolbarButton = ({ icon: Icon, onClick, title }: { icon: LucideIcon; onClick: () => void; title: string }) => (
     <Button type="button" variant="ghost" size="icon" className="h-8 w-8" onClick={onClick} title={title}>
       <Icon className="h-4 w-4" />
     </Button>

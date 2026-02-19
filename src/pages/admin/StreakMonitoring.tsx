@@ -96,9 +96,9 @@ const STREAK_WORKFLOW_STEPS: WorkflowStep[] = [
     title: "Routing Kanal Pembayaran",
     trigger: "Tenant membuka invoice dan memilih kanal pembayaran.",
     systemAction:
-      "Jika Xendit aktif: invoice online diproses via `create-xendit-invoice` + webhook. Jika Xendit belum aktif: tenant bayar manual transfer dan upload bukti.",
+      "Tenant B2B dengan billing terpusat (pegawai >= ambang B2B atau harga negosiasi aktif) wajib manual transfer. Tenant billing mandiri/non-B2B dapat memakai Xendit jika aktif, atau manual transfer jika Xendit nonaktif.",
     dataState:
-      "Invoice tetap terpusat di `invoices`, dengan `payment_method_type` sesuai kanal (XENDIT / MANUAL_TRANSFER).",
+      "Invoice tetap terpusat di `invoices`, dengan `payment_method_type` sesuai kanal (XENDIT / MANUAL_TRANSFER) dan guard backend mencegah Xendit untuk tenant B2B billing terpusat.",
     result: "Satu alur data invoice tetap konsisten meskipun kanal pembayaran berbeda.",
   },
   {
@@ -132,6 +132,16 @@ const STREAK_WORKFLOW_STEPS: WorkflowStep[] = [
     result: "Akses tenant terkunci sampai pembayaran diselesaikan.",
   },
   {
+    id: "unpaid-cleanup-lifecycle",
+    title: "Lifecycle Cleanup Tenant/User Tidak Bayar",
+    trigger: "Tenant tetap `expired` dengan invoice belum lunas, lalu lifecycle cleanup aktif.",
+    systemAction:
+      "Sistem menjadwalkan purge (`tenant_cleanup_lifecycle`) + mengirim reminder bertahap (H-14/H-7/H-3/H-1) berisi tanggal purge.",
+    dataState:
+      "Status lifecycle berpindah `scheduled` -> `cancelled` (jika sudah bayar) atau `purged` (jika melewati purge_at tanpa pembayaran).",
+    result: "Akses tenant/user non-bayar dibersihkan otomatis untuk menghemat resource dan kuota akun.",
+  },
+  {
     id: "grace-unpaid-regression-test",
     title: "Uji Regresi: Tidak Bayar Sampai Grace Berakhir",
     trigger: "Tim ops menjalankan `npm run streak:test-grace-expired` saat validasi kebijakan billing.",
@@ -157,6 +167,9 @@ const STREAK_GLOSSARY: StreakGlossaryItem[] = [
   { term: "Stability Streak", description: "Hitungan hari kerja berurutan saat tenant aktif menggunakan sistem absensi.", reference: "Table: `stability_streaks.streak_count`" },
   { term: "Streak Threshold", description: "Batas minimal streak sebelum tenant masuk fase billing streak.", reference: "Setting: `system_settings.key=streak_threshold`" },
   { term: "Grace Period", description: "Masa tenggang setelah target tercapai sebelum tenant dinyatakan expired/suspend.", reference: "Setting: `streak_grace_period_days`, field `grace_period_end`" },
+  { term: "Unpaid Cleanup Lifecycle", description: "Mekanisme otomatis untuk tenant non-bayar: jadwal purge, reminder, dan cleanup ketika melewati tenggat.", reference: "Table: `tenant_cleanup_lifecycle`" },
+  { term: "Purge Date", description: "Tanggal/waktu final penghapusan akses tenant/user non-bayar jika belum ada pembayaran tervalidasi.", reference: "Field: `tenant_cleanup_lifecycle.purge_at`" },
+  { term: "Purge Reminder", description: "Pengingat H-14/H-7/H-3/H-1 sebelum purge berisi countdown dan tanggal purge.", reference: "Setting: `unpaid_cleanup_reminder_days`, log: `reminder_history`" },
   { term: "Grace Notifier Cron", description: "Cron pengingat invoice grace period yang mengirim email + WhatsApp otomatis.", reference: "Job: `billing-grace-notifier-10m` -> Edge Function `billing-grace-notifier`" },
   { term: "Grace Notification Reason", description: "Kode fase notifikasi yang dicatat untuk menghindari duplikasi dan menandai konteks pengingat.", reference: "Metadata: `billing_notification_logs.metadata.reason`" },
   { term: "GRACE_PERIOD_ENTERED", description: "Notifikasi awal ketika tenant masuk fase grace period.", reference: "Reason: `GRACE_PERIOD_ENTERED`" },
@@ -175,6 +188,7 @@ const STREAK_GLOSSARY: StreakGlossaryItem[] = [
   { term: "Invoice Paid", description: "Tagihan telah dibayar dan tervalidasi.", reference: "Table: `invoices.status=PAID`" },
   { term: "Manual Transfer", description: "Pembayaran via transfer bank yang butuh verifikasi admin.", reference: "Field: `invoices.payment_method_type=MANUAL_TRANSFER`" },
   { term: "Xendit Payment", description: "Pembayaran online melalui payment gateway Xendit.", reference: "Edge Function: `create-xendit-invoice`, `xendit-webhook`" },
+  { term: "B2B Manual-Only", description: "Tenant B2B dengan billing terpusat tidak boleh checkout via Xendit; wajib transfer manual.", reference: "Guard: `create-xendit-invoice` menolak tenant B2B billing terpusat (HTTP 403)" },
   { term: "Fallback Manual Billing", description: "Mode saat Xendit belum aktif: invoice tetap dibuat, pembayaran dilakukan via transfer manual.", reference: "Flow: `invoices` + `manual_payments` + verifikasi admin billing" },
   { term: "Payment Verification", description: "Tahap validasi pembayaran oleh sistem/webhook/admin sebelum aktivasi final.", reference: "UI Billing + Edge/Webhook flow" },
   { term: "Financial Ledger", description: "Catatan transaksi keuangan final setelah pembayaran sukses.", reference: "Table: `financial_ledger`" },

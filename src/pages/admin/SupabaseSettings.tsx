@@ -20,6 +20,7 @@ import { FullBackupManager } from "@/components/admin/settings/FullBackupManager
 import { MigrationWizard } from "@/components/admin/settings/MigrationWizard";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { supabase } from "@/integrations/supabase/client";
+import { debugLog } from "@/lib/debugLog";
 import { toast } from "sonner";
 import { 
   Database, 
@@ -789,7 +790,7 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
         }
         
         const json = JSON.parse(content);
-        console.log("Preview JSON keys:", Object.keys(json));
+        debugLog("Preview JSON keys:", Object.keys(json));
         
         // Check if it's a full backup format (has 'data' property with table data)
         const isFullBackup = json.data && typeof json.data === 'object' && !Array.isArray(json.data);

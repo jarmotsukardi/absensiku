@@ -1,15 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
-
-interface SidebarBanner {
-  id: string;
-  title: string;
-  link: string;
-  position: string;
-  imageUrl: string;
-  isActive: boolean;
-}
+import { normalizeSidebarBanners } from "@/lib/sidebarBanners";
+import type { SidebarBannerItem } from "@/lib/sidebarBanners";
 
 interface BannerSidebarProps {
   position?: string;
@@ -17,7 +10,7 @@ interface BannerSidebarProps {
 }
 
 export function BannerSidebar({ position = "homepage", className = "" }: BannerSidebarProps) {
-  const [banners, setBanners] = useState<SidebarBanner[]>([]);
+  const [banners, setBanners] = useState<SidebarBannerItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchBanners = useCallback(async () => {
@@ -33,16 +26,11 @@ export function BannerSidebar({ position = "homepage", className = "" }: BannerS
         return;
       }
 
-      console.log("Banner sidebar data:", data);
-
-      if (data?.value) {
-        const bannersData = Array.isArray(data.value) ? data.value : [];
-        const filteredBanners = (bannersData as unknown as SidebarBanner[])
-          .filter((b) => b && b.isActive && b.imageUrl && (b.position === position || b.position === "all"))
-          .slice(0, 2); // Maksimal 2 banner yang ditampilkan
-        console.log("Filtered sidebar banners (max 2):", filteredBanners);
-        setBanners(filteredBanners);
-      }
+      const normalizedBanners = normalizeSidebarBanners(data?.value);
+      const filteredBanners = normalizedBanners
+        .filter((banner) => banner.isActive && banner.imageUrl && (banner.position === position || banner.position === "all"))
+        .slice(0, 2);
+      setBanners(filteredBanners);
     } catch (error) {
       console.error("Error fetching sidebar banners:", error);
     } finally {

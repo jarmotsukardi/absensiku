@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Pagination,
   PaginationContent,
@@ -31,23 +32,50 @@ import {
   BookOpen,
 } from "lucide-react";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRealOfficeCoordinate } from "@/lib/officeCoordinates";
 
 interface ImportRow {
   rowNum: number;
   nik: string;
   nip: string;
   name: string;
+  gelar_depan: string;
+  gelar_belakang: string;
   email: string;
   phone: string;
+  whatsapp: string;
   position: string;
+  golongan: string;
   opd_code: string;
+  address: string;
   gender: string;
   status: "valid" | "error" | "warning";
   errors: string[];
 }
 
+interface OfficeOption {
+  id: string;
+  name: string;
+}
+
 export default function OrgEmployeeImport() {
   const PREVIEW_PAGE_SIZE = 20;
+  const MAX_IMPORT_ROWS = 100;
+  const CSV_HEADERS = [
+    "NIK",
+    "NIP",
+    "Nama Lengkap",
+    "Gelar Depan",
+    "Gelar Belakang",
+    "Email",
+    "No. Telepon",
+    "WhatsApp",
+    "Jenis Kelamin (L/P)",
+    "Jabatan",
+    "Golongan",
+    "Kode OPD",
+    "Alamat",
+  ];
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -56,6 +84,41 @@ export default function OrgEmployeeImport() {
   const [previewPage, setPreviewPage] = useState(1);
   const [importResult, setImportResult] = useState<{ success: number; failed: number } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [offices, setOffices] = useState<OfficeOption[]>([]);
+  const [selectedOfficeId, setSelectedOfficeId] = useState("");
+  const [isLoadingOffices, setIsLoadingOffices] = useState(false);
+
+  const normalizeHeader = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();
+
+  const parseCsvLine = (line: string): string[] => {
+    const values: string[] = [];
+    let current = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === "\"") {
+        if (inQuotes && line[i + 1] === "\"") {
+          current += "\"";
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+        continue;
+      }
+
+      if (char === "," && !inQuotes) {
+        values.push(current.trim());
+        current = "";
+        continue;
+      }
+
+      current += char;
+    }
+
+    values.push(current.trim());
+    return values.map((value) => value.replace(/\r/g, ""));
+  };
 
   useEffect(() => {
     void fetchUserTenant();
@@ -84,6 +147,45 @@ export default function OrgEmployeeImport() {
       toast.error(message);
     }
   };
+
+  const fetchValidOffices = useCallback(async (currentTenantId: string) => {
+    setIsLoadingOffices(true);
+    try {
+      const { data, error } = await supabase
+        .from("offices")
+        .select("id, name, latitude, longitude")
+        .eq("tenant_id", currentTenantId)
+        .eq("is_active", true)
+        .order("name");
+
+      if (error) throw error;
+
+      const validOffices = (data || [])
+        .filter((office) => isRealOfficeCoordinate(office.latitude, office.longitude))
+        .map((office) => ({ id: office.id, name: office.name }));
+      setOffices(validOffices);
+      setSelectedOfficeId((prev) => (validOffices.some((office) => office.id === prev) ? prev : ""));
+
+      if (validOffices.length === 0) {
+        toast.error("Belum ada kantor dengan koordinat real. Lengkapi dulu di Data Lokasi Kerja.");
+      }
+    } catch (error) {
+      const errorRef = reportError(error, "org.employee_import.valid_offices.fetch", {
+        tenant_id: currentTenantId,
+      });
+      const message = appendErrorReference("Gagal memuat daftar kantor valid", errorRef);
+      setLoadError((prev) => prev ?? message);
+      setOffices([]);
+      toast.error(message);
+    } finally {
+      setIsLoadingOffices(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!tenantId) return;
+    void fetchValidOffices(tenantId);
+  }, [fetchValidOffices, tenantId]);
 
   const downloadTemplate = () => {
     // Create CSV template with comprehensive headers
@@ -174,17 +276,39 @@ export default function OrgEmployeeImport() {
     setPreviewPage(1);
 
     try {
-      const text = await file.text();
-      const lines = text.split("\n").filter(line => line.trim());
+      const text = (await file.text()).replace(/^\uFEFF/, "");
+      const lines = text.split(/\r?\n/).filter((line) => line.trim());
       
       if (lines.length < 2) {
         toast.error("File CSV kosong atau hanya berisi header");
         return;
       }
 
-      // Skip header
+      const headerColumns = parseCsvLine(lines[0]);
+      const expectedHeader = CSV_HEADERS.map(normalizeHeader);
+      const uploadedHeader = headerColumns.map(normalizeHeader);
+      const headerValid =
+        uploadedHeader.length === expectedHeader.length &&
+        expectedHeader.every((header, index) => uploadedHeader[index] === header);
+
+      if (!headerValid) {
+        const message = "Header CSV tidak sesuai template. Gunakan file hasil Download Template CSV.";
+        setLoadError(message);
+        toast.error(message);
+        return;
+      }
+
       const dataLines = lines.slice(1);
+      if (dataLines.length > MAX_IMPORT_ROWS) {
+        const message = `Maksimal ${MAX_IMPORT_ROWS} baris per import. File ini berisi ${dataLines.length} baris.`;
+        setLoadError(message);
+        toast.error(message);
+        return;
+      }
+
       const parsedRows: ImportRow[] = [];
+      const seenNiksInFile = new Set<string>();
+      const seenEmailsInFile = new Set<string>();
 
       // Get existing NIKs and emails for validation
       const { data: existingEmployees } = await supabase
@@ -205,29 +329,46 @@ export default function OrgEmployeeImport() {
 
       for (let i = 0; i < dataLines.length; i++) {
         const line = dataLines[i];
-        const values = line.split(",").map(v => v.trim().replace(/^"|"$/g, ""));
+        const values = parseCsvLine(line);
         
         const row: ImportRow = {
           rowNum: i + 2,
           nik: values[0] || "",
           nip: values[1] || "",
           name: values[2] || "",
+          gelar_depan: values[3] || "",
+          gelar_belakang: values[4] || "",
           email: values[5] || "",
           phone: values[6] || "",
+          whatsapp: values[7] || "",
           position: values[9] || "",
+          golongan: values[10] || "",
           opd_code: values[11] || "",
+          address: values[12] || "",
           gender: values[8] || "",
           status: "valid",
           errors: [],
         };
 
         // Validation
+        if (values.length !== CSV_HEADERS.length) {
+          row.errors.push(`Jumlah kolom tidak sesuai template (${values.length}/${CSV_HEADERS.length})`);
+        }
+
         if (!row.nik) {
           row.errors.push("NIK wajib diisi");
-        } else if (row.nik.length !== 16) {
-          row.errors.push("NIK harus 16 digit");
+        } else if (!/^\d{16}$/.test(row.nik)) {
+          row.errors.push("NIK harus 16 digit angka");
+        } else if (seenNiksInFile.has(row.nik)) {
+          row.errors.push("NIK duplikat dalam file");
         } else if (existingNiks.has(row.nik)) {
           row.errors.push("NIK sudah terdaftar");
+        } else {
+          seenNiksInFile.add(row.nik);
+        }
+
+        if (row.nip && !/^\d{18}$/.test(row.nip)) {
+          row.errors.push("NIP harus 18 digit angka");
         }
 
         if (!row.name) {
@@ -238,8 +379,20 @@ export default function OrgEmployeeImport() {
           row.errors.push("Email wajib diisi");
         } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email)) {
           row.errors.push("Format email tidak valid");
+        } else if (seenEmailsInFile.has(row.email.toLowerCase())) {
+          row.errors.push("Email duplikat dalam file");
         } else if (existingEmails.has(row.email.toLowerCase())) {
           row.errors.push("Email sudah terdaftar");
+        } else {
+          seenEmailsInFile.add(row.email.toLowerCase());
+        }
+
+        if (row.phone && !/^(?:\+62|62|0)[0-9]{8,15}$/.test(row.phone)) {
+          row.errors.push("Format No. Telepon tidak valid");
+        }
+
+        if (row.whatsapp && !/^(?:\+62|62|0)[0-9]{8,15}$/.test(row.whatsapp)) {
+          row.errors.push("Format WhatsApp tidak valid");
         }
 
         if (row.gender && !["L", "P", "l", "p"].includes(row.gender)) {
@@ -270,8 +423,17 @@ export default function OrgEmployeeImport() {
       toast.error("Tenant tidak ditemukan");
       return;
     }
+    if (!selectedOfficeId) {
+      toast.error("Pilih lokasi kerja valid untuk mapping pegawai import.");
+      return;
+    }
 
     const validRows = previewData.filter(row => row.status === "valid");
+    const hasErrorRows = previewData.some((row) => row.status === "error");
+    if (hasErrorRows) {
+      toast.error("Perbaiki semua baris error di preview sebelum import.");
+      return;
+    }
     if (validRows.length === 0) {
       toast.error("Tidak ada data valid untuk diimport");
       return;
@@ -291,34 +453,27 @@ export default function OrgEmployeeImport() {
 
       const opdMap = new Map(opds?.map(o => [o.code.toUpperCase(), o.id]) || []);
 
-      // Re-read CSV for all fields
-      const text = await file!.text();
-      const lines = text.split("\n").filter(line => line.trim());
-      const dataLines = lines.slice(1);
-
       for (let i = 0; i < validRows.length; i++) {
         try {
-          const rowIndex = validRows[i].rowNum - 2;
-          const line = dataLines[rowIndex];
-          const values = line.split(",").map(v => v.trim().replace(/^"|"$/g, ""));
-          
-          const opdId = values[11] ? opdMap.get(values[11].toUpperCase()) : null;
+          const row = validRows[i];
+          const opdId = row.opd_code ? opdMap.get(row.opd_code.toUpperCase()) : null;
 
           const { error } = await supabase.from("employees").insert({
             tenant_id: tenantId,
-            nik: values[0],
-            nip: values[1] || null,
-            name: values[2],
-            gelar_depan: values[3] || null,
-            gelar_belakang: values[4] || null,
-            email: values[5],
-            phone: values[6] || null,
-            whatsapp: values[7] || null,
-            gender: values[8]?.toUpperCase() === "L" ? "L" : values[8]?.toUpperCase() === "P" ? "P" : null,
-            position: values[9] || null,
-            golongan: values[10] || null,
+            nik: row.nik,
+            nip: row.nip || null,
+            name: row.name,
+            gelar_depan: row.gelar_depan || null,
+            gelar_belakang: row.gelar_belakang || null,
+            email: row.email,
+            phone: row.phone || null,
+            whatsapp: row.whatsapp || null,
+            gender: row.gender?.toUpperCase() === "L" ? "L" : row.gender?.toUpperCase() === "P" ? "P" : null,
+            position: row.position || null,
+            golongan: row.golongan || null,
             opd_id: opdId,
-            address: values[12] || null,
+            office_id: selectedOfficeId,
+            address: row.address || null,
             is_active: true,
           });
 
@@ -352,6 +507,7 @@ export default function OrgEmployeeImport() {
 
   const validCount = previewData.filter(r => r.status === "valid").length;
   const errorCount = previewData.filter(r => r.status === "error").length;
+  const importDisabled = validCount === 0 || errorCount > 0 || isImporting || !selectedOfficeId;
   const previewTotalPages = Math.max(1, Math.ceil(previewData.length / PREVIEW_PAGE_SIZE));
   const paginatedPreviewRows = previewData.slice(
     (previewPage - 1) * PREVIEW_PAGE_SIZE,
@@ -396,6 +552,7 @@ export default function OrgEmployeeImport() {
                     <li><strong>Download Template:</strong> Klik tombol "Download Template CSV" untuk mendapatkan format yang benar</li>
                     <li><strong>Isi Data:</strong> Buka file dengan Excel/Google Sheets dan isi data pegawai sesuai kolom</li>
                     <li><strong>Simpan sebagai CSV:</strong> Simpan file dengan format CSV (Comma Separated Values)</li>
+                    <li><strong>Pilih Lokasi Kerja:</strong> Wajib pilih lokasi kerja dengan koordinat real</li>
                     <li><strong>Upload File:</strong> Pilih file CSV yang sudah diisi</li>
                     <li><strong>Periksa Preview:</strong> Pastikan tidak ada error pada data yang akan diimport</li>
                     <li><strong>Import:</strong> Klik tombol Import untuk memproses data</li>
@@ -487,6 +644,30 @@ export default function OrgEmployeeImport() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
+              <Label>Lokasi Kerja Mapping (Wajib)</Label>
+              <Select
+                value={selectedOfficeId}
+                onValueChange={setSelectedOfficeId}
+                disabled={isLoadingOffices || offices.length === 0}
+              >
+                <SelectTrigger className="max-w-md">
+                  <SelectValue placeholder={isLoadingOffices ? "Memuat lokasi kerja..." : "Pilih lokasi kerja valid"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {offices.map((office) => (
+                    <SelectItem key={office.id} value={office.id}>
+                      {office.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {!isLoadingOffices && offices.length === 0 && (
+                <p className="text-xs text-destructive">
+                  Belum ada kantor koordinat real, import pegawai belum bisa dijalankan.
+                </p>
+              )}
+            </div>
+            <div className="space-y-2">
               <Label>File CSV</Label>
               <Input
                 type="file"
@@ -529,6 +710,11 @@ export default function OrgEmployeeImport() {
               </CardDescription>
             </CardHeader>
             <CardContent>
+              {errorCount > 0 && (
+                <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                  Import dikunci sampai semua error diperbaiki (saat ini masih ada {errorCount} baris error).
+                </div>
+              )}
               <div className="rounded-md border overflow-x-auto">
                 <Table>
                   <TableHeader>
@@ -651,7 +837,7 @@ export default function OrgEmployeeImport() {
                 </Button>
                 <Button
                   onClick={handleImport}
-                  disabled={validCount === 0 || isImporting}
+                  disabled={importDisabled}
                 >
                   {isImporting ? (
                     <>
@@ -661,7 +847,7 @@ export default function OrgEmployeeImport() {
                   ) : (
                     <>
                       <Upload className="h-4 w-4 mr-2" />
-                      Import {validCount} Data Valid
+                      Import {validCount} Data
                     </>
                   )}
                 </Button>

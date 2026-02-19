@@ -53,6 +53,11 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
     return `${withBackendRef} [Log: ${localLogId}]`;
   };
 
+  const getErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    return String(error);
+  };
+
   const handleOtpChange = useCallback((value: string) => {
     setOtpValid(value.length === 6);
     setVerifiedOtp(value);
@@ -136,7 +141,7 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
         title: "✅ Data Tervalidasi",
         description: `Email dan No. WhatsApp cocok${result.name ? ` (${result.name})` : ""}. Silakan lanjutkan.`,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       setIsValidated(false);
       const logId = reportError(err, "ForgotPasswordDialog.handleValidate", {
         loginType,
@@ -147,7 +152,7 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
       toast({
         variant: "destructive",
         title: "Validasi Gagal",
-        description: createErrorDescription(err.message || "Data tidak valid", logId),
+        description: createErrorDescription(getErrorMessage(err) || "Data tidak valid", logId),
       });
     } finally {
       setIsValidating(false);
@@ -189,7 +194,7 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
           ? "Periksa pesan WhatsApp Anda untuk password baru"
           : "Periksa email Anda untuk password baru",
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       const logId = reportError(err, "ForgotPasswordDialog.handleSendNewPassword", {
         loginType,
         actionType,
@@ -199,7 +204,7 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
       toast({
         variant: "destructive",
         title: "Gagal",
-        description: createErrorDescription(err.message || "Gagal mengirim password baru", logId),
+        description: createErrorDescription(getErrorMessage(err) || "Gagal mengirim password baru", logId),
       });
     } finally {
       setIsLoading(false);
@@ -245,7 +250,7 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
           ? "Periksa pesan WhatsApp Anda"
           : "Periksa email Anda (berlaku 10 menit)",
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       const logId = reportError(err, "ForgotPasswordDialog.handleSendOTP", {
         loginType,
         actionType,
@@ -255,7 +260,7 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
       toast({
         variant: "destructive",
         title: "Gagal",
-        description: createErrorDescription(err.message || "Gagal mengirim OTP", logId),
+        description: createErrorDescription(getErrorMessage(err) || "Gagal mengirim OTP", logId),
       });
     } finally {
       setIsLoading(false);
@@ -322,7 +327,7 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
 
       setStep("success");
       toast({ title: "Password berhasil diubah!" });
-    } catch (err: any) {
+    } catch (err: unknown) {
       const logId = reportError(err, "ForgotPasswordDialog.handleVerifyAndReset", {
         loginType,
         actionType,
@@ -332,7 +337,7 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
       toast({
         variant: "destructive",
         title: "Gagal",
-        description: createErrorDescription(err.message || "Gagal reset password", logId),
+        description: createErrorDescription(getErrorMessage(err) || "Gagal reset password", logId),
       });
     } finally {
       setIsLoading(false);

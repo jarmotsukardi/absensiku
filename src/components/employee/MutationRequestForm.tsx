@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -86,6 +86,21 @@ interface Position {
 }
 
 type MutationType = "profile_change" | "transfer";
+type MutationPayload = Record<string, unknown>;
+type EditableProfileField =
+  | "email"
+  | "address"
+  | "gender"
+  | "golongan"
+  | "employee_category"
+  | "gelar_depan"
+  | "gelar_belakang"
+  | "nik";
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return String(error);
+};
 
 export function MutationRequestForm({ employee, onSuccess }: MutationRequestFormProps) {
   const [isOpen, setIsOpen] = useState(false);
@@ -124,14 +139,8 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
   
   const [reason, setReason] = useState("");
 
-  // Fetch master data
-  useEffect(() => {
-    if (isOpen && employee.tenant_id) {
-      fetchMasterData();
-    }
-  }, [isOpen, employee.tenant_id]);
-
-  const fetchMasterData = async () => {
+  const fetchMasterData = useCallback(async () => {
+    if (!employee.tenant_id) return;
     try {
       const [opdRes, workUnitRes, officeRes, positionRes] = await Promise.all([
         supabase.from("opd").select("id, name, code").eq("tenant_id", employee.tenant_id).eq("is_active", true),
@@ -147,7 +156,14 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
     } catch (error) {
       console.error("Error fetching master data:", error);
     }
-  };
+  }, [employee.tenant_id]);
+
+  // Fetch master data
+  useEffect(() => {
+    if (isOpen && employee.tenant_id) {
+      fetchMasterData();
+    }
+  }, [isOpen, employee.tenant_id, fetchMasterData]);
 
   // Filter work units by selected OPD
   const filteredWorkUnits = transferData.opd_id
@@ -169,8 +185,8 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
     : offices;
 
   const getChangedFields = () => {
-    const changes: Record<string, any> = {};
-    const original: Record<string, any> = {};
+    const changes: MutationPayload = {};
+    const original: MutationPayload = {};
 
     if (mutationType === "transfer") {
       if (transferData.opd_id && transferData.opd_id !== employee.opd_id) {
@@ -202,15 +218,15 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
 
     // Semua perubahan dilakukan di satu form (tidak dipisah lagi)
     // Profile fields (kecuali nama & NIP)
-    const profileFields = [
+    const profileFields: EditableProfileField[] = [
       "email", "address", "gender", 
       "golongan", "employee_category",
       "gelar_depan", "gelar_belakang", "nik"
     ];
 
     profileFields.forEach((field) => {
-      const currentValue = (employee as any)[field] || "";
-      const newValue = (formData as any)[field] || "";
+      const currentValue = String(employee[field] ?? "");
+      const newValue = String(formData[field] ?? "");
       if (currentValue !== newValue && newValue !== "") {
         changes[field] = newValue;
         original[field] = currentValue;
@@ -293,9 +309,9 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
       setIsOpen(false);
       resetForm();
       onSuccess?.();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error submitting mutation request:", error);
-      toast.error("Gagal mengajukan mutasi", { description: error.message });
+      toast.error("Gagal mengajukan mutasi", { description: getErrorMessage(error) });
     } finally {
       setIsLoading(false);
     }

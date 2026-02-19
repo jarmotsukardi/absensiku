@@ -98,6 +98,18 @@ const CRON_CATALOG_FALLBACK: CronTaskRow[] = [
     command_preview: null,
   },
   {
+    job_name: "org-dashboard-snapshot-5m",
+    category: "Dashboard",
+    target: "SQL/RPC",
+    description: "Refresh snapshot dashboard organisasi (skip otomatis saat jam sibuk absensi).",
+    timezone: "UTC (WIB +7)",
+    expected_schedule: "*/5 * * * *",
+    current_schedule: null,
+    is_scheduled: false,
+    is_active: false,
+    command_preview: null,
+  },
+  {
     job_name: "cleanup-gps-daily",
     category: "Maintenance",
     target: "SQL/RPC",

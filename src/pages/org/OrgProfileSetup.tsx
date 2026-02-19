@@ -114,7 +114,7 @@ export default function OrgProfileSetup() {
       await autoSeedOrganizationData(tenantId, formData.pic_name);
 
       toast.success("Profil organisasi berhasil disimpan!");
-      navigate("/org");
+      navigate("/org/onboarding");
     } catch (error: unknown) {
       console.error("Error saving profile:", error);
       const errorMessage = error instanceof Error ? error.message : "Gagal menyimpan profil";

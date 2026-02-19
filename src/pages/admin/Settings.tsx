@@ -15,6 +15,7 @@ import { ForgotPasswordDialog } from "@/components/auth/ForgotPasswordDialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Key } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 // Lazy load heavy settings pages
 const DatabaseManagementContent = lazy(() => import("@/pages/admin/DatabaseManagement"));
@@ -33,6 +34,7 @@ const settingsTabs = [
   { id: "floating-wa", label: "Floating WhatsApp" },
   { id: "rate-limit", label: "Rate Limit" },
   { id: "streak", label: "Konfigurasi Streak" },
+  { id: "template-org", label: "Template Org" },
   { id: "database", label: "Database" },
   { id: "supabase", label: "Pengaturan Supabase" },
 ];
@@ -46,6 +48,7 @@ const TabFallback = () => (
 );
 
 export default function Settings() {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("umum");
   const [showForgotPassword, setShowForgotPassword] = useState(false);
 
@@ -120,6 +123,19 @@ export default function Settings() {
                 <Suspense fallback={<TabFallback />}>
                   <TrialSettingsContent embedded />
                 </Suspense>
+              </TabsContent>
+              <TabsContent value="template-org" className="mt-0">
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-lg font-semibold">Template Onboarding Org</h3>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      Kelola template setup awal tenant/member baru (master data, jadwal kerja, fitur, dan pengumuman awal).
+                    </p>
+                  </div>
+                  <Button onClick={() => navigate("/admin/templates")}>
+                    Buka Halaman Template Onboarding
+                  </Button>
+                </div>
               </TabsContent>
               <TabsContent value="database" className="mt-0">
                 <Suspense fallback={<TabFallback />}>

@@ -81,14 +81,73 @@ interface BillingAlertNotification {
   metadata: Record<string, unknown> | null;
 }
 
+interface OrgDashboardTrendCount {
+  date: string;
+  present: number;
+}
+
+interface OrgDashboardSnapshotPayload {
+  stats: DashboardStats;
+  attendance_trend_counts: OrgDashboardTrendCount[];
+  approval_performance: ApprovalPerformance;
+}
+
+interface OrgDashboardSnapshotRow {
+  payload: unknown;
+  computed_at: string | null;
+  source: string | null;
+  count_mode: string | null;
+}
+
 const DASHBOARD_FETCH_TIMEOUT_MS = 30000;
 const DASHBOARD_LOADING_WATCHDOG_MS = 70000;
 const ORG_ACTIVE_TENANT_STORAGE_KEY = "org_active_tenant_id";
+const ORG_DASHBOARD_SNAPSHOT_MAX_AGE_SECONDS = 180;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const sanitizeUuid = (value: string | null): string | null => {
   if (!value) return null;
   return UUID_PATTERN.test(value) ? value : null;
+};
+
+const isSnapshotStats = (value: unknown): value is DashboardStats => {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.totalEmployees === "number" &&
+    typeof v.linkedEmployees === "number" &&
+    typeof v.totalOffices === "number" &&
+    typeof v.todayPresent === "number" &&
+    typeof v.pendingOvertime === "number" &&
+    typeof v.pendingLeaves === "number" &&
+    typeof v.pendingWfh === "number" &&
+    typeof v.expiredInvitations === "number"
+  );
+};
+
+const isSnapshotApproval = (value: unknown): value is ApprovalPerformance => {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.avgApprovalHours === "number" &&
+    typeof v.processedCount === "number" &&
+    typeof v.approvedCount === "number" &&
+    typeof v.rejectedCount === "number"
+  );
+};
+
+const parseSnapshotTrendCounts = (value: unknown): OrgDashboardTrendCount[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const row = item as Record<string, unknown>;
+      const date = typeof row.date === "string" ? row.date : "";
+      const present = typeof row.present === "number" ? row.present : Number(row.present ?? 0);
+      if (!date || Number.isNaN(present)) return null;
+      return { date, present };
+    })
+    .filter((row): row is OrgDashboardTrendCount => Boolean(row));
 };
 
 export default function OrgDashboard() {
@@ -123,6 +182,9 @@ export default function OrgDashboard() {
   const [billingAlertsErrorReason, setBillingAlertsErrorReason] = useState<string | null>(null);
   const [dashboardPartialRef, setDashboardPartialRef] = useState<string | null>(null);
   const [dashboardPartialScopes, setDashboardPartialScopes] = useState<string[]>([]);
+  const [snapshotSource, setSnapshotSource] = useState<"fresh" | "cache" | "legacy" | "peak_cache" | null>(null);
+  const [snapshotCountMode, setSnapshotCountMode] = useState<string | null>(null);
+  const [snapshotComputedAt, setSnapshotComputedAt] = useState<string | null>(null);
 
   const fetchDashboardData = useCallback(async () => {
     let resolvedTenantIdForLog: string | null = null;
@@ -246,6 +308,100 @@ export default function OrgDashboard() {
       sevenDaysAgoDate.setDate(sevenDaysAgoDate.getDate() - 6);
       const sevenDaysAgo = format(sevenDaysAgoDate, "yyyy-MM-dd");
       const thirtyDaysAgoIso = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000)).toISOString();
+
+      let snapshotApplied = false;
+      try {
+        const { data: snapshotData, error: snapshotError } = await withTimeout(
+          Promise.resolve(
+            supabase.rpc("get_org_dashboard_snapshot", {
+              p_tenant_id: resolvedTenantId,
+              p_force_refresh: false,
+              p_max_age_seconds: ORG_DASHBOARD_SNAPSHOT_MAX_AGE_SECONDS,
+            })
+          ),
+          DASHBOARD_FETCH_TIMEOUT_MS,
+          "Timeout membaca snapshot dashboard organisasi"
+        );
+        if (snapshotError) throw snapshotError;
+
+        const snapshotRow = (Array.isArray(snapshotData) ? snapshotData[0] : null) as OrgDashboardSnapshotRow | null;
+        const snapshotPayload = (snapshotRow?.payload && typeof snapshotRow.payload === "object")
+          ? (snapshotRow.payload as Partial<OrgDashboardSnapshotPayload>)
+          : null;
+
+        if (snapshotPayload && isSnapshotStats(snapshotPayload.stats) && isSnapshotApproval(snapshotPayload.approval_performance)) {
+          const trendRows = parseSnapshotTrendCounts(snapshotPayload.attendance_trend_counts);
+          const attendanceByDate = new Map(trendRows.map((row) => [row.date, row.present]));
+          const trendPoints: AttendanceTrendPoint[] = [];
+          for (let index = 0; index < 7; index += 1) {
+            const pointDate = new Date(sevenDaysAgoDate);
+            pointDate.setDate(sevenDaysAgoDate.getDate() + index);
+            const dateKey = format(pointDate, "yyyy-MM-dd");
+            const present = attendanceByDate.get(dateKey) || 0;
+            const absent = Math.max(0, snapshotPayload.stats.totalEmployees - present);
+            const coveragePct = snapshotPayload.stats.totalEmployees > 0
+              ? Math.min(100, Math.round((present / snapshotPayload.stats.totalEmployees) * 100))
+              : 0;
+            trendPoints.push({
+              date: dateKey,
+              label: format(pointDate, "EEE, d MMM", { locale: id }),
+              present,
+              absent,
+              coveragePct,
+            });
+          }
+
+          setStats(snapshotPayload.stats);
+          setAttendanceTrend(trendPoints);
+          setApprovalPerformance(snapshotPayload.approval_performance);
+          setDashboardPartialRef(null);
+          setDashboardPartialScopes([]);
+          setSnapshotSource(
+            snapshotRow?.source === "peak_cache"
+              ? "peak_cache"
+              : snapshotRow?.source === "cache"
+                ? "cache"
+                : "fresh"
+          );
+          setSnapshotCountMode(snapshotRow?.count_mode || "snapshot");
+          setSnapshotComputedAt(snapshotRow?.computed_at || new Date().toISOString());
+          snapshotApplied = true;
+        } else {
+          throw new Error("Invalid org dashboard snapshot payload");
+        }
+      } catch (snapshotError) {
+        reportError(snapshotError, "org.dashboard.fetch_snapshot", { tenant_id: resolvedTenantId });
+      }
+
+      if (snapshotApplied) {
+        const { data: apkSettings, error: apkSettingsError } = await withTimeout(
+          Promise.resolve(
+            supabase
+              .from("system_settings")
+              .select("value")
+              .eq("key", "apk_settings")
+              .maybeSingle()
+          ),
+          DASHBOARD_FETCH_TIMEOUT_MS,
+          "Timeout membaca konfigurasi APK organisasi"
+        );
+        if (!apkSettingsError && apkSettings?.value && typeof apkSettings.value === "object") {
+          const apkData = apkSettings.value as Record<string, unknown>;
+          if (apkData.url) {
+            setApkInfo({
+              url: apkData.url as string,
+              version: apkData.version as string || "1.0.0",
+              updated_at: apkData.updated_at as string || "",
+            });
+          }
+        }
+        return;
+      }
+
+      setSnapshotSource("legacy");
+      setSnapshotCountMode("planned");
+      setSnapshotComputedAt(new Date().toISOString());
+
       const { data: officeRows, error: officeRowsError } = await withTimeout(
         Promise.resolve(
           supabase
@@ -743,6 +899,29 @@ export default function OrgDashboard() {
             </Card>
           )}
 
+          {snapshotSource && (
+            <Card className="border-blue-400/50 bg-blue-500/5">
+              <CardContent className="py-3">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span className="font-semibold text-blue-700">Snapshot Dashboard:</span>
+                  <Badge variant="outline" className="text-[10px]">
+                    {snapshotSource === "peak_cache" ? "peak-hour cache" : snapshotSource}
+                  </Badge>
+                  {snapshotCountMode && (
+                    <Badge variant="outline" className="text-[10px]">
+                      count {snapshotCountMode}
+                    </Badge>
+                  )}
+                  {snapshotComputedAt && (
+                    <span>
+                      sync {new Date(snapshotComputedAt).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
           {/* Stability Streak Widget */}
           {tenantId && (
             <StabilityStreakWidget
@@ -756,7 +935,10 @@ export default function OrgDashboard() {
 
         {/* Stats Grid */}
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-          <Card>
+          <Card
+            className="cursor-pointer transition-colors hover:bg-muted/20"
+            onClick={() => navigate("/org/employees/active")}
+          >
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Total Pegawai
@@ -769,7 +951,10 @@ export default function OrgDashboard() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card
+            className="cursor-pointer transition-colors hover:bg-muted/20"
+            onClick={() => navigate("/org/employees/active")}
+          >
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Akun Terhubung
@@ -784,7 +969,10 @@ export default function OrgDashboard() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card
+            className="cursor-pointer transition-colors hover:bg-muted/20"
+            onClick={() => navigate("/org/master/work-locations")}
+          >
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Total Kantor
@@ -797,7 +985,10 @@ export default function OrgDashboard() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card
+            className="cursor-pointer transition-colors hover:bg-muted/20"
+            onClick={() => navigate("/org/reports/attendance")}
+          >
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Hadir Hari Ini
@@ -812,7 +1003,10 @@ export default function OrgDashboard() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card
+            className="cursor-pointer transition-colors hover:bg-muted/20"
+            onClick={() => navigate("/org/reports/attendance")}
+          >
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Belum Hadir Hari Ini
@@ -825,7 +1019,10 @@ export default function OrgDashboard() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card
+            className="cursor-pointer transition-colors hover:bg-muted/20"
+            onClick={() => navigate("/org/leave/requests")}
+          >
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 Pengajuan Pending
@@ -1042,7 +1239,7 @@ export default function OrgDashboard() {
             <CardDescription>Akses fitur-fitur utama dengan cepat</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
               <Button 
                 variant="outline" 
                 className="h-auto py-4 flex flex-col items-center gap-2"
@@ -1078,6 +1275,15 @@ export default function OrgDashboard() {
                 <FileText className="h-6 w-6 text-primary" />
                 <span>Laporan Absensi</span>
               </Button>
+
+              <Button
+                variant="outline"
+                className="h-auto py-4 flex flex-col items-center gap-2"
+                onClick={() => navigate("/org/onboarding")}
+              >
+                <Sparkles className="h-6 w-6 text-primary" />
+                <span>Setup Awal</span>
+              </Button>
             </div>
           </CardContent>
         </Card>
@@ -1092,15 +1298,24 @@ export default function OrgDashboard() {
           </CardHeader>
           <CardContent>
             <div className="grid gap-4 md:grid-cols-3">
-              <div className="p-4 rounded-lg bg-muted/50">
+              <div
+                className="cursor-pointer rounded-lg bg-muted/50 p-4 transition-colors hover:bg-muted"
+                onClick={() => navigate("/org/activation")}
+              >
                 <p className="text-sm text-muted-foreground">Status</p>
                 <Badge variant={status.variant} className="mt-1">{status.label}</Badge>
               </div>
-              <div className="p-4 rounded-lg bg-muted/50">
+              <div
+                className="cursor-pointer rounded-lg bg-muted/50 p-4 transition-colors hover:bg-muted"
+                onClick={() => navigate("/org/activation")}
+              >
                 <p className="text-sm text-muted-foreground">Kebijakan Akses</p>
                 <p className="font-semibold mt-1">Streak Monitoring</p>
               </div>
-              <div className="p-4 rounded-lg bg-muted/50">
+              <div
+                className="cursor-pointer rounded-lg bg-muted/50 p-4 transition-colors hover:bg-muted"
+                onClick={() => navigate("/org/activation")}
+              >
                 <p className="text-sm text-muted-foreground">Berakhir</p>
                 <p className="font-semibold mt-1">
                   {subscription?.end_date 

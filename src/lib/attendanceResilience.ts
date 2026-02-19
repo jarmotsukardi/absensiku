@@ -249,20 +249,21 @@ export async function withExponentialBackoff<T>(
     try {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
       return await fn();
-    } catch (error: any) {
-      lastError = error;
+    } catch (error: unknown) {
+      const normalizedError = error instanceof Error ? error : new Error(String(error));
+      lastError = normalizedError;
 
       // Don't retry if aborted
-      if (error.name === 'AbortError') throw error;
+      if (normalizedError.name === 'AbortError') throw normalizedError;
 
       // Don't retry if shouldRetry returns false
-      if (!shouldRetry(error)) throw error;
+      if (!shouldRetry(normalizedError)) throw normalizedError;
 
       // Don't retry on last attempt
       if (attempt >= maxRetries) break;
 
       const backoffMs = calculateBackoff(attempt);
-      onRetry?.(attempt + 1, backoffMs, error);
+      onRetry?.(attempt + 1, backoffMs, normalizedError);
 
       await delayWithAbort(backoffMs, signal);
     }
@@ -433,8 +434,9 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, msg: string): Pr
  * - 400 Bad Request: NO (data salah, retry sia-sia)
  * - 401/403 Auth Error: NO
  */
-export function isRetryableError(error: any): boolean {
-  const message = error?.message?.toLowerCase() || '';
+export function isRetryableError(error: unknown): boolean {
+  const errorRecord = (typeof error === "object" && error !== null) ? (error as Record<string, unknown>) : {};
+  const message = (typeof errorRecord.message === "string" ? errorRecord.message : "").toLowerCase();
   
   // Timeout errors - always retry
   if (message.includes('timeout')) return true;
@@ -443,7 +445,7 @@ export function isRetryableError(error: any): boolean {
   if (message.includes('network') || message.includes('fetch')) return true;
   
   // HTTP status codes from Supabase
-  const status = error?.status || error?.code;
+  const status = errorRecord.status ?? errorRecord.code;
   if (status === 429 || status === 503 || status === 502 || status === 500) return true;
   
   // Client errors - don't retry

@@ -7,6 +7,7 @@ import { getAndroidId } from "@/lib/deviceId";
 const DEBOUNCE_MS = 1000; // Mencegah double-submit
 const MIN_REQUEST_INTERVAL_MS = 2000; // Minimum interval antar request
 const BATCH_UPDATE_DELAY_MS = 5000; // Delay batch update device info
+const SESSION_CACHE_TTL_MS = 5 * 60 * 1000; // 5 menit
 
 interface LoginResult {
   success: boolean;
@@ -151,7 +152,7 @@ export function useOptimizedLogin() {
       }
 
       return { success: true, userId: authData.user.id };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Login error:", error);
       return { 
         success: false, 
@@ -187,8 +188,7 @@ export function useOptimizedLogin() {
  * Hook untuk session caching - mengurangi query berulang
  */
 export function useSessionCache() {
-  const cacheRef = useRef<Map<string, { data: any; expiry: number }>>(new Map());
-  const CACHE_TTL_MS = 5 * 60 * 1000; // 5 menit
+  const cacheRef = useRef<Map<string, { data: unknown; expiry: number }>>(new Map());
 
   const get = useCallback(<T>(key: string): T | null => {
     const cached = cacheRef.current.get(key);
@@ -202,7 +202,7 @@ export function useSessionCache() {
   const set = useCallback(<T>(key: string, data: T, ttlMs?: number): void => {
     cacheRef.current.set(key, {
       data,
-      expiry: Date.now() + (ttlMs || CACHE_TTL_MS),
+      expiry: Date.now() + (ttlMs || SESSION_CACHE_TTL_MS),
     });
   }, []);
 
@@ -221,7 +221,7 @@ export function useSessionCache() {
  * Hook untuk request queue - mencegah thundering herd
  */
 export function useRequestQueue() {
-  const queueRef = useRef<Map<string, Promise<any>>>(new Map());
+  const queueRef = useRef<Map<string, Promise<unknown>>>(new Map());
 
   const dedupe = useCallback(async <T>(
     key: string, 

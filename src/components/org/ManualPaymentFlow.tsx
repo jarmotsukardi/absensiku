@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -66,6 +66,7 @@ export function ManualPaymentFlow({
   const [packages, setPackages] = useState<SubscriptionPackage[]>([]);
   const [selectedPackage, setSelectedPackage] = useState<string>("");
   const [employeeCount, setEmployeeCount] = useState(currentEmployeeCount || 5);
+  const [negotiatedPricePerEmployee, setNegotiatedPricePerEmployee] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -77,40 +78,69 @@ export function ManualPaymentFlow({
     bankInfo: { bank: string; account: string; name: string };
   } | null>(null);
 
-  useEffect(() => {
-    fetchPackages();
-  }, []);
-
-  const fetchPackages = async () => {
+  const fetchPackages = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("subscription_packages")
-        .select("*")
-        .eq("is_active", true)
-        .order("sort_order");
+      const subscriptionPricePromise = subscriptionId
+        ? supabase
+            .from("subscriptions")
+            .select("price_per_employee")
+            .eq("id", subscriptionId)
+            .maybeSingle()
+        : supabase
+            .from("subscriptions")
+            .select("price_per_employee")
+            .eq("tenant_id", tenantId)
+            .order("updated_at", { ascending: false })
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+      const [{ data, error }, subscriptionRes] = await Promise.all([
+        supabase
+          .from("subscription_packages")
+          .select("*")
+          .eq("is_active", true)
+          .order("sort_order"),
+        subscriptionPricePromise,
+      ]);
 
       if (error) throw error;
       setPackages(data || []);
       if (data && data.length > 0) {
         setSelectedPackage(data[0].id);
       }
+      if (subscriptionRes.error) {
+        console.warn("Failed to load subscription negotiated price:", subscriptionRes.error);
+      } else {
+        const rawPrice = subscriptionRes.data?.price_per_employee;
+        const parsedPrice =
+          typeof rawPrice === "number" && Number.isFinite(rawPrice) && rawPrice > 0
+            ? rawPrice
+            : null;
+        setNegotiatedPricePerEmployee(parsedPrice);
+      }
     } catch (error) {
       console.error("Error fetching packages:", error);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [subscriptionId, tenantId]);
+
+  useEffect(() => {
+    void fetchPackages();
+  }, [fetchPackages]);
 
   const getSelectedPackageData = () => packages.find((p) => p.id === selectedPackage);
 
   const calculateTotal = () => {
     const pkg = getSelectedPackageData();
-    if (!pkg) return { subtotal: 0, discount: 0, total: 0 };
+    if (!pkg) return { unitPrice: 0, subtotal: 0, discount: 0, total: 0 };
 
-    const subtotal = pkg.base_price_per_month * employeeCount * pkg.duration_months;
+    const unitPrice = negotiatedPricePerEmployee ?? pkg.base_price_per_month;
+    const subtotal = unitPrice * employeeCount * pkg.duration_months;
     const discount = subtotal * (pkg.discount_percentage / 100);
     const total = subtotal - discount;
-    return { subtotal, discount, total };
+    return { unitPrice, subtotal, discount, total };
   };
 
   const generateUniqueCode = () => {
@@ -134,7 +164,7 @@ export function ManualPaymentFlow({
 
     setIsSubmitting(true);
     try {
-      const { total } = calculateTotal();
+      const { unitPrice, subtotal, discount, total } = calculateTotal();
       const uniqueCode = generateUniqueCode();
       const finalAmount = total + uniqueCode;
       const invoiceNumber = `INV-${format(new Date(), "yyyyMMdd")}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
@@ -147,9 +177,9 @@ export function ManualPaymentFlow({
         package_duration_months: pkg.duration_months,
         package_discount_percentage: pkg.discount_percentage,
         employee_count: employeeCount,
-        price_per_employee: pkg.base_price_per_month,
-        subtotal: total,
-        discount_amount: calculateTotal().discount,
+        price_per_employee: unitPrice,
+        subtotal,
+        discount_amount: discount,
         vat_percentage: 0,
         vat_amount: 0,
         gross_amount: finalAmount,
@@ -313,7 +343,7 @@ export function ManualPaymentFlow({
     );
   }
 
-  const { subtotal, discount, total } = calculateTotal();
+  const { unitPrice, subtotal, discount, total } = calculateTotal();
   const pkg = getSelectedPackageData();
 
   return (
@@ -329,6 +359,12 @@ export function ManualPaymentFlow({
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
+          {negotiatedPricePerEmployee !== null && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-100">
+              Harga negosiasi B2B aktif: <strong>{formatCurrency(negotiatedPricePerEmployee)}</strong> per pegawai per bulan.
+            </div>
+          )}
+
           {/* Package Selection */}
           <div className="space-y-2">
             <Label>Paket Langganan</Label>
@@ -357,7 +393,7 @@ export function ManualPaymentFlow({
               onChange={(e) => setEmployeeCount(parseInt(e.target.value) || 1)}
             />
             <p className="text-xs text-muted-foreground">
-              Digunakan untuk perhitungan billing invoice. Harga per pegawai: {pkg ? formatCurrency(pkg.base_price_per_month) : "-"}/bulan
+              Digunakan untuk perhitungan billing invoice. Harga per pegawai: {pkg ? formatCurrency(unitPrice) : "-"}/bulan
               {currentEmployeeCount > 0 && ` • Pegawai aktif saat ini: ${currentEmployeeCount}`}
             </p>
           </div>
@@ -367,7 +403,7 @@ export function ManualPaymentFlow({
             <div className="rounded-lg border p-4 space-y-2">
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">
-                  {employeeCount} pegawai × {formatCurrency(pkg.base_price_per_month)} × {pkg.duration_months} bulan
+                  {employeeCount} pegawai × {formatCurrency(unitPrice)} × {pkg.duration_months} bulan
                 </span>
                 <span>{formatCurrency(subtotal)}</span>
               </div>

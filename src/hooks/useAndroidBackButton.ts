@@ -22,7 +22,16 @@ export function useAndroidBackButton() {
   useEffect(() => {
     // Only setup Capacitor back button handler in native environment
     // Check if we're running in a Capacitor app
-    const capacitor = (window as unknown as { Capacitor?: any })?.Capacitor;
+    const capacitor = (
+      window as unknown as {
+        Capacitor?: {
+          isNativePlatform?: () => boolean;
+          Plugins?: {
+            App?: unknown;
+          };
+        };
+      }
+    )?.Capacitor;
     const isCapacitorNative = typeof window !== "undefined" && !!capacitor?.isNativePlatform?.();
 
     if (!isCapacitorNative) {

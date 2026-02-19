@@ -13,6 +13,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { validateOfficeCoordinateInput } from "@/lib/officeCoordinates";
+import { LocationPicker } from "@/components/maps/LocationPicker";
 
 type Office = Tables<"offices">;
 type OPD = Tables<"opd">;
@@ -75,11 +77,17 @@ export default function WorkLocationsManagement() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const coordinateValidation = validateOfficeCoordinateInput(formData.latitude, formData.longitude);
+      if (!coordinateValidation.ok) {
+        toast.error(coordinateValidation.message);
+        return;
+      }
+
       const locationData = {
         name: formData.name,
         opd_id: formData.opd_id || null,
-        latitude: parseFloat(formData.latitude),
-        longitude: parseFloat(formData.longitude),
+        latitude: coordinateValidation.latitude,
+        longitude: coordinateValidation.longitude,
         radius_meters: parseInt(formData.radius_meters),
         address: formData.address,
       };
@@ -186,7 +194,7 @@ export default function WorkLocationsManagement() {
                 Tambah Lokasi
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-lg">
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>{editingLocation ? "Edit Lokasi Kerja" : "Tambah Lokasi Kerja"}</DialogTitle>
                 <DialogDescription>
@@ -223,31 +231,26 @@ export default function WorkLocationsManagement() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="latitude">Latitude</Label>
-                      <Input
-                        id="latitude"
-                        type="number"
-                        step="any"
-                        value={formData.latitude}
-                        onChange={(e) => setFormData({ ...formData, latitude: e.target.value })}
-                        placeholder="-6.123456"
-                        required
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="longitude">Longitude</Label>
-                      <Input
-                        id="longitude"
-                        type="number"
-                        step="any"
-                        value={formData.longitude}
-                        onChange={(e) => setFormData({ ...formData, longitude: e.target.value })}
-                        placeholder="106.123456"
-                        required
-                      />
-                    </div>
+                  <div className="grid gap-2">
+                    <Label>Pilih Lokasi dari Google Maps</Label>
+                    <LocationPicker
+                      latitude={formData.latitude}
+                      longitude={formData.longitude}
+                      onLocationChange={(lat, lng) => {
+                        setFormData((prev) => ({
+                          ...prev,
+                          latitude: lat,
+                          longitude: lng,
+                        }));
+                      }}
+                      address={formData.address}
+                      onAddressChange={(addr) => {
+                        setFormData((prev) => ({
+                          ...prev,
+                          address: addr,
+                        }));
+                      }}
+                    />
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="radius">Radius GPS (meter)</Label>
@@ -258,15 +261,6 @@ export default function WorkLocationsManagement() {
                       onChange={(e) => setFormData({ ...formData, radius_meters: e.target.value })}
                       placeholder="100"
                       required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="address">Alamat</Label>
-                    <Input
-                      id="address"
-                      value={formData.address}
-                      onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                      placeholder="Alamat lengkap"
                     />
                   </div>
                 </div>

@@ -13,6 +13,8 @@
  import { id } from "date-fns/locale";
  import { cn } from "@/lib/utils";
  import { useOvertimeRequests, OvertimeSettings } from "@/hooks/useOvertimeRequests";
+ import { supabase } from "@/integrations/supabase/client";
+ import { reportError } from "@/lib/errorLogger";
  import { toast } from "sonner";
  
  interface OvertimeDateEntry {
@@ -30,7 +32,7 @@
    onSuccess?: () => void;
  }
  
- export function OvertimeRequestForm({ 
+	 export function OvertimeRequestForm({ 
    employeeId, 
    tenantId, 
    settings,
@@ -103,9 +105,73 @@
      setDates(dates.filter((_, i) => i !== index));
    };
  
-   const totalHours = dates.reduce((sum, d) => sum + d.hours, 0);
- 
-   const handleSubmit = async () => {
+  const totalHours = dates.reduce((sum, d) => sum + d.hours, 0);
+
+   const loadHolidaySet = async (entries: OvertimeDateEntry[]): Promise<Set<string>> => {
+     const holidayDates = new Set<string>();
+     if (entries.length === 0) return holidayDates;
+
+     const dateStrings = entries.map((entry) => format(entry.date, "yyyy-MM-dd"));
+     const ymPairs = Array.from(
+       new Set(entries.map((entry) => `${entry.date.getFullYear()}-${entry.date.getMonth() + 1}`))
+     ).map((raw) => {
+       const [year, month] = raw.split("-").map((v) => Number(v));
+       return { year, month };
+     });
+
+    const workHolidayQueries = ymPairs.map(({ year, month }) =>
+      supabase
+        .from("work_holidays")
+        .select("year,month,dates")
+        .eq("tenant_id", tenantId)
+        .eq("year", year)
+        .eq("month", month)
+    );
+
+     const [workHolidayResponses, nationalRes, legacyRes] = await Promise.all([
+       Promise.all(workHolidayQueries),
+       supabase
+         .from("national_holidays")
+         .select("date")
+         .in("date", dateStrings)
+         .eq("is_active", true),
+       supabase
+         .from("holidays")
+         .select("date")
+         .in("date", dateStrings)
+         .or(`tenant_id.eq.${tenantId},tenant_id.is.null`),
+     ]);
+
+     for (const response of workHolidayResponses) {
+       if (response.error) throw response.error;
+       for (const row of response.data || []) {
+         const dayTokens = (row.dates || "")
+           .split(",")
+           .map((token) => token.trim())
+           .filter(Boolean);
+         for (const day of dayTokens) {
+           const normalizedDay = day.padStart(2, "0");
+          holidayDates.add(
+            `${row.year}-${String(row.month).padStart(2, "0")}-${normalizedDay}`
+          );
+        }
+      }
+    }
+
+     if (nationalRes.error) throw nationalRes.error;
+     for (const row of nationalRes.data || []) {
+       if (row.date) holidayDates.add(row.date);
+     }
+
+     if (legacyRes.error) throw legacyRes.error;
+     for (const row of legacyRes.data || []) {
+       if (row.date) holidayDates.add(row.date);
+     }
+
+     return holidayDates;
+   };
+	 
+  const handleSubmit = async () => {
      if (!reason.trim()) {
        toast.error("Alasan lembur wajib diisi");
        return;
@@ -115,21 +181,31 @@
        toast.error("Tambahkan minimal 1 tanggal lembur");
        return;
      }
- 
-     setIsSubmitting(true);
-     try {
-       const dateEntries = dates.map(d => ({
-         date: format(d.date, "yyyy-MM-dd"),
-         start_time: d.startTime + ":00",
-         end_time: d.endTime + ":00",
-         hours: d.hours,
+	 
+    setIsSubmitting(true);
+    try {
+       let holidaySet = new Set<string>();
+       try {
+         holidaySet = await loadHolidaySet(dates);
+       } catch (holidayError: unknown) {
+         const ref = reportError(holidayError, "overtime.form.load_holidays", { tenantId, employeeId });
+         toast.warning(`Verifikasi hari libur gagal dimuat (Ref: ${ref}). Sistem lanjut tanpa penanda libur.`);
+       }
+
+      const dateEntries = dates.map((d) => ({
+        date: format(d.date, "yyyy-MM-dd"),
+        start_time: d.startTime + ":00",
+        end_time: d.endTime + ":00",
+        hours: d.hours,
          is_weekend: isWeekend(d.date),
-         is_holiday: false, // TODO: Check against holidays
-         rate_multiplier: isWeekend(d.date) 
-           ? (settings?.weekend_rate_multiplier || 2.0) 
-           : (settings?.rate_multiplier || 1.5),
-         notes: d.notes || null,
-       }));
+         is_holiday: holidaySet.has(format(d.date, "yyyy-MM-dd")),
+         rate_multiplier: holidaySet.has(format(d.date, "yyyy-MM-dd"))
+           ? (settings?.holiday_rate_multiplier || 2.0)
+           : isWeekend(d.date)
+             ? (settings?.weekend_rate_multiplier || 2.0)
+             : (settings?.rate_multiplier || 1.5),
+        notes: d.notes || null,
+      }));
  
        const success = await createRequest(employeeId, tenantId, reason, dateEntries);
        if (success) {

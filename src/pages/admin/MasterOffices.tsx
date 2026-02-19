@@ -15,6 +15,9 @@ import {
 } from "@/components/ui/dialog";
 import { Tables } from "@/integrations/supabase/types";
 import { useToast } from "@/hooks/use-toast";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { validateOfficeCoordinateInput } from "@/lib/officeCoordinates";
+import { LocationPicker } from "@/components/maps/LocationPicker";
 import {
   Building2,
   Plus,
@@ -42,9 +45,6 @@ export default function MasterOffices() {
     latitude: "",
     longitude: "",
     radius_meters: "100",
-    work_start_time: "08:00",
-    work_end_time: "17:00",
-    late_tolerance_minutes: "15",
   });
 
   useEffect(() => {
@@ -69,15 +69,18 @@ export default function MasterOffices() {
     setIsSubmitting(true);
 
     try {
+      const coordinateValidation = validateOfficeCoordinateInput(formData.latitude, formData.longitude);
+      if (!coordinateValidation.ok) {
+        toast({ variant: "destructive", title: "Validasi lokasi gagal", description: coordinateValidation.message });
+        return;
+      }
+
       const officeData = {
         name: formData.name,
         address: formData.address,
-        latitude: parseFloat(formData.latitude),
-        longitude: parseFloat(formData.longitude),
+        latitude: coordinateValidation.latitude,
+        longitude: coordinateValidation.longitude,
         radius_meters: parseInt(formData.radius_meters),
-        work_start_time: formData.work_start_time,
-        work_end_time: formData.work_end_time,
-        late_tolerance_minutes: parseInt(formData.late_tolerance_minutes),
         tenant_id: editingOffice?.tenant_id || crypto.randomUUID(),
       };
 
@@ -98,8 +101,15 @@ export default function MasterOffices() {
       setDialogOpen(false);
       resetForm();
       fetchOffices();
-    } catch (error) {
-      toast({ variant: "destructive", title: "Gagal", description: "Terjadi kesalahan" });
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.master_offices.save", {
+        is_edit: Boolean(editingOffice),
+      });
+      toast({
+        variant: "destructive",
+        title: "Gagal",
+        description: appendErrorReference("Terjadi kesalahan saat menyimpan data kantor", errorRef),
+      });
     } finally {
       setIsSubmitting(false);
     }
@@ -112,9 +122,6 @@ export default function MasterOffices() {
       latitude: "",
       longitude: "",
       radius_meters: "100",
-      work_start_time: "08:00",
-      work_end_time: "17:00",
-      late_tolerance_minutes: "15",
     });
     setEditingOffice(null);
   };
@@ -127,9 +134,6 @@ export default function MasterOffices() {
       latitude: String(office.latitude),
       longitude: String(office.longitude),
       radius_meters: String(office.radius_meters || 100),
-      work_start_time: office.work_start_time || "08:00",
-      work_end_time: office.work_end_time || "17:00",
-      late_tolerance_minutes: String(office.late_tolerance_minutes || 15),
     });
     setDialogOpen(true);
   };
@@ -163,7 +167,7 @@ export default function MasterOffices() {
                 Tambah Kantor
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-lg">
+            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>{editingOffice ? "Edit Kantor" : "Tambah Kantor Baru"}</DialogTitle>
                 <DialogDescription>Isi data lokasi kantor untuk absensi GPS</DialogDescription>
@@ -178,37 +182,26 @@ export default function MasterOffices() {
                     required
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label>Alamat</Label>
-                  <Input
-                    value={formData.address}
-                    onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                    placeholder="Jl. Contoh No. 123"
+                <div className="grid gap-2">
+                  <Label>Pilih Lokasi dari Google Maps</Label>
+                  <LocationPicker
+                    latitude={formData.latitude}
+                    longitude={formData.longitude}
+                    onLocationChange={(lat, lng) => {
+                      setFormData((prev) => ({
+                        ...prev,
+                        latitude: lat,
+                        longitude: lng,
+                      }));
+                    }}
+                    address={formData.address}
+                    onAddressChange={(addr) => {
+                      setFormData((prev) => ({
+                        ...prev,
+                        address: addr,
+                      }));
+                    }}
                   />
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Latitude</Label>
-                    <Input
-                      type="number"
-                      step="any"
-                      value={formData.latitude}
-                      onChange={(e) => setFormData({ ...formData, latitude: e.target.value })}
-                      placeholder="-6.2088"
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Longitude</Label>
-                    <Input
-                      type="number"
-                      step="any"
-                      value={formData.longitude}
-                      onChange={(e) => setFormData({ ...formData, longitude: e.target.value })}
-                      placeholder="106.8456"
-                      required
-                    />
-                  </div>
                 </div>
                 <div className="space-y-2">
                   <Label>Radius GPS (meter)</Label>
@@ -219,33 +212,10 @@ export default function MasterOffices() {
                     placeholder="100"
                   />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Jam Masuk</Label>
-                    <Input
-                      type="time"
-                      value={formData.work_start_time}
-                      onChange={(e) => setFormData({ ...formData, work_start_time: e.target.value })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Jam Pulang</Label>
-                    <Input
-                      type="time"
-                      value={formData.work_end_time}
-                      onChange={(e) => setFormData({ ...formData, work_end_time: e.target.value })}
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>Toleransi Keterlambatan (menit)</Label>
-                  <Input
-                    type="number"
-                    value={formData.late_tolerance_minutes}
-                    onChange={(e) => setFormData({ ...formData, late_tolerance_minutes: e.target.value })}
-                    placeholder="15"
-                  />
-                </div>
+                <p className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                  Jam kerja dan toleransi keterlambatan kini dikelola terpusat di menu{" "}
+                  <span className="font-semibold">/org/schedule/work-hours</span>.
+                </p>
                 <div className="flex gap-3 pt-4">
                   <Button type="button" variant="outline" onClick={() => setDialogOpen(false)} className="flex-1">
                     Batal
@@ -283,9 +253,6 @@ export default function MasterOffices() {
                           <Badge variant="secondary" className="text-xs">
                             <MapPin className="w-3 h-3 mr-1" />
                             {office.radius_meters}m
-                          </Badge>
-                          <Badge variant="outline" className="text-xs">
-                            {office.work_start_time} - {office.work_end_time}
                           </Badge>
                         </div>
                       </div>

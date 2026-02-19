@@ -21,6 +21,7 @@ const maxParallel = Number.parseInt(readOption("--max-parallel", "3"), 10) || 3;
 const skipOrchestrate = readFlag("--skip-orchestrate");
 const skipAutofix = readFlag("--skip-autofix");
 const skipValidate = readFlag("--skip-validate");
+const skipFaqOffer = readFlag("--skip-faq-offer");
 const withSmoke = readFlag("--with-smoke");
 const dryRun = readFlag("--dry-run");
 
@@ -114,6 +115,14 @@ async function main() {
 
   if (skipValidate) {
     log("Step 3/3: Validasi dilewati (--skip-validate).");
+    if (!skipFaqOffer) {
+      const faqOffer = await run("npm", ["run", "faq:offer"], { label: "npm run faq:offer" });
+      if (!faqOffer.ok) {
+        log(`[WARN-${runId}] FAQ offer hook gagal (code ${faqOffer.code}).`);
+      } else {
+        log(`[OK] ${faqOffer.label} (${faqOffer.durationMs}ms)`);
+      }
+    }
     log(`DONE [${runId}] ${Date.now() - startedAt}ms`);
     return;
   }
@@ -156,6 +165,15 @@ async function main() {
     return;
   }
 
+  if (!skipFaqOffer) {
+    const faqOffer = await run("npm", ["run", "faq:offer"], { label: "npm run faq:offer" });
+    if (!faqOffer.ok) {
+      log(`[WARN-${runId}] FAQ offer hook gagal (code ${faqOffer.code}).`);
+    } else {
+      log(`[OK] ${faqOffer.label} (${faqOffer.durationMs}ms)`);
+    }
+  }
+
   log("Risiko tersisa: tidak ada dari batch validasi yang dijalankan.");
 }
 
@@ -164,4 +182,3 @@ main().catch((error) => {
   log(`[ERR-${runId}] builder-mode crash: ${message}`);
   process.exitCode = 1;
 });
-

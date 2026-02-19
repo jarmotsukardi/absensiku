@@ -755,7 +755,31 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       // Sebelumnya sequential (6 query berurutan), sekarang paralel.
       // Mengurangi waktu loading dari ~6x latency menjadi ~1x latency.
       // ============================================================
-      const tenantId = empData.tenant_id;
+      const tenantId = isValidUuid(empData.tenant_id) ? empData.tenant_id : null;
+      if (!tenantId) {
+        const errorRef = reportError(
+          new Error("Tenant ID pegawai tidak valid"),
+          "employee.dashboard.fetch_data.tenant_invalid",
+          {
+            user_id: effectiveUserId,
+            employee_id: empData.id ?? null,
+            tenant_id_raw: (empData as { tenant_id?: string | null }).tenant_id ?? null,
+          }
+        );
+        setDashboardLoadIssue({
+          ref: errorRef,
+          mode: "fatal",
+          reason: "Data tenant pegawai tidak valid. Hubungi admin organisasi.",
+          scopes: ["resolve_tenant"],
+        });
+        toast.error(
+          appendErrorReference(
+            "Data tenant pegawai tidak valid. Hubungi admin organisasi.",
+            errorRef
+          )
+        );
+        return;
+      }
       const todayDayOfWeek = new Date().getDay() === 0 ? 7 : new Date().getDay();
 
       // Semua promise independen dijalankan bersamaan

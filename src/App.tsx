@@ -42,7 +42,10 @@ const BillingDashboard = lazy(() => import("./pages/admin/billing/BillingDashboa
 const OPDManagement = lazy(() => import("./pages/admin/master/OPDManagement"));
 const OPDAdminsManagement = lazy(() => import("./pages/admin/master/OPDAdminsManagement"));
 const EmployeeImport = lazy(() => import("./pages/admin/master/EmployeeImport"));
+const AdminAbsenceLimitsManagement = lazy(() => import("./pages/admin/schedule/AbsenceLimitsManagement"));
+const OrgOnboardingTemplates = lazy(() => import("./pages/admin/OrgOnboardingTemplates"));
 const OrgDashboard = lazy(() => import("./pages/org/OrgDashboard"));
+const OrgOnboardingSetup = lazy(() => import("./pages/org/OrgOnboardingSetup"));
 const OrgOPDManagement = lazy(() => import("./pages/org/master/OrgOPDManagement"));
 const OrgEmployeeInvitations = lazy(() => import("./pages/org/OrgEmployeeInvitations"));
 const OrgLandingSettings = lazy(() => import("./pages/org/OrgLandingSettings"));
@@ -177,6 +180,8 @@ const App = () => (
               <Route path="/admin/master/opd" element={<OPDManagement />} />
               <Route path="/admin/master/opd-admins" element={<OPDAdminsManagement />} />
               <Route path="/admin/master/employee-import" element={<EmployeeImport />} />
+              <Route path="/admin/schedule/absence-limits" element={<AdminAbsenceLimitsManagement />} />
+              <Route path="/admin/templates" element={<OrgOnboardingTemplates />} />
               <Route path="/admin/institution-types" element={<AdminInstitutionTypesManagement />} />
               <Route path="/admin/stress-test" element={<AttendanceStressTest />} />
 
@@ -184,6 +189,7 @@ const App = () => (
               <Route path="/org/login" element={<OrgLogin />} />
               <Route path="/org" element={<OrgDashboard />} />
               <Route path="/org/dashboard" element={<Navigate to="/org" replace />} />
+              <Route path="/org/onboarding" element={<OrgOnboardingSetup />} />
               <Route path="/org/master/opd" element={<OrgOPDManagement />} />
               <Route path="/org/master/opd-admins" element={<OrgOPDAdminsManagement />} />
               <Route path="/org/master/institution-types" element={<OrgInstitutionTypesManagement />} />

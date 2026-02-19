@@ -35,6 +35,7 @@ import { useOnlineStatus } from './useOnlineStatus';
 import { supabase } from '@/integrations/supabase/client';
 import { reportError } from '@/lib/errorLogger';
 import { buildAttendanceClientContext } from '@/lib/attendanceClientContext';
+import { debugLog } from '@/lib/debugLog';
 
 export interface SyncStats {
   pendingCount: number;
@@ -55,17 +56,33 @@ interface BatchSyncResult {
   trace_id?: string;
 }
 
-function normalizeBatchItem(item: any): BatchSyncResult {
-  const nested = item?.process_check_in ?? item?.process_check_out ?? item ?? {};
+const asRecord = (value: unknown): Record<string, unknown> => {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+};
+
+const getOptionalString = (value: unknown): string | undefined => {
+  return typeof value === "string" ? value : undefined;
+};
+
+const toErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return String(error);
+};
+
+function normalizeBatchItem(item: unknown): BatchSyncResult {
+  const itemRecord = asRecord(item);
+  const nested = asRecord(itemRecord.process_check_in ?? itemRecord.process_check_out ?? itemRecord);
+  const nestedSuccess = nested.success ?? itemRecord.success;
+
   return {
-    buffer_id: item?.buffer_id ?? nested?.buffer_id ?? '',
-    success: Boolean(nested?.success ?? item?.success),
-    id: nested?.id,
-    status: nested?.status,
-    error: nested?.error ?? item?.error,
-    message: nested?.message || item?.message || 'Unknown response',
-    queue_status: item?.queue_status ?? nested?.queue_status,
-    trace_id: item?.trace_id ?? nested?.trace_id,
+    buffer_id: getOptionalString(itemRecord.buffer_id) || getOptionalString(nested.buffer_id) || "",
+    success: typeof nestedSuccess === "boolean" ? nestedSuccess : Boolean(nestedSuccess),
+    id: getOptionalString(nested.id),
+    status: getOptionalString(nested.status),
+    error: getOptionalString(nested.error) || getOptionalString(itemRecord.error),
+    message: getOptionalString(nested.message) || getOptionalString(itemRecord.message) || "Unknown response",
+    queue_status: getOptionalString(itemRecord.queue_status) || getOptionalString(nested.queue_status),
+    trace_id: getOptionalString(itemRecord.trace_id) || getOptionalString(nested.trace_id),
   };
 }
 
@@ -99,10 +116,12 @@ async function syncBatchToServer(entries: AttendanceEntry[]): Promise<BatchSyncR
 
   if (error) throw error;
 
-  const rawResults = Array.isArray((data as any)?.results)
-    ? (data as any).results
-    : Array.isArray(data)
-      ? data
+  const responsePayload = data as unknown;
+  const payloadRecord = asRecord(responsePayload);
+  const rawResults: unknown[] = Array.isArray(payloadRecord.results)
+    ? payloadRecord.results
+    : Array.isArray(responsePayload)
+      ? responsePayload
       : [];
 
   return rawResults.map(normalizeBatchItem);
@@ -240,7 +259,7 @@ export function useAttendanceSync(employeeId: string | null) {
       const syncSingleEntryWithRetry = async (entry: AttendanceEntry) => {
         const cbCheck = canMakeRequest();
         if (!cbCheck.allowed) {
-          console.log('[AttendanceSync] Circuit breaker open, pausing sync');
+          debugLog('[AttendanceSync] Circuit breaker open, pausing sync');
           return;
         }
 
@@ -262,8 +281,8 @@ export function useAttendanceSync(employeeId: string | null) {
           } else {
             await markFailed(entry, formatResultMessage(result, 'Sync failed'));
           }
-        } catch (err: any) {
-          await markFailed(entry, err?.message || 'Sync failed');
+        } catch (err: unknown) {
+          await markFailed(entry, toErrorMessage(err) || 'Sync failed');
         }
       };
 
@@ -272,7 +291,7 @@ export function useAttendanceSync(employeeId: string | null) {
           const chunk = batch.slice(i, i + chunkSize);
           const cbCheck = canMakeRequest();
           if (!cbCheck.allowed) {
-            console.log('[AttendanceSync] Circuit breaker open, pausing sync');
+            debugLog('[AttendanceSync] Circuit breaker open, pausing sync');
             break;
           }
 
@@ -306,7 +325,7 @@ export function useAttendanceSync(employeeId: string | null) {
                 await markFailed(entry, formatResultMessage(result, 'No result for buffered entry'));
               }
             }
-          } catch (batchError: any) {
+          } catch (batchError: unknown) {
             const errorRef = reportError(batchError, 'attendance.sync.batch_fallback', {
               employeeId,
               chunkSize: chunk.length,

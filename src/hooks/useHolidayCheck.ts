@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { reportError } from "@/lib/errorLogger";
 import { toWorkDayOfWeek } from "@/lib/workday";
 
 interface HolidayInfo {
@@ -118,7 +119,11 @@ export function useHolidayCheck(tenantId: string | null, date?: Date) {
         holidaySource: null,
       });
     } catch (err) {
-      console.error("Error checking holiday:", err);
+      const errorRef = reportError(err, "holiday.check", {
+        tenant_id: tenantId,
+        date: dateStr,
+      });
+      console.error(`[HolidayCheck ${errorRef}] Error checking holiday:`, err);
       setHolidayInfo({
         isHoliday: false,
         holidayName: null,

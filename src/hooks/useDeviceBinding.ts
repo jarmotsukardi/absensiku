@@ -7,6 +7,7 @@ import {
   isDeviceIdMatch,
   getCurrentDeviceId,
 } from "@/lib/deviceId";
+import { debugLog } from "@/lib/debugLog";
 
 interface DeviceBindingSettings {
   enable_device_binding: boolean;
@@ -55,9 +56,9 @@ export function useDeviceBinding(employeeId: string | null) {
       return;
     }
 
-    console.log("[DeviceBinding] Fetching data for employee:", employeeId);
-    console.log("[DeviceBinding] Current device ID (generated):", currentDeviceId);
-    console.log("[DeviceBinding] Has stored device ID:", hasStoredDeviceId());
+    debugLog("[DeviceBinding] Fetching data for employee:", employeeId);
+    debugLog("[DeviceBinding] Current device ID (generated):", currentDeviceId);
+    debugLog("[DeviceBinding] Has stored device ID:", hasStoredDeviceId());
 
     try {
       // Fetch settings dan employee data secara paralel
@@ -85,8 +86,8 @@ export function useDeviceBinding(employeeId: string | null) {
       const employeeAndroidId = employeeRes.data?.android_id || null;
       const resetCount = employeeRes.data?.device_id_reset_count || 0;
 
-      console.log("[DeviceBinding] Settings enabled:", isEnabled);
-      console.log("[DeviceBinding] Employee android_id from DB:", employeeAndroidId);
+      debugLog("[DeviceBinding] Settings enabled:", isEnabled);
+      debugLog("[DeviceBinding] Employee android_id from DB:", employeeAndroidId);
 
       // Cek validitas device
       const isFirstTime = !employeeAndroidId;
@@ -103,16 +104,16 @@ export function useDeviceBinding(employeeId: string | null) {
         const deviceMatches = isDeviceIdMatch(employeeAndroidId);
         
         if (currentDeviceId !== employeeAndroidId && !deviceMatches) {
-          console.log("[DeviceBinding] Device ID mismatch!");
-          console.log("[DeviceBinding] - Current (generated):", currentDeviceId);
-          console.log("[DeviceBinding] - Database:", employeeAndroidId);
-          console.log("[DeviceBinding] - Storage has ID:", storageHasDeviceId);
-          console.log("[DeviceBinding] - Any match found:", deviceMatches);
+          debugLog("[DeviceBinding] Device ID mismatch!");
+          debugLog("[DeviceBinding] - Current (generated):", currentDeviceId);
+          debugLog("[DeviceBinding] - Database:", employeeAndroidId);
+          debugLog("[DeviceBinding] - Storage has ID:", storageHasDeviceId);
+          debugLog("[DeviceBinding] - Any match found:", deviceMatches);
           
           // Jika localStorage kosong dan device ID dari database ada,
           // kemungkinan user melakukan reset storage pada device yang sama
           if (!storageHasDeviceId) {
-            console.log("[DeviceBinding] Storage kosong, melakukan auto-sync dari database");
+            debugLog("[DeviceBinding] Storage kosong, melakukan auto-sync dari database");
             // Auto-sync: simpan device ID dari database ke localStorage
             syncDeviceIdFromDatabase(employeeAndroidId);
             // Gunakan device ID dari database
@@ -122,12 +123,12 @@ export function useDeviceBinding(employeeId: string | null) {
             errorMessage = null;
           } else {
             // localStorage ada tapi berbeda = benar-benar device berbeda
-            console.log("[DeviceBinding] Storage ada tapi berbeda, ini device berbeda");
+            debugLog("[DeviceBinding] Storage ada tapi berbeda, ini device berbeda");
             isDeviceValid = false;
             errorMessage = "Perangkat ini berbeda dengan yang terdaftar. Silakan reset device di menu profil.";
           }
         } else {
-          console.log("[DeviceBinding] Device ID match, valid (direct or backward-compatible)");
+          debugLog("[DeviceBinding] Device ID match, valid (direct or backward-compatible)");
           // Device ID sama atau cocok dengan salah satu kemungkinan
           if (!storageHasDeviceId || deviceMatches) {
             // Sync dari database jika storage kosong atau match ditemukan
@@ -138,9 +139,9 @@ export function useDeviceBinding(employeeId: string | null) {
           isDeviceValid = true;
         }
       } else if (!isEnabled) {
-        console.log("[DeviceBinding] Device binding disabled");
+        debugLog("[DeviceBinding] Device binding disabled");
       } else if (isFirstTime) {
-        console.log("[DeviceBinding] First time, no device registered yet");
+        debugLog("[DeviceBinding] First time, no device registered yet");
         // Simpan device ID ke localStorage untuk pertama kali
         if (!storageHasDeviceId) {
           localStorage.setItem("web_device_id", currentDeviceId);

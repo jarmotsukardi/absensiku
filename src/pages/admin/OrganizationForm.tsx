@@ -17,6 +17,8 @@ import {
 import { ArrowLeft, Save, Building2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { applyOrgOnboardingTemplateToTenant } from "@/lib/orgOnboardingTemplates";
 
 const organizationSchema = z.object({
   name: z.string().min(1, "Nama organisasi wajib diisi").max(200),
@@ -167,19 +169,35 @@ export default function OrganizationForm() {
 
         if (error) throw error;
 
-        // Create default subscription for new tenant
+        // Create default subscription for new tenant.
         if (newTenant) {
-          await supabase.from("subscriptions").insert({
+          const { error: subscriptionError } = await supabase.from("subscriptions").insert({
             tenant_id: newTenant.id,
             status: "trial",
           });
+          if (subscriptionError) throw subscriptionError;
+
+          // Seed onboarding template (master/schedule/settings/content) for first-time tenant usage.
+          try {
+            await applyOrgOnboardingTemplateToTenant(newTenant.id);
+          } catch (seedError: unknown) {
+            const errorRef = reportError(seedError, "admin.organization.seed_onboarding_template", {
+              tenant_id: newTenant.id,
+            });
+            toast.warning(
+              appendErrorReference(
+                "Organisasi berhasil dibuat, tetapi template setup awal gagal disalin.",
+                errorRef
+              )
+            );
+          }
         }
 
         toast.success("Organisasi berhasil ditambahkan");
       }
 
       navigate("/admin");
-    } catch (error) {
+    } catch (error: unknown) {
       console.error("Error saving organization:", error);
       const isUniqueCodeError =
         typeof error === "object" &&

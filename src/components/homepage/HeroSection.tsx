@@ -18,7 +18,7 @@ export function HeroSection({ heroSettings, statisticsSettings, showStats }: Her
   };
 
   return (
-    <section className="hero-gradient pt-32 pb-20 px-4 relative overflow-hidden">
+    <section className="hero-gradient pt-32 pb-20 md:pb-24 px-4 relative overflow-hidden">
       {/* Background Pattern */}
       <div className="absolute inset-0 opacity-10">
         <div className="absolute top-20 left-10 w-72 h-72 bg-accent rounded-full blur-3xl" />
@@ -37,22 +37,28 @@ export function HeroSection({ heroSettings, statisticsSettings, showStats }: Her
             <span className="text-gradient block">{heroSettings.subtitle}</span>
           </h1>
 
-          <p className="text-xl text-primary-foreground/70 mb-10 max-w-2xl mx-auto animate-slide-in-up stagger-1">
+          <p className="text-lg md:text-xl text-primary-foreground/75 mb-10 max-w-2xl mx-auto animate-slide-in-up stagger-1">
             {heroSettings.description}
           </p>
 
-          <div className="flex flex-col sm:flex-row gap-4 justify-center animate-slide-in-up stagger-2">
+          <div className="flex flex-col items-center gap-3 animate-slide-in-up stagger-2">
             <Link to={heroSettings.cta_link}>
               <Button variant="gold" size="xl" className="group">
                 {heroSettings.cta_text}
                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
               </Button>
             </Link>
-            <Link to={heroSettings.secondary_cta_link}>
-              <Button variant="hero-outline" size="xl">
+            {heroSettings.secondary_cta_text?.trim() && heroSettings.secondary_cta_link?.trim() && (
+              <Link
+                to={heroSettings.secondary_cta_link}
+                className="text-sm font-medium text-primary-foreground/80 hover:text-primary-foreground underline underline-offset-4 transition-colors"
+              >
                 {heroSettings.secondary_cta_text}
-              </Button>
-            </Link>
+              </Link>
+            )}
+            <p className="text-xs md:text-sm text-primary-foreground/75 max-w-xl">
+              Gratis sampai instansi Anda siap go-live penuh untuk seluruh pegawai.
+            </p>
           </div>
 
           {/* Stats */}

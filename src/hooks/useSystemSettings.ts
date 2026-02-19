@@ -5,14 +5,19 @@ import { toast } from "sonner";
 export interface SystemSetting {
   id: string;
   key: string;
-  value: any;
+  value: unknown;
   description: string | null;
   updated_at: string;
 }
 
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return String(error);
+};
+
 export function useSystemSettings(settingKey?: string) {
   const [settings, setSettings] = useState<SystemSetting[]>([]);
-  const [setting, setSetting] = useState<any>(null);
+  const [setting, setSetting] = useState<unknown>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -48,7 +53,7 @@ export function useSystemSettings(settingKey?: string) {
     fetchSettings();
   }, [fetchSettings]);
 
-  const saveSetting = async (key: string, value: any, description?: string): Promise<boolean> => {
+  const saveSetting = async (key: string, value: unknown, description?: string): Promise<boolean> => {
     setIsSaving(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -71,16 +76,16 @@ export function useSystemSettings(settingKey?: string) {
       toast.success("Pengaturan berhasil disimpan");
       await fetchSettings();
       return true;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error saving system setting:", error);
-      toast.error("Gagal menyimpan pengaturan: " + error.message);
+      toast.error("Gagal menyimpan pengaturan: " + getErrorMessage(error));
       return false;
     } finally {
       setIsSaving(false);
     }
   };
 
-  const getSetting = (key: string): any => {
+  const getSetting = (key: string): unknown => {
     const found = settings.find(s => s.key === key);
     return found?.value || null;
   };

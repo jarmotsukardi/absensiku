@@ -12,6 +12,7 @@ import { CTASection } from "@/components/homepage/CTASection";
 import { FooterSection } from "@/components/homepage/FooterSection";
 import { BannerPromoCarousel } from "@/components/banners/BannerPromoCarousel";
 import { FloatingWhatsApp } from "@/components/common/FloatingWhatsApp";
+import { HomepageChatAgent } from "@/components/common/HomepageChatAgent";
 import { AppDownloadSection } from "@/components/homepage/AppDownloadSection";
 import { PaymentMethodsSection } from "@/components/homepage/PaymentMethodsSection";
 import { ClientLogosSection } from "@/components/homepage/ClientLogosSection";
@@ -27,6 +28,7 @@ const Index = () => {
     targetSegmentSettings,
     promoSidebarSettings,
     pricingSectionSettings,
+    b2bNegotiationThreshold,
     features,
     pricingPlans,
     faqs,
@@ -95,7 +97,8 @@ const Index = () => {
           key="pricing" 
           plans={pricingPlans} 
           title={pricingSectionSettings.section_title} 
-          subtitle={pricingSectionSettings.section_subtitle} 
+          subtitle={pricingSectionSettings.section_subtitle}
+          negotiationThreshold={b2bNegotiationThreshold}
         />
       ),
     },
@@ -142,7 +145,7 @@ const Index = () => {
       render: () => isSectionEnabled("footer") && <FooterSection key="footer" settings={footerSettings} />,
     },
   ], [
-    heroSettings, statisticsSettings, newsSettings, targetSegmentSettings, pricingSectionSettings,
+    heroSettings, statisticsSettings, newsSettings, targetSegmentSettings, pricingSectionSettings, b2bNegotiationThreshold,
     features, pricingPlans, faqs, testimonials, ctaSettings, footerSettings,
     articles, promoSidebarSettings, isSectionEnabled
   ]);
@@ -168,7 +171,18 @@ const Index = () => {
       {/* ALL sections are now dynamically ordered based on sort_order from database */}
       {sortedSections.map((section) => section.render())}
 
-      <FloatingWhatsApp />
+      <HomepageChatAgent
+        features={features}
+        pricingPlans={pricingPlans}
+        faqs={faqs}
+        articles={articles}
+        hideLauncher
+      />
+      <FloatingWhatsApp
+        showChatAgentOption
+        chatAgentNoticeText="Chat Agent akan menjawab semua pertanyaan Anda dengan cepat."
+        chatAgentButtonText="Tanya Chat Agent"
+      />
     </div>
   );
 };

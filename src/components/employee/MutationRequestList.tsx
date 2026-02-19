@@ -84,7 +84,7 @@ export function MutationRequestList({ employeeId }: MutationRequestListProps) {
     }
   };
 
-  const formatChanges = (changes: Record<string, any>, original: Record<string, any>) => {
+  const formatChanges = (changes: Record<string, unknown>, original: Record<string, unknown>) => {
     return Object.entries(changes).map(([key, newValue]) => {
       const oldValue = original[key];
       const label = key

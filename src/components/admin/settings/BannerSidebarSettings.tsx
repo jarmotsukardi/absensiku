@@ -11,18 +11,10 @@ import {
   Eye, EyeOff, AlertTriangle, CheckCircle2,
   ExternalLink, ArrowUp, ArrowDown
 } from "lucide-react";
-import { toast } from "sonner";
 import { useSystemSettings } from "@/hooks/useSystemSettings";
 import { cn } from "@/lib/utils";
-
-interface SidebarBanner {
-  id: string;
-  title: string;
-  link: string;
-  position: string;
-  imageUrl: string;
-  isActive: boolean;
-}
+import { normalizeSidebarBanners } from "@/lib/sidebarBanners";
+import type { SidebarBannerItem } from "@/lib/sidebarBanners";
 
 const MAX_VISIBLE_BANNERS = 2;
 
@@ -34,13 +26,11 @@ const positionOptions = [
 
 export function BannerSidebarSettings() {
   const { setting, isLoading, isSaving, saveSetting } = useSystemSettings("banners_sidebar");
-  const [banners, setBanners] = useState<SidebarBanner[]>([]);
+  const [banners, setBanners] = useState<SidebarBannerItem[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (setting && Array.isArray(setting)) {
-      setBanners(setting);
-    }
+    setBanners(normalizeSidebarBanners(setting));
   }, [setting]);
 
   const activeBanners = banners.filter(b => b.isActive && b.imageUrl);
@@ -60,7 +50,7 @@ export function BannerSidebarSettings() {
     setExpandedId(newBanner.id);
   };
 
-  const updateBanner = (id: string, field: keyof SidebarBanner, value: string | boolean) => {
+  const updateBanner = (id: string, field: keyof SidebarBannerItem, value: string | boolean) => {
     setBanners(banners.map((b) => (b.id === id ? { ...b, [field]: value } : b)));
   };
 
@@ -80,10 +70,10 @@ export function BannerSidebarSettings() {
 
 
   const handleSave = async () => {
-    await saveSetting("banners_sidebar", banners, "Banner Sidebar Dashboard");
+    await saveSetting("banners_sidebar", normalizeSidebarBanners(banners), "Banner Sidebar Dashboard");
   };
 
-  const getBannerVisibility = (banner: SidebarBanner, index: number): "visible" | "hidden" | "inactive" => {
+  const getBannerVisibility = (banner: SidebarBannerItem): "visible" | "hidden" | "inactive" => {
     if (!banner.isActive || !banner.imageUrl) return "inactive";
     const activeIndex = activeBanners.findIndex(b => b.id === banner.id);
     return activeIndex < MAX_VISIBLE_BANNERS ? "visible" : "hidden";
@@ -168,7 +158,7 @@ export function BannerSidebarSettings() {
       {/* Banner List */}
       <div className="space-y-3">
         {banners.map((banner, index) => {
-          const visibility = getBannerVisibility(banner, index);
+          const visibility = getBannerVisibility(banner);
           const isExpanded = expandedId === banner.id;
           
           return (

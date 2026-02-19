@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,12 +9,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, Pencil, Trash2, AlertTriangle, RotateCcw, Bell } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, AlertTriangle, RotateCcw, Bell, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { Switch } from "@/components/ui/switch";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import {
+  ABSENCE_LIMIT_TEMPLATE_SETTING_KEY,
+  normalizeAbsenceLimitTemplate,
+} from "@/lib/absenceLimitTemplates";
 
 interface AbsenceLimit {
   id: string;
@@ -28,6 +32,24 @@ interface AbsenceLimit {
 }
 
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
+const ABSENCE_LIMIT_NOTIFICATIONS_SETTING_KEY = "absence_limit_notifications_enabled";
+
+const parseNotificationSetting = (value: unknown, fallback: boolean): boolean => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    if (value.toLowerCase() === "true") return true;
+    if (value.toLowerCase() === "false") return false;
+  }
+  if (typeof value === "object" && value !== null && !Array.isArray(value) && "enabled" in value) {
+    const enabledValue = (value as { enabled?: unknown }).enabled;
+    if (typeof enabledValue === "boolean") return enabledValue;
+    if (typeof enabledValue === "string") {
+      if (enabledValue.toLowerCase() === "true") return true;
+      if (enabledValue.toLowerCase() === "false") return false;
+    }
+  }
+  return fallback;
+};
 
 export default function OrgAbsenceLimitsManagement() {
   const [limits, setLimits] = useState<AbsenceLimit[]>([]);
@@ -37,6 +59,11 @@ export default function OrgAbsenceLimitsManagement() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [sendingRuleId, setSendingRuleId] = useState<string | null>(null);
+  const [tenantId, setTenantId] = useState<string | null>(null);
+  const [isNotificationSettingEnabled, setIsNotificationSettingEnabled] = useState(true);
+  const [isNotificationSettingLoading, setIsNotificationSettingLoading] = useState(true);
+  const [isApplyingTemplate, setIsApplyingTemplate] = useState(false);
+  const [hasAttemptedTemplateBootstrap, setHasAttemptedTemplateBootstrap] = useState(false);
   const [formData, setFormData] = useState({
     id: "",
     max_days: 3,
@@ -49,11 +76,7 @@ export default function OrgAbsenceLimitsManagement() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoadError(null);
       const { data, error } = await supabase
@@ -72,9 +95,9 @@ export default function OrgAbsenceLimitsManagement() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
-  const getTenantId = async (): Promise<string | null> => {
+  const getTenantId = useCallback(async (): Promise<string | null> => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
 
@@ -87,6 +110,174 @@ export default function OrgAbsenceLimitsManagement() {
 
     if (roleError) throw roleError;
     return roleData?.tenant_id || null;
+  }, []);
+
+  const fetchNotificationSetting = useCallback(async () => {
+    try {
+      setIsNotificationSettingLoading(true);
+      const resolvedTenantId = await getTenantId();
+      setTenantId(resolvedTenantId);
+      if (!resolvedTenantId) {
+        setIsNotificationSettingEnabled(true);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("organization_settings")
+        .select("setting_value")
+        .eq("tenant_id", resolvedTenantId)
+        .eq("setting_key", ABSENCE_LIMIT_NOTIFICATIONS_SETTING_KEY)
+        .maybeSingle();
+
+      if (error && error.code !== "PGRST116") throw error;
+      setIsNotificationSettingEnabled(parseNotificationSetting(data?.setting_value, true));
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.schedule.absence_limits.fetch_notification_setting");
+      const message = appendErrorReference("Gagal memuat pengaturan notifikasi batas absen", errorRef);
+      toast.error(message);
+      setIsNotificationSettingEnabled(true);
+    } finally {
+      setIsNotificationSettingLoading(false);
+    }
+  }, [getTenantId]);
+
+  const resolveTenantId = useCallback(async (): Promise<string | null> => {
+    if (tenantId) return tenantId;
+    return getTenantId();
+  }, [getTenantId, tenantId]);
+
+  const applyAdminTemplate = useCallback(
+    async (options?: { silentIfHasData?: boolean; showToast?: boolean }) => {
+      const silentIfHasData = options?.silentIfHasData ?? false;
+      const showToast = options?.showToast ?? true;
+
+      try {
+        setIsApplyingTemplate(true);
+        const resolvedTenantId = await resolveTenantId();
+        if (!resolvedTenantId) {
+          if (showToast) toast.error("Tenant tidak ditemukan.");
+          return false;
+        }
+
+        const { count, error: countError } = await supabase
+          .from("absence_limits")
+          .select("id", { count: "exact", head: true })
+          .eq("tenant_id", resolvedTenantId);
+        if (countError) throw countError;
+
+        if ((count || 0) > 0) {
+          if (!silentIfHasData && showToast) {
+            toast.info("Template hanya diterapkan jika data batas absen masih kosong.");
+          }
+          return false;
+        }
+
+        const { data: templateData, error: templateError } = await supabase
+          .from("system_settings")
+          .select("value")
+          .eq("key", ABSENCE_LIMIT_TEMPLATE_SETTING_KEY)
+          .maybeSingle();
+        if (templateError) throw templateError;
+
+        const templateRules = normalizeAbsenceLimitTemplate(templateData?.value);
+        if (templateRules.length === 0) {
+          if (showToast) toast.info("Template admin belum diisi.");
+          return false;
+        }
+
+        const payload = templateRules.map((rule) => ({
+          tenant_id: resolvedTenantId,
+          max_days: rule.max_days,
+          warning_type: rule.warning_type,
+          description: rule.description || null,
+          is_active: rule.is_active,
+        }));
+
+        const { error: insertError } = await supabase.from("absence_limits").insert(payload);
+        if (insertError) throw insertError;
+
+        await fetchData();
+        if (showToast) toast.success("Template batas absen admin berhasil diterapkan.");
+        return true;
+      } catch (error: unknown) {
+        const errorRef = reportError(error, "org.schedule.absence_limits.apply_template", {
+          tenant_id: tenantId,
+        });
+        if (showToast) {
+          toast.error(appendErrorReference("Gagal menerapkan template admin", errorRef));
+        } else {
+          setLoadError(appendErrorReference("Template admin gagal diterapkan otomatis", errorRef));
+        }
+        return false;
+      } finally {
+        setIsApplyingTemplate(false);
+      }
+    },
+    [fetchData, resolveTenantId, tenantId]
+  );
+
+  useEffect(() => {
+    void fetchData();
+    void fetchNotificationSetting();
+  }, [fetchData, fetchNotificationSetting]);
+
+  useEffect(() => {
+    if (isLoading || loadError || hasAttemptedTemplateBootstrap || limits.length > 0) return;
+    setHasAttemptedTemplateBootstrap(true);
+    void applyAdminTemplate({ silentIfHasData: true, showToast: false });
+  }, [applyAdminTemplate, hasAttemptedTemplateBootstrap, isLoading, limits.length, loadError]);
+
+  const handleToggleNotificationSetting = async (nextValue: boolean) => {
+    if (!tenantId) {
+      toast.error("Tenant tidak ditemukan. Muat ulang halaman.");
+      return;
+    }
+
+    setIsNotificationSettingLoading(true);
+    try {
+      const { data: existing, error: existingError } = await supabase
+        .from("organization_settings")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("setting_key", ABSENCE_LIMIT_NOTIFICATIONS_SETTING_KEY)
+        .maybeSingle();
+
+      if (existingError && existingError.code !== "PGRST116") throw existingError;
+
+      if (existing?.id) {
+        const { error: updateError } = await supabase
+          .from("organization_settings")
+          .update({
+            setting_value: nextValue,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", existing.id);
+        if (updateError) throw updateError;
+      } else {
+        const { error: insertError } = await supabase.from("organization_settings").insert({
+          tenant_id: tenantId,
+          setting_key: ABSENCE_LIMIT_NOTIFICATIONS_SETTING_KEY,
+          setting_value: nextValue,
+          description: "Aktif/nonaktifkan notifikasi otomatis batas absen ke pegawai.",
+        });
+        if (insertError) throw insertError;
+      }
+
+      setIsNotificationSettingEnabled(nextValue);
+      toast.success(
+        nextValue
+          ? "Notifikasi batas absen diaktifkan. Aturan aktif akan mengirim notifikasi ke pegawai terkait."
+          : "Notifikasi batas absen dinonaktifkan."
+      );
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.schedule.absence_limits.toggle_notification_setting", {
+        tenant_id: tenantId,
+        next_value: nextValue,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan notifikasi", errorRef));
+    } finally {
+      setIsNotificationSettingLoading(false);
+    }
   };
 
   const handleSubmit = async () => {
@@ -98,6 +289,7 @@ export default function OrgAbsenceLimitsManagement() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      let savedRule: AbsenceLimit | null = null;
 
       const { data: roleData } = await supabase
         .from("user_roles")
@@ -106,7 +298,7 @@ export default function OrgAbsenceLimitsManagement() {
         .single();
 
       if (isEditing) {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("absence_limits")
           .update({
             max_days: formData.max_days,
@@ -114,11 +306,14 @@ export default function OrgAbsenceLimitsManagement() {
             description: formData.description || null,
             is_active: formData.is_active,
           })
-          .eq("id", formData.id);
+          .eq("id", formData.id)
+          .select("*")
+          .single();
         if (error) throw error;
+        savedRule = data as AbsenceLimit;
         toast.success("Batas absen berhasil diperbarui");
       } else {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("absence_limits")
           .insert({
             tenant_id: roleData?.tenant_id,
@@ -126,14 +321,20 @@ export default function OrgAbsenceLimitsManagement() {
             warning_type: formData.warning_type,
             description: formData.description || null,
             is_active: formData.is_active,
-          });
+          })
+          .select("*")
+          .single();
         if (error) throw error;
+        savedRule = data as AbsenceLimit;
         toast.success("Batas absen berhasil ditambahkan");
       }
 
       setIsDialogOpen(false);
       resetForm();
-      fetchData();
+      void fetchData();
+      if (savedRule?.is_active && isNotificationSettingEnabled) {
+        void notifyEmployeesByRule(savedRule);
+      }
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.schedule.absence_limits.save", {
         rule_id: formData.id || null,
@@ -179,6 +380,9 @@ export default function OrgAbsenceLimitsManagement() {
       if (error) throw error;
       setLimits((prev) => prev.map((row) => (row.id === limit.id ? { ...row, is_active: nextValue } : row)));
       toast.success(`Aturan ${nextValue ? "diaktifkan" : "dinonaktifkan"}.`);
+      if (nextValue && isNotificationSettingEnabled) {
+        void notifyEmployeesByRule({ ...limit, is_active: true });
+      }
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.schedule.absence_limits.toggle_status", {
         rule_id: limit.id,
@@ -191,6 +395,10 @@ export default function OrgAbsenceLimitsManagement() {
   const notifyEmployeesByRule = async (limit: AbsenceLimit) => {
     if (!limit.is_active) {
       toast.error("Aturan ini nonaktif. Aktifkan terlebih dahulu.");
+      return;
+    }
+    if (!isNotificationSettingEnabled) {
+      toast.error("Notifikasi batas absen sedang dinonaktifkan. Aktifkan toggle notifikasi terlebih dahulu.");
       return;
     }
 
@@ -334,7 +542,7 @@ export default function OrgAbsenceLimitsManagement() {
   return (
     <OrganizationLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
               <AlertTriangle className="h-6 w-6" />
@@ -342,13 +550,25 @@ export default function OrgAbsenceLimitsManagement() {
             </h1>
             <p className="text-muted-foreground">Kelola batas absen dan jenis teguran</p>
           </div>
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button onClick={() => { resetForm(); setIsDialogOpen(true); }}>
-                <Plus className="mr-2 h-4 w-4" /> Tambah Batas
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              disabled={isApplyingTemplate}
+              onClick={() => {
+                setHasAttemptedTemplateBootstrap(true);
+                void applyAdminTemplate({ silentIfHasData: false, showToast: true });
+              }}
+            >
+              {isApplyingTemplate ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
+              Terapkan Template Admin
+            </Button>
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
+                <Button onClick={() => { resetForm(); setIsDialogOpen(true); }}>
+                  <Plus className="mr-2 h-4 w-4" /> Tambah Batas
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
               <DialogHeader>
                 <DialogTitle>{isEditing ? "Edit Batas Absen" : "Tambah Batas Absen"}</DialogTitle>
                 <DialogDescription>
@@ -398,8 +618,9 @@ export default function OrgAbsenceLimitsManagement() {
                 <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
                 <Button onClick={handleSubmit}>{isEditing ? "Simpan" : "Tambah"}</Button>
               </DialogFooter>
-            </DialogContent>
-          </Dialog>
+              </DialogContent>
+            </Dialog>
+          </div>
         </div>
 
         {loadError && (
@@ -407,6 +628,33 @@ export default function OrgAbsenceLimitsManagement() {
             {loadError}
           </div>
         )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Pengaturan Notifikasi Batas Absen</CardTitle>
+            <CardDescription>
+              Aktifkan/ nonaktifkan pengiriman notifikasi ke pegawai berdasarkan aturan batas absen.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-medium">Notifikasi ke pegawai bersangkutan</p>
+              <p className="text-xs text-muted-foreground">
+                Jika aktif, aturan batas absen yang aktif akan mengirim notifikasi otomatis ke pegawai yang melampaui batas.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Switch
+                checked={isNotificationSettingEnabled}
+                disabled={isNotificationSettingLoading}
+                onCheckedChange={(checked) => void handleToggleNotificationSetting(checked)}
+              />
+              <Badge variant={isNotificationSettingEnabled ? "default" : "secondary"}>
+                {isNotificationSettingEnabled ? "Enable" : "Disable"}
+              </Badge>
+            </div>
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>
@@ -481,9 +729,18 @@ export default function OrgAbsenceLimitsManagement() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          disabled={!limit.is_active || sendingRuleId === limit.id}
+                          disabled={
+                            !limit.is_active ||
+                            sendingRuleId === limit.id ||
+                            !isNotificationSettingEnabled ||
+                            isNotificationSettingLoading
+                          }
                           onClick={() => void notifyEmployeesByRule(limit)}
-                          title="Kirim notifikasi ke pegawai sesuai aturan ini"
+                          title={
+                            !isNotificationSettingEnabled
+                              ? "Aktifkan toggle notifikasi terlebih dahulu"
+                              : "Kirim notifikasi ke pegawai sesuai aturan ini"
+                          }
                         >
                           <Bell className="h-4 w-4" />
                         </Button>

@@ -9,7 +9,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Pencil, Trash2, Timer, RotateCcw } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { Plus, Pencil, Trash2, Timer, RotateCcw, CircleHelp } from "lucide-react";
 import { toast } from "sonner";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
@@ -22,6 +23,7 @@ interface WorkHour {
   day_of_week: number;
   time_in: string;
   time_out: string;
+  late_tolerance_minutes: number | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -57,6 +59,7 @@ export default function OrgWorkHoursManagement() {
     day_of_week: 1,
     time_in: "08:00",
     time_out: "17:00",
+    late_tolerance_minutes: 0,
   });
 
   // Filters
@@ -128,6 +131,7 @@ export default function OrgWorkHoursManagement() {
             day_of_week: formData.day_of_week,
             time_in: formData.time_in,
             time_out: formData.time_out,
+            late_tolerance_minutes: formData.late_tolerance_minutes,
           })
           .eq("id", formData.id);
         if (error) throw error;
@@ -141,6 +145,7 @@ export default function OrgWorkHoursManagement() {
             day_of_week: formData.day_of_week,
             time_in: formData.time_in,
             time_out: formData.time_out,
+            late_tolerance_minutes: formData.late_tolerance_minutes,
             is_active: true,
           });
         if (error) {
@@ -195,6 +200,7 @@ export default function OrgWorkHoursManagement() {
             .update({
               time_in: "08:00",
               time_out: "17:00",
+              late_tolerance_minutes: 0,
               is_active: true,
               updated_at: new Date().toISOString(),
             })
@@ -209,6 +215,7 @@ export default function OrgWorkHoursManagement() {
               day_of_week: day,
               time_in: "08:00",
               time_out: "17:00",
+              late_tolerance_minutes: 0,
               is_active: true,
             });
           if (error) throw error;
@@ -248,6 +255,7 @@ export default function OrgWorkHoursManagement() {
       day_of_week: 1,
       time_in: "08:00",
       time_out: "17:00",
+      late_tolerance_minutes: 0,
     });
     setIsEditing(false);
   };
@@ -259,6 +267,7 @@ export default function OrgWorkHoursManagement() {
       day_of_week: workHour.day_of_week,
       time_in: workHour.time_in,
       time_out: workHour.time_out,
+      late_tolerance_minutes: workHour.late_tolerance_minutes ?? 0,
     });
     setIsEditing(true);
     setIsDialogOpen(true);
@@ -384,6 +393,36 @@ export default function OrgWorkHoursManagement() {
                     />
                   </div>
                 </div>
+                <div className="grid gap-2">
+                  <div className="flex items-center gap-2">
+                    <Label>Toleransi Keterlambatan (menit)</Label>
+                    <TooltipProvider delayDuration={120}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button type="button" className="inline-flex text-muted-foreground hover:text-foreground">
+                            <CircleHelp className="h-4 w-4" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="max-w-xs">
+                          Batas menit toleransi setelah jam masuk sebelum absensi ditandai terlambat.
+                          Nilai 0 berarti tidak ada toleransi.
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={formData.late_tolerance_minutes}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        late_tolerance_minutes: Math.max(0, parseInt(e.target.value) || 0),
+                      })
+                    }
+                    placeholder="0"
+                  />
+                </div>
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
@@ -450,6 +489,7 @@ export default function OrgWorkHoursManagement() {
                   <TableHead>Hari Kerja</TableHead>
                   <TableHead>Jam Masuk</TableHead>
                   <TableHead>Jam Pulang</TableHead>
+                  <TableHead>Toleransi</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Aksi</TableHead>
                 </TableRow>
@@ -457,13 +497,13 @@ export default function OrgWorkHoursManagement() {
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-8">
+                    <TableCell colSpan={8} className="text-center py-8">
                       <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto"></div>
                     </TableCell>
                   </TableRow>
                 ) : paginatedWorkHours.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                       Belum ada data jam kerja
                     </TableCell>
                   </TableRow>
@@ -477,6 +517,7 @@ export default function OrgWorkHoursManagement() {
                       <TableCell className="font-medium">{getDayLabel(wh.day_of_week)}</TableCell>
                       <TableCell>{formatTime(wh.time_in)}</TableCell>
                       <TableCell>{formatTime(wh.time_out)}</TableCell>
+                      <TableCell>{wh.late_tolerance_minutes ?? 0} menit</TableCell>
                       <TableCell>
                         <Badge variant={wh.is_active ? "default" : "secondary"}>
                           {wh.is_active ? "Aktif" : "Nonaktif"}

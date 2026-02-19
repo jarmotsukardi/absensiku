@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -8,187 +8,300 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Pencil, Trash2, AlertTriangle } from "lucide-react";
+import { Plus, Pencil, Trash2, AlertTriangle, Loader2, RefreshCcw } from "lucide-react";
 import { toast } from "sonner";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { supabase } from "@/integrations/supabase/client";
+import {
+  ABSENCE_LIMIT_TEMPLATE_SETTING_KEY,
+  DEFAULT_ABSENCE_LIMIT_TEMPLATE,
+  normalizeAbsenceLimitTemplate,
+  type AbsenceLimitTemplateItem,
+} from "@/lib/absenceLimitTemplates";
 
-interface AbsenceLimit {
-  id: string;
-  max_days: number;
-  description: string;
-  warning_type: string;
-  is_active: boolean;
-}
 const ITEMS_PER_PAGE = 10;
 
 export default function AbsenceLimitsManagement() {
-  const [limits, setLimits] = useState<AbsenceLimit[]>([
-    { id: "1", max_days: 3, description: "Teguran lisan", warning_type: "lisan", is_active: true },
-    { id: "2", max_days: 5, description: "Teguran tertulis ringan", warning_type: "tertulis_ringan", is_active: true },
-    { id: "3", max_days: 10, description: "Teguran tertulis sedang", warning_type: "tertulis_sedang", is_active: true },
-    { id: "4", max_days: 15, description: "Teguran tertulis berat", warning_type: "tertulis_berat", is_active: true },
-    { id: "5", max_days: 20, description: "Pemberhentian sementara", warning_type: "pemberhentian", is_active: true },
-  ]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [limits, setLimits] = useState<AbsenceLimitTemplateItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
-  const [editingLimit, setEditingLimit] = useState<AbsenceLimit | null>(null);
+  const [editingLimit, setEditingLimit] = useState<AbsenceLimitTemplateItem | null>(null);
   const [formData, setFormData] = useState({
     max_days: "",
     description: "",
     warning_type: "",
+    is_active: true,
   });
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const fetchTemplate = useCallback(async () => {
     try {
+      setIsLoading(true);
       setLoadError(null);
-      if (editingLimit) {
-        setLimits(prev => prev.map(l => 
-          l.id === editingLimit.id 
-            ? { ...l, max_days: parseInt(formData.max_days), description: formData.description, warning_type: formData.warning_type }
-            : l
-        ));
-        toast.success("Batas absen berhasil diperbarui");
-      } else {
-        const newLimit: AbsenceLimit = {
-          id: Date.now().toString(),
-          max_days: parseInt(formData.max_days),
-          description: formData.description,
-          warning_type: formData.warning_type,
-          is_active: true,
-        };
-        setLimits(prev => [...prev, newLimit]);
-        toast.success("Batas absen berhasil ditambahkan");
-      }
 
-      setIsDialogOpen(false);
-      setEditingLimit(null);
-      setFormData({ max_days: "", description: "", warning_type: "" });
+      const { data, error } = await supabase
+        .from("system_settings")
+        .select("value")
+        .eq("key", ABSENCE_LIMIT_TEMPLATE_SETTING_KEY)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      const normalized = normalizeAbsenceLimitTemplate(data?.value);
+      setLimits(normalized);
     } catch (error: unknown) {
-      const errorRef = reportError(error, "admin.schedule.absence_limits.save");
-      const message = appendErrorReference("Gagal menyimpan batas absen", errorRef);
+      const errorRef = reportError(error, "admin.schedule.absence_limits_template.fetch");
+      const message = appendErrorReference("Gagal memuat template batas absen", errorRef);
       setLoadError(message);
+      setLimits([...DEFAULT_ABSENCE_LIMIT_TEMPLATE]);
       toast.error(message);
+    } finally {
+      setIsLoading(false);
     }
-  };
+  }, []);
 
-  const handleEdit = (limit: AbsenceLimit) => {
-    setEditingLimit(limit);
-    setFormData({
-      max_days: limit.max_days.toString(),
-      description: limit.description,
-      warning_type: limit.warning_type,
-    });
-    setIsDialogOpen(true);
-  };
-
-  const handleDelete = (id: string) => {
-    if (!confirm("Yakin ingin menghapus batas absen ini?")) return;
-    try {
-      setLoadError(null);
-      setLimits(prev => prev.filter(l => l.id !== id));
-      toast.success("Batas absen berhasil dihapus");
-    } catch (error: unknown) {
-      const errorRef = reportError(error, "admin.schedule.absence_limits.delete", { limit_id: id });
-      const message = appendErrorReference("Gagal menghapus batas absen", errorRef);
-      setLoadError(message);
-      toast.error(message);
-    }
-  };
-
-  const getWarningBadgeColor = (type: string) => {
-    switch (type) {
-      case "lisan": return "bg-yellow-500/10 text-yellow-500";
-      case "tertulis_ringan": return "bg-orange-500/10 text-orange-500";
-      case "tertulis_sedang": return "bg-red-500/10 text-red-500";
-      case "tertulis_berat": return "bg-red-700/10 text-red-700";
-      case "pemberhentian": return "bg-destructive/10 text-destructive";
-      default: return "";
-    }
-  };
-  const totalPages = Math.max(1, Math.ceil(limits.length / ITEMS_PER_PAGE));
-  const paginatedLimits = limits.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
-  );
+  useEffect(() => {
+    void fetchTemplate();
+  }, [fetchTemplate]);
 
   useEffect(() => {
     setCurrentPage(1);
   }, [limits.length]);
+
+  const saveTemplate = async (nextLimits: AbsenceLimitTemplateItem[], successMessage: string) => {
+    try {
+      setIsSaving(true);
+      setLoadError(null);
+      const payload = nextLimits.map((item) => ({
+        id: item.id,
+        max_days: item.max_days,
+        warning_type: item.warning_type,
+        description: item.description,
+        is_active: item.is_active,
+      }));
+
+      const { error } = await supabase
+        .from("system_settings")
+        .upsert(
+          {
+            key: ABSENCE_LIMIT_TEMPLATE_SETTING_KEY,
+            value: payload,
+            description: "Template aturan batas absen default untuk tenant/member baru.",
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "key" }
+        );
+
+      if (error) throw error;
+      setLimits(nextLimits);
+      toast.success(successMessage);
+      return true;
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.schedule.absence_limits_template.save", {
+        item_count: nextLimits.length,
+      });
+      const message = appendErrorReference("Gagal menyimpan template batas absen", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      return false;
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const maxDays = Number(formData.max_days);
+    if (!Number.isFinite(maxDays) || maxDays < 1) {
+      toast.error("Maksimal hari tidak hadir harus lebih dari 0.");
+      return;
+    }
+    if (!formData.warning_type.trim()) {
+      toast.error("Jenis teguran harus diisi.");
+      return;
+    }
+
+    let nextLimits: AbsenceLimitTemplateItem[];
+    if (editingLimit) {
+      nextLimits = limits.map((item) =>
+        item.id === editingLimit.id
+          ? {
+              ...item,
+              max_days: Math.floor(maxDays),
+              description: formData.description.trim(),
+              warning_type: formData.warning_type.trim(),
+              is_active: formData.is_active,
+            }
+          : item
+      );
+    } else {
+      nextLimits = [
+        ...limits,
+        {
+          id: `rule-${Date.now()}`,
+          max_days: Math.floor(maxDays),
+          description: formData.description.trim(),
+          warning_type: formData.warning_type.trim(),
+          is_active: formData.is_active,
+        },
+      ];
+    }
+
+    nextLimits = [...nextLimits].sort((a, b) => a.max_days - b.max_days);
+    const ok = await saveTemplate(
+      nextLimits,
+      editingLimit ? "Template batas absen berhasil diperbarui." : "Template batas absen berhasil ditambahkan."
+    );
+
+    if (ok) {
+      setIsDialogOpen(false);
+      setEditingLimit(null);
+      setFormData({ max_days: "", description: "", warning_type: "", is_active: true });
+    }
+  };
+
+  const handleEdit = (limit: AbsenceLimitTemplateItem) => {
+    setEditingLimit(limit);
+    setFormData({
+      max_days: String(limit.max_days),
+      description: limit.description ?? "",
+      warning_type: limit.warning_type,
+      is_active: limit.is_active,
+    });
+    setIsDialogOpen(true);
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm("Yakin ingin menghapus batas absen ini dari template admin?")) return;
+    const next = limits.filter((item) => item.id !== id);
+    await saveTemplate(next, "Template batas absen berhasil dihapus.");
+  };
+
+  const handleToggleStatus = async (target: AbsenceLimitTemplateItem, nextValue: boolean) => {
+    const next = limits.map((item) => (item.id === target.id ? { ...item, is_active: nextValue } : item));
+    await saveTemplate(next, `Template aturan ${nextValue ? "diaktifkan" : "dinonaktifkan"}.`);
+  };
+
+  const getWarningBadgeColor = (type: string) => {
+    switch (type) {
+      case "lisan":
+        return "bg-yellow-500/10 text-yellow-500";
+      case "tertulis_ringan":
+        return "bg-orange-500/10 text-orange-500";
+      case "tertulis_sedang":
+        return "bg-red-500/10 text-red-500";
+      case "tertulis_berat":
+        return "bg-red-700/10 text-red-700";
+      case "pemberhentian":
+        return "bg-destructive/10 text-destructive";
+      default:
+        return "";
+    }
+  };
+
+  const totalPages = Math.max(1, Math.ceil(limits.length / ITEMS_PER_PAGE));
+  const paginatedLimits = limits.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
 
   return (
     <SuperAdminLayout>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Batas Absen</h1>
+            <h1 className="text-3xl font-bold tracking-tight">Template Batas Absen</h1>
             <p className="text-muted-foreground">
-              Kelola batas ketidakhadiran dan sanksi untuk pegawai
+              Template ini otomatis dipakai untuk tenant/member baru pada menu /org/schedule/absence-limits.
             </p>
           </div>
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-            <DialogTrigger asChild>
-              <Button onClick={() => { 
-                setEditingLimit(null); 
-                setFormData({ max_days: "", description: "", warning_type: "" }); 
-              }}>
-                <Plus className="mr-2 h-4 w-4" />
-                Tambah Batas
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>{editingLimit ? "Edit Batas Absen" : "Tambah Batas Absen"}</DialogTitle>
-                <DialogDescription>
-                  {editingLimit ? "Perbarui data batas absen" : "Masukkan data batas absen baru"}
-                </DialogDescription>
-              </DialogHeader>
-              <form onSubmit={handleSubmit}>
-                <div className="space-y-4 py-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="max_days">Maksimal Hari Tidak Hadir</Label>
-                    <Input
-                      id="max_days"
-                      type="number"
-                      min="1"
-                      value={formData.max_days}
-                      onChange={(e) => setFormData({ ...formData, max_days: e.target.value })}
-                      placeholder="Contoh: 5"
-                      required
-                    />
+          <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => void fetchTemplate()} disabled={isLoading || isSaving}>
+              {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
+              Refresh
+            </Button>
+            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  onClick={() => {
+                    setEditingLimit(null);
+                    setFormData({ max_days: "", description: "", warning_type: "", is_active: true });
+                  }}
+                  disabled={isLoading || isSaving}
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  Tambah Batas
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>{editingLimit ? "Edit Template Batas Absen" : "Tambah Template Batas Absen"}</DialogTitle>
+                  <DialogDescription>
+                    {editingLimit
+                      ? "Perbarui aturan template yang akan dipakai tenant baru."
+                      : "Tambahkan aturan template baru untuk tenant/member baru."}
+                  </DialogDescription>
+                </DialogHeader>
+                <form onSubmit={handleSubmit}>
+                  <div className="space-y-4 py-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="max_days">Maksimal Hari Tidak Hadir</Label>
+                      <Input
+                        id="max_days"
+                        type="number"
+                        min="1"
+                        value={formData.max_days}
+                        onChange={(e) => setFormData({ ...formData, max_days: e.target.value })}
+                        placeholder="Contoh: 5"
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="warning_type">Jenis Teguran</Label>
+                      <Input
+                        id="warning_type"
+                        value={formData.warning_type}
+                        onChange={(e) => setFormData({ ...formData, warning_type: e.target.value })}
+                        placeholder="Contoh: tertulis_ringan"
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="description">Keterangan</Label>
+                      <Textarea
+                        id="description"
+                        value={formData.description}
+                        onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                        placeholder="Deskripsi teguran atau sanksi"
+                        rows={3}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between rounded-md border p-3">
+                      <div>
+                        <Label>Aturan Aktif</Label>
+                        <p className="text-xs text-muted-foreground">Aturan aktif langsung bisa dipakai tenant baru.</p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant={formData.is_active ? "default" : "secondary"}
+                        onClick={() => setFormData((prev) => ({ ...prev, is_active: !prev.is_active }))}
+                      >
+                        {formData.is_active ? "Aktif" : "Nonaktif"}
+                      </Button>
+                    </div>
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="warning_type">Jenis Teguran</Label>
-                    <Input
-                      id="warning_type"
-                      value={formData.warning_type}
-                      onChange={(e) => setFormData({ ...formData, warning_type: e.target.value })}
-                      placeholder="Contoh: tertulis_ringan"
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="description">Keterangan</Label>
-                    <Textarea
-                      id="description"
-                      value={formData.description}
-                      onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                      placeholder="Deskripsi teguran atau sanksi"
-                      required
-                    />
-                  </div>
-                </div>
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                    Batal
-                  </Button>
-                  <Button type="submit">Simpan</Button>
-                </DialogFooter>
-              </form>
-            </DialogContent>
-          </Dialog>
+                  <DialogFooter>
+                    <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                      Batal
+                    </Button>
+                    <Button type="submit" disabled={isSaving}>
+                      {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      Simpan
+                    </Button>
+                  </DialogFooter>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </div>
         </div>
 
         {loadError && (
@@ -201,10 +314,10 @@ export default function AbsenceLimitsManagement() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5" />
-              Daftar Batas Absen
+              Daftar Template Batas Absen
             </CardTitle>
             <CardDescription>
-              Aturan sanksi berdasarkan jumlah hari ketidakhadiran
+              Aturan ini menjadi default untuk organisasi baru. Organisasi juga bisa menerapkan ulang template saat data masih kosong.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -217,7 +330,7 @@ export default function AbsenceLimitsManagement() {
                     <TableHead>Jenis Teguran</TableHead>
                     <TableHead>Keterangan</TableHead>
                     <TableHead className="w-24">Status</TableHead>
-                    <TableHead className="w-32 text-right">Aksi</TableHead>
+                    <TableHead className="w-40 text-right">Aksi</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -227,10 +340,10 @@ export default function AbsenceLimitsManagement() {
                         Memuat data...
                       </TableCell>
                     </TableRow>
-                  ) : limits.length === 0 ? (
+                  ) : paginatedLimits.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={6} className="text-center py-8">
-                        Tidak ada data batas absen
+                        Tidak ada data template batas absen
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -243,26 +356,21 @@ export default function AbsenceLimitsManagement() {
                             {limit.warning_type.replace("_", " ")}
                           </Badge>
                         </TableCell>
-                        <TableCell>{limit.description}</TableCell>
+                        <TableCell>{limit.description || "-"}</TableCell>
                         <TableCell>
                           <Badge variant={limit.is_active ? "default" : "secondary"}>
-                            {limit.is_active ? "Aktif" : "Non-Aktif"}
+                            {limit.is_active ? "Aktif" : "Nonaktif"}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-2">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleEdit(limit)}
-                            >
+                            <Button variant="outline" size="sm" onClick={() => void handleToggleStatus(limit, !limit.is_active)} disabled={isSaving}>
+                              {limit.is_active ? "Disable" : "Enable"}
+                            </Button>
+                            <Button variant="ghost" size="icon" onClick={() => handleEdit(limit)} disabled={isSaving}>
                               <Pencil className="h-4 w-4" />
                             </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => handleDelete(limit.id)}
-                            >
+                            <Button variant="ghost" size="icon" onClick={() => void handleDelete(limit.id)} disabled={isSaving}>
                               <Trash2 className="h-4 w-4" />
                             </Button>
                           </div>
@@ -273,6 +381,7 @@ export default function AbsenceLimitsManagement() {
                 </TableBody>
               </Table>
             </div>
+
             {!isLoading && limits.length > 0 && (
               <div className="mt-4 flex items-center justify-between">
                 <Button

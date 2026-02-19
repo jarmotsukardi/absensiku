@@ -10,6 +10,7 @@
  */
 
 import Dexie, { type EntityTable } from 'dexie';
+import { debugLog } from "@/lib/debugLog";
 
 // ==================== TYPES ====================
 
@@ -45,6 +46,12 @@ export interface TodayCache {
   cachedAt: string;
   date: string;
 }
+
+type JsonObject = Record<string, unknown>;
+
+const isObject = (value: unknown): value is JsonObject => {
+  return typeof value === "object" && value !== null;
+};
 
 // ==================== ENCRYPTION (Simple XOR + Base64) ====================
 
@@ -257,10 +264,11 @@ export function validateEntryIntegrity(entry: AttendanceEntry): boolean {
 /**
  * Decrypt entry payload
  */
-export function decryptEntryPayload(entry: AttendanceEntry): Record<string, any> | null {
+export function decryptEntryPayload(entry: AttendanceEntry): JsonObject | null {
   try {
     const decrypted = xorDecrypt(entry.encryptedPayload, ENCRYPT_KEY);
-    return JSON.parse(decrypted);
+    const parsed = JSON.parse(decrypted) as unknown;
+    return isObject(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -271,7 +279,7 @@ export function decryptEntryPayload(entry: AttendanceEntry): Record<string, any>
 /**
  * Cache today's attendance record ke IndexedDB
  */
-export async function cacheTodayRecord(employeeId: string, record: any | null): Promise<void> {
+export async function cacheTodayRecord(employeeId: string, record: unknown | null): Promise<void> {
   const today = new Date().toISOString().split('T')[0];
   
   // Delete existing cache for today
@@ -294,7 +302,7 @@ export async function cacheTodayRecord(employeeId: string, record: any | null): 
 /**
  * Load cached today attendance (untuk instant UI saat app load / re-hydration)
  */
-export async function getCachedTodayRecord(employeeId: string): Promise<any | null> {
+export async function getCachedTodayRecord(employeeId: string): Promise<JsonObject | null> {
   const today = new Date().toISOString().split('T')[0];
   
   const cached = await db.todayCache
@@ -306,7 +314,8 @@ export async function getCachedTodayRecord(employeeId: string): Promise<any | nu
 
   try {
     const decrypted = xorDecrypt(cached.recordJson, ENCRYPT_KEY);
-    return JSON.parse(decrypted);
+    const parsed = JSON.parse(decrypted) as unknown;
+    return isObject(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -321,7 +330,7 @@ export async function getCachedTodayRecord(employeeId: string): Promise<any | nu
 export async function rehydratePendingEntries(employeeId: string): Promise<{
   pendingCount: number;
   entries: AttendanceEntry[];
-  todayCache: any | null;
+  todayCache: JsonObject | null;
 }> {
   await recoverStuckSyncEntries(employeeId);
   const pending = await getPendingEntries(employeeId);
@@ -388,11 +397,27 @@ export async function migrateFromLocalStorage(): Promise<number> {
     const raw = localStorage.getItem(BUFFER_KEY);
     if (!raw) return 0;
 
-    const items = JSON.parse(raw) as any[];
+    const parsedItems = JSON.parse(raw) as unknown;
+    const items = Array.isArray(parsedItems) ? parsedItems : [];
     let migrated = 0;
 
     for (const item of items) {
+      if (!isObject(item)) continue;
+
       if (item.syncStatus === 'synced') continue; // skip already synced
+      if (
+        typeof item.id !== "string" ||
+        typeof item.employeeId !== "string" ||
+        typeof item.officeId !== "string" ||
+        typeof item.date !== "string" ||
+        (item.type !== "check_in" && item.type !== "check_out") ||
+        typeof item.latitude !== "number" ||
+        typeof item.longitude !== "number" ||
+        typeof item.distanceMeters !== "number" ||
+        typeof item.timestamp !== "string"
+      ) {
+        continue;
+      }
 
       // Check if already exists in IndexedDB
       const existing = await db.attendanceEntries
@@ -418,7 +443,7 @@ export async function migrateFromLocalStorage(): Promise<number> {
     // Clear old localStorage buffer after migration
     if (migrated > 0) {
       localStorage.removeItem(BUFFER_KEY);
-      console.log(`[AttendanceDB] Migrated ${migrated} entries from localStorage to IndexedDB`);
+      debugLog(`[AttendanceDB] Migrated ${migrated} entries from localStorage to IndexedDB`);
     }
 
     return migrated;

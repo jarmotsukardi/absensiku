@@ -30,18 +30,18 @@ const DEFAULT_TTL: CacheConfig = {
 };
 
 // In-memory cache storage
-const cache = new Map<string, CacheEntry<any>>();
+const cache = new Map<string, CacheEntry<unknown>>();
 
 export function useConfigCache() {
   const [isLoading, setIsLoading] = useState(false);
 
-  const getCacheKey = (type: string, tenantId: string) => `${type}:${tenantId}`;
+  const getCacheKey = useCallback((type: string, tenantId: string) => `${type}:${tenantId}`, []);
 
-  const isExpired = (entry: CacheEntry<any>) => {
+  const isExpired = useCallback((entry: CacheEntry<unknown>) => {
     return Date.now() - entry.timestamp > entry.ttl;
-  };
+  }, []);
 
-  const getFromCache = <T>(key: string): T | null => {
+  const getFromCache = useCallback(<T,>(key: string): T | null => {
     const entry = cache.get(key);
     if (!entry) return null;
     if (isExpired(entry)) {
@@ -49,13 +49,13 @@ export function useConfigCache() {
       return null;
     }
     return entry.data as T;
-  };
+  }, [isExpired]);
 
-  const setToCache = <T>(key: string, data: T, ttl: number) => {
+  const setToCache = useCallback(<T,>(key: string, data: T, ttl: number) => {
     cache.set(key, { data, timestamp: Date.now(), ttl });
-  };
+  }, []);
 
-  const invalidateCache = (pattern?: string) => {
+  const invalidateCache = useCallback((pattern?: string) => {
     if (!pattern) {
       cache.clear();
       return;
@@ -65,7 +65,7 @@ export function useConfigCache() {
         cache.delete(key);
       }
     }
-  };
+  }, []);
 
   // Cached data fetchers
   const getTenant = useCallback(async (tenantId: string) => {
@@ -82,7 +82,7 @@ export function useConfigCache() {
     if (error) throw error;
     setToCache(key, data, DEFAULT_TTL.tenant);
     return data;
-  }, []);
+  }, [getCacheKey, getFromCache, setToCache]);
 
   const getOpdList = useCallback(async (tenantId: string) => {
     const key = getCacheKey("opd", tenantId);
@@ -99,7 +99,7 @@ export function useConfigCache() {
     if (error) throw error;
     setToCache(key, data || [], DEFAULT_TTL.opd);
     return data || [];
-  }, []);
+  }, [getCacheKey, getFromCache, setToCache]);
 
   const getWorkUnits = useCallback(async (tenantId: string) => {
     const key = getCacheKey("workUnits", tenantId);
@@ -116,7 +116,7 @@ export function useConfigCache() {
     if (error) throw error;
     setToCache(key, data || [], DEFAULT_TTL.workUnits);
     return data || [];
-  }, []);
+  }, [getCacheKey, getFromCache, setToCache]);
 
   const getOffices = useCallback(async (tenantId: string) => {
     const key = getCacheKey("offices", tenantId);
@@ -133,7 +133,7 @@ export function useConfigCache() {
     if (error) throw error;
     setToCache(key, data || [], DEFAULT_TTL.offices);
     return data || [];
-  }, []);
+  }, [getCacheKey, getFromCache, setToCache]);
 
   const getWorkHours = useCallback(async (tenantId: string) => {
     const key = getCacheKey("workHours", tenantId);
@@ -150,7 +150,7 @@ export function useConfigCache() {
     if (error) throw error;
     setToCache(key, data || [], DEFAULT_TTL.workHours);
     return data || [];
-  }, []);
+  }, [getCacheKey, getFromCache, setToCache]);
 
   const getHolidays = useCallback(async (tenantId: string, year?: number) => {
     const currentYear = year || new Date().getFullYear();
@@ -167,7 +167,7 @@ export function useConfigCache() {
     if (error) throw error;
     setToCache(key, data || [], DEFAULT_TTL.holidays);
     return data || [];
-  }, []);
+  }, [getCacheKey, getFromCache, setToCache]);
 
   const getAbsenceLimits = useCallback(async (tenantId: string) => {
     const key = getCacheKey("absenceLimits", tenantId);
@@ -183,7 +183,7 @@ export function useConfigCache() {
     if (error) throw error;
     setToCache(key, data || [], DEFAULT_TTL.absenceLimits);
     return data || [];
-  }, []);
+  }, [getCacheKey, getFromCache, setToCache]);
 
   const getUserTenantId = useCallback(async (userId: string) => {
     const key = getCacheKey("userMapping", userId);
@@ -201,7 +201,7 @@ export function useConfigCache() {
       setToCache(key, data.tenant_id, DEFAULT_TTL.userMapping);
     }
     return data?.tenant_id || null;
-  }, []);
+  }, [getCacheKey, getFromCache, setToCache]);
 
   // Prefetch all config untuk pegawai (digunakan saat login)
   const prefetchEmployeeConfig = useCallback(async (tenantId: string) => {

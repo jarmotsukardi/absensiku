@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { 
   Building2, 
   School, 
@@ -18,6 +19,7 @@ import {
   Users,
   Calendar,
   MapPin,
+  CircleHelp,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
@@ -69,7 +71,7 @@ const DAYS = [
 
 const defaultSettings: OrgTypeSettings = {
   employee_fields: { required: [], optional: [] },
-  attendance_rules: { tolerance_minutes: 15, require_photo: false, require_location: true },
+  attendance_rules: { tolerance_minutes: 0, require_photo: false, require_location: true },
   leave_types: { enabled: ["cuti_tahunan", "sakit", "izin"] },
   work_schedule: { default_start: "08:00", default_end: "17:00", work_days: [1, 2, 3, 4, 5] },
 };
@@ -295,10 +297,25 @@ export default function OrganizationTypeSettings() {
                 <CardContent className="space-y-4">
                   <div className="grid gap-4 sm:grid-cols-3">
                     <div className="space-y-2">
-                      <Label>Toleransi Keterlambatan (menit)</Label>
+                      <div className="flex items-center gap-2">
+                        <Label>Toleransi Keterlambatan (menit)</Label>
+                        <TooltipProvider delayDuration={120}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <button type="button" className="inline-flex text-muted-foreground hover:text-foreground">
+                                <CircleHelp className="h-4 w-4" />
+                              </button>
+                            </TooltipTrigger>
+                            <TooltipContent side="top" className="max-w-xs">
+                              Batas menit toleransi setelah jam masuk sebelum pegawai dinilai terlambat.
+                              Nilai default 0 berarti tanpa toleransi tambahan.
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                      </div>
                       <Input
                         type="number"
-                        value={currentSettings.attendance_rules?.tolerance_minutes || 15}
+                        value={currentSettings.attendance_rules?.tolerance_minutes ?? 0}
                         onChange={(e) => updateSetting(activeTab, "attendance_rules", {
                           ...currentSettings.attendance_rules,
                           tolerance_minutes: parseInt(e.target.value) || 0,

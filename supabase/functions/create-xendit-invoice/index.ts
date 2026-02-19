@@ -21,6 +21,24 @@ interface BillingSettingRow {
   setting_value: { value?: number; amount?: number } | null;
 }
 
+interface SubscriptionPriceRow {
+  price_per_employee: number | null;
+}
+
+const parseNumericSetting = (raw: unknown, fallback: number): number => {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    const value = raw as Record<string, unknown>;
+    if ("value" in value) return parseNumericSetting(value.value, fallback);
+    if ("amount" in value) return parseNumericSetting(value.amount, fallback);
+  }
+  return fallback;
+};
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -40,13 +58,6 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const xenditSecretKey = Deno.env.get("XENDIT_SECRET_KEY");
-
-    if (!xenditSecretKey) {
-      return new Response(
-        JSON.stringify(withTrace({ error: "Xendit API key not configured" }, traceId)),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
@@ -91,7 +102,7 @@ serve(async (req) => {
     // Get tenant info
     const { data: tenant, error: tenantError } = await supabase
       .from("tenants")
-      .select("id, name, code, email")
+      .select("id, name, code, email, billing_mode")
       .eq("id", tenant_id)
       .single();
 
@@ -116,6 +127,78 @@ serve(async (req) => {
     const pricePerEmployee = getSettingValue("price_per_employee", 15000);
     const vatPercentage = getSettingValue("vat_percentage", 11);
 
+    const [
+      subPriceResult,
+      b2bThresholdResult,
+      activeEmployeeCountResult,
+    ] = await Promise.all([
+      supabase
+        .from("subscriptions")
+        .select("price_per_employee")
+        .eq("tenant_id", tenant_id)
+        .order("updated_at", { ascending: false })
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("system_settings")
+        .select("value")
+        .eq("key", "b2b_negotiation_threshold")
+        .maybeSingle(),
+      supabase
+        .from("employees")
+        .select("id", { count: "exact", head: true })
+        .eq("tenant_id", tenant_id)
+        .eq("is_active", true),
+    ]);
+
+    const { data: subPriceRow, error: subPriceError } = subPriceResult;
+    if (subPriceError) {
+      logTraceError(traceId, "Failed to load subscription negotiated price", subPriceError);
+    }
+    const negotiatedPrice = (subPriceRow as SubscriptionPriceRow | null)?.price_per_employee;
+    const hasNegotiatedPrice =
+      typeof negotiatedPrice === "number" && Number.isFinite(negotiatedPrice) && negotiatedPrice > 0;
+    const isCentralizedBilling = tenant.billing_mode !== "individual";
+
+    const thresholdRaw = b2bThresholdResult.data?.value;
+    const b2bThreshold = Math.max(1, Math.floor(parseNumericSetting(thresholdRaw, 2000)));
+    const activeEmployeeCount = Math.max(0, activeEmployeeCountResult.count ?? 0);
+    const effectiveHeadcount = Math.max(activeEmployeeCount, employee_count);
+    const isB2BHeadcount = effectiveHeadcount >= b2bThreshold;
+    const isB2BManualOnly = isCentralizedBilling && (hasNegotiatedPrice || isB2BHeadcount);
+
+    if (isB2BManualOnly) {
+      return new Response(
+        JSON.stringify(
+          withTrace(
+            {
+              error: "Skema B2B wajib pembayaran manual transfer",
+              reason: hasNegotiatedPrice ? "NEGOTIATED_PRICE" : "HEADCOUNT_THRESHOLD",
+              billing_mode: tenant.billing_mode ?? "centralized",
+              b2b_threshold: b2bThreshold,
+              active_employee_count: activeEmployeeCount,
+              requested_employee_count: employee_count,
+            },
+            traceId,
+          ),
+        ),
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    if (!xenditSecretKey) {
+      return new Response(
+        JSON.stringify(withTrace({ error: "Xendit API key not configured" }, traceId)),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const effectivePricePerEmployee =
+      hasNegotiatedPrice
+        ? negotiatedPrice
+        : pricePerEmployee;
+
     // Get package if provided
     let packageData = null;
     let discountPercentage = 0;
@@ -134,7 +217,7 @@ serve(async (req) => {
     }
 
     // Calculate amounts
-    const subtotal = employee_count * pricePerEmployee * duration_months;
+    const subtotal = employee_count * effectivePricePerEmployee * duration_months;
     const discountAmount = subtotal * (discountPercentage / 100);
     const amountAfterDiscount = subtotal - discountAmount;
     const vatAmount = amountAfterDiscount * (vatPercentage / 100);
@@ -178,7 +261,7 @@ serve(async (req) => {
           {
             name: `Langganan ${packageData?.name || "Custom"} (${duration_months} bulan)`,
             quantity: employee_count,
-            price: pricePerEmployee * duration_months * (1 - discountPercentage / 100),
+            price: effectivePricePerEmployee * duration_months * (1 - discountPercentage / 100),
           },
         ],
         fees: [
@@ -213,7 +296,7 @@ serve(async (req) => {
         package_duration_months: duration_months,
         package_discount_percentage: discountPercentage,
         employee_count,
-        price_per_employee: pricePerEmployee,
+        price_per_employee: effectivePricePerEmployee,
         subtotal,
         discount_amount: discountAmount,
         vat_percentage: vatPercentage,

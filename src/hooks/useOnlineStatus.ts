@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { debugLog } from "@/lib/debugLog";
 
 export interface OnlineStatusInfo {
   isOnline: boolean;
@@ -39,7 +40,7 @@ export function useOnlineStatus(onReconnect?: () => void) {
     }));
 
     if (justReconnected) {
-      console.log('[OnlineStatus] Reconnected - triggering sync');
+      debugLog('[OnlineStatus] Reconnected - triggering sync');
       onReconnectRef.current?.();
       
       // Reset wasOffline after 5s
@@ -57,7 +58,7 @@ export function useOnlineStatus(onReconnect?: () => void) {
       lastOnlineAt: prev.lastOnlineAt,
       lastOfflineAt: new Date().toISOString(),
     }));
-    console.log('[OnlineStatus] Went offline');
+    debugLog('[OnlineStatus] Went offline');
   }, []);
 
   useEffect(() => {

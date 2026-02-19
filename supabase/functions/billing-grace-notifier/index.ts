@@ -29,6 +29,12 @@ interface StreakRow {
   reached_target_at: string | null;
 }
 
+interface CleanupScheduleRow {
+  tenant_id: string;
+  status: string;
+  purge_at: string;
+}
+
 interface InvoiceRow {
   id: string;
   tenant_id: string;
@@ -160,6 +166,8 @@ const getMessagePayload = (params: {
   siteUrl: string;
   reason: NotificationReason;
   daysRemaining: number | null;
+  purgeDateText?: string | null;
+  purgeDaysRemaining?: number | null;
 }): { subject: string; emailText: string; emailHtml: string; whatsappText: string } => {
   const {
     tenantName,
@@ -170,6 +178,8 @@ const getMessagePayload = (params: {
     siteUrl,
     reason,
     daysRemaining,
+    purgeDateText,
+    purgeDaysRemaining,
   } = params;
 
   const reasonLabel = reason === "GRACE_PERIOD_ENTERED"
@@ -180,7 +190,7 @@ const getMessagePayload = (params: {
     ? "Hari Terakhir Grace Period"
     : "Grace Period Berakhir";
 
-  const reasonLine = reason === "GRACE_PERIOD_ENTERED"
+  const reasonLineBase = reason === "GRACE_PERIOD_ENTERED"
     ? "Tenant Anda sudah memasuki masa grace period kebijakan streak."
     : reason === "GRACE_PERIOD_REMINDER"
     ? `Pengingat pembayaran: masa grace period masih berjalan${
@@ -189,6 +199,18 @@ const getMessagePayload = (params: {
     : reason === "GRACE_PERIOD_LAST_DAY"
     ? "Hari ini adalah batas akhir grace period. Segera selesaikan pembayaran agar layanan tidak dinonaktifkan."
     : "Masa grace period telah berakhir. Layanan dapat dinonaktifkan jika pembayaran belum diterima.";
+
+  const purgeLine = purgeDateText
+    ? `Tanggal purge data: ${purgeDateText}${
+      typeof purgeDaysRemaining === "number" && purgeDaysRemaining >= 0
+        ? ` (sisa ${purgeDaysRemaining} hari).`
+        : "."
+    }`
+    : "";
+
+  const reasonLine = reason !== "GRACE_PERIOD_ENTERED" && purgeLine
+    ? `${reasonLineBase} ${purgeLine}`
+    : reasonLineBase;
 
   const subject = `[AbsensiKu] ${reasonLabel} - ${invoiceNumber}`;
   const emailText = [
@@ -501,6 +523,22 @@ serve(async (req) => {
       logTraceError(traceId, "Failed to sync streak subscription status", syncError);
     }
 
+    // Best-effort lifecycle automation: schedule/cancel cleanup, send purge reminders,
+    // and execute cleanup when purge date is reached.
+    let cleanupLifecycleResult: JsonObject | null = null;
+    const lifecycleArgs = tenantFilter
+      ? { p_limit: limit, p_dry_run: dryRun, p_tenant_id: tenantFilter }
+      : { p_limit: limit, p_dry_run: dryRun };
+    const { data: lifecycleData, error: lifecycleError } = await supabase.rpc(
+      "run_unpaid_cleanup_lifecycle",
+      lifecycleArgs,
+    );
+    if (lifecycleError) {
+      logTraceError(traceId, "Failed to run unpaid cleanup lifecycle", lifecycleError);
+    } else if (lifecycleData && typeof lifecycleData === "object") {
+      cleanupLifecycleResult = lifecycleData as JsonObject;
+    }
+
     let streakQuery = supabase
       .from("stability_streaks")
       .select("tenant_id, status, grace_period_end, reached_target, reached_target_at")
@@ -525,7 +563,13 @@ serve(async (req) => {
     const streaks = (streakRows ?? []) as StreakRow[];
     if (streaks.length === 0) {
       return new Response(
-        JSON.stringify({ success: true, trace_id: traceId, processed: 0, message: "Tidak ada tenant grace period." }),
+        JSON.stringify({
+          success: true,
+          trace_id: traceId,
+          processed: 0,
+          message: "Tidak ada tenant grace period.",
+          cleanup_lifecycle: cleanupLifecycleResult,
+        }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
@@ -605,6 +649,21 @@ serve(async (req) => {
     const emailGateway = getGatewaySetting(gatewayRows, "email_gateway");
     const waGateway = getGatewaySetting(gatewayRows, "whatsapp_gateway");
 
+    // Optional purge schedule context (migration may not exist yet on some environments).
+    const cleanupScheduleMap = new Map<string, CleanupScheduleRow>();
+    const { data: cleanupRows, error: cleanupRowsError } = await supabase
+      .from("tenant_cleanup_lifecycle")
+      .select("tenant_id, status, purge_at")
+      .in("tenant_id", tenantIds)
+      .eq("status", "scheduled");
+    if (cleanupRowsError) {
+      logTraceError(traceId, "Failed to load tenant cleanup lifecycle rows", cleanupRowsError);
+    } else {
+      for (const row of (cleanupRows ?? []) as CleanupScheduleRow[]) {
+        cleanupScheduleMap.set(row.tenant_id, row);
+      }
+    }
+
     const tenantMap = new Map(tenants.map((tenant) => [tenant.id, tenant]));
     const streakMap = new Map(streaks.map((streak) => [streak.tenant_id, streak]));
     const recipientMap = new Map<string, EmployeeRecipientRow[]>();
@@ -670,6 +729,7 @@ serve(async (req) => {
           trace_id: traceId,
           processed: 0,
           message: "Tenant grace period belum memiliki invoice pending.",
+          cleanup_lifecycle: cleanupLifecycleResult,
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
@@ -736,6 +796,11 @@ serve(async (req) => {
       const amountText = formatCurrencyIdr(invoice.gross_amount);
       const dueDateText = formatDateId(graceDate);
       const invoiceUrl = (invoice.invoice_url || `${siteUrl}/org/subscription`).trim();
+      const cleanupSchedule = cleanupScheduleMap.get(tenant.id);
+      const purgeDateText = cleanupSchedule?.purge_at ? formatDateId(cleanupSchedule.purge_at) : null;
+      const purgeDaysRemaining = cleanupSchedule?.purge_at
+        ? getGraceDaysRemaining(cleanupSchedule.purge_at)
+        : null;
 
       const tenantResult: Record<string, unknown> = {
         tenant_id: tenant.id,
@@ -743,6 +808,8 @@ serve(async (req) => {
         invoice_id: invoice.id,
         invoice_number: invoiceNumber,
         grace_days_remaining: graceDaysRemaining,
+        cleanup_purge_at: cleanupSchedule?.purge_at ?? null,
+        cleanup_days_remaining: purgeDaysRemaining,
         dry_run: dryRun,
         channels: {},
       };
@@ -763,6 +830,8 @@ serve(async (req) => {
         siteUrl,
         reason: emailReason,
         daysRemaining: graceDaysRemaining,
+        purgeDateText,
+        purgeDaysRemaining,
       });
       const emailReasonKey = buildReasonKey(invoice.id, "EMAIL", emailReason);
       const emailChannelKey = `${invoice.id}:EMAIL`;
@@ -853,6 +922,8 @@ serve(async (req) => {
         siteUrl,
         reason: waReason,
         daysRemaining: graceDaysRemaining,
+        purgeDateText,
+        purgeDaysRemaining,
       });
       const waReasonKey = buildReasonKey(invoice.id, "WHATSAPP", waReason);
       const waChannelKey = `${invoice.id}:WHATSAPP`;
@@ -1014,6 +1085,7 @@ serve(async (req) => {
         email_sent: emailSent,
         whatsapp_sent: waSent,
         failed,
+        cleanup_lifecycle: cleanupLifecycleResult,
         details,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },

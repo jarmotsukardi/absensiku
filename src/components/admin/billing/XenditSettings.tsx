@@ -12,6 +12,24 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import type { Json } from "@/integrations/supabase/types";
 
+const parseNumericSettingValue = (raw: unknown, fallback: number): number => {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    const objectValue = raw as Record<string, unknown>;
+    if ("value" in objectValue) {
+      return parseNumericSettingValue(objectValue.value, fallback);
+    }
+    if ("amount" in objectValue) {
+      return parseNumericSettingValue(objectValue.amount, fallback);
+    }
+  }
+  return fallback;
+};
+
 export function XenditSettings() {
   const { settings, isLoading, getSetting, updateSetting } = useBillingSettings();
   const [isSaving, setIsSaving] = useState(false);
@@ -65,15 +83,7 @@ export function XenditSettings() {
         .select("value")
         .eq("key", "b2b_negotiation_threshold")
         .maybeSingle();
-      if (data?.value && typeof data.value === "object" && !Array.isArray(data.value)) {
-        const value = data.value as Record<string, unknown>;
-        const parsedValue = value.value;
-        setB2bThreshold(
-          typeof parsedValue === "number" || typeof parsedValue === "string"
-            ? String(parsedValue)
-            : "2000"
-        );
-      }
+      setB2bThreshold(String(Math.max(1, Math.floor(parseNumericSettingValue(data?.value, 2000)))));
     };
     fetchB2b();
   }, []);
@@ -111,7 +121,7 @@ export function XenditSettings() {
         .eq("key", "b2b_negotiation_threshold")
         .maybeSingle();
 
-      const valuePayload: Json = { value: parseInt(b2bThreshold, 10) || 2000 };
+      const valuePayload: Json = Math.max(1, parseInt(b2bThreshold, 10) || 2000);
 
       if (existing) {
         await supabase

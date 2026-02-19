@@ -61,6 +61,16 @@ const getErrorMessage = (error: unknown): string => {
   return "Terjadi kesalahan";
 };
 
+const withContextError = (
+  label: string,
+  error: unknown,
+  context: string,
+  metadata?: Record<string, unknown>
+): string => {
+  const ref = reportError(error, context, metadata);
+  return appendErrorReference(`${label}: ${getErrorMessage(error)}`, ref);
+};
+
 export function useOvertimeSettings(tenantId?: string) {
    const [settings, setSettings] = useState<OvertimeSettings | null>(null);
    const [isLoading, setIsLoading] = useState(true);
@@ -80,8 +90,9 @@ export function useOvertimeSettings(tenantId?: string) {
  
        if (error) throw error;
        setSettings(data);
-     } catch (error) {
-       console.error("Error fetching overtime settings:", error);
+     } catch (error: unknown) {
+       const ref = reportError(error, "overtime_settings.fetch", { tenant_id: tenantId });
+       console.error(`[OvertimeSettings ${ref}] Error fetching overtime settings:`, error);
      } finally {
        setIsLoading(false);
      }
@@ -110,7 +121,11 @@ export function useOvertimeSettings(tenantId?: string) {
        await fetchSettings();
        return true;
      } catch (error: unknown) {
-       toast.error("Gagal menyimpan: " + getErrorMessage(error));
+       toast.error(
+         withContextError("Gagal menyimpan", error, "overtime_settings.save", {
+           tenant_id: tenantId,
+         })
+       );
        return false;
      }
    };
@@ -208,15 +223,17 @@ export function useOvertimeRequests(filters?: {
      tenantId: string,
      reason: string,
      dates: Omit<OvertimeRequestDate, "id" | "overtime_request_id" | "created_at">[]
-   ): Promise<boolean> => {
-     try {
-       // Generate request number
-       const { data: requestNumber } = await supabase.rpc(
-         "generate_overtime_request_number",
-         { p_tenant_id: tenantId }
-       );
+     ): Promise<boolean> => {
+       try {
+         // Generate request number
+       const { data: requestNumber, error: requestNumberError } = await supabase.rpc(
+          "generate_overtime_request_number",
+          { p_tenant_id: tenantId }
+        );
+       if (requestNumberError) throw requestNumberError;
+       if (!requestNumber) throw new Error("Nomor pengajuan lembur tidak tersedia");
  
-       const totalHours = dates.reduce((sum, d) => sum + d.hours, 0);
+         const totalHours = dates.reduce((sum, d) => sum + d.hours, 0);
  
        // Create the request
        const { data: request, error: requestError } = await supabase
@@ -257,7 +274,13 @@ export function useOvertimeRequests(filters?: {
        await fetchRequests();
        return true;
      } catch (error: unknown) {
-       toast.error("Gagal mengajukan lembur: " + getErrorMessage(error));
+       toast.error(
+         withContextError("Gagal mengajukan lembur", error, "overtime_requests.create", {
+           employee_id: employeeId,
+           tenant_id: tenantId,
+           date_count: dates.length,
+         })
+       );
        return false;
      }
    };
@@ -291,7 +314,13 @@ export function useOvertimeRequests(filters?: {
        await fetchRequests();
        return true;
      } catch (error: unknown) {
-       toast.error("Gagal memproses: " + getErrorMessage(error));
+       toast.error(
+         withContextError("Gagal memproses", error, "overtime_requests.approve", {
+           request_id: requestId,
+           approver_id: approverId,
+           approved,
+         })
+       );
        return false;
      }
    };
@@ -312,7 +341,11 @@ export function useOvertimeRequests(filters?: {
        await fetchRequests();
        return true;
      } catch (error: unknown) {
-       toast.error("Gagal membatalkan: " + getErrorMessage(error));
+       toast.error(
+         withContextError("Gagal membatalkan", error, "overtime_requests.cancel", {
+           request_id: requestId,
+         })
+       );
        return false;
      }
    };

@@ -67,6 +67,11 @@ interface RpcResult {
   error?: string;
 }
 
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof Error) return error.message;
+  return String(error);
+};
+
 async function syncCheckInToServer(entry: AttendanceEntry, retryCount: number = 0): Promise<RpcResult> {
   const timeout = getAdaptiveTimeout(retryCount);
   const clientContext = buildAttendanceClientContext();
@@ -462,7 +467,7 @@ export function useAttendance(employeeId: string | null, officeId: string | null
       fetchAttendance();
       return { success: true, message: result.message, distance };
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       const errorRef = reportError(error, "attendance.check_in.sync", {
         employeeId,
         officeId,
@@ -473,11 +478,11 @@ export function useAttendance(employeeId: string | null, officeId: string | null
       await updateEntryStatus(entry.bufferId, {
         syncStatus: 'failed', syncAttempts: 1,
         lastSyncAttempt: new Date().toISOString(),
-        syncError: error?.message || 'Unknown error',
+        syncError: getErrorMessage(error) || 'Unknown error',
       });
       recordFailure();
 
-      const isTimeout = error?.message?.includes('timeout');
+      const isTimeout = getErrorMessage(error).toLowerCase().includes('timeout');
       const msg = isTimeout
         ? 'Timeout, absensi tersimpan di perangkat dan akan disinkronkan otomatis.'
         : 'Gagal sinkronisasi, data aman di perangkat. Akan dicoba ulang otomatis.';
@@ -649,7 +654,7 @@ export function useAttendance(employeeId: string | null, officeId: string | null
       fetchAttendance();
       return { success: true, message: result.message, distance };
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       const errorRef = reportError(error, "attendance.check_out.sync", {
         employeeId,
         officeId,
@@ -660,11 +665,11 @@ export function useAttendance(employeeId: string | null, officeId: string | null
       await updateEntryStatus(entry.bufferId, {
         syncStatus: 'failed', syncAttempts: 1,
         lastSyncAttempt: new Date().toISOString(),
-        syncError: error?.message || 'Unknown error',
+        syncError: getErrorMessage(error) || 'Unknown error',
       });
       recordFailure();
 
-      const isTimeout = error?.message?.includes('timeout');
+      const isTimeout = getErrorMessage(error).toLowerCase().includes('timeout');
       const msg = isTimeout
         ? 'Timeout, absensi pulang tersimpan di perangkat dan akan disinkronkan otomatis.'
         : 'Gagal sinkronisasi, data aman di perangkat. Akan dicoba ulang otomatis.';

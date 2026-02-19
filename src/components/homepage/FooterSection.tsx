@@ -19,6 +19,33 @@ const isValidLink = (url?: string) => {
   return true;
 };
 
+const ANCHOR_ALIAS: Record<string, string> = {
+  "#features": "/#fitur",
+  "/#features": "/#fitur",
+  "#fitur": "/#fitur",
+  "/#fitur": "/#fitur",
+  "#pricing": "/#harga",
+  "/#pricing": "/#harga",
+  "#harga": "/#harga",
+  "/#harga": "/#harga",
+  "#faq": "/#faq",
+  "/#faq": "/#faq",
+  "#contact": "/#contact",
+  "/#contact": "/#contact",
+  "#tentang": "/#contact",
+  "/#tentang": "/#contact",
+};
+
+const normalizeFooterLink = (url?: string) => {
+  if (!url) return "";
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+  const alias = ANCHOR_ALIAS[trimmed.toLowerCase()];
+  if (alias) return alias;
+  if (trimmed.startsWith("#")) return `/${trimmed}`;
+  return trimmed;
+};
+
 export function FooterSection({ settings }: FooterSectionProps) {
   const [showTermsDialog, setShowTermsDialog] = useState(false);
   const [termsContent, setTermsContent] = useState<{ title: string; content: string } | null>(null);
@@ -51,8 +78,9 @@ export function FooterSection({ settings }: FooterSectionProps) {
 
   return (
     <>
-      <footer id="tentang" className="bg-muted/30 border-t border-border py-12 px-4">
+      <footer id="contact" className="bg-muted/30 border-t border-border py-12 px-4">
         <div className="container mx-auto">
+          <div id="tentang" className="relative -top-20" aria-hidden />
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
             {/* Company Info */}
             <div>
@@ -69,25 +97,28 @@ export function FooterSection({ settings }: FooterSectionProps) {
             <div>
               <h4 className="font-semibold mb-4">Menu Cepat</h4>
               <ul className="space-y-2 text-sm text-muted-foreground">
-                {quickLinks.map((link) => (
-                  <li key={link.id}>
-                    {!isValidLink(link.url) ? (
-                      <span className="text-muted-foreground/60">{link.label}</span>
-                    ) : link.url.startsWith("/") ? (
-                      <Link to={link.url} className="hover:text-foreground transition-colors">
-                        {link.label}
-                      </Link>
-                    ) : link.url.startsWith("#") ? (
-                      <a href={link.url} className="hover:text-foreground transition-colors">
-                        {link.label}
-                      </a>
-                    ) : (
-                      <a href={link.url} target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">
-                        {link.label}
-                      </a>
-                    )}
-                  </li>
-                ))}
+                {quickLinks.map((link) => {
+                  const normalizedUrl = normalizeFooterLink(link.url);
+                  return (
+                    <li key={link.id}>
+                      {!isValidLink(link.url) ? (
+                        <span className="text-muted-foreground/60">{link.label}</span>
+                      ) : normalizedUrl.startsWith("/") ? (
+                        <Link to={normalizedUrl} className="hover:text-foreground transition-colors">
+                          {link.label}
+                        </Link>
+                      ) : normalizedUrl.startsWith("#") ? (
+                        <a href={normalizedUrl} className="hover:text-foreground transition-colors">
+                          {link.label}
+                        </a>
+                      ) : (
+                        <a href={normalizedUrl} target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">
+                          {link.label}
+                        </a>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
 
@@ -95,28 +126,31 @@ export function FooterSection({ settings }: FooterSectionProps) {
             <div>
               <h4 className="font-semibold mb-4">Legal</h4>
               <ul className="space-y-2 text-sm text-muted-foreground">
-                {legalLinks.map((link) => (
-                  <li key={link.id}>
-                    {link.content ? (
-                      <button
-                        onClick={() => handleLegalLinkClick(link)}
-                        className="hover:text-foreground transition-colors text-left"
-                      >
-                        {link.label}
-                      </button>
-                    ) : !isValidLink(link.url) ? (
-                      <span className="text-muted-foreground/60">{link.label}</span>
-                    ) : link.url.startsWith("/") ? (
-                      <Link to={link.url} className="hover:text-foreground transition-colors">
-                        {link.label}
-                      </Link>
-                    ) : (
-                      <a href={link.url} target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">
-                        {link.label}
-                      </a>
-                    )}
-                  </li>
-                ))}
+                {legalLinks.map((link) => {
+                  const normalizedUrl = normalizeFooterLink(link.url);
+                  return (
+                    <li key={link.id}>
+                      {link.content ? (
+                        <button
+                          onClick={() => handleLegalLinkClick(link)}
+                          className="hover:text-foreground transition-colors text-left"
+                        >
+                          {link.label}
+                        </button>
+                      ) : !isValidLink(link.url) ? (
+                        <span className="text-muted-foreground/60">{link.label}</span>
+                      ) : normalizedUrl.startsWith("/") ? (
+                        <Link to={normalizedUrl} className="hover:text-foreground transition-colors">
+                          {link.label}
+                        </Link>
+                      ) : (
+                        <a href={normalizedUrl} target="_blank" rel="noopener noreferrer" className="hover:text-foreground transition-colors">
+                          {link.label}
+                        </a>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
 

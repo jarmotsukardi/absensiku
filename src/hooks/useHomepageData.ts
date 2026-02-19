@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { getHomepageSectionOrder, isHomepageSectionEnabled } from "@/lib/homepageLayout";
+import { mapSubscriptionPackagesToPricingPlans } from "@/lib/pricingPlans";
 
 interface HomepageSection {
   id: string;
@@ -81,6 +82,12 @@ interface PricingPlan {
   period: string;
   features: string[];
   is_popular: boolean;
+  original_price?: number | null;
+  discount_percentage?: number | null;
+  duration_months?: number | null;
+  total_price?: number | null;
+  total_price_before_discount?: number | null;
+  popular_label?: string | null;
 }
 
 interface PricingSectionSettings {
@@ -144,6 +151,24 @@ interface Article {
   category: string | null;
   published_at: string | null;
 }
+
+const parseNumericSettingValue = (raw: unknown, fallback: number): number => {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    const objectValue = raw as Record<string, unknown>;
+    if ("value" in objectValue) {
+      return parseNumericSettingValue(objectValue.value, fallback);
+    }
+    if ("amount" in objectValue) {
+      return parseNumericSettingValue(objectValue.amount, fallback);
+    }
+  }
+  return fallback;
+};
 
 // Default values
 const defaultHeroSettings: HeroSettings = {
@@ -267,6 +292,7 @@ export function useHomepageData() {
   const [targetSegmentSettings, setTargetSegmentSettings] = useState<TargetSegmentSettings>(defaultTargetSegmentSettings);
   const [promoSidebarSettings, setPromoSidebarSettings] = useState<PromoSidebarSettings>(defaultPromoSidebarSettings);
   const [pricingSectionSettings, setPricingSectionSettings] = useState<PricingSectionSettings>({ section_title: "Harga Transparan", section_subtitle: "Pilih paket yang sesuai dengan kebutuhan instansi Anda." });
+  const [b2bNegotiationThreshold, setB2bNegotiationThreshold] = useState(2000);
   const [features, setFeatures] = useState<Feature[]>([]);
   const [pricingPlans, setPricingPlans] = useState<PricingPlan[]>([]);
   const [faqs, setFaqs] = useState<FAQ[]>([]);
@@ -283,6 +309,7 @@ export function useHomepageData() {
   const fetchAllData = async () => {
     try {
       let resolvedNewsSettings: NewsSettings = defaultNewsSettings;
+      let legacyPricingPlans: PricingPlan[] = [];
 
       // Fetch homepage sections
       const { data: sectionsData } = await supabase
@@ -343,6 +370,7 @@ export function useHomepageData() {
           "legal_links_settings",
           "target_segment_settings",
           "promo_sidebar_settings",
+          "b2b_negotiation_threshold",
         ]);
 
       if (settingsData) {
@@ -358,13 +386,18 @@ export function useHomepageData() {
               if (Array.isArray(setting.value)) setFeatures(setting.value as unknown as Feature[]);
               break;
             case "pricing_settings":
-              if (Array.isArray(setting.value)) setPricingPlans(setting.value as unknown as PricingPlan[]);
+              if (Array.isArray(setting.value)) {
+                legacyPricingPlans = setting.value as unknown as PricingPlan[];
+              }
               break;
             case "faq_settings":
               if (Array.isArray(setting.value)) {
                 setFaqs((setting.value as unknown as FAQ[]).sort((a, b) => a.sort_order - b.sort_order));
-              } else if (setting.value && typeof setting.value === 'object' && (setting.value as any).items) {
-                setFaqs(((setting.value as any).items as FAQ[]).sort((a, b) => a.sort_order - b.sort_order));
+              } else if (setting.value && typeof setting.value === "object" && !Array.isArray(setting.value)) {
+                const faqValue = setting.value as { items?: unknown };
+                if (Array.isArray(faqValue.items)) {
+                  setFaqs((faqValue.items as FAQ[]).sort((a, b) => a.sort_order - b.sort_order));
+                }
               }
               break;
             case "testimonials_settings":
@@ -414,6 +447,9 @@ export function useHomepageData() {
                 });
               }
               break;
+            case "b2b_negotiation_threshold":
+              setB2bNegotiationThreshold(Math.max(1, Math.floor(parseNumericSettingValue(setting.value, 2000))));
+              break;
           }
         }
 
@@ -423,6 +459,24 @@ export function useHomepageData() {
         }
 
         setFooterSettings(footerBase);
+      }
+
+      const { data: billingPackages, error: billingPackagesError } = await supabase
+        .from("subscription_packages")
+        .select("id, name, description, base_price_per_month, duration_months, discount_percentage, features, sort_order")
+        .eq("is_active", true)
+        .order("sort_order");
+
+      if (billingPackagesError) {
+        console.error("Error fetching billing packages for homepage pricing:", billingPackagesError);
+      }
+
+      if (billingPackages && billingPackages.length > 0) {
+        setPricingPlans(mapSubscriptionPackagesToPricingPlans(billingPackages, legacyPricingPlans));
+      } else if (legacyPricingPlans.length > 0) {
+        setPricingPlans(legacyPricingPlans);
+      } else {
+        setPricingPlans([]);
       }
 
       // Fetch articles/news
@@ -459,6 +513,7 @@ export function useHomepageData() {
     targetSegmentSettings,
     promoSidebarSettings,
     pricingSectionSettings,
+    b2bNegotiationThreshold,
     features,
     pricingPlans,
     faqs,

@@ -25,6 +25,7 @@ export type PageGlossaryPreset =
   | "admin_audit_logs"
   | "admin_stress_test"
   | "admin_cron_jobs"
+  | "admin_org_onboarding_templates"
   | "settings_migration_wizard"
   | "settings_data_import"
   | "settings_full_backup"
@@ -51,6 +52,7 @@ export type PageGlossaryPreset =
   | "org_news"
   | "org_profile"
   | "org_profile_setup"
+  | "org_onboarding_setup"
   | "org_employee_management"
   | "org_mutation_requests"
   | "org_leave_requests"
@@ -100,12 +102,14 @@ const PRESETS: Record<PageGlossaryPreset, GlossaryPresetConfig> = {
       { term: "Status Langganan", description: "Status teknis layanan tenant: trial, active, expired, atau cancelled." },
       { term: "Kebijakan Streak", description: "Status proses berbasis streak: tracking, near_suspension, invoiced, suspended." },
       { term: "Grace Period", description: "Masa tenggang setelah due date sebelum tenant masuk status suspend." },
+      { term: "Harga Negosiasi B2B", description: "Harga per pegawai khusus tenant yang meng-override harga global billing untuk invoice baru." },
       { term: "Recommended Status", description: "Saran status otomatis berdasarkan data streak + invoice agar admin cepat mengambil aksi." },
       { term: "Ready for Invoicing", description: "Kondisi tenant sudah memenuhi aturan untuk diterbitkan tagihan." },
     ],
     workflowTitle: "Alur Monitoring",
     workflowSteps: [
       "Pantau tenant yang masuk near_suspension dan invoiced.",
+      "Set harga negosiasi B2B per tenant bila perlu (mis. tenant besar >= ambang pegawai).",
       "Pastikan status langganan sinkron dengan status invoice/payment.",
       "Terapkan perubahan status hanya setelah verifikasi data billing.",
     ],
@@ -193,6 +197,24 @@ const PRESETS: Record<PageGlossaryPreset, GlossaryPresetConfig> = {
       "Pastikan job penting statusnya scheduled + active.",
       "Cek run gagal terbaru dan tindak lanjuti error berulang.",
       "Jalankan sync jika ada job belum terdaftar.",
+    ],
+  },
+  admin_org_onboarding_templates: {
+    title: "Glosary & Penjelasan Template Onboarding Org",
+    description:
+      "Template global superadmin untuk membantu organisasi baru menyelesaikan setup awal secara aman tanpa menimpa data existing.",
+    entries: [
+      { term: "Template Master Data", description: "Default OPD, satuan kerja, jabatan, dan lokasi kerja untuk tenant baru." },
+      { term: "Template Schedule", description: "Default hari kerja, jam masuk/pulang, serta toleransi keterlambatan awal." },
+      { term: "Feature Flags", description: "Default toggle WFH, approval WFH, dan notifikasi batas absen." },
+      { term: "Seed Announcement", description: "Pengumuman awal otomatis jika tenant belum memiliki konten." },
+      { term: "Safe Apply", description: "Template hanya mengisi tabel kosong agar data yang sudah valid tidak tertimpa." },
+    ],
+    workflowTitle: "Alur Template",
+    workflowSteps: [
+      "Superadmin menyusun template global onboarding.",
+      "Template disimpan ke system settings dan dipakai oleh wizard /org/onboarding.",
+      "Tenant baru bisa terapkan otomatis lalu melengkapi data real di modul terkait.",
     ],
   },
   settings_migration_wizard: {
@@ -299,17 +321,19 @@ const PRESETS: Record<PageGlossaryPreset, GlossaryPresetConfig> = {
   },
   org_dashboard: {
     title: "Glosary & Penjelasan Dashboard Organisasi",
-    description: "Ringkasan metrik operasional organisasi, notifikasi tagihan, dan tindak lanjut harian.",
+    description: "Ringkasan metrik operasional organisasi, notifikasi tagihan, dan mode snapshot adaptif saat jam sibuk absensi.",
     entries: [
       { term: "Total Pegawai", description: "Jumlah pegawai terdaftar pada tenant organisasi aktif." },
       { term: "Pending Approval", description: "Total pengajuan yang menunggu persetujuan admin organisasi." },
       { term: "Trend Kehadiran", description: "Grafik ringkas kehadiran untuk memantau pola absensi terbaru." },
       { term: "Billing Alert", description: "Peringatan tagihan saat memasuki grace period atau mendekati suspend." },
+      { term: "Snapshot Source", description: "Sumber data dashboard: fresh (hitung baru), cache (snapshot valid), peak-hour cache (snapshot dipakai saat jam sibuk)." },
       { term: "APK Info", description: "Versi dan tautan aplikasi mobile untuk dibagikan ke pegawai." },
     ],
     workflowTitle: "Alur Monitoring Harian",
     workflowSteps: [
       "Cek metrik pengajuan dan kehadiran.",
+      "Pada jam sibuk absensi, dashboard memakai peak-hour cache untuk menurunkan beban query real-time.",
       "Tindak lanjuti notifikasi billing prioritas.",
       "Validasi aplikasi dan data dashboard tetap sinkron.",
     ],
@@ -323,6 +347,7 @@ const PRESETS: Record<PageGlossaryPreset, GlossaryPresetConfig> = {
       { term: "Floating WhatsApp", description: "Widget kontak cepat yang tampil pada halaman tenant organisasi." },
       { term: "OTP Verifikasi", description: "Validasi perubahan sensitif (mis. tipe organisasi atau mode pembiayaan)." },
       { term: "Billing Mode", description: "Pola pembiayaan centralized atau individual untuk langganan organisasi." },
+      { term: "Ambang B2B", description: "Batas jumlah pegawai aktif untuk memicu rekomendasi negosiasi harga korporasi." },
     ],
     workflowTitle: "Urutan Ubah Setting",
     workflowSteps: [
@@ -440,12 +465,14 @@ const PRESETS: Record<PageGlossaryPreset, GlossaryPresetConfig> = {
       { term: "Max Days", description: "Ambang jumlah hari ketidakhadiran sebelum aturan aktif." },
       { term: "Warning Type", description: "Jenis teguran/notifikasi saat ambang terlampaui." },
       { term: "Rule Active", description: "Aturan aktif akan dipakai saat proses evaluasi absensi." },
+      { term: "Notification Toggle", description: "Toggle global untuk mengaktifkan/menonaktifkan notifikasi batas absen ke pegawai." },
       { term: "Notify by Rule", description: "Aksi kirim notifikasi berdasarkan aturan tertentu." },
       { term: "Rule Description", description: "Catatan kebijakan internal agar konteks aturan jelas." },
     ],
     workflowTitle: "Alur Penerapan Aturan",
     workflowSteps: [
       "Tambahkan aturan ambang sesuai kebijakan HR.",
+      "Aktifkan toggle notifikasi bila ingin aturan mengirim notifikasi otomatis ke pegawai bersangkutan.",
       "Aktifkan rule yang relevan dan nonaktifkan rule lama.",
       "Uji kirim notifikasi untuk memastikan rule berjalan.",
     ],
@@ -635,6 +662,24 @@ const PRESETS: Record<PageGlossaryPreset, GlossaryPresetConfig> = {
       "Isi data PIC dan kontak organisasi.",
       "Lengkapi alamat serta NPWP jika tersedia.",
       "Simpan untuk melanjutkan onboarding organisasi.",
+    ],
+  },
+  org_onboarding_setup: {
+    title: "Glosary & Penjelasan Setup Awal Org",
+    description:
+      "Wizard onboarding untuk member baru /org agar master data, jadwal, dan konten awal siap sebelum operasional harian.",
+    entries: [
+      { term: "Checklist Modul", description: "Menampilkan status siap/belum siap berdasarkan jumlah data per modul inti." },
+      { term: "Terapkan Template Admin", description: "Mengisi modul kosong dari template global yang ditetapkan superadmin." },
+      { term: "No Overwrite Rule", description: "Jika modul sudah berisi data, wizard akan skip agar konfigurasi existing tetap aman." },
+      { term: "Setup Completion", description: "Indikator progres jumlah modul yang sudah terisi data." },
+      { term: "Module Deep Link", description: "Tombol buka modul untuk lanjut melengkapi data real (OPD, lokasi, jam kerja, dll)." },
+    ],
+    workflowTitle: "Alur Onboarding Tenant",
+    workflowSteps: [
+      "Buka /org/onboarding setelah akun admin organisasi aktif.",
+      "Jalankan Terapkan Template Admin untuk isi data awal yang kosong.",
+      "Lanjutkan validasi dan penyempurnaan data real di tiap modul.",
     ],
   },
   org_employee_management: {

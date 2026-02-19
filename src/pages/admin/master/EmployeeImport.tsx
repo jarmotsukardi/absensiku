@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -29,6 +29,7 @@ import {
   Info
 } from "lucide-react";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRealOfficeCoordinate } from "@/lib/officeCoordinates";
 
 interface ImportRow {
   rowNum: number;
@@ -49,10 +50,18 @@ interface Tenant {
   code: string;
 }
 
+interface OfficeOption {
+  id: string;
+  name: string;
+}
+
 export default function EmployeeImport() {
   const PREVIEW_PAGE_SIZE = 20;
   const [tenants, setTenants] = useState<Tenant[]>([]);
   const [selectedTenant, setSelectedTenant] = useState<string>("");
+  const [offices, setOffices] = useState<OfficeOption[]>([]);
+  const [selectedOfficeId, setSelectedOfficeId] = useState<string>("");
+  const [isLoadingOffices, setIsLoadingOffices] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
@@ -65,6 +74,50 @@ export default function EmployeeImport() {
   useEffect(() => {
     void fetchTenants();
   }, []);
+
+  const fetchValidOffices = useCallback(async (tenantId: string) => {
+    setIsLoadingOffices(true);
+    try {
+      const { data, error } = await supabase
+        .from("offices")
+        .select("id, name, latitude, longitude")
+        .eq("tenant_id", tenantId)
+        .eq("is_active", true)
+        .order("name");
+
+      if (error) throw error;
+
+      const validOffices = (data || [])
+        .filter((office) => isRealOfficeCoordinate(office.latitude, office.longitude))
+        .map((office) => ({ id: office.id, name: office.name }));
+
+      setOffices(validOffices);
+      if (validOffices.length === 0) {
+        toast.error("Tenant ini belum punya kantor dengan koordinat real. Lengkapi dulu di Master Kantor.");
+      }
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "admin.master.employee_import.offices.fetch", {
+        tenant_id: tenantId,
+      });
+      const message = appendErrorReference("Gagal memuat daftar kantor tenant", errorRef);
+      setLoadError((prev) => prev ?? message);
+      setOffices([]);
+      toast.error(message);
+    } finally {
+      setIsLoadingOffices(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    setSelectedOfficeId("");
+    setOffices([]);
+    setFile(null);
+    setPreviewData([]);
+    setImportResult(null);
+    setPreviewPage(1);
+    if (!selectedTenant) return;
+    void fetchValidOffices(selectedTenant);
+  }, [fetchValidOffices, selectedTenant]);
 
   const fetchTenants = async () => {
     try {
@@ -124,6 +177,11 @@ export default function EmployeeImport() {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
 
+    if (!selectedTenant) {
+      toast.error("Pilih organisasi terlebih dahulu agar validasi import sesuai tenant.");
+      return;
+    }
+
     if (!selectedFile.name.endsWith(".csv")) {
       toast.error("Hanya file CSV yang diperbolehkan");
       return;
@@ -134,6 +192,11 @@ export default function EmployeeImport() {
   };
 
   const parseCSV = async (file: File) => {
+    if (!selectedTenant) {
+      toast.error("Pilih organisasi terlebih dahulu");
+      return;
+    }
+
     setIsLoading(true);
     setLoadError(null);
     setPreviewData([]);
@@ -156,7 +219,8 @@ export default function EmployeeImport() {
       // Get existing NIKs and emails for validation
       const { data: existingEmployees } = await supabase
         .from("employees")
-        .select("nik, email");
+        .select("nik, email")
+        .eq("tenant_id", selectedTenant);
 
       const existingNiks = new Set(existingEmployees?.map(e => e.nik) || []);
       const existingEmails = new Set(existingEmployees?.map(e => e.email?.toLowerCase()) || []);
@@ -164,7 +228,8 @@ export default function EmployeeImport() {
       // Get OPDs for validation
       const { data: opds } = await supabase
         .from("opd")
-        .select("code, name");
+        .select("code, name")
+        .eq("tenant_id", selectedTenant);
 
       const opdCodes = new Set(opds?.map(o => o.code.toUpperCase()) || []);
 
@@ -230,6 +295,10 @@ export default function EmployeeImport() {
       toast.error("Pilih organisasi terlebih dahulu");
       return;
     }
+    if (!selectedOfficeId) {
+      toast.error("Pilih lokasi kerja valid untuk mapping pegawai hasil import.");
+      return;
+    }
 
     const validRows = previewData.filter(row => row.status === "valid");
     if (validRows.length === 0) {
@@ -263,6 +332,7 @@ export default function EmployeeImport() {
             phone: row.phone || null,
             position: row.position || null,
             opd_id: opdId,
+            office_id: selectedOfficeId,
             is_active: true,
           });
 
@@ -322,6 +392,7 @@ export default function EmployeeImport() {
             <ol className="list-decimal list-inside mt-2 space-y-1 text-sm">
               <li>Download template CSV dan isi dengan data pegawai</li>
               <li>Pilih organisasi tujuan import</li>
+              <li>Pilih lokasi kerja valid (koordinat real) untuk mapping pegawai</li>
               <li>Upload file CSV yang sudah diisi</li>
               <li>Periksa preview data dan pastikan tidak ada error</li>
               <li>Klik tombol Import untuk memproses data</li>
@@ -359,7 +430,7 @@ export default function EmployeeImport() {
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label>Organisasi Tujuan</Label>
-              <Select value={selectedTenant} onValueChange={setSelectedTenant}>
+                <Select value={selectedTenant} onValueChange={setSelectedTenant}>
                 <SelectTrigger className="max-w-md">
                   <SelectValue placeholder="Pilih organisasi" />
                 </SelectTrigger>
@@ -370,8 +441,41 @@ export default function EmployeeImport() {
                     </SelectItem>
                   ))}
                 </SelectContent>
-              </Select>
-            </div>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Lokasi Kerja Mapping (Wajib)</Label>
+                <Select
+                  value={selectedOfficeId}
+                  onValueChange={setSelectedOfficeId}
+                  disabled={!selectedTenant || isLoadingOffices}
+                >
+                  <SelectTrigger className="max-w-md">
+                    <SelectValue
+                      placeholder={
+                        !selectedTenant
+                          ? "Pilih organisasi dulu"
+                          : isLoadingOffices
+                            ? "Memuat lokasi kerja..."
+                            : "Pilih lokasi kerja valid"
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {offices.map((office) => (
+                      <SelectItem key={office.id} value={office.id}>
+                        {office.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {selectedTenant && !isLoadingOffices && offices.length === 0 && (
+                  <p className="text-xs text-destructive">
+                    Belum ada kantor dengan koordinat real pada tenant ini.
+                  </p>
+                )}
+              </div>
 
             <div className="space-y-2">
               <Label>File CSV</Label>
@@ -524,7 +628,7 @@ export default function EmployeeImport() {
                 </Button>
                 <Button
                   onClick={handleImport}
-                  disabled={validCount === 0 || isImporting || !selectedTenant}
+                  disabled={validCount === 0 || isImporting || !selectedTenant || !selectedOfficeId}
                 >
                   {isImporting ? (
                     <>

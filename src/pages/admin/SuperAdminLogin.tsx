@@ -70,6 +70,7 @@ export default function SuperAdminLogin() {
   
   // Ref untuk OTP input (uncontrolled)
   const otpInputRef = useRef<SingleOTPInputRef>(null);
+  const nonSuperAdminSessionNotifiedRef = useRef(false);
 
   // Stable callback untuk OTP change
   const handleOtpChange = useCallback((value: string) => {
@@ -114,28 +115,16 @@ export default function SuperAdminLogin() {
           if (isSuperAdmin) {
             navigate("/admin", { replace: true });
           } else {
-            // Bukan super admin - redirect ke halaman yang sesuai tanpa logout
-            // Cek role lainnya untuk redirect yang tepat
-            const { data: roles } = await supabase
-              .from("user_roles")
-              .select("role")
-              .eq("user_id", session.user.id);
-
-            const isAdminInstansi = roles?.some((r) => r.role === "admin_instansi");
-            
-            if (isAdminInstansi) {
+            if (!nonSuperAdminSessionNotifiedRef.current) {
+              nonSuperAdminSessionNotifiedRef.current = true;
               toast({
-                title: "Dialihkan",
-                description: "Anda dialihkan ke panel Admin Organisasi.",
+                variant: "destructive",
+                title: "Akses Ditolak",
+                description:
+                  "Akun ini bukan Super Admin. Gunakan halaman login sesuai role Anda.",
               });
-              navigate("/org", { replace: true });
-            } else {
-              toast({
-                title: "Dialihkan", 
-                description: "Anda dialihkan ke dashboard pegawai.",
-              });
-              navigate("/employee/dashboard", { replace: true });
             }
+            return;
           }
         }, 0);
       }
@@ -243,27 +232,15 @@ export default function SuperAdminLogin() {
         });
 
         if (!isSuperAdmin) {
-          // Bukan super admin - redirect ke halaman yang sesuai tanpa logout
-          const { data: roles } = await supabase
-            .from("user_roles")
-            .select("role")
-            .eq("user_id", authData.user.id);
-
-          const isAdminInstansi = roles?.some((r) => r.role === "admin_instansi");
-          
-          if (isAdminInstansi) {
-            toast({
-              title: "Dialihkan",
-              description: "Anda dialihkan ke panel Admin Organisasi.",
-            });
-            navigate("/org", { replace: true });
-          } else {
-            toast({
-              title: "Dialihkan",
-              description: "Anda dialihkan ke dashboard pegawai.",
-            });
-            navigate("/employee/dashboard", { replace: true });
-          }
+          await supabase.auth.signOut();
+          nonSuperAdminSessionNotifiedRef.current = true;
+          toast({
+            variant: "destructive",
+            title: "Akses Ditolak",
+            description:
+              "Akun ini bukan Super Admin. Gunakan login organisasi/pegawai.",
+          });
+          refreshCaptcha();
           return;
         }
 

@@ -44,7 +44,7 @@ const GLOSSARY_TERMS: GlossaryTerm[] = [
   { term: "Presensi Fleksibel", description: "Izin khusus bagi pegawai untuk melakukan absensi di luar radius kantor dengan persetujuan atasan.", category: "absensi" },
   { term: "WFH (Work From Home)", description: "Status kerja dari rumah dimana validasi lokasi GPS tidak diperlukan.", category: "absensi" },
   { term: "Shift Kerja", description: "Pengaturan jadwal kerja dengan jam masuk dan pulang tertentu yang bisa berbeda per unit kerja.", category: "absensi" },
-  { term: "Toleransi Keterlambatan", description: "Jumlah menit (default: 15) setelah jam masuk dimana pegawai masih dianggap 'hadir' bukan 'terlambat'.", category: "absensi" },
+  { term: "Toleransi Keterlambatan", description: "Jumlah menit (default: 0) setelah jam masuk sebelum status dinilai terlambat. Nilai 0 berarti keterlambatan dihitung langsung dari jam masuk.", category: "absensi" },
 
   // Organisasi
   { term: "Tenant", description: "Istilah teknis untuk organisasi/instansi yang terdaftar dalam sistem multi-tenant.", category: "organisasi" },

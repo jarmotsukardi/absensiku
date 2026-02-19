@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   Select,
   SelectContent,
@@ -11,7 +12,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Settings, Save, Clock, MapPin, Bell, Shield, Home } from "lucide-react";
+import { Settings, Save, Clock, MapPin, Bell, Shield, Home, CircleHelp } from "lucide-react";
 import { toast } from "sonner";
 import { useWfhSettings } from "@/hooks/useWfhSettings";
 
@@ -48,7 +49,7 @@ export function OrganizationSettings({ tenantId }: OrganizationSettingsProps) {
     // Jam Kerja
     defaultWorkStart: "08:00",
     defaultWorkEnd: "17:00",
-    lateToleranceMinutes: 15,
+    lateToleranceMinutes: 0,
     earlyLeaveToleranceMinutes: 15,
     
     // Hari Kerja
@@ -121,11 +122,25 @@ export function OrganizationSettings({ tenantId }: OrganizationSettingsProps) {
               />
             </div>
             <div className="space-y-2">
-              <Label>Toleransi Terlambat (menit)</Label>
+              <div className="flex items-center gap-2">
+                <Label>Toleransi Terlambat (menit)</Label>
+                <TooltipProvider delayDuration={120}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button type="button" className="inline-flex text-muted-foreground hover:text-foreground">
+                        <CircleHelp className="h-4 w-4" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs">
+                      Batas menit toleransi setelah jam masuk. Nilai 0 berarti keterlambatan dihitung langsung dari jam masuk.
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              </div>
               <Input
                 type="number"
                 value={settings.lateToleranceMinutes}
-                onChange={(e) => handleChange("lateToleranceMinutes", parseInt(e.target.value))}
+                onChange={(e) => handleChange("lateToleranceMinutes", parseInt(e.target.value) || 0)}
               />
             </div>
             <div className="space-y-2">

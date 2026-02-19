@@ -7,28 +7,28 @@ export function NavigationBar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <nav className="fixed top-0 left-0 right-0 z-50 glass">
+    <nav className="fixed top-0 left-0 right-0 z-50 glass border-b border-border/60 shadow-soft">
       <div className="container mx-auto px-4">
-        <div className="flex items-center justify-between h-16">
+        <div className="flex items-center justify-between h-[4.25rem]">
           <Link to="/" className="flex items-center gap-2">
             <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center">
               <MapPin className="w-5 h-5 text-primary-foreground" />
             </div>
-            <span className="text-xl font-bold text-foreground">AbsensiKu</span>
+            <span className="text-xl font-extrabold tracking-tight text-foreground">AbsensiKu</span>
           </Link>
 
           {/* Desktop Menu */}
           <div className="hidden md:flex items-center gap-8">
-            <a href="/#fitur" className="text-muted-foreground hover:text-foreground transition-colors animated-underline">
+            <a href="/#fitur" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors animated-underline">
               Fitur
             </a>
-            <a href="/#harga" className="text-muted-foreground hover:text-foreground transition-colors animated-underline">
+            <a href="/#harga" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors animated-underline">
               Harga
             </a>
-            <a href="/#faq" className="text-muted-foreground hover:text-foreground transition-colors animated-underline">
+            <a href="/#faq" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors animated-underline">
               FAQ
             </a>
-            <Link to="/about" className="text-muted-foreground hover:text-foreground transition-colors animated-underline">
+            <Link to="/about" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors animated-underline">
               Tentang
             </Link>
           </div>

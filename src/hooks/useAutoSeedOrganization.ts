@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { debugLog } from "@/lib/debugLog";
 
 /**
  * Auto-seed data contoh saat admin organisasi pertama kali setup:
@@ -78,7 +79,7 @@ export async function autoSeedOrganizationData(tenantId: string, organizationNam
       is_active: true,
     });
 
-    console.log("Auto-seed organization data completed for tenant:", tenantId);
+    debugLog("Auto-seed organization data completed for tenant:", tenantId);
   } catch (error) {
     console.error("Error in autoSeedOrganizationData:", error);
   }

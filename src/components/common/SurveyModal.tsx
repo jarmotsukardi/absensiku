@@ -114,7 +114,7 @@ export function SurveyModal({ tenantId, employeeId, reporterName, reporterRole =
       localStorage.setItem(`survey_submitted_${tenantId}_day${surveyDay}`, "true");
       toast.success("Terima kasih atas feedback Anda!");
       setIsOpen(false);
-    } catch (error: any) {
+    } catch (error: unknown) {
       toast.error("Gagal mengirim survei");
     } finally {
       setIsSubmitting(false);

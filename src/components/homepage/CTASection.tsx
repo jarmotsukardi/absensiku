@@ -10,9 +10,10 @@ interface CTASectionProps {
 
 export function CTASection({ settings }: CTASectionProps) {
   if (!settings.show_section) return null;
+  const hasSecondary = Boolean(settings.secondary_button_text?.trim() && settings.secondary_button_link?.trim());
 
   return (
-    <section className="py-20 px-4">
+    <section className="py-16 px-4">
       <div className="container mx-auto">
         <Card className="bg-gradient-to-br from-primary to-primary/80 border-0 overflow-hidden relative">
           <div className="absolute inset-0 opacity-10">
@@ -23,18 +24,21 @@ export function CTASection({ settings }: CTASectionProps) {
             <p className="text-primary-foreground/70 mb-8 max-w-xl mx-auto">
               {settings.description}
             </p>
-            <div className="flex flex-col sm:flex-row gap-4 justify-center">
+            <div className="flex flex-col items-center gap-3">
               <Link to={settings.primary_button_link}>
                 <Button variant="gold" size="xl" className="group">
                   {settings.primary_button_text}
                   <ChevronRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                 </Button>
               </Link>
-              <Link to={settings.secondary_button_link}>
-                <Button variant="hero-outline" size="xl">
+              {hasSecondary && (
+                <Link
+                  to={settings.secondary_button_link}
+                  className="text-sm font-medium text-primary-foreground/80 hover:text-primary-foreground underline underline-offset-4 transition-colors"
+                >
                   {settings.secondary_button_text}
-                </Button>
-              </Link>
+                </Link>
+              )}
             </div>
           </CardContent>
         </Card>

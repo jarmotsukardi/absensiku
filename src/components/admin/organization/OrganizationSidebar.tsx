@@ -53,6 +53,7 @@ import {
   UserCog,
   Bell,
   Zap,
+  Wand2,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -84,6 +85,7 @@ const menuGroups: MenuGroup[] = [
     label: "Utama",
     items: [
       { title: "Dashboard", icon: LayoutDashboard, path: "/org" },
+      { title: "Setup Awal", icon: Wand2, path: "/org/onboarding" },
     ],
   },
   {

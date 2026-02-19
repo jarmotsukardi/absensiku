@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { 
-  GripVertical, Save, Layout, Image, FileText, Users, CreditCard, HelpCircle, Phone, Loader2, Megaphone, PanelRight, BarChart3, Newspaper, FileCheck, Share2, Info, Link2, Download, HeartHandshake,
+  GripVertical, Save, Layout, Image, FileText, Users, CreditCard, HelpCircle, Phone, Loader2, Megaphone, PanelRight, BarChart3, Newspaper, FileCheck, Share2, Info, Link2, Download, HeartHandshake, MessageSquare,
 } from "lucide-react";
 import { BannerPromoSettings } from "@/components/admin/settings/BannerPromoSettings";
 import { BannerSidebarSettings } from "@/components/admin/settings/BannerSidebarSettings";
@@ -32,6 +32,7 @@ import { QuickLinksSettings } from "@/components/admin/settings/QuickLinksSettin
 import { AppDownloadSettings } from "@/components/admin/settings/AppDownloadSettings";
 import { PromoSidebarSettings } from "@/components/admin/settings/PromoSidebarSettings";
 import { TargetSegmentSettings } from "@/components/admin/settings/TargetSegmentSettings";
+import { HomepageChatAgentSettings } from "@/components/admin/settings/HomepageChatAgentSettings";
 import { useNavigate } from "react-router-dom";
 import { reportError } from "@/lib/errorLogger";
 
@@ -160,6 +161,7 @@ export default function HomepageLayoutSettings() {
             <TabsTrigger value="quicklinks" className="flex-shrink-0"><Link2 className="h-4 w-4" /><span className="hidden sm:inline ml-1">Quick Links</span></TabsTrigger>
             <TabsTrigger value="legal" className="flex-shrink-0"><FileCheck className="h-4 w-4" /><span className="hidden sm:inline ml-1">Legal</span></TabsTrigger>
             <TabsTrigger value="social" className="flex-shrink-0"><Share2 className="h-4 w-4" /><span className="hidden sm:inline ml-1">Sosmed</span></TabsTrigger>
+            <TabsTrigger value="chat_agent" className="flex-shrink-0"><MessageSquare className="h-4 w-4" /><span className="hidden sm:inline ml-1">Chat Agent</span></TabsTrigger>
             <TabsTrigger value="banners" className="flex-shrink-0"><Megaphone className="h-4 w-4" /><span className="hidden sm:inline ml-1">Banner</span></TabsTrigger>
             <TabsTrigger value="sidebar" className="flex-shrink-0"><PanelRight className="h-4 w-4" /><span className="hidden sm:inline ml-1">Sidebar</span></TabsTrigger>
             <TabsTrigger value="promo" className="flex-shrink-0"><Megaphone className="h-4 w-4" /><span className="hidden sm:inline ml-1">Promosi</span></TabsTrigger>
@@ -230,6 +232,7 @@ export default function HomepageLayoutSettings() {
           <TabsContent value="quicklinks" className="mt-6"><QuickLinksSettings /></TabsContent>
           <TabsContent value="legal" className="mt-6"><LegalLinksSettings /></TabsContent>
           <TabsContent value="social" className="mt-6"><SocialMediaSettings /></TabsContent>
+          <TabsContent value="chat_agent" className="mt-6"><HomepageChatAgentSettings /></TabsContent>
           <TabsContent value="banners" className="mt-6"><Card><CardContent className="pt-6"><BannerPromoSettings /></CardContent></Card></TabsContent>
           <TabsContent value="sidebar" className="mt-6"><Card><CardContent className="pt-6"><BannerSidebarSettings /></CardContent></Card></TabsContent>
           <TabsContent value="promo" className="mt-6"><PromoSidebarSettings /></TabsContent>

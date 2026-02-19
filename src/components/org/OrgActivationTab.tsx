@@ -52,6 +52,20 @@ interface XenditInvoiceResponse {
 
 type PaymentMethod = "manual" | "xendit";
 
+const parseNumericSettingValue = (raw: unknown, fallback: number): number => {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    const objectValue = raw as Record<string, unknown>;
+    if ("value" in objectValue) return parseNumericSettingValue(objectValue.value, fallback);
+    if ("amount" in objectValue) return parseNumericSettingValue(objectValue.amount, fallback);
+  }
+  return fallback;
+};
+
 export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps) {
   const ITEMS_PER_PAGE = 10;
   const [packages, setPackages] = useState<SubscriptionPackage[]>([]);
@@ -64,16 +78,20 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("manual");
   const [isCreatingXenditInvoice, setIsCreatingXenditInvoice] = useState(false);
   const [xenditEnabled, setXenditEnabled] = useState(false);
+  const [b2bThreshold, setB2bThreshold] = useState(2000);
+  const [isCentralizedBilling, setIsCentralizedBilling] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [pkgRes, subRes, invRes, empRes, xenditRes] = await Promise.all([
+      const [pkgRes, subRes, invRes, empRes, xenditRes, b2bRes, tenantRes] = await Promise.all([
         supabase.from("subscription_packages").select("*").eq("is_active", true).order("sort_order"),
         supabase.from("subscriptions").select("*").eq("tenant_id", tenantId).maybeSingle(),
         supabase.from("invoices").select("*").eq("tenant_id", tenantId).order("created_at", { ascending: false }).limit(20),
         supabase.from("employees").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId).eq("is_active", true),
         supabase.from("system_settings").select("value").eq("key", "xendit_enabled").maybeSingle(),
+        supabase.from("system_settings").select("value").eq("key", "b2b_negotiation_threshold").maybeSingle(),
+        supabase.from("tenants").select("billing_mode").eq("id", tenantId).maybeSingle(),
       ]);
 
       setPackages(pkgRes.data || []);
@@ -86,6 +104,11 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       const isObjectSetting = typeof settingValue === "object" && settingValue !== null && !Array.isArray(settingValue);
       const enabledFromObject = isObjectSetting ? (settingValue as XenditSettingValue).enabled === true : false;
       setXenditEnabled(settingValue === true || enabledFromObject);
+
+      const b2bRaw = (b2bRes.data as SystemSetting | null)?.value;
+      setB2bThreshold(Math.max(1, Math.floor(parseNumericSettingValue(b2bRaw, 2000))));
+      setIsCentralizedBilling(tenantRes.data?.billing_mode !== "individual");
+
       if (pkgRes.data && pkgRes.data.length > 0) {
         setSelectedPkgId(pkgRes.data[0].id);
       }
@@ -102,12 +125,26 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
   }, [fetchAll]);
 
   const selectedPkg = packages.find((p) => p.id === selectedPkgId);
+  const hasNegotiatedB2BPrice =
+    typeof subscription?.price_per_employee === "number" &&
+    Number.isFinite(subscription.price_per_employee) &&
+    subscription.price_per_employee > 0;
+  const isB2BManualOnly = isCentralizedBilling && (hasNegotiatedB2BPrice || employeeCount >= b2bThreshold);
+  const isXenditAllowed = xenditEnabled && !isB2BManualOnly;
+
+  const getEffectiveUnitPrice = (basePrice: number) => {
+    const overridePrice = subscription?.price_per_employee;
+    return typeof overridePrice === "number" && Number.isFinite(overridePrice) && overridePrice > 0
+      ? overridePrice
+      : basePrice;
+  };
 
   const calculateTotal = () => {
-    if (!selectedPkg) return { subtotal: 0, discount: 0, total: 0 };
-    const subtotal = selectedPkg.base_price_per_month * memberSlider[0] * selectedPkg.duration_months;
+    if (!selectedPkg) return { unitPrice: 0, subtotal: 0, discount: 0, total: 0 };
+    const unitPrice = getEffectiveUnitPrice(selectedPkg.base_price_per_month);
+    const subtotal = unitPrice * memberSlider[0] * selectedPkg.duration_months;
     const discount = subtotal * (selectedPkg.discount_percentage / 100);
-    return { subtotal, discount, total: subtotal - discount };
+    return { unitPrice, subtotal, discount, total: subtotal - discount };
   };
 
   const formatCurrency = (amount: number) =>
@@ -129,6 +166,14 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
 
   const handleXenditCheckout = async () => {
     if (!selectedPkg) return;
+    if (!isXenditAllowed) {
+      toast.warning(
+        isCentralizedBilling
+          ? "Skema B2B (billing terpusat) hanya mendukung transfer manual."
+          : "Pembayaran online saat ini tidak tersedia.",
+      );
+      return;
+    }
     setIsCreatingXenditInvoice(true);
     try {
       const { data, error } = await supabase.functions.invoke<XenditInvoiceResponse>("create-xendit-invoice", {
@@ -168,6 +213,12 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
     setCurrentPage(1);
   }, [invoices.length]);
 
+  useEffect(() => {
+    if (paymentMethod === "xendit" && !isXenditAllowed) {
+      setPaymentMethod("manual");
+    }
+  }, [paymentMethod, isXenditAllowed]);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
@@ -176,7 +227,7 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
     );
   }
 
-  const { subtotal, discount, total } = calculateTotal();
+  const { unitPrice, subtotal, discount, total } = calculateTotal();
 
   return (
     <div className="space-y-6">
@@ -241,6 +292,14 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
           <CardDescription>Geser slider untuk menghitung estimasi biaya berdasarkan jumlah member</CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
+          {typeof subscription?.price_per_employee === "number" &&
+            Number.isFinite(subscription.price_per_employee) &&
+            subscription.price_per_employee > 0 && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-100">
+                Harga negosiasi B2B aktif: <strong>{formatCurrency(subscription.price_per_employee)}</strong> per pegawai per bulan.
+              </div>
+            )}
+
           {/* Package Selection */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {packages.map((pkg) => (
@@ -253,7 +312,7 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
               >
                 <p className="font-semibold">{pkg.name}</p>
                 <p className="text-sm text-muted-foreground">{pkg.duration_months} bulan</p>
-                <p className="text-sm font-medium mt-1">{formatCurrency(pkg.base_price_per_month)}/org/bln</p>
+                <p className="text-sm font-medium mt-1">{formatCurrency(getEffectiveUnitPrice(pkg.base_price_per_month))}/org/bln</p>
                 {pkg.discount_percentage > 0 && (
                   <Badge variant="secondary" className="mt-2 text-xs">Hemat {pkg.discount_percentage}%</Badge>
                 )}
@@ -286,7 +345,7 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
             <div className="rounded-lg border p-4 space-y-2">
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">
-                  {memberSlider[0]} member × {formatCurrency(selectedPkg.base_price_per_month)} × {selectedPkg.duration_months} bln
+                  {memberSlider[0]} member × {formatCurrency(unitPrice)} × {selectedPkg.duration_months} bln
                 </span>
                 <span>{formatCurrency(subtotal)}</span>
               </div>
@@ -347,10 +406,10 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
             {/* Xendit Payment */}
             <button
               type="button"
-              onClick={() => xenditEnabled && setPaymentMethod("xendit")}
-              disabled={!xenditEnabled}
+              onClick={() => isXenditAllowed && setPaymentMethod("xendit")}
+              disabled={!isXenditAllowed}
               className={`p-4 rounded-xl border-2 text-left transition-all ${
-                !xenditEnabled ? "opacity-50 cursor-not-allowed border-border" :
+                !isXenditAllowed ? "opacity-50 cursor-not-allowed border-border" :
                 paymentMethod === "xendit" ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
               }`}
             >
@@ -363,11 +422,15 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
                 <div>
                   <p className="font-semibold text-sm">Pembayaran Online</p>
                   <p className="text-xs text-muted-foreground">
-                    {xenditEnabled ? "QRIS, Virtual Account, E-Wallet, Kartu" : "Belum dikonfigurasi admin"}
+                    {!xenditEnabled
+                      ? "Belum dikonfigurasi admin"
+                      : isB2BManualOnly
+                        ? "Skema B2B: wajib transfer manual"
+                        : "QRIS, Virtual Account, E-Wallet, Kartu"}
                   </p>
                 </div>
               </div>
-              {xenditEnabled && (
+              {isXenditAllowed && (
                 <div className="flex flex-wrap gap-1.5 mt-3">
                   <Badge variant="outline" className="text-[10px] flex items-center gap-1">
                     <QrCode className="h-3 w-3" /> QRIS
@@ -383,16 +446,24 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
                   </Badge>
                 </div>
               )}
-              {!xenditEnabled && (
+              {!isXenditAllowed && (
                 <p className="text-[10px] text-muted-foreground mt-2">
-                  Hubungi admin untuk mengaktifkan pembayaran online
+                  {!xenditEnabled
+                    ? "Hubungi admin untuk mengaktifkan pembayaran online"
+                    : `Tenant B2B billing terpusat (≥ ${b2bThreshold.toLocaleString()} pegawai / harga negosiasi) wajib manual transfer`}
                 </p>
               )}
             </button>
           </div>
 
+          {isB2BManualOnly && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+              Skema B2B aktif. Pembayaran online Xendit dinonaktifkan otomatis, gunakan <strong>Transfer Bank Manual</strong>.
+            </div>
+          )}
+
           {/* Xendit Checkout Button */}
-          {paymentMethod === "xendit" && selectedPkg && (
+          {paymentMethod === "xendit" && selectedPkg && isXenditAllowed && (
             <div className="pt-2">
               <Button
                 onClick={handleXenditCheckout}

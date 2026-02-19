@@ -63,9 +63,10 @@ export function JoinOrganizationCard({ onSuccess }: JoinOrganizationCardProps) {
       toast.success(`Berhasil bergabung ke ${result.tenant_name}!`);
       setInvitationCode("");
       onSuccess();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error joining organization:", error);
-      toast.error(error.message || "Terjadi kesalahan");
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(message || "Terjadi kesalahan");
     } finally {
       setIsLoading(false);
     }

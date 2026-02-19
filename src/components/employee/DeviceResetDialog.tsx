@@ -83,6 +83,10 @@ export function DeviceResetDialog({
 }: DeviceResetDialogProps) {
   const withTrace = (message: string, traceId?: string) =>
     traceId ? `${message} (Ref: ${traceId})` : message;
+  const getErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    return String(error);
+  };
   const parseHttpError = async (
     response: Response
   ): Promise<{ message: string; traceId?: string; code?: string; retryAfterSeconds?: number }> => {
@@ -153,7 +157,10 @@ export function DeviceResetDialog({
         setEffectiveResetCount(currentResetCount);
       }
     } catch (error) {
-      console.error("Error checking monthly reset:", error);
+      const ref = reportError(error, "employee.device_reset.check_monthly_reset", {
+        employee_id: employeeId,
+      });
+      console.error(`[DeviceResetDialog ${ref}] Error checking monthly reset:`, error);
       setEffectiveResetCount(currentResetCount);
     }
   }, [employeeId, currentResetCount]);
@@ -229,12 +236,12 @@ export function DeviceResetDialog({
       setLastBackendRetryAfter(null);
       setOtpSent(true);
       toast.success("Kode OTP terkirim ke email Anda");
-    } catch (error: any) {
+    } catch (error: unknown) {
       const logRef = reportError(error, "employee.device_reset.send_otp", {
         employee_id: employeeId,
         employee_email: employeeEmail,
       });
-      toast.error(appendErrorReference(error?.message || "Gagal mengirim OTP", logRef));
+      toast.error(appendErrorReference(getErrorMessage(error) || "Gagal mengirim OTP", logRef));
     } finally {
       setIsSendingOtp(false);
     }
@@ -318,38 +325,58 @@ export function DeviceResetDialog({
         return newId;
       })();
 
-      // Verify OTP dan update device/password dalam SATU panggilan
-      const { data: sessionData } = await supabase.auth.getSession();
-      const accessToken = sessionData?.session?.access_token;
-      if (!accessToken) {
-        throw new Error("Sesi login kadaluarsa. Silakan login ulang.");
-      }
-
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-device-otp`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-            "Authorization": `Bearer ${accessToken}`,
-          },
-          body: JSON.stringify({
-            email: normalizedEmail,
-            otp: normalizedOtp,
-            newPassword: requirePasswordChange ? newPassword : undefined,
-            employeeId: employeeId,
-            newAndroidId: currentDeviceId,
-          }),
+      // Verify OTP dan update device/password dalam SATU panggilan.
+      // Beberapa sesi mobile/webview bisa kedaluwarsa; lakukan retry dengan refresh session.
+      const invokeVerifyDeviceOtp = async (accessToken?: string | null) => {
+        const headers: Record<string, string> = {
+          "Content-Type": "application/json",
+          "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        };
+        if (accessToken) {
+          headers["Authorization"] = `Bearer ${accessToken}`;
         }
-      );
+        return fetch(
+          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-device-otp`,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              email: normalizedEmail,
+              otp: normalizedOtp,
+              newPassword: requirePasswordChange ? newPassword : undefined,
+              employeeId: employeeId,
+              newAndroidId: currentDeviceId,
+            }),
+          }
+        );
+      };
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      let accessToken = sessionData?.session?.access_token || null;
+      let response = await invokeVerifyDeviceOtp(accessToken);
+
+      if (response.status === 401) {
+        const { data: refreshed, error: refreshError } = await supabase.auth.refreshSession();
+        if (!refreshError && refreshed?.session?.access_token) {
+          accessToken = refreshed.session.access_token;
+          response = await invokeVerifyDeviceOtp(accessToken);
+        } else {
+          // Fallback tanpa bearer untuk deployment yang verify_jwt=false
+          response = await invokeVerifyDeviceOtp(null);
+        }
+      }
 
       if (!response.ok) {
         const parsed = await parseHttpError(response);
         setLastBackendTrace(parsed.traceId || null);
         setLastBackendErrorCode(parsed.code || null);
         setLastBackendRetryAfter(parsed.retryAfterSeconds || null);
-        throw new Error(withTrace(parsed.message || "Gagal verifikasi OTP atau reset device", parsed.traceId));
+        const rawMessage = parsed.message || "Gagal verifikasi OTP atau reset device";
+        const normalizedMessage =
+          response.status === 401 || /invalid jwt|unauthorized|not authenticated/i.test(rawMessage)
+            ? "Sesi login kadaluarsa. Silakan login ulang."
+            : rawMessage;
+        throw new Error(withTrace(normalizedMessage, parsed.traceId));
       }
 
       const data = await response.json();
@@ -374,12 +401,12 @@ export function DeviceResetDialog({
       toast.success("Device berhasil direset dan didaftarkan ke perangkat ini.");
       onSuccess();
       onOpenChange(false);
-    } catch (error: any) {
+    } catch (error: unknown) {
       const logRef = reportError(error, "employee.device_reset.verify_and_reset", {
         employee_id: employeeId,
         employee_email: employeeEmail,
       });
-      toast.error(appendErrorReference(error?.message || "Gagal reset device ID", logRef));
+      toast.error(appendErrorReference(getErrorMessage(error) || "Gagal reset device ID", logRef));
     } finally {
       setIsLoading(false);
     }

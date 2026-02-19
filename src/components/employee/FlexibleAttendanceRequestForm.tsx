@@ -117,9 +117,10 @@ export function FlexibleAttendanceRequestForm({ employeeId, tenantId, onSuccess 
       setOpen(false);
       resetForm();
       onSuccess?.();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error submitting request:", error);
-      toast.error(error.message || "Gagal mengajukan permohonan");
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(message || "Gagal mengajukan permohonan");
     } finally {
       setIsSubmitting(false);
     }

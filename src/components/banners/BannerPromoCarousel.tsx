@@ -118,7 +118,7 @@ export function BannerPromoCarousel() {
                 const img = e.target as HTMLImageElement;
                 if (!img.dataset.fallback) {
                   img.dataset.fallback = "1";
-                  img.crossOrigin = null as any;
+                  img.crossOrigin = null;
                   img.src = currentBanner.imageUrl;
                 } else {
                   img.src = '/placeholder.svg';

@@ -15,6 +15,7 @@ import type { Tables } from "@/integrations/supabase/types";
 import { LocationPicker } from "@/components/maps/LocationPicker";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { validateOfficeCoordinateInput } from "@/lib/officeCoordinates";
 
 type Office = Tables<"offices">;
 type OPD = Tables<"opd">;
@@ -77,6 +78,11 @@ export default function OrgWorkLocationsManagement() {
       toast.error("Nama dan koordinat harus diisi");
       return;
     }
+    const coordinateValidation = validateOfficeCoordinateInput(formData.latitude, formData.longitude);
+    if (!coordinateValidation.ok) {
+      toast.error(coordinateValidation.message);
+      return;
+    }
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -96,8 +102,8 @@ export default function OrgWorkLocationsManagement() {
       const payload = {
         name: formData.name,
         opd_id: formData.opd_id || null,
-        latitude: parseFloat(formData.latitude),
-        longitude: parseFloat(formData.longitude),
+        latitude: coordinateValidation.latitude,
+        longitude: coordinateValidation.longitude,
         radius_meters: parseInt(formData.radius_meters) || 100,
         address: formData.address || null,
         tenant_id: roleData.tenant_id,

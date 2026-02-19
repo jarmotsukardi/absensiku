@@ -29,6 +29,24 @@ const ORGANIZATION_TYPES = [
   { value: "sekolah", label: "Sekolah" },
 ];
 
+const parseNumericSettingValue = (raw: unknown, fallback: number): number => {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    const objectValue = raw as Record<string, unknown>;
+    if ("value" in objectValue) {
+      return parseNumericSettingValue(objectValue.value, fallback);
+    }
+    if ("amount" in objectValue) {
+      return parseNumericSettingValue(objectValue.amount, fallback);
+    }
+  }
+  return fallback;
+};
+
 export default function OrgSettings() {
   const { organization, isLoading, updateOrganization, updateTimezone, refetch } = useOrganizationSettings();
   const [activeTab, setActiveTab] = useState("general");
@@ -58,9 +76,7 @@ export default function OrgSettings() {
         .select("value")
         .eq("key", "b2b_negotiation_threshold")
         .maybeSingle();
-      if (data?.value) {
-        setB2bThreshold(parseInt(String(data.value)) || 2000);
-      }
+      setB2bThreshold(Math.max(1, Math.floor(parseNumericSettingValue(data?.value, 2000))));
     };
     fetchB2bThreshold();
   }, []);

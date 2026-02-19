@@ -11,6 +11,8 @@ import { SimpleCaptcha } from "@/components/common/SimpleCaptcha";
 import { useToast } from "@/hooks/use-toast";
 import { useLoginRateLimit } from "@/hooks/useLoginRateLimit";
 import { cn } from "@/lib/utils";
+import { validateOfficeCoordinateInput } from "@/lib/officeCoordinates";
+import { LocationPicker } from "@/components/maps/LocationPicker";
 import { 
   User, Mail, Lock, Phone, Building2, Loader2, Eye, EyeOff, 
   ArrowRight, ArrowLeft, CheckCircle2, Pencil, Copy, Monitor, 
@@ -60,6 +62,10 @@ export function OrgRegistrationForm({ rateLimit }: OrgRegistrationFormProps) {
   // Step 2 fields
   const [orgName, setOrgName] = useState("");
   const [orgType, setOrgType] = useState<string>("");
+  const [officeName, setOfficeName] = useState("");
+  const [officeAddress, setOfficeAddress] = useState("");
+  const [officeLatitude, setOfficeLatitude] = useState("");
+  const [officeLongitude, setOfficeLongitude] = useState("");
   const [hoveredType, setHoveredType] = useState<string | null>(null);
 
   // Step 3
@@ -142,6 +148,11 @@ export function OrgRegistrationForm({ rateLimit }: OrgRegistrationFormProps) {
     const errs: Record<string, string> = {};
     if (!orgName || orgName.length < 3) errs.organizationName = "Nama organisasi minimal 3 karakter";
     if (!orgType) errs.organizationType = "Pilih tipe organisasi";
+    if (!officeName || officeName.length < 3) errs.officeName = "Nama kantor minimal 3 karakter";
+    const coordinateValidation = validateOfficeCoordinateInput(officeLatitude, officeLongitude);
+    if (!coordinateValidation.ok) {
+      errs.officeCoordinates = coordinateValidation.message;
+    }
     setErrors(errs);
     return Object.keys(errs).length === 0;
   };
@@ -164,6 +175,14 @@ export function OrgRegistrationForm({ rateLimit }: OrgRegistrationFormProps) {
 
     setIsLoading(true);
     try {
+      const coordinateValidation = validateOfficeCoordinateInput(officeLatitude, officeLongitude);
+      if (!coordinateValidation.ok) {
+        setErrors((prev) => ({ ...prev, officeCoordinates: coordinateValidation.message }));
+        setStep(2);
+        toast({ variant: "destructive", title: "Koordinat kantor tidak valid", description: coordinateValidation.message });
+        return;
+      }
+
       const { error } = await supabase.auth.signUp({
         email: email.trim().toLowerCase(),
         password,
@@ -173,6 +192,10 @@ export function OrgRegistrationForm({ rateLimit }: OrgRegistrationFormProps) {
             name,
             tenant_name: orgName,
             organization_type: orgType,
+            tenant_office_name: officeName,
+            tenant_office_address: officeAddress,
+            tenant_office_latitude: String(coordinateValidation.latitude),
+            tenant_office_longitude: String(coordinateValidation.longitude),
           },
         },
       });
@@ -422,6 +445,32 @@ export function OrgRegistrationForm({ rateLimit }: OrgRegistrationFormProps) {
             {errors.organizationType && <p className="text-xs text-destructive">{errors.organizationType}</p>}
           </div>
 
+          <div className="space-y-2">
+            <Label>Nama Kantor Utama</Label>
+            <Input
+              value={officeName}
+              onChange={(e) => setOfficeName(e.target.value)}
+              placeholder="Contoh: Kantor Pusat"
+              className="rounded-xl"
+            />
+            {errors.officeName && <p className="text-xs text-destructive">{errors.officeName}</p>}
+          </div>
+
+          <div className="space-y-2">
+            <Label>Lokasi Kantor Utama</Label>
+            <LocationPicker
+              latitude={officeLatitude}
+              longitude={officeLongitude}
+              onLocationChange={(lat, lng) => {
+                setOfficeLatitude(lat);
+                setOfficeLongitude(lng);
+              }}
+              address={officeAddress}
+              onAddressChange={setOfficeAddress}
+            />
+          </div>
+          {errors.officeCoordinates && <p className="text-xs text-destructive">{errors.officeCoordinates}</p>}
+
           <div className="flex gap-3">
             <Button variant="outline" className="flex-1 rounded-xl" onClick={goBack}>
               <ArrowLeft className="w-4 h-4 mr-2" /> Kembali
@@ -467,6 +516,11 @@ export function OrgRegistrationForm({ rateLimit }: OrgRegistrationFormProps) {
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Tipe:</span>
                   <Badge variant="secondary">{orgTypes.find(t => t.value === orgType)?.label || "-"}</Badge>
+                </div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Kantor Utama:</span><span className="font-medium">{officeName}</span></div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Koordinat:</span>
+                  <span className="font-medium">{officeLatitude || "-"}, {officeLongitude || "-"}</span>
                 </div>
               </div>
             </CardContent>

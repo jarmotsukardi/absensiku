@@ -698,7 +698,25 @@ Opsi penting:
 - `--skip-orchestrate`: lewati tahap orchestrator
 - `--skip-autofix`: lewati `npm run autofix`
 - `--skip-validate`: hanya jalankan tahap awal
+- `--skip-faq-offer`: lewati hook penawaran FAQ otomatis
 - `--dry-run`: simulasi tanpa eksekusi command
+
+Catatan:
+- `builder` sekarang menjalankan hook **penawaran FAQ otomatis** (`npm run faq:offer`) setelah batch selesai, agar setiap perubahan fitur selalu diikuti usulan update FAQ.
+
+### Mekanisme permanen update FAQ
+
+Gunakan command berikut untuk governance FAQ:
+
+```bash
+npm run faq:offer   # tampilkan modul terdampak + usulan FAQ
+npm run faq:ack     # tandai bahwa FAQ sudah ditinjau/diperbarui
+npm run faq:check   # mode ketat (gagal jika perubahan fitur belum di-ack)
+```
+
+Artifact otomatis:
+- `artifacts/faq-offer/latest.json`
+- `artifacts/faq-offer/latest.md`
 
 ---
 

@@ -19,6 +19,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
 import { 
   CreditCard, 
   Search,
@@ -32,6 +41,7 @@ import {
   Flame,
   AlertTriangle,
   Loader2,
+  DollarSign,
 } from "lucide-react";
 import { toast } from "sonner";
 import { addDays, format } from "date-fns";
@@ -67,6 +77,7 @@ interface Subscription {
   start_date: string | null;
   end_date: string | null;
   created_at: string | null;
+  price_per_employee?: number | null;
   tenant?: {
     name: string;
     code: string;
@@ -107,6 +118,10 @@ const getNumericSettingValue = (raw: unknown, fallback: number) => {
 
   if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && "value" in raw) {
     const nested = (raw as Record<string, unknown>).value;
+    return getNumericSettingValue(nested, fallback);
+  }
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw) && "amount" in raw) {
+    const nested = (raw as Record<string, unknown>).amount;
     return getNumericSettingValue(nested, fallback);
   }
 
@@ -191,7 +206,12 @@ export default function SubscriptionManagement() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [policyThreshold, setPolicyThreshold] = useState(30);
   const [policyGraceDays, setPolicyGraceDays] = useState(7);
+  const [defaultPricePerEmployee, setDefaultPricePerEmployee] = useState(15000);
   const [isSyncingPolicy, setIsSyncingPolicy] = useState(false);
+  const [priceDialogOpen, setPriceDialogOpen] = useState(false);
+  const [editingSubscription, setEditingSubscription] = useState<Subscription | null>(null);
+  const [editingPriceValue, setEditingPriceValue] = useState("");
+  const [isSavingPrice, setIsSavingPrice] = useState(false);
   const [stats, setStats] = useState({
     total: 0,
     trial: 0,
@@ -251,6 +271,7 @@ export default function SubscriptionManagement() {
         subsWithCounts,
         streakRes,
         settingsRes,
+        billingPriceRes,
       ] = await Promise.all([
         Promise.all(
           (data || []).map(async (sub: Subscription) => {
@@ -279,6 +300,11 @@ export default function SubscriptionManagement() {
           .from("system_settings")
           .select("key, value")
           .in("key", ["streak_threshold", "streak_grace_period_days"]),
+        supabase
+          .from("billing_settings")
+          .select("setting_value")
+          .eq("setting_key", "price_per_employee")
+          .maybeSingle(),
       ]);
 
       let effectiveThreshold = policyThreshold;
@@ -299,6 +325,16 @@ export default function SubscriptionManagement() {
         effectiveGraceDays = Math.max(0, Math.floor(getNumericSettingValue(graceRaw, 7)));
         setPolicyThreshold(effectiveThreshold);
         setPolicyGraceDays(effectiveGraceDays);
+      }
+
+      if (billingPriceRes.error) {
+        reportError(billingPriceRes.error, "admin.subscriptions.fetch_default_price_per_employee");
+      } else {
+        const parsedDefault = Math.max(
+          1,
+          Math.floor(getNumericSettingValue((billingPriceRes.data as { setting_value?: unknown } | null)?.setting_value, 15000))
+        );
+        setDefaultPricePerEmployee(parsedDefault);
       }
 
       const streakByTenant = new Map(
@@ -415,6 +451,83 @@ export default function SubscriptionManagement() {
     }
   };
 
+  const openPriceDialog = (subscription: Subscription) => {
+    setEditingSubscription(subscription);
+    const currentPrice =
+      typeof subscription.price_per_employee === "number" && subscription.price_per_employee > 0
+        ? subscription.price_per_employee
+        : defaultPricePerEmployee;
+    setEditingPriceValue(String(Math.floor(currentPrice)));
+    setPriceDialogOpen(true);
+  };
+
+  const saveNegotiatedPrice = async () => {
+    if (!editingSubscription) return;
+
+    const parsed = Number(editingPriceValue.replace(/[^0-9.]/g, ""));
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      toast.error("Harga per pegawai harus berupa angka lebih dari 0");
+      return;
+    }
+
+    setIsSavingPrice(true);
+    try {
+      const normalized = Math.floor(parsed);
+      const { data, error } = await supabase
+        .from("subscriptions")
+        .update({ price_per_employee: normalized })
+        .eq("id", editingSubscription.id)
+        .select("id")
+        .maybeSingle();
+
+      if (error || !data?.id) {
+        throw error || new Error("Gagal menyimpan harga negosiasi");
+      }
+
+      toast.success("Harga negosiasi B2B berhasil disimpan");
+      setPriceDialogOpen(false);
+      setEditingSubscription(null);
+      await fetchSubscriptions();
+    } catch (error) {
+      const errorRef = reportError(error, "admin.subscriptions.save_negotiated_price", {
+        subscription_id: editingSubscription.id,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan harga negosiasi", errorRef));
+    } finally {
+      setIsSavingPrice(false);
+    }
+  };
+
+  const resetNegotiatedPrice = async () => {
+    if (!editingSubscription) return;
+
+    setIsSavingPrice(true);
+    try {
+      const { data, error } = await supabase
+        .from("subscriptions")
+        .update({ price_per_employee: null })
+        .eq("id", editingSubscription.id)
+        .select("id")
+        .maybeSingle();
+
+      if (error || !data?.id) {
+        throw error || new Error("Gagal reset harga negosiasi");
+      }
+
+      toast.success("Harga negosiasi direset ke harga default");
+      setPriceDialogOpen(false);
+      setEditingSubscription(null);
+      await fetchSubscriptions();
+    } catch (error) {
+      const errorRef = reportError(error, "admin.subscriptions.reset_negotiated_price", {
+        subscription_id: editingSubscription.id,
+      });
+      toast.error(appendErrorReference("Gagal reset harga negosiasi", errorRef));
+    } finally {
+      setIsSavingPrice(false);
+    }
+  };
+
   const syncWithStreakPolicy = async () => {
     const syncTargets = subscriptions.filter((sub) => {
       const currentStatus = isSubscriptionStatus(sub.status)
@@ -502,6 +615,7 @@ export default function SubscriptionManagement() {
         "status_langganan",
         "kebijakan_streak",
         "pegawai",
+        "harga_per_pegawai",
         "mulai",
         "berakhir",
       ];
@@ -520,6 +634,11 @@ export default function SubscriptionManagement() {
           statusLabels[normalizedStatus].label,
           streakLabel,
           String(sub.employees_count ?? 0),
+          String(
+            typeof sub.price_per_employee === "number" && sub.price_per_employee > 0
+              ? Math.floor(sub.price_per_employee)
+              : defaultPricePerEmployee
+          ),
           startLabel,
           endLabel,
         ];
@@ -685,6 +804,7 @@ export default function SubscriptionManagement() {
                       <TableHead>Status</TableHead>
                       <TableHead>Kebijakan Streak</TableHead>
                       <TableHead className="text-center">Pegawai</TableHead>
+                      <TableHead>Harga / Pegawai</TableHead>
                       <TableHead>Mulai</TableHead>
                       <TableHead>Berakhir</TableHead>
                       <TableHead className="text-right">Aksi</TableHead>
@@ -693,7 +813,7 @@ export default function SubscriptionManagement() {
                   <TableBody>
                     {subscriptions.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                        <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                           Tidak ada data langganan
                         </TableCell>
                       </TableRow>
@@ -702,6 +822,13 @@ export default function SubscriptionManagement() {
                         const normalizedStatus = isSubscriptionStatus(sub.status)
                           ? sub.status
                           : DEFAULT_SUBSCRIPTION_STATUS;
+                        const isCustomPrice =
+                          typeof sub.price_per_employee === "number" &&
+                          Number.isFinite(sub.price_per_employee) &&
+                          sub.price_per_employee > 0;
+                        const effectivePrice = isCustomPrice
+                          ? Number(sub.price_per_employee)
+                          : defaultPricePerEmployee;
                         return (
                           <TableRow key={sub.id}>
                             <TableCell>
@@ -735,6 +862,14 @@ export default function SubscriptionManagement() {
                               </div>
                             </TableCell>
                             <TableCell>
+                              <div className="space-y-1">
+                                <p className="font-medium">{formatCurrency(effectivePrice)}</p>
+                                <Badge variant={isCustomPrice ? "default" : "outline"}>
+                                  {isCustomPrice ? "Negosiasi B2B" : "Default Global"}
+                                </Badge>
+                              </div>
+                            </TableCell>
+                            <TableCell>
                               {sub.start_date
                                 ? format(new Date(sub.start_date), "d MMM yyyy", { locale: id })
                                 : "-"}
@@ -758,6 +893,14 @@ export default function SubscriptionManagement() {
                                     <SelectItem value="cancelled">Dibatalkan</SelectItem>
                                   </SelectContent>
                                 </Select>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => openPriceDialog(sub)}
+                                >
+                                  <DollarSign className="h-3 w-3 mr-1" />
+                                  Harga
+                                </Button>
                                 {sub.recommended_status && sub.recommended_status !== normalizedStatus && (
                                   <Button
                                     size="sm"
@@ -818,6 +961,48 @@ export default function SubscriptionManagement() {
             )}
           </CardContent>
         </Card>
+        <Dialog open={priceDialogOpen} onOpenChange={setPriceDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Harga Negosiasi B2B</DialogTitle>
+              <DialogDescription>
+                Atur harga per pegawai khusus tenant. Jika direset, sistem kembali memakai harga default global.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-2">
+              <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm">
+                <p className="font-medium">{editingSubscription?.tenant?.name || "-"}</p>
+                <p className="text-muted-foreground">{editingSubscription?.tenant?.code || "-"}</p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="negotiated-price">Harga per pegawai (IDR)</Label>
+                <Input
+                  id="negotiated-price"
+                  inputMode="numeric"
+                  value={editingPriceValue}
+                  onChange={(event) => setEditingPriceValue(event.target.value)}
+                  placeholder="contoh: 14000"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Default global saat ini: {formatCurrency(defaultPricePerEmployee)}
+                </p>
+              </div>
+            </div>
+            <DialogFooter className="gap-2 sm:justify-between">
+              <Button
+                variant="outline"
+                onClick={() => void resetNegotiatedPrice()}
+                disabled={isSavingPrice}
+              >
+                Reset ke Default
+              </Button>
+              <Button onClick={() => void saveNegotiatedPrice()} disabled={isSavingPrice}>
+                {isSavingPrice ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                Simpan Harga
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
         <PageGlossarySection preset="admin_subscription_management" />
       </div>
     </SuperAdminLayout>

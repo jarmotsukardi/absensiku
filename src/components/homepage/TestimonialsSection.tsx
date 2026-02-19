@@ -1,10 +1,11 @@
+import { useEffect, useMemo, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
-import { Star, Quote } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Star, Quote, ChevronLeft, ChevronRight } from "lucide-react";
 import type { Testimonial } from "@/hooks/useHomepageData";
 
 interface TestimonialsSectionProps {
   testimonials: Testimonial[];
-  speed?: number; // seconds for one full cycle
 }
 
 const defaultTestimonials: Testimonial[] = [
@@ -18,7 +19,7 @@ const defaultTestimonials: Testimonial[] = [
 
 function TestimonialCard({ testimonial }: { testimonial: Testimonial }) {
   return (
-    <Card className="border-border/50 min-w-[280px] max-w-[320px] flex-shrink-0">
+    <Card className="border-border/50 h-full">
       <CardContent className="p-5">
         <div className="flex items-center gap-1 mb-3">
           {[...Array(testimonial.rating)].map((_, i) => (
@@ -45,36 +46,100 @@ function TestimonialCard({ testimonial }: { testimonial: Testimonial }) {
   );
 }
 
-export function TestimonialsSection({ testimonials, speed = 30 }: TestimonialsSectionProps) {
+export function TestimonialsSection({ testimonials }: TestimonialsSectionProps) {
   const displayTestimonials = testimonials.length > 0 ? testimonials : defaultTestimonials;
-  // Duplicate for seamless loop
-  const marqueeItems = [...displayTestimonials, ...displayTestimonials];
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [cardsPerView, setCardsPerView] = useState(1);
+
+  useEffect(() => {
+    const updateCardsPerView = () => {
+      const width = window.innerWidth;
+      if (width >= 1280) {
+        setCardsPerView(3);
+      } else if (width >= 768) {
+        setCardsPerView(2);
+      } else {
+        setCardsPerView(1);
+      }
+    };
+
+    updateCardsPerView();
+    window.addEventListener("resize", updateCardsPerView);
+    return () => window.removeEventListener("resize", updateCardsPerView);
+  }, []);
+
+  const maxCards = Math.min(cardsPerView, displayTestimonials.length);
+  const canSlide = displayTestimonials.length > maxCards;
+
+  useEffect(() => {
+    if (!canSlide) return;
+    const intervalId = window.setInterval(() => {
+      setCurrentIndex((prev) => (prev + 1) % displayTestimonials.length);
+    }, 6500);
+    return () => window.clearInterval(intervalId);
+  }, [canSlide, displayTestimonials.length]);
+
+  useEffect(() => {
+    if (currentIndex >= displayTestimonials.length) {
+      setCurrentIndex(0);
+    }
+  }, [currentIndex, displayTestimonials.length]);
+
+  const visibleTestimonials = useMemo(() => {
+    if (displayTestimonials.length === 0) return [];
+    return Array.from({ length: maxCards }, (_, offset) => {
+      const index = (currentIndex + offset) % displayTestimonials.length;
+      return displayTestimonials[index];
+    });
+  }, [currentIndex, displayTestimonials, maxCards]);
+
+  const goNext = () => {
+    if (!canSlide) return;
+    setCurrentIndex((prev) => (prev + 1) % displayTestimonials.length);
+  };
+
+  const goPrev = () => {
+    if (!canSlide) return;
+    setCurrentIndex((prev) => (prev - 1 + displayTestimonials.length) % displayTestimonials.length);
+  };
 
   return (
-    <section className="py-16 px-4 overflow-hidden">
+    <section className="py-16 px-4">
       <div className="container mx-auto">
-        <div className="text-center mb-10">
-          <h2 className="text-2xl md:text-3xl font-bold text-foreground mb-2">Apa Kata Mereka</h2>
-          <p className="text-muted-foreground text-sm">Testimoni dari pengguna AbsensiKu</p>
+        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
+          <div className="text-center md:text-left">
+            <h2 className="text-2xl md:text-3xl font-bold text-foreground mb-2">Apa Kata Mereka</h2>
+            <p className="text-muted-foreground text-sm">Testimoni dari pengguna AbsensiKu</p>
+          </div>
+          <div className="flex items-center justify-center md:justify-end gap-2">
+            <Button variant="outline" size="icon" onClick={goPrev} disabled={!canSlide} aria-label="Testimoni sebelumnya">
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+            <Button variant="outline" size="icon" onClick={goNext} disabled={!canSlide} aria-label="Testimoni berikutnya">
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
-      </div>
 
-      {/* Infinite Marquee */}
-      <div className="relative">
-        <div className="absolute left-0 top-0 bottom-0 w-16 bg-gradient-to-r from-background to-transparent z-10" />
-        <div className="absolute right-0 top-0 bottom-0 w-16 bg-gradient-to-l from-background to-transparent z-10" />
-        
-        <div 
-          className="flex gap-4 animate-marquee"
-          style={{ 
-            animationDuration: `${speed}s`,
-            width: 'max-content'
-          }}
-        >
-          {marqueeItems.map((testimonial, index) => (
-            <TestimonialCard key={`${testimonial.id}-${index}`} testimonial={testimonial} />
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 md:gap-5">
+          {visibleTestimonials.map((testimonial, index) => (
+            <TestimonialCard key={`${testimonial.id}-${currentIndex}-${index}`} testimonial={testimonial} />
           ))}
         </div>
+
+        {canSlide && (
+          <div className="flex items-center justify-center gap-2 mt-6">
+            {displayTestimonials.map((item, idx) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setCurrentIndex(idx)}
+                className={`h-2 rounded-full transition-all ${idx === currentIndex ? "w-6 bg-primary" : "w-2 bg-border hover:bg-primary/40"}`}
+                aria-label={`Lihat testimoni ${idx + 1}`}
+              />
+            ))}
+          </div>
+        )}
       </div>
     </section>
   );

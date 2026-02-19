@@ -9,6 +9,7 @@ import { Progress } from "@/components/ui/progress";
 import { Checkbox } from "@/components/ui/checkbox";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { supabase } from "@/integrations/supabase/client";
+import { debugLog } from "@/lib/debugLog";
 import { toast } from "sonner";
 import {
   Upload,
@@ -132,11 +133,11 @@ export function DataImportManager() {
         }
 
         const json = JSON.parse(content);
-        console.log("Parsed JSON keys:", Object.keys(json));
-        console.log("Has data:", !!json.data);
-        console.log("Has schema:", !!json.schema);
-        console.log("Has rls:", !!json.rls);
-        console.log("Has metadata:", !!json.metadata);
+        debugLog("Parsed JSON keys:", Object.keys(json));
+        debugLog("Has data:", !!json.data);
+        debugLog("Has schema:", !!json.schema);
+        debugLog("Has rls:", !!json.rls);
+        debugLog("Has metadata:", !!json.metadata);
         
         // Check if it's a full backup format (has 'data' property with table data)
         const isFullBackup = json.data && typeof json.data === 'object' && !Array.isArray(json.data);
@@ -158,7 +159,7 @@ export function DataImportManager() {
             return acc + (Array.isArray(val) ? val.length : 0);
           }, 0);
           
-          console.log("Full backup detected:", {
+          debugLog("Full backup detected:", {
             tables: tablesWithData.length,
             records: totalRecords,
             hasSchema: !!json.schema,

@@ -4314,6 +4314,14 @@ export type Database = {
         Args: { p_invoice_id?: string | null; p_tenant_id: string }
         Returns: undefined
       }
+      run_unpaid_cleanup_lifecycle: {
+        Args: {
+          p_dry_run?: boolean
+          p_limit?: number
+          p_tenant_id?: string | null
+        }
+        Returns: Json
+      }
       log_critical_error: {
         Args: {
           p_action: string
@@ -4371,8 +4379,66 @@ export type Database = {
           queue_depth: number
         }[]
       }
+      get_admin_dashboard_snapshot: {
+        Args: {
+          p_force_refresh?: boolean | null
+          p_max_age_seconds?: number | null
+        }
+        Returns: {
+          computed_at: string | null
+          count_mode: string | null
+          payload: Json | null
+          source: string | null
+        }[]
+      }
+      get_org_dashboard_snapshot: {
+        Args: {
+          p_force_refresh?: boolean | null
+          p_max_age_seconds?: number | null
+          p_tenant_id: string
+        }
+        Returns: {
+          computed_at: string | null
+          count_mode: string | null
+          payload: Json | null
+          source: string | null
+        }[]
+      }
+      is_dashboard_peak_hour: {
+        Args: { p_now?: string | null }
+        Returns: boolean
+      }
+      parse_hhmm_to_minutes: { Args: { p_time_text: string }; Returns: number | null }
+      refresh_admin_dashboard_snapshot: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          computed_at: string | null
+          count_mode: string | null
+          payload: Json | null
+        }[]
+      }
+      refresh_admin_dashboard_snapshot_if_off_peak: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
+      refresh_org_dashboard_snapshot: {
+        Args: { p_tenant_id: string }
+        Returns: {
+          computed_at: string | null
+          count_mode: string | null
+          payload: Json | null
+        }[]
+      }
+      refresh_recent_org_dashboard_snapshots_if_off_peak: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
       refresh_monthly_attendance_stats: { Args: never; Returns: undefined }
       sync_streak_subscription_status: {
+        Args: { p_tenant_id?: string | null }
+        Returns: Json
+      }
+      sync_unpaid_cleanup_schedules: {
         Args: { p_tenant_id?: string | null }
         Returns: Json
       }

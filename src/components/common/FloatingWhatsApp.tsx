@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { MessageCircle, X } from "lucide-react";
+import { Bot, MessageCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 type AnimationEffect = "pulse" | "glow" | "wobble" | "ripple";
@@ -26,6 +26,10 @@ interface FloatingWhatsAppProps {
   fallbackSettingKeys?: string[];
   panelTitle?: string;
   panelSubtitle?: string;
+  showChatAgentOption?: boolean;
+  onOpenChatAgent?: () => void;
+  chatAgentNoticeText?: string;
+  chatAgentButtonText?: string;
 }
 
 const defaultFallbackSettingKeys = ["floating_whatsapp"];
@@ -53,6 +57,10 @@ export function FloatingWhatsApp({
   fallbackSettingKeys = defaultFallbackSettingKeys,
   panelTitle = "Tim Support",
   panelSubtitle = "Biasanya merespon dalam 1 jam",
+  showChatAgentOption = false,
+  onOpenChatAgent,
+  chatAgentNoticeText = "Chat Agent akan menjawab semua pertanyaan Anda dengan cepat.",
+  chatAgentButtonText = "Pakai Chat Agent",
 }: FloatingWhatsAppProps = {}) {
   const [settings, setSettings] = useState<FloatingWhatsAppSettings | null>(null);
   const [isOpen, setIsOpen] = useState(false);
@@ -159,7 +167,16 @@ export function FloatingWhatsApp({
 
   const handleClick = () => {
     const message = encodeURIComponent(resolvedDefaultMessage);
-    window.open(`https://wa.me/${resolvedPhone}?text=${message}`, "_blank");
+    window.open(`https://wa.me/${resolvedPhone}?text=${message}`, "_blank", "noopener,noreferrer");
+  };
+
+  const handleOpenChatAgent = () => {
+    if (onOpenChatAgent) {
+      onOpenChatAgent();
+    } else if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("homepage-chat-agent:open"));
+    }
+    setIsOpen(false);
   };
 
   const isLeftPosition = settings.position === "left" || settings.position === "bottom-left";
@@ -217,10 +234,23 @@ export function FloatingWhatsApp({
               {resolvedWelcomeText}
             </p>
           </div>
-          <Button onClick={handleClick} className="w-full bg-success hover:bg-success/90">
-            <MessageCircle className="w-4 h-4 mr-2" />
-            Mulai Chat
-          </Button>
+          {showChatAgentOption && (
+            <div className="mb-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
+              <p className="text-xs text-primary font-medium">{chatAgentNoticeText}</p>
+            </div>
+          )}
+          <div className="space-y-2">
+            <Button onClick={handleClick} className="w-full bg-success hover:bg-success/90">
+              <MessageCircle className="w-4 h-4 mr-2" />
+              Chat via WhatsApp
+            </Button>
+            {showChatAgentOption && (
+              <Button onClick={handleOpenChatAgent} variant="outline" className="w-full">
+                <Bot className="w-4 h-4 mr-2" />
+                {chatAgentButtonText}
+              </Button>
+            )}
+          </div>
         </div>
       )}
       

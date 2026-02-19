@@ -45,6 +45,8 @@ import {
   HardDrive,
   MessageCircleQuestion,
   Activity,
+  AlertTriangle,
+  Wand2,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -102,6 +104,8 @@ const menuGroups: MenuGroup[] = [
       { title: "Profil Saya", icon: UserCog, path: "/admin/profile" },
       { title: "Tata Letak Homepage", icon: Layout, path: "/admin/homepage-layout" },
       { title: "Manajemen FAQ", icon: MessageCircleQuestion, path: "/admin/faq" },
+      { title: "Template Batas Absen", icon: AlertTriangle, path: "/admin/schedule/absence-limits" },
+      { title: "Template Onboarding Org", icon: Wand2, path: "/admin/templates" },
       { title: "Keamanan Absensi", icon: Shield, path: "/admin/attendance-security" },
       { title: "Pengaturan Sistem", icon: Settings, path: "/admin/settings" },
       { title: "Notifikasi", icon: Bell, path: "/admin/notifications" },

@@ -48,41 +48,118 @@ interface Stats {
   };
 }
 
+interface StatsCachePayload {
+  stats: Stats;
+  updatedAt: string;
+}
+
+interface DashboardSnapshotRpcRow {
+  payload: unknown;
+  computed_at: string | null;
+  source: string | null;
+  count_mode: string | null;
+}
+
+const DASHBOARD_STATS_CACHE_KEY = "admin.dashboard.widgets.stats.v1";
+const DASHBOARD_STATS_CACHE_TTL_MS = 60 * 1000;
+const DASHBOARD_AUTO_REFRESH_MS = 2 * 60 * 1000;
+const DASHBOARD_COUNT_MODE = "planned" as const;
+
+const DEFAULT_STATS: Stats = {
+  totalTenants: 0,
+  activeTenants: 0,
+  totalEmployees: 0,
+  activeSubscriptions: 0,
+  trialSubscriptions: 0,
+  expiredSubscriptions: 0,
+  todayAttendance: 0,
+  pendingLeaves: 0,
+  readyForInvoicing: 0,
+  pendingInvoices: 0,
+  overdueInvoices: 0,
+  failedCronRuns24h: 0,
+  openFeedbacks: 0,
+  openBugs: 0,
+  lockedOtpUsers: 0,
+  trends: {
+    tenants: { label: "0% vs 30 hari lalu", trendUp: true },
+    employees: { label: "0% vs 30 hari lalu", trendUp: true },
+    subscriptions: { label: "0% vs 30 hari lalu", trendUp: true },
+    attendance: { label: "0% vs kemarin", trendUp: true },
+  },
+};
+
+const isValidStats = (value: unknown): value is Stats => {
+  if (!value || typeof value !== "object") return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.totalTenants === "number" &&
+    typeof v.totalEmployees === "number" &&
+    typeof v.activeSubscriptions === "number" &&
+    typeof v.todayAttendance === "number"
+  );
+};
+
+const readStatsCache = (): { stats: Stats; updatedAt: Date; isStale: boolean } | null => {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(DASHBOARD_STATS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StatsCachePayload;
+    if (!parsed || !isValidStats(parsed.stats) || typeof parsed.updatedAt !== "string") return null;
+    const updatedAt = new Date(parsed.updatedAt);
+    if (Number.isNaN(updatedAt.getTime())) return null;
+    const isStale = Date.now() - updatedAt.getTime() > DASHBOARD_STATS_CACHE_TTL_MS;
+    return { stats: parsed.stats, updatedAt, isStale };
+  } catch {
+    return null;
+  }
+};
+
+const writeStatsCache = (stats: Stats, updatedAt: Date) => {
+  if (typeof window === "undefined") return;
+  try {
+    const payload: StatsCachePayload = {
+      stats,
+      updatedAt: updatedAt.toISOString(),
+    };
+    window.localStorage.setItem(DASHBOARD_STATS_CACHE_KEY, JSON.stringify(payload));
+  } catch {
+    // Ignore storage quota/private mode failures.
+  }
+};
+
+const isAttendancePeakHourJakarta = (date = new Date()): boolean => {
+  const formatter = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Jakarta",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const timeStr = formatter.format(date); // HH:mm
+  const [hourStr, minuteStr] = timeStr.split(":");
+  const minutes = Number(hourStr) * 60 + Number(minuteStr);
+
+  const windows = [
+    { start: 6 * 60, end: 9 * 60 }, // 06:00-09:00
+    { start: 15 * 60, end: 18 * 60 + 30 }, // 15:00-18:30
+  ];
+
+  return windows.some((window) => minutes >= window.start && minutes < window.end);
+};
+
 export function DashboardWidgets() {
   const navigate = useNavigate();
-  const [stats, setStats] = useState<Stats>({
-    totalTenants: 0,
-    activeTenants: 0,
-    totalEmployees: 0,
-    activeSubscriptions: 0,
-    trialSubscriptions: 0,
-    expiredSubscriptions: 0,
-    todayAttendance: 0,
-    pendingLeaves: 0,
-    readyForInvoicing: 0,
-    pendingInvoices: 0,
-    overdueInvoices: 0,
-    failedCronRuns24h: 0,
-    openFeedbacks: 0,
-    openBugs: 0,
-    lockedOtpUsers: 0,
-    trends: {
-      tenants: { label: "0% vs 30 hari lalu", trendUp: true },
-      employees: { label: "0% vs 30 hari lalu", trendUp: true },
-      subscriptions: { label: "0% vs 30 hari lalu", trendUp: true },
-      attendance: { label: "0% vs kemarin", trendUp: true },
-    },
-  });
+  const [stats, setStats] = useState<Stats>(DEFAULT_STATS);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isUsingCachedSnapshot, setIsUsingCachedSnapshot] = useState(false);
+  const [snapshotSource, setSnapshotSource] = useState<"fresh" | "cache" | "legacy" | "peak_cache" | null>(null);
+  const [snapshotCountMode, setSnapshotCountMode] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
 
-  useEffect(() => {
-    fetchStats();
-  }, []);
-
-  const fetchStats = async (options?: { silent?: boolean }) => {
+  const fetchStats = async (options?: { silent?: boolean; forceRefresh?: boolean }) => {
     const isSilent = options?.silent ?? false;
     try {
       if (isSilent) {
@@ -97,6 +174,36 @@ export function DashboardWidgets() {
       const thirtyDaysAgoIso = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
       const sixtyDaysAgoIso = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
       const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+
+      // Primary path: use server snapshot RPC (cached in DB) to avoid heavy count queries per page load.
+      try {
+        const { data: snapshotData, error: snapshotError } = await supabase.rpc("get_admin_dashboard_snapshot", {
+          p_force_refresh: options?.forceRefresh ?? false,
+          p_max_age_seconds: 180,
+        });
+        if (snapshotError) {
+          throw snapshotError;
+        }
+        const snapshotRow = (Array.isArray(snapshotData) ? snapshotData[0] : null) as DashboardSnapshotRpcRow | null;
+        if (snapshotRow && isValidStats(snapshotRow.payload)) {
+          const updatedAt = snapshotRow.computed_at ? new Date(snapshotRow.computed_at) : new Date();
+          setStats(snapshotRow.payload);
+          setLastUpdatedAt(Number.isNaN(updatedAt.getTime()) ? new Date() : updatedAt);
+          setIsUsingCachedSnapshot(false);
+          const source = snapshotRow.source === "peak_cache"
+            ? "peak_cache"
+            : snapshotRow.source === "cache"
+              ? "cache"
+              : "fresh";
+          setSnapshotSource(source);
+          setSnapshotCountMode(snapshotRow.count_mode || "snapshot");
+          writeStatsCache(snapshotRow.payload, Number.isNaN(updatedAt.getTime()) ? new Date() : updatedAt);
+          return;
+        }
+        throw new Error("Invalid dashboard snapshot payload");
+      } catch (snapshotFetchError) {
+        reportError(snapshotFetchError, "admin.dashboard.widgets.fetch_snapshot");
+      }
 
       const [
         tenantsRes,
@@ -123,37 +230,37 @@ export function DashboardWidgets() {
         activeSubsPrev30Res,
         attendanceYesterdayRes,
       ] = await Promise.all([
-        supabase.from("tenants").select("id", { count: "exact", head: true }),
-        supabase.from("tenants").select("id", { count: "exact", head: true }).eq("is_active", true),
-        supabase.from("employees").select("id", { count: "exact", head: true }).eq("is_active", true),
-        supabase.from("subscriptions").select("id", { count: "exact", head: true }).eq("status", "active"),
-        supabase.from("subscriptions").select("id", { count: "exact", head: true }).eq("status", "trial"),
-        supabase.from("subscriptions").select("id", { count: "exact", head: true }).eq("status", "expired"),
-        supabase.from("attendance_records_partitioned").select("id", { count: "exact", head: true }).eq("date", today),
-        supabase.from("leave_requests").select("id", { count: "exact", head: true }).eq("status", "menunggu"),
-        supabase.from("stability_streaks").select("id", { count: "exact", head: true }).eq("status", "ready_for_invoicing"),
-        supabase.from("invoices").select("id", { count: "exact", head: true }).eq("status", "PENDING"),
-        supabase.from("invoices").select("id", { count: "exact", head: true }).eq("status", "AWAITING_VERIFICATION"),
+        supabase.from("tenants").select("id", { count: DASHBOARD_COUNT_MODE, head: true }),
+        supabase.from("tenants").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("is_active", true),
+        supabase.from("employees").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("is_active", true),
+        supabase.from("subscriptions").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "active"),
+        supabase.from("subscriptions").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "trial"),
+        supabase.from("subscriptions").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "expired"),
+        supabase.from("attendance_records_partitioned").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("date", today),
+        supabase.from("leave_requests").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "menunggu"),
+        supabase.from("stability_streaks").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "ready_for_invoicing"),
+        supabase.from("invoices").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "PENDING"),
+        supabase.from("invoices").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "AWAITING_VERIFICATION"),
         supabase
           .from("invoices")
-          .select("id", { count: "exact", head: true })
+          .select("id", { count: DASHBOARD_COUNT_MODE, head: true })
           .in("status", ["PENDING", "AWAITING_VERIFICATION"])
           .lt("due_date", today),
         supabase
           .from("cron_job_logs")
-          .select("id", { count: "exact", head: true })
+          .select("id", { count: DASHBOARD_COUNT_MODE, head: true })
           .gte("started_at", dayAgoIso)
           .or("status.ilike.%fail%,status.ilike.%error%"),
-        supabase.from("feedback_reports").select("id", { count: "exact", head: true }).eq("status", "open"),
-        supabase.from("feedback_reports").select("id", { count: "exact", head: true }).eq("status", "open").eq("feedback_type", "bug"),
-        supabase.from("rate_limit_otp").select("id", { count: "exact", head: true }).gt("locked_until", nowIso),
-        supabase.from("tenants").select("id", { count: "exact", head: true }).gte("created_at", thirtyDaysAgoIso),
-        supabase.from("tenants").select("id", { count: "exact", head: true }).gte("created_at", sixtyDaysAgoIso).lt("created_at", thirtyDaysAgoIso),
-        supabase.from("employees").select("id", { count: "exact", head: true }).gte("created_at", thirtyDaysAgoIso),
-        supabase.from("employees").select("id", { count: "exact", head: true }).gte("created_at", sixtyDaysAgoIso).lt("created_at", thirtyDaysAgoIso),
-        supabase.from("subscriptions").select("id", { count: "exact", head: true }).eq("status", "active").gte("created_at", thirtyDaysAgoIso),
-        supabase.from("subscriptions").select("id", { count: "exact", head: true }).eq("status", "active").gte("created_at", sixtyDaysAgoIso).lt("created_at", thirtyDaysAgoIso),
-        supabase.from("attendance_records_partitioned").select("id", { count: "exact", head: true }).eq("date", yesterday),
+        supabase.from("feedback_reports").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "open"),
+        supabase.from("feedback_reports").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "open").eq("feedback_type", "bug"),
+        supabase.from("rate_limit_otp").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).gt("locked_until", nowIso),
+        supabase.from("tenants").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).gte("created_at", thirtyDaysAgoIso),
+        supabase.from("tenants").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).gte("created_at", sixtyDaysAgoIso).lt("created_at", thirtyDaysAgoIso),
+        supabase.from("employees").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).gte("created_at", thirtyDaysAgoIso),
+        supabase.from("employees").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).gte("created_at", sixtyDaysAgoIso).lt("created_at", thirtyDaysAgoIso),
+        supabase.from("subscriptions").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "active").gte("created_at", thirtyDaysAgoIso),
+        supabase.from("subscriptions").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "active").gte("created_at", sixtyDaysAgoIso).lt("created_at", thirtyDaysAgoIso),
+        supabase.from("attendance_records_partitioned").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("date", yesterday),
       ]);
 
       const queryErrors = [
@@ -209,7 +316,7 @@ export function DashboardWidgets() {
         };
       })();
 
-      setStats({
+      const nextStats: Stats = {
         totalTenants: tenantsRes.count || 0,
         activeTenants: activeTenantsRes.count || 0,
         totalEmployees: employeesRes.count || 0,
@@ -231,18 +338,51 @@ export function DashboardWidgets() {
           subscriptions: pctTrend(activeSubsNew30Res.count || 0, activeSubsPrev30Res.count || 0),
           attendance: attendanceTrend,
         },
-      });
-      setLastUpdatedAt(new Date());
+      };
+      const updatedAt = new Date();
+      setStats(nextStats);
+      setLastUpdatedAt(updatedAt);
+      setIsUsingCachedSnapshot(false);
+      setSnapshotSource("legacy");
+      setSnapshotCountMode(DASHBOARD_COUNT_MODE);
+      writeStatsCache(nextStats, updatedAt);
     } catch (error) {
       const errorRef = reportError(error, "admin.dashboard.widgets.fetch_stats");
       const message = appendErrorReference("Gagal memuat widget dashboard", errorRef);
       setLoadError(message);
-      toast.error(message);
+      if (!isSilent) {
+        toast.error(message);
+      }
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
     }
   };
+
+  useEffect(() => {
+    const cached = readStatsCache();
+    if (cached) {
+      setStats(cached.stats);
+      setLastUpdatedAt(cached.updatedAt);
+      setIsUsingCachedSnapshot(true);
+      setIsLoading(false);
+      if (cached.isStale) {
+        void fetchStats({ silent: true });
+      }
+      return;
+    }
+    void fetchStats();
+  }, []);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      if (isAttendancePeakHourJakarta()) {
+        return;
+      }
+      void fetchStats({ silent: true });
+    }, DASHBOARD_AUTO_REFRESH_MS);
+    return () => window.clearInterval(intervalId);
+  }, []);
 
   const lastUpdatedLabel = useMemo(() => {
     if (!lastUpdatedAt) return "Belum tersinkron";
@@ -252,6 +392,22 @@ export function DashboardWidgets() {
       second: "2-digit",
     })}`;
   }, [lastUpdatedAt]);
+
+  const navigateToSubscriptions = (status?: "active" | "trial" | "expired") => {
+    if (!status) {
+      navigate("/admin/subscriptions");
+      return;
+    }
+    navigate(`/admin/subscriptions?status=${encodeURIComponent(status)}`);
+  };
+
+  const navigateToBilling = (status?: "PENDING" | "OVERDUE") => {
+    if (!status) {
+      navigate("/admin/billing");
+      return;
+    }
+    navigate(`/admin/billing?status=${encodeURIComponent(status)}`);
+  };
 
   const widgets = [
     {
@@ -322,12 +478,29 @@ export function DashboardWidgets() {
         </div>
       )}
       <div className="flex flex-col gap-2 rounded-lg border bg-card px-4 py-3 text-sm text-muted-foreground md:flex-row md:items-center md:justify-between">
-        <p>{lastUpdatedLabel}</p>
+        <div className="flex flex-wrap items-center gap-2">
+          <p>{lastUpdatedLabel}</p>
+          {isUsingCachedSnapshot && (
+            <Badge variant="outline" className="text-[10px]">
+              Snapshot cepat
+            </Badge>
+          )}
+          {snapshotSource && (
+            <Badge variant="outline" className="text-[10px]">
+              Snapshot {snapshotSource === "peak_cache" ? "peak-hour cache" : snapshotSource}
+            </Badge>
+          )}
+          {snapshotCountMode && (
+            <Badge variant="outline" className="text-[10px]">
+              Count {snapshotCountMode}
+            </Badge>
+          )}
+        </div>
         <Button
           variant="outline"
           size="sm"
           disabled={isRefreshing}
-          onClick={() => fetchStats({ silent: true })}
+          onClick={() => fetchStats({ silent: true, forceRefresh: true })}
         >
           {isRefreshing ? "Menyegarkan..." : "Refresh Data"}
         </Button>
@@ -379,7 +552,10 @@ export function DashboardWidgets() {
             <CardDescription>Distribusi status langganan</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-2">
+            <div
+              className="space-y-2 cursor-pointer rounded-md p-1 -m-1 transition-colors hover:bg-muted/40"
+              onClick={() => navigateToSubscriptions("active")}
+            >
               <div className="flex items-center justify-between text-sm">
                 <span className="flex items-center gap-2">
                   <CheckCircle2 className="h-4 w-4 text-green-500" />
@@ -392,7 +568,10 @@ export function DashboardWidgets() {
                 className="h-2 bg-green-100"
               />
             </div>
-            <div className="space-y-2">
+            <div
+              className="space-y-2 cursor-pointer rounded-md p-1 -m-1 transition-colors hover:bg-muted/40"
+              onClick={() => navigateToSubscriptions("trial")}
+            >
               <div className="flex items-center justify-between text-sm">
                 <span className="flex items-center gap-2">
                   <Clock className="h-4 w-4 text-amber-500" />
@@ -405,7 +584,10 @@ export function DashboardWidgets() {
                 className="h-2 bg-amber-100"
               />
             </div>
-            <div className="space-y-2">
+            <div
+              className="space-y-2 cursor-pointer rounded-md p-1 -m-1 transition-colors hover:bg-muted/40"
+              onClick={() => navigateToSubscriptions("expired")}
+            >
               <div className="flex items-center justify-between text-sm">
                 <span className="flex items-center gap-2">
                   <AlertTriangle className="h-4 w-4 text-red-500" />
@@ -428,7 +610,10 @@ export function DashboardWidgets() {
           </CardHeader>
           <CardContent className="space-y-3">
             {stats.expiredSubscriptions > 0 && (
-              <div className="flex items-center gap-3 p-3 rounded-lg bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20">
+              <div
+                className="flex cursor-pointer items-center gap-3 rounded-lg border border-red-200 bg-red-50 p-3 transition-colors hover:bg-red-100 dark:border-red-500/20 dark:bg-red-500/10 dark:hover:bg-red-500/20"
+                onClick={() => navigateToSubscriptions("expired")}
+              >
                 <AlertTriangle className="h-5 w-5 text-red-500 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-red-700 dark:text-red-400">
@@ -441,7 +626,10 @@ export function DashboardWidgets() {
               </div>
             )}
             {stats.pendingLeaves > 0 && (
-              <div className="flex items-center gap-3 p-3 rounded-lg bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20">
+              <div
+                className="flex cursor-pointer items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 transition-colors hover:bg-amber-100 dark:border-amber-500/20 dark:bg-amber-500/10 dark:hover:bg-amber-500/20"
+                onClick={() => navigate("/admin/leave-approvals")}
+              >
                 <Clock className="h-5 w-5 text-amber-500 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
@@ -475,21 +663,30 @@ export function DashboardWidgets() {
             <CardDescription>Status billing berbasis streak</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+            <div
+              className="flex cursor-pointer items-center justify-between rounded-lg bg-muted/50 p-3 transition-colors hover:bg-muted"
+              onClick={() => navigate("/admin/streak-monitoring?status=ready_for_invoicing")}
+            >
               <span className="text-sm flex items-center gap-2">
                 <Flame className="h-4 w-4 text-orange-500" />
                 Ready for invoicing
               </span>
               <Badge variant="outline">{stats.readyForInvoicing}</Badge>
             </div>
-            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+            <div
+              className="flex cursor-pointer items-center justify-between rounded-lg bg-muted/50 p-3 transition-colors hover:bg-muted"
+              onClick={() => navigateToBilling("PENDING")}
+            >
               <span className="text-sm flex items-center gap-2">
                 <CreditCard className="h-4 w-4 text-blue-500" />
                 Invoice pending
               </span>
               <Badge variant="outline">{stats.pendingInvoices}</Badge>
             </div>
-            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+            <div
+              className="flex cursor-pointer items-center justify-between rounded-lg bg-muted/50 p-3 transition-colors hover:bg-muted"
+              onClick={() => navigateToBilling("OVERDUE")}
+            >
               <span className="text-sm flex items-center gap-2">
                 <AlertTriangle className="h-4 w-4 text-red-500" />
                 Invoice overdue
@@ -505,21 +702,30 @@ export function DashboardWidgets() {
             <CardDescription>Monitoring cron, feedback, dan lock login</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+            <div
+              className="flex cursor-pointer items-center justify-between rounded-lg bg-muted/50 p-3 transition-colors hover:bg-muted"
+              onClick={() => navigate("/admin/cron-jobs")}
+            >
               <span className="text-sm flex items-center gap-2">
                 <CalendarClock className="h-4 w-4 text-amber-500" />
                 Cron gagal (24 jam)
               </span>
               <Badge variant={stats.failedCronRuns24h > 0 ? "destructive" : "outline"}>{stats.failedCronRuns24h}</Badge>
             </div>
-            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+            <div
+              className="flex cursor-pointer items-center justify-between rounded-lg bg-muted/50 p-3 transition-colors hover:bg-muted"
+              onClick={() => navigate("/admin/feedback?status=open")}
+            >
               <span className="text-sm flex items-center gap-2">
                 <MessageSquare className="h-4 w-4 text-indigo-500" />
                 Feedback terbuka
               </span>
               <Badge variant="outline">{stats.openFeedbacks} ({stats.openBugs} bug)</Badge>
             </div>
-            <div className="flex items-center justify-between p-3 rounded-lg bg-muted/50">
+            <div
+              className="flex cursor-pointer items-center justify-between rounded-lg bg-muted/50 p-3 transition-colors hover:bg-muted"
+              onClick={() => navigate("/admin/settings?tab=rate-limit")}
+            >
               <span className="text-sm flex items-center gap-2">
                 <ShieldAlert className="h-4 w-4 text-red-500" />
                 OTP lock aktif

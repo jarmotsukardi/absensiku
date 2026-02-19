@@ -73,19 +73,11 @@ export function SuperAdminLayout({ children, title, subtitle }: SuperAdminLayout
           return;
         }
 
-        const isAdminInstansi = roles?.some((r) => r.role === "admin_instansi");
-        const isPegawai = roles?.some((r) => r.role === "pegawai");
-
-        if (isAdminInstansi) {
-          toast.info("Anda dialihkan ke panel Admin Organisasi.");
-          navigate("/org", { replace: true });
-        } else if (isPegawai) {
-          toast.info("Anda dialihkan ke dashboard pegawai.");
-          navigate("/employee/dashboard", { replace: true });
-        } else {
-          toast.info("Akun ini belum memiliki role Super Admin.");
-          navigate("/admin/login", { replace: true });
-        }
+        // Route /admin harus tegas untuk Super Admin saja.
+        // Jika akun bukan super_admin, arahkan kembali ke login admin agar tidak membingungkan
+        // (sebelumnya akun pegawai bisa terdorong ke /employee/dashboard saat membuka /admin).
+        toast.info("Akun ini belum memiliki role Super Admin.");
+        navigate("/admin/login", { replace: true });
       } catch (error) {
         if (isMounted) {
           const errorRef = reportError(error, "superadmin.layout.check_admin_access.unexpected");

@@ -1,3 +1,5 @@
+import { debugLog } from "@/lib/debugLog";
+
 /**
  * Utility tunggal untuk generate dan mengelola Device ID
  * SEMUA komponen harus menggunakan utility ini untuk konsistensi
@@ -6,6 +8,10 @@
 // Keys untuk localStorage
 const WEB_DEVICE_ID_KEY = "web_device_id";
 const ANDROID_DEVICE_ID_KEY = "android_device_id";
+
+interface AndroidBridge {
+  getAndroidId?: () => string;
+}
 
 /**
  * Generate fingerprint yang STABIL (tanpa canvas karena hasilnya bisa berbeda)
@@ -126,7 +132,7 @@ export const generateStableWebDeviceId = (saveToStorage: boolean = true): string
   
   if (saveToStorage) {
     localStorage.setItem(WEB_DEVICE_ID_KEY, deviceId);
-    console.log("[DeviceId] Generated and saved stable device ID:", deviceId);
+    debugLog("[DeviceId] Generated and saved stable device ID:", deviceId);
   }
   
   return deviceId;
@@ -138,9 +144,10 @@ export const generateStableWebDeviceId = (saveToStorage: boolean = true): string
  */
 export const getAndroidId = (saveToStorage: boolean = true): string => {
   // Cek apakah ada Android interface dari native app
-  if (typeof (window as any).Android !== "undefined" && (window as any).Android.getAndroidId) {
+  const androidBridge = (window as unknown as { Android?: AndroidBridge }).Android;
+  if (typeof androidBridge !== "undefined" && androidBridge?.getAndroidId) {
     try {
-      const nativeId = (window as any).Android.getAndroidId();
+      const nativeId = androidBridge.getAndroidId();
       if (nativeId && nativeId.length > 0) {
         if (saveToStorage) {
           localStorage.setItem(ANDROID_DEVICE_ID_KEY, nativeId);
@@ -167,7 +174,7 @@ export const getAndroidId = (saveToStorage: boolean = true): string => {
 export const syncDeviceIdFromDatabase = (dbDeviceId: string): void => {
   if (!dbDeviceId) return;
   
-  console.log("[DeviceId] Syncing device ID from database:", dbDeviceId);
+  debugLog("[DeviceId] Syncing device ID from database:", dbDeviceId);
   
   if (dbDeviceId.startsWith("WEB-")) {
     localStorage.setItem(WEB_DEVICE_ID_KEY, dbDeviceId);
