@@ -42,19 +42,32 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseAnonKey =
+      Deno.env.get("SUPABASE_ANON_KEY") ||
+      Deno.env.get("NEXT_PUBLIC_SUPABASE_ANON_KEY") ||
+      "";
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Get user from token
-    const token = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: userError } = await supabase.auth.getUser(token);
+    // Auth client: validasi JWT user memakai anon key + Authorization header asli.
+    const authClient = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+
+    const {
+      data: { user },
+      error: userError,
+    } = await authClient.auth.getUser();
 
     if (userError || !user) {
+      logTraceError(traceId, "Token validation failed", userError || "user_not_found");
       return new Response(
         JSON.stringify(withTrace({ error: "Token tidak valid" }, traceId)),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+
+    // Admin client: operasi tulis DB memakai service role.
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // Rate limit: max 5 join attempts per hour per user
     const { data: rateCheck } = await supabase

@@ -37,7 +37,7 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.join-organization]
-verify_jwt = true
+verify_jwt = false
 
 [functions.create-xendit-invoice]
 verify_jwt = false

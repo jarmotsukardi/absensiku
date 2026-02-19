@@ -40,6 +40,40 @@ npm run ops:readiness
 
 Jika output `Ops readiness: SIAP`, berarti data minimum sudah lengkap.
 
+Quality gate cepat (autofix -> lint/test/build paralel):
+
+```bash
+npm run qa:fast
+```
+
+Validasi prasyarat E2E (tanpa menjalankan suite):
+
+```bash
+npm run e2e:smoke:check
+```
+
+Jalankan suite smoke E2E paralel:
+
+```bash
+npm run e2e:smoke
+```
+
+Jalankan Playwright test runner:
+
+```bash
+npm run e2e:install
+npm run e2e:pw
+```
+
+## Observability Baseline
+
+- Frontend:
+  - `src/lib/errorLogger.ts` menyimpan `Ref: ERR-*` lokal + log console terstruktur.
+  - Sentry aktif otomatis jika `.env.local` berisi `VITE_SENTRY_DSN`.
+- Backend:
+  - Edge Function memakai `trace_id` pada response error.
+  - Saat triase, selalu cocokkan `Ref: ERR-*` (frontend) dengan `trace_id` (backend) di log Supabase.
+
 ## Mode Cepat Permanen (Lovable-like)
 
 Mode default repo ini sekarang pakai fastlane berikut:

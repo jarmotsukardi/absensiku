@@ -131,23 +131,31 @@ export default function OrgEmployeeInvitations() {
         return;
       }
 
-      const { data: roleData } = await supabase
+      const { data: roleRows, error: roleError } = await supabase
         .from("user_roles")
-        .select("tenant_id")
+        .select("tenant_id, role")
         .eq("user_id", user.id)
-        .maybeSingle();
+        .eq("role", "admin_instansi")
+        .not("tenant_id", "is", null)
+        .limit(5);
 
-      if (!roleData?.tenant_id) {
+      if (roleError) {
+        throw roleError;
+      }
+
+      const resolvedTenantId = roleRows?.find((row) => !!row.tenant_id)?.tenant_id ?? null;
+
+      if (!resolvedTenantId) {
         setIsLoading(false);
         return;
       }
-      setTenantId(roleData.tenant_id);
+      setTenantId(resolvedTenantId);
 
       // Fetch OPD list
       const { data: opdData } = await supabase
         .from("opd")
         .select("id, name")
-        .eq("tenant_id", roleData.tenant_id)
+        .eq("tenant_id", resolvedTenantId)
         .eq("is_active", true)
         .order("name");
       setOpdList(opdData || []);
@@ -156,7 +164,7 @@ export default function OrgEmployeeInvitations() {
       const { data: officeData } = await supabase
         .from("offices")
         .select("id, name")
-        .eq("tenant_id", roleData.tenant_id)
+        .eq("tenant_id", resolvedTenantId)
         .eq("is_active", true)
         .order("name");
       setOfficeList(officeData || []);

@@ -1,3 +1,5 @@
+import { captureClientException } from "@/lib/observability";
+
 type ErrorMetadata = Record<string, unknown>;
 
 export interface AppErrorLogEntry {
@@ -104,6 +106,12 @@ export const reportError = (error: unknown, context: string, metadata?: ErrorMet
     metadata,
     error,
   });
+
+  try {
+    captureClientException(error, context, metadata, id);
+  } catch {
+    // Observability should never break the main flow.
+  }
 
   return id;
 };

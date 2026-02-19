@@ -11,6 +11,7 @@ import { APKUploadSettings } from "@/components/admin/settings/APKUploadSettings
 import { FloatingWhatsappSettings } from "@/components/admin/settings/FloatingWhatsappSettings";
 import { LoginRateLimitSettings } from "@/components/admin/settings/LoginRateLimitSettings";
 import { ScalabilitySettings } from "@/components/admin/settings/ScalabilitySettings";
+import { CloudCapacitySettings } from "@/components/admin/settings/CloudCapacitySettings";
 import { ForgotPasswordDialog } from "@/components/auth/ForgotPasswordDialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -35,6 +36,7 @@ const settingsTabs = [
   { id: "rate-limit", label: "Rate Limit" },
   { id: "streak", label: "Konfigurasi Streak" },
   { id: "template-org", label: "Template Org" },
+  { id: "infra-cloud", label: "Supabase & Vercel" },
   { id: "database", label: "Database" },
   { id: "supabase", label: "Pengaturan Supabase" },
 ];
@@ -136,6 +138,9 @@ export default function Settings() {
                     Buka Halaman Template Onboarding
                   </Button>
                 </div>
+              </TabsContent>
+              <TabsContent value="infra-cloud" className="mt-0">
+                <CloudCapacitySettings />
               </TabsContent>
               <TabsContent value="database" className="mt-0">
                 <Suspense fallback={<TabFallback />}>

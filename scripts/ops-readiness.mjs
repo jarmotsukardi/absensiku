@@ -12,6 +12,10 @@ const ACCOUNTS_LOCAL = path.join(OPS_DIR, "test-accounts.local.json");
 const DATASET_LOCAL = path.join(OPS_DIR, "test-dataset.local.json");
 const ROUTES_FILE = path.join(OPS_DIR, "smoke-routes.json");
 const PROFILE_FILE = path.join(OPS_DIR, "working-profile.json");
+const PLAYWRIGHT_CONFIG = path.join(ROOT, "playwright.config.ts");
+const PLAYWRIGHT_SPEC = path.join(ROOT, "tests", "e2e", "role-login.e2e.ts");
+const PACKAGE_JSON = path.join(ROOT, "package.json");
+const ENV_LOCAL = path.join(ROOT, ".env.local");
 
 const args = new Set(process.argv.slice(2));
 const isInit = args.has("--init");
@@ -28,6 +32,20 @@ async function fileExists(filePath) {
 async function readJson(filePath) {
   const raw = await fs.readFile(filePath, "utf8");
   return JSON.parse(raw);
+}
+
+async function readEnvValue(filePath, key) {
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const line = raw
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .find((item) => item.startsWith(`${key}=`));
+    if (!line) return "";
+    return line.slice(key.length + 1).trim();
+  } catch {
+    return "";
+  }
 }
 
 function getByPath(obj, pathExpr) {
@@ -77,6 +95,8 @@ async function main() {
   printStatus("ops/test-dataset.template.json", templateChecks[1]);
   printStatus("ops/smoke-routes.json", templateChecks[2]);
   printStatus("ops/working-profile.json", templateChecks[3]);
+  printStatus("playwright.config.ts", await fileExists(PLAYWRIGHT_CONFIG));
+  printStatus("tests/e2e/role-login.e2e.ts", await fileExists(PLAYWRIGHT_SPEC));
 
   if (!templateChecks.every(Boolean)) {
     console.error("Template ops belum lengkap. Pastikan semua file di folder ops tersedia.");
@@ -100,6 +120,22 @@ async function main() {
     process.exitCode = 1;
     return;
   }
+
+  let packageJson = {};
+  try {
+    packageJson = await readJson(PACKAGE_JSON);
+  } catch {
+    packageJson = {};
+  }
+
+  const scripts = typeof packageJson === "object" && packageJson ? packageJson.scripts || {} : {};
+  const requiredScripts = ["qa:fast", "e2e:smoke", "e2e:pw"];
+  const missingScripts = requiredScripts.filter((scriptName) => typeof scripts[scriptName] !== "string");
+  printStatus(
+    "Script quality/e2e",
+    missingScripts.length === 0,
+    missingScripts.length > 0 ? `kurang: ${missingScripts.join(", ")}` : "lengkap",
+  );
 
   const accounts = await readJson(ACCOUNTS_LOCAL);
   const dataset = await readJson(DATASET_LOCAL);
@@ -142,6 +178,13 @@ async function main() {
     return;
   }
 
+  const sentryDsn = await readEnvValue(ENV_LOCAL, "VITE_SENTRY_DSN");
+  printStatus(
+    "Observability Sentry (opsional)",
+    sentryDsn.length > 0,
+    sentryDsn.length > 0 ? "aktif di .env.local" : "belum diisi (boleh kosong untuk local dev)",
+  );
+
   console.log("Ops readiness: SIAP. Saya bisa kerja lebih cepat dengan pembagian task paralel.");
 }
 
@@ -149,4 +192,3 @@ main().catch((error) => {
   console.error(`ops-readiness error: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 });
-

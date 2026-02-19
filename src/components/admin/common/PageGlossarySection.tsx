@@ -30,6 +30,7 @@ export type PageGlossaryPreset =
   | "settings_data_import"
   | "settings_full_backup"
   | "settings_system"
+  | "settings_cloud_capacity"
   | "settings_email_gateway"
   | "settings_whatsapp_gateway"
   | "org_dashboard"
@@ -283,6 +284,23 @@ const PRESETS: Record<PageGlossaryPreset, GlossaryPresetConfig> = {
       "Ubah parameter satu per satu lalu simpan.",
       "Catat perubahan kritis pada audit log internal.",
       "Uji login, OTP, dan backup setelah update kebijakan.",
+    ],
+  },
+  settings_cloud_capacity: {
+    title: "Glosary & Penjelasan Kapasitas Cloud",
+    description: "Panduan memantau kapasitas Supabase & Vercel per paket (free/pro/team/enterprise) agar upgrade paket bisa diantisipasi.",
+    entries: [
+      { term: "Current Usage", description: "Nilai pemakaian terkini untuk metrik database, storage, bandwidth, active users, dan edge invocations." },
+      { term: "Plan Limits", description: "Batas kapasitas per paket provider yang dapat disesuaikan mengikuti kebijakan internal/kontrak." },
+      { term: "Warning Threshold", description: "Persentase batas kapasitas yang memicu status waspada dan notifikasi dini." },
+      { term: "Free Plan Alert", description: "Notifikasi otomatis ke superadmin jika paket free mendekati limit agar siap upgrade." },
+      { term: "Manual Metrics", description: "Input metrik yang belum tersedia otomatis dari API provider (misalnya bandwidth/invocation)." },
+    ],
+    workflowTitle: "Alur Antisipasi Upgrade",
+    workflowSteps: [
+      "Refresh snapshot usage dan cek persentase setiap metrik.",
+      "Sesuaikan plan limits dengan kebijakan paket provider aktual.",
+      "Jika paket free mendekati limit, tindak lanjuti notifikasi dan siapkan migrasi ke paket berbayar.",
     ],
   },
   settings_email_gateway: {

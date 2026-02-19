@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { toast } from "sonner";
 import { Loader2, UserPlus, AlertCircle, CheckCircle2 } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface JoinOrganizationCardProps {
   onSuccess: () => void;
@@ -27,6 +28,7 @@ export function JoinOrganizationCard({ onSuccess }: JoinOrganizationCardProps) {
     setIsLoading(true);
 
     try {
+      const normalizedInviteCode = invitationCode.trim();
       const { data: { session } } = await supabase.auth.getSession();
       
       if (!session) {
@@ -43,30 +45,68 @@ export function JoinOrganizationCard({ onSuccess }: JoinOrganizationCardProps) {
             "Authorization": `Bearer ${session.access_token}`,
             "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
           },
-          body: JSON.stringify({ invitation_code: invitationCode.trim() }),
+          body: JSON.stringify({ invitation_code: normalizedInviteCode }),
         }
       );
 
-      const result = await response.json();
+      const rawResult = await response.text();
+      let result: Record<string, unknown> = {};
+      try {
+        result = rawResult ? JSON.parse(rawResult) : {};
+      } catch {
+        result = { message: rawResult };
+      }
 
       if (!response.ok) {
-        if (result.code === "INVALID_CODE") {
+        const code = String(result.code ?? "");
+        const message = String(result.error ?? result.message ?? "");
+        const isInvalidJwt = response.status === 401 && /invalid jwt/i.test(message || code);
+
+        if (isInvalidJwt) {
+          // Fallback: beberapa environment project menolak JWT pada edge gateway.
+          // Gunakan RPC DB untuk menyelesaikan join agar flow user tetap berjalan.
+          const { error: rpcError } = await supabase.rpc("complete_employee_invitation_link", {
+            p_invite_code: normalizedInviteCode,
+          });
+
+          if (rpcError) {
+            const ref = reportError(rpcError, "employee.join_organization.fallback_rpc", {
+              invitation_code: normalizedInviteCode,
+            });
+            toast.error(appendErrorReference(rpcError.message || "Gagal bergabung ke organisasi", ref));
+            return;
+          }
+
+          toast.success("Berhasil bergabung ke organisasi!");
+          setInvitationCode("");
+          onSuccess();
+          return;
+        }
+
+        if (code === "INVALID_CODE") {
           toast.error("Kode undangan tidak valid atau sudah kadaluarsa");
-        } else if (result.code === "ALREADY_MEMBER") {
+        } else if (code === "ALREADY_MEMBER") {
           toast.error("Anda sudah terdaftar di organisasi ini");
         } else {
-          throw new Error(result.error || "Gagal bergabung");
+          const edgeError = new Error(message || `Gagal bergabung (HTTP ${response.status})`);
+          const ref = reportError(edgeError, "employee.join_organization.edge", {
+            invitation_code: normalizedInviteCode,
+            status: response.status,
+          });
+          throw new Error(appendErrorReference(edgeError.message, ref));
         }
         return;
       }
 
-      toast.success(`Berhasil bergabung ke ${result.tenant_name}!`);
+      toast.success(`Berhasil bergabung ke ${String(result.tenant_name || "organisasi")}!`);
       setInvitationCode("");
       onSuccess();
     } catch (error: unknown) {
-      console.error("Error joining organization:", error);
+      const ref = reportError(error, "employee.join_organization.catch", {
+        invitation_code: invitationCode.trim(),
+      });
       const message = error instanceof Error ? error.message : String(error);
-      toast.error(message || "Terjadi kesalahan");
+      toast.error(appendErrorReference(message || "Terjadi kesalahan", ref));
     } finally {
       setIsLoading(false);
     }
