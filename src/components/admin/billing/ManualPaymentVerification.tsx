@@ -220,6 +220,69 @@ export function ManualPaymentVerification() {
           });
           console.error("Failed to sync streak invoiced state:", streakSyncError);
         }
+
+        const [waDispatch, emailDispatch] = await Promise.all([
+          supabase.functions.invoke<{ success?: boolean; error?: string; trace_id?: string }>(
+            "dispatch-billing-whatsapp",
+            {
+              body: {
+                invoice_id: selectedInvoice.id,
+                trigger: "ADMIN_VERIFY_MANUAL",
+              },
+            },
+          ),
+          supabase.functions.invoke<{ success?: boolean; error?: string; trace_id?: string }>(
+            "dispatch-billing-email",
+            {
+              body: {
+                invoice_id: selectedInvoice.id,
+                trigger: "ADMIN_VERIFY_MANUAL",
+              },
+            },
+          ),
+        ]);
+
+        if (waDispatch.error || waDispatch.data?.success === false) {
+          const traceId = waDispatch.data?.trace_id || null;
+          const errorRef = reportError(
+            waDispatch.error || waDispatch.data || "WA dispatch failed",
+            "admin.billing.manual_payment.whatsapp_notify_failed",
+            {
+              invoice_id: selectedInvoice.id,
+              tenant_id: selectedInvoice.tenant_id,
+              trace_id: traceId,
+            },
+          );
+          toast.warning(
+            appendErrorReference(
+              traceId
+                ? `Pembayaran diverifikasi, tetapi notifikasi WhatsApp belum terkirim (Ref: ${traceId})`
+                : "Pembayaran diverifikasi, tetapi notifikasi WhatsApp belum terkirim.",
+              errorRef,
+            ),
+          );
+        }
+
+        if (emailDispatch.error || emailDispatch.data?.success === false) {
+          const traceId = emailDispatch.data?.trace_id || null;
+          const errorRef = reportError(
+            emailDispatch.error || emailDispatch.data || "Email dispatch failed",
+            "admin.billing.manual_payment.email_notify_failed",
+            {
+              invoice_id: selectedInvoice.id,
+              tenant_id: selectedInvoice.tenant_id,
+              trace_id: traceId,
+            },
+          );
+          toast.warning(
+            appendErrorReference(
+              traceId
+                ? `Pembayaran diverifikasi, tetapi notifikasi Email belum terkirim (Ref: ${traceId})`
+                : "Pembayaran diverifikasi, tetapi notifikasi Email belum terkirim.",
+              errorRef,
+            ),
+          );
+        }
       }
 
       toast.success(approved ? "Pembayaran berhasil diverifikasi" : "Pembayaran ditolak");
