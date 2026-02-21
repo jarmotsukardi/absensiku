@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   Sidebar,
@@ -26,7 +26,6 @@ import {
   FileText,
   Calendar,
   MapPin,
-  BarChart3,
   LogOut,
   ChevronRight,
   ChevronDown,
@@ -34,26 +33,22 @@ import {
   Briefcase,
   Clock,
   UserCheck,
-  UserX,
-  FileWarning,
   ClipboardList,
   AlertTriangle,
-  Plane,
-  HeartPulse,
   FileSpreadsheet,
   FolderTree,
   Timer,
   Database,
   LandmarkIcon,
   ShieldCheck,
-  Upload,
   Newspaper,
   Home,
-  MapPinOff,
-  UserCog,
   Bell,
   Zap,
+  Receipt,
   Wand2,
+  LifeBuoy,
+  Ticket,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -61,6 +56,11 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { fetchOrgOnboardingCounts } from "@/lib/orgOnboardingTemplates";
+import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { reportError } from "@/lib/errorLogger";
 
 interface SubMenuItem {
   title: string;
@@ -80,7 +80,11 @@ interface MenuGroup {
   items: MenuItem[];
 }
 
-const menuGroups: MenuGroup[] = [
+type OrgSidebarAccessLevel = "admin" | "operator";
+
+const ORG_ONBOARDING_MODULE_TOTAL = 7;
+
+const MENU_GROUPS: MenuGroup[] = [
   {
     label: "Utama",
     items: [
@@ -117,44 +121,23 @@ const menuGroups: MenuGroup[] = [
       },
       { 
         title: "Data Pegawai", 
-        icon: Users, 
-        subItems: [
-          { title: "Pegawai Aktif", path: "/org/employees/active", icon: UserCheck },
-          { title: "Pegawai Non-Aktif", path: "/org/employees/inactive", icon: UserX },
-          { title: "Permohonan Mutasi", path: "/org/employees/mutations", icon: UserCog },
-          { title: "Import Pegawai", path: "/org/master/employee-import", icon: Upload },
-        ]
+        icon: Users,
+        path: "/org/employees",
       },
+      { title: "Undangan Pegawai", icon: UserCheck, path: "/org/invitations" },
     ],
   },
   {
-    label: "Izin/Cuti",
+    label: "Permohonan",
     items: [
-      { 
-        title: "Permohonan", 
-        icon: ClipboardList, 
-        subItems: [
-          { title: "Permohonan Cuti", path: "/org/leave/requests", icon: FileText },
-          { title: "Pengajuan Lembur", path: "/org/leave/overtime", icon: Timer },
-          { title: "Permohonan WFH", path: "/org/leave/wfh", icon: Home },
-          { title: "Absensi Khusus", path: "/org/leave/flexible", icon: MapPinOff },
-          { title: "Izin/Cuti", path: "/org/leave/approved", icon: Calendar },
-          { title: "Sakit", path: "/org/leave/sick", icon: HeartPulse },
-          { title: "Dinas/Lainnya", path: "/org/leave/official", icon: Plane },
-          { title: "Tanpa Keterangan", path: "/org/leave/absent", icon: FileWarning },
-        ]
-      },
+      { title: "Permohonan", icon: ClipboardList, path: "/org/leave" },
     ],
   },
   {
     label: "Laporan",
     items: [
-      { title: "Laporan Absensi", icon: FileSpreadsheet, path: "/org/reports/attendance" },
-      { title: "Rekapitulasi", icon: BarChart3, path: "/org/reports/recap" },
-      { title: "Laporan Izin/Cuti", icon: FileText, path: "/org/reports/leave" },
-      { title: "Laporan Lembur", icon: Timer, path: "/org/reports/overtime" },
-      { title: "WFH & Absensi Khusus", icon: MapPinOff, path: "/org/reports/flexible" },
-      { title: "Riwayat Mutasi", icon: UserCog, path: "/org/reports/mutations" },
+      { title: "Laporan Absensi & Rekap", icon: FileSpreadsheet, path: "/org/reports/attendance-recap" },
+      { title: "Laporan Permohonan", icon: FileText, path: "/org/reports" },
     ],
   },
   {
@@ -168,22 +151,29 @@ const menuGroups: MenuGroup[] = [
     label: "Billing",
     items: [
       { title: "Aktivasi", icon: Zap, path: "/org/activation" },
+      { title: "Billing", icon: Receipt, path: "/org/billing" },
     ],
   },
   {
     label: "Pengaturan",
     items: [
-      { title: "Profil Saya", icon: UserCog, path: "/org/profile" },
       { title: "Pengaturan Umum", icon: Settings, path: "/org/settings" },
-      { title: "Undangan Pegawai", icon: UserCheck, path: "/org/invitations" },
-      { title: "Landing Page & Aplikasi", icon: LandmarkIcon, path: "/org/landing-settings" },
+      { title: "Admin & Operator", icon: Users, path: "/org/settings/admin-operator" },
       { title: "Log Aktivitas", icon: ClipboardList, path: "/org/audit-log" },
     ],
   },
   {
     label: "Bantuan",
     items: [
-      { title: "Pusat Bantuan", icon: HelpCircle, path: "/org/help" },
+      {
+        title: "FAQ, Bantuan & Buat Tiket",
+        icon: HelpCircle,
+        subItems: [
+          { title: "FAQ", path: "/org/help/faq", icon: HelpCircle },
+          { title: "Bantuan", path: "/org/help/support", icon: LifeBuoy },
+          { title: "Buat Tiket", path: "/org/help/tickets", icon: Ticket },
+        ],
+      },
     ],
   },
 ];
@@ -191,18 +181,43 @@ const menuGroups: MenuGroup[] = [
 interface OrganizationSidebarProps {
   organizationName?: string;
   organizationType?: string;
+  accessLevel?: OrgSidebarAccessLevel;
 }
 
-export function OrganizationSidebar({ organizationName = "Organisasi", organizationType = "Pemerintah Daerah" }: OrganizationSidebarProps) {
+export function OrganizationSidebar({
+  organizationName = "Organisasi",
+  organizationType = "Pemerintah Daerah",
+  accessLevel = "admin",
+}: OrganizationSidebarProps) {
   const location = useLocation();
   const navigate = useNavigate();
   const { state, isMobile, setOpenMobile } = useSidebar();
   const isCollapsed = state === "collapsed";
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({});
+  const [onboardingReadyModules, setOnboardingReadyModules] = useState<number | null>(null);
+  const [isOnboardingStatusLoading, setIsOnboardingStatusLoading] = useState(false);
 
   const isActive = (path: string) => {
     if (path === "/org") {
       return location.pathname === "/org";
+    }
+    if (path === "/org/settings") {
+      return location.pathname === "/org/settings";
+    }
+    if (path === "/org/leave") {
+      return (
+        location.pathname.startsWith("/org/leave") ||
+        location.pathname === "/org/employees/mutations" ||
+        location.pathname.startsWith("/org/employees/mutations/")
+      );
+    }
+    if (path === "/org/reports") {
+      return ["/org/reports/leave", "/org/reports/overtime", "/org/reports/flexible", "/org/reports/mutations"]
+        .some((reportPath) => location.pathname === reportPath || location.pathname.startsWith(`${reportPath}/`));
+    }
+    if (path === "/org/reports/attendance-recap") {
+      return ["/org/reports/attendance", "/org/reports/recap"]
+        .some((reportPath) => location.pathname === reportPath || location.pathname.startsWith(`${reportPath}/`));
     }
     return location.pathname === path || location.pathname.startsWith(`${path}/`);
   };
@@ -226,6 +241,79 @@ export function OrganizationSidebar({ organizationName = "Organisasi", organizat
     await supabase.auth.signOut();
     navigate("/org/login");
   };
+
+  const menuGroups = accessLevel === "admin"
+    ? MENU_GROUPS
+    : MENU_GROUPS
+        .map((group) => {
+          if (group.label === "Utama") {
+            return {
+              ...group,
+              items: group.items.filter((item) => item.path !== "/org/onboarding"),
+            };
+          }
+          if (group.label === "Permohonan") {
+            return group;
+          }
+          if (group.label === "Laporan") {
+            return {
+              ...group,
+              items: group.items.filter((item) => item.path === "/org/reports"),
+            };
+          }
+          if (group.label === "Pengaturan") {
+            return { ...group, items: [] };
+          }
+          if (group.label === "Bantuan") {
+            return group;
+          }
+          return { ...group, items: [] };
+        })
+        .filter((group) => group.items.length > 0);
+
+  useEffect(() => {
+    if (accessLevel !== "admin") return;
+
+    let cancelled = false;
+    const loadOnboardingStatus = async () => {
+      setIsOnboardingStatusLoading(true);
+      try {
+        const tenantId = await resolveOrgTenantId();
+        if (!tenantId) {
+          if (!cancelled) setOnboardingReadyModules(0);
+          return;
+        }
+        const counts = await fetchOrgOnboardingCounts(tenantId);
+        const readyCount = Object.values(counts).filter((value) => value > 0).length;
+        if (!cancelled) {
+          setOnboardingReadyModules(readyCount);
+        }
+      } catch (error) {
+        reportError(error, "org.sidebar.fetch_onboarding_status");
+        if (!cancelled) {
+          setOnboardingReadyModules(0);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsOnboardingStatusLoading(false);
+        }
+      }
+    };
+
+    void loadOnboardingStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [accessLevel]);
+
+  const hasOnboardingIncomplete =
+    onboardingReadyModules !== null && onboardingReadyModules < ORG_ONBOARDING_MODULE_TOTAL;
+  const onboardingStatusLabel =
+    onboardingReadyModules === null || isOnboardingStatusLoading
+      ? "MEMUAT"
+      : hasOnboardingIncomplete
+        ? "TIDAK SIAP"
+        : "SIAP";
 
   const renderMenuItem = (item: MenuItem) => {
     if (item.subItems) {
@@ -294,6 +382,37 @@ export function OrganizationSidebar({ organizationName = "Organisasi", organizat
             <ChevronRight className="ml-auto h-4 w-4" />
           )}
         </SidebarMenuButton>
+        {item.path === "/org/onboarding" && !isCollapsed && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={() => handleNavigation("/org/onboarding")}
+                className={cn(
+                  "mt-1 ml-7 flex w-[calc(100%-1.75rem)] items-center justify-between rounded-md border px-2 py-1 text-[11px] transition-colors",
+                  hasOnboardingIncomplete
+                    ? "border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
+                    : "border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                )}
+              >
+                <span className="truncate">Status Setup</span>
+                <Badge
+                  className={cn(
+                    "h-5 px-1.5 text-[10px] text-white",
+                    hasOnboardingIncomplete
+                      ? "bg-red-600 hover:bg-red-600 animate-pulse"
+                      : "bg-emerald-600 hover:bg-emerald-600"
+                  )}
+                >
+                  {onboardingStatusLabel}
+                </Badge>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              {onboardingReadyModules ?? 0}/{ORG_ONBOARDING_MODULE_TOTAL} modul siap. Klik untuk buka Setup Awal.
+            </TooltipContent>
+          </Tooltip>
+        )}
       </SidebarMenuItem>
     );
   };

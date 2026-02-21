@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/table";
 import { Plus, Pencil, Trash2, Loader2, Package, Info, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat("id-ID", {
@@ -42,6 +43,7 @@ const formatCurrency = (amount: number) => {
 };
 
 export function SubscriptionPackagesManager() {
+  const confirmDialog = useConfirmDialog();
   const ITEMS_PER_PAGE = 10;
   const { packages, isLoading, createPackage, updatePackage, deletePackage } = useSubscriptionPackages();
   const { settings, isLoading: isLoadingSettings, getSetting } = useBillingSettings();
@@ -93,9 +95,14 @@ export function SubscriptionPackagesManager() {
   };
 
   const handleDelete = async (id: string) => {
-    if (confirm("Hapus paket ini?")) {
-      await deletePackage(id);
-    }
+    const confirmed = await confirmDialog({
+      title: "Hapus Paket",
+      description: "Hapus paket ini?",
+      confirmText: "Ya, hapus",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
+    await deletePackage(id);
   };
 
   // Sync all packages to use the current global price
@@ -106,7 +113,13 @@ export function SubscriptionPackagesManager() {
       return;
     }
 
-    if (!confirm(`${outOfSync.length} paket memiliki harga berbeda dari pengaturan global (${formatCurrency(globalPrice)}/bulan). Sinkronkan semua?`)) {
+    if (
+      !(await confirmDialog({
+        title: "Sinkronkan Harga Paket",
+        description: `${outOfSync.length} paket memiliki harga berbeda dari pengaturan global (${formatCurrency(globalPrice)}/bulan). Sinkronkan semua?`,
+        confirmText: "Ya, sinkronkan",
+      }))
+    ) {
       return;
     }
 

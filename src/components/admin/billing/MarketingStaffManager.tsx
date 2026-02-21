@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/table";
 import { Plus, Pencil, Trash2, Loader2, Users, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 interface MarketingStaff {
   id: string;
@@ -57,6 +58,7 @@ const emptyStaff: Partial<MarketingStaff> = {
 };
 
 export function MarketingStaffManager() {
+  const confirmDialog = useConfirmDialog();
   const ITEMS_PER_PAGE = 10;
   const [staff, setStaff] = useState<MarketingStaff[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -144,7 +146,16 @@ export function MarketingStaffManager() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Hapus marketing ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Staff Marketing",
+        description: "Hapus marketing ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
     try {
       const { error } = await supabase.from("marketing_staff").delete().eq("id", id);
       if (error) throw error;

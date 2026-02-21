@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -10,7 +10,9 @@ import {
   Clock,
   CheckCircle,
   XCircle,
-  AlertCircle
+  AlertCircle,
+  ShieldCheck,
+  ShieldAlert
 } from "lucide-react";
 import { format, startOfMonth, endOfMonth } from "date-fns";
 import { id } from "date-fns/locale";
@@ -33,8 +35,16 @@ const formatCurrency = (amount: number) => {
   }).format(amount);
 };
 
+const INVOICE_NUMBER_PATTERN = /^INV-\d{6}-\d{4,}$/;
+
+const isInvoiceNumberValid = (invoiceNumber: string | null | undefined): boolean => {
+  if (!invoiceNumber) return false;
+  return INVOICE_NUMBER_PATTERN.test(invoiceNumber.trim());
+};
+
 export default function BillingDashboard() {
   const [activeTab, setActiveTab] = useState("overview");
+  const [invoiceFilterMode, setInvoiceFilterMode] = useState<"all" | "invalid_number">("all");
   const currentMonth = {
     start: format(startOfMonth(new Date()), "yyyy-MM-dd"),
     end: format(endOfMonth(new Date()), "yyyy-MM-dd"),
@@ -46,6 +56,19 @@ export default function BillingDashboard() {
   const pendingCount = invoices.filter(i => i.status === "PENDING" || i.status === "AWAITING_VERIFICATION").length;
   const paidCount = invoices.filter(i => i.status === "PAID").length;
   const expiredCount = invoices.filter(i => i.status === "EXPIRED" || i.status === "CANCELLED").length;
+  const invoiceNumberHealth = useMemo(() => {
+    const invalidRows = invoices.filter((invoice) => !isInvoiceNumberValid(invoice.invoice_number));
+    const invalidSamples = invalidRows
+      .slice(0, 3)
+      .map((invoice) => (invoice.invoice_number || "(kosong)").trim());
+
+    return {
+      total: invoices.length,
+      invalid: invalidRows.length,
+      valid: Math.max(invoices.length - invalidRows.length, 0),
+      invalidSamples,
+    };
+  }, [invoices]);
 
   const tabs = [
     { id: "overview", label: "Ringkasan" },
@@ -60,6 +83,11 @@ export default function BillingDashboard() {
     { id: "policy", label: "Kebijakan Billing" },
   ];
 
+  const openInvalidInvoiceNumbers = () => {
+    setActiveTab("invoices");
+    setInvoiceFilterMode(invoiceNumberHealth.invalid > 0 ? "invalid_number" : "all");
+  };
+
   return (
     <SuperAdminLayout
       title="Billing & Payment"
@@ -70,7 +98,7 @@ export default function BillingDashboard() {
           <GlossaryPanel defaultCategory="billing" />
         </div>
         {/* Stats Cards */}
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
               <CardTitle className="text-sm font-medium">Gross Revenue (Bulan Ini)</CardTitle>
@@ -141,6 +169,33 @@ export default function BillingDashboard() {
               </p>
             </CardContent>
           </Card>
+
+          <button type="button" className="text-left" onClick={openInvalidInvoiceNumbers}>
+            <Card className={invoiceNumberHealth.invalid > 0 ? "border-red-300" : "border-green-300"}>
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Kesehatan Nomor Faktur</CardTitle>
+                {invoiceNumberHealth.invalid > 0 ? (
+                  <ShieldAlert className="h-4 w-4 text-red-600" />
+                ) : (
+                  <ShieldCheck className="h-4 w-4 text-green-600" />
+                )}
+              </CardHeader>
+              <CardContent>
+                <div className={`text-2xl font-bold ${invoiceNumberHealth.invalid > 0 ? "text-red-600" : "text-green-600"}`}>
+                  {isLoadingInvoices ? "..." : invoiceNumberHealth.invalid > 0 ? "Tidak Sehat" : "Sehat"}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Valid {invoiceNumberHealth.valid}/{invoiceNumberHealth.total} • Invalid {invoiceNumberHealth.invalid}
+                </p>
+                {invoiceNumberHealth.invalidSamples.length > 0 && (
+                  <p className="mt-1 text-[11px] text-red-700">
+                    Contoh: {invoiceNumberHealth.invalidSamples.join(", ")}
+                  </p>
+                )}
+                <p className="mt-1 text-[11px] text-muted-foreground">Klik untuk melihat daftar invoice.</p>
+              </CardContent>
+            </Card>
+          </button>
         </div>
 
         {/* Tabs */}
@@ -166,7 +221,10 @@ export default function BillingDashboard() {
                   <OverviewContent />
                 </TabsContent>
                 <TabsContent value="invoices" className="mt-0">
-                  <InvoicesManager />
+                  <InvoicesManager
+                    filterMode={invoiceFilterMode}
+                    onClearFilterMode={() => setInvoiceFilterMode("all")}
+                  />
                 </TabsContent>
                 <TabsContent value="manual" className="mt-0">
                   <ManualPaymentVerification />

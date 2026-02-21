@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useInvoices, Invoice } from "@/hooks/useBilling";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,10 +35,25 @@ import {
   Loader2, 
   ExternalLink,
   FileText,
-  Building2
+  Building2,
+  AlertTriangle
 } from "lucide-react";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
+
+type InvoicesFilterMode = "all" | "invalid_number";
+
+interface InvoicesManagerProps {
+  filterMode?: InvoicesFilterMode;
+  onClearFilterMode?: () => void;
+}
+
+const INVOICE_NUMBER_PATTERN = /^INV-\d{6}-\d{4,}$/;
+
+const isInvoiceNumberValid = (invoiceNumber: string | null | undefined): boolean => {
+  if (!invoiceNumber) return false;
+  return INVOICE_NUMBER_PATTERN.test(invoiceNumber.trim());
+};
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat("id-ID", {
@@ -66,7 +81,7 @@ const statusLabels: Record<string, string> = {
   REFUNDED: "Refund",
 };
 
-export function InvoicesManager() {
+export function InvoicesManager({ filterMode = "all", onClearFilterMode }: InvoicesManagerProps) {
   const ITEMS_PER_PAGE = 10;
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -81,15 +96,23 @@ export function InvoicesManager() {
   const [rejectionReason, setRejectionReason] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
 
-  const filteredInvoices = invoices.filter((inv) => {
-    if (!searchQuery) return true;
-    const query = searchQuery.toLowerCase();
-    return (
-      inv.invoice_number.toLowerCase().includes(query) ||
-      inv.tenant?.name?.toLowerCase().includes(query) ||
-      inv.tenant?.code?.toLowerCase().includes(query)
-    );
-  });
+  const filteredInvoices = useMemo(
+    () =>
+      invoices.filter((inv) => {
+        if (filterMode === "invalid_number" && isInvoiceNumberValid(inv.invoice_number)) {
+          return false;
+        }
+
+        if (!searchQuery) return true;
+        const query = searchQuery.toLowerCase();
+        return (
+          (inv.invoice_number || "").toLowerCase().includes(query) ||
+          inv.tenant?.name?.toLowerCase().includes(query) ||
+          inv.tenant?.code?.toLowerCase().includes(query)
+        );
+      }),
+    [filterMode, invoices, searchQuery],
+  );
   const totalPages = Math.max(1, Math.ceil(filteredInvoices.length / ITEMS_PER_PAGE));
   const paginatedInvoices = filteredInvoices.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
@@ -99,6 +122,12 @@ export function InvoicesManager() {
   useEffect(() => {
     setCurrentPage(1);
   }, [searchQuery, statusFilter, invoices.length]);
+
+  useEffect(() => {
+    if (filterMode === "invalid_number" && statusFilter !== "all") {
+      setStatusFilter("all");
+    }
+  }, [filterMode, statusFilter]);
 
   const handleViewDetail = (invoice: Invoice) => {
     setSelectedInvoice(invoice);
@@ -159,6 +188,16 @@ export function InvoicesManager() {
         </Select>
       </div>
 
+      {filterMode === "invalid_number" && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          <AlertTriangle className="h-4 w-4" />
+          Menampilkan hanya invoice dengan format nomor faktur tidak valid.
+          <Button variant="link" className="h-auto p-0 text-red-700" onClick={onClearFilterMode}>
+            Tampilkan semua
+          </Button>
+        </div>
+      )}
+
       {/* Table */}
       <Card>
         <Table>
@@ -178,13 +217,19 @@ export function InvoicesManager() {
             {filteredInvoices.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={8} className="text-center text-muted-foreground">
-                  Tidak ada invoice ditemukan
+                  {filterMode === "invalid_number"
+                    ? "Tidak ada invoice dengan format nomor faktur tidak valid"
+                    : "Tidak ada invoice ditemukan"}
                 </TableCell>
               </TableRow>
             ) : (
               paginatedInvoices.map((invoice) => (
                 <TableRow key={invoice.id}>
-                  <TableCell className="font-mono text-sm">{invoice.invoice_number}</TableCell>
+                  <TableCell className="font-mono text-sm">
+                    <span className={!isInvoiceNumberValid(invoice.invoice_number) ? "text-red-700 font-semibold" : undefined}>
+                      {invoice.invoice_number}
+                    </span>
+                  </TableCell>
                   <TableCell>
                     <div>
                       <p className="font-medium">{invoice.tenant?.name || "-"}</p>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -7,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { toast } from "sonner";
 import {
   HelpCircle,
@@ -19,6 +21,7 @@ import {
   Shield,
   Smartphone,
   Loader2,
+  Wallet,
 } from "lucide-react";
 
 interface FAQ {
@@ -30,9 +33,14 @@ interface FAQ {
 }
 
 interface GeneralSettingsValue {
-  supportEmail?: string;
   supportPhone?: string;
 }
+
+interface FAQSettingsValue {
+  items?: FAQ[];
+}
+
+type SubscriptionStatus = "trial" | "active" | "expired" | "cancelled" | "unknown";
 
 const DUMMY_FAQS: FAQ[] = [
   {
@@ -57,6 +65,13 @@ const DUMMY_FAQS: FAQ[] = [
       "Buka menu Izin/Cuti, pilih jenis cuti, tentukan tanggal, isi alasan, lalu kirim permohonan untuk persetujuan.",
   },
   {
+    id: "6",
+    category: "Izin & Cuti",
+    question: "Mengapa submenu Izin/Cuti tidak terlihat di sidebar?",
+    answer:
+      "Submenu Izin/Cuti sudah dipusatkan menjadi tab di dalam halaman Permohonan. Klik menu Izin/Cuti di sidebar, lalu pilih tab sesuai kebutuhan.",
+  },
+  {
     id: "4",
     category: "Perangkat",
     question: "Mengapa perangkat saya tidak bisa digunakan untuk absensi?",
@@ -70,6 +85,41 @@ const DUMMY_FAQS: FAQ[] = [
     answer:
       "Data disimpan dengan enkripsi dan hanya dapat diakses oleh pihak berwenang sesuai hak akses.",
   },
+  {
+    id: "7",
+    category: "Keamanan",
+    question: "Apa perbedaan akses Admin Organisasi dan Operator?",
+    answer:
+      "Admin Organisasi memiliki akses penuh untuk konfigurasi, master data, jadwal, konten, dan manajemen role. Operator fokus pada modul operasional seperti permohonan, laporan permohonan, bantuan, dan profil saya.",
+  },
+  {
+    id: "8",
+    category: "Keamanan",
+    question: "Kenapa menu tertentu tidak tampil saat login sebagai Operator?",
+    answer:
+      "Itu normal. Sistem membatasi akses Operator agar tidak bisa mengubah pengaturan sensitif seperti setup awal, master data, jadwal, konten, billing, audit log, dan manajemen role.",
+  },
+  {
+    id: "9",
+    category: "Billing & Harga",
+    question: "Bagaimana cara membayar faktur di menu /org/billing?",
+    answer:
+      "Buka detail faktur, lalu gunakan Buka Link Pembayaran jika tersedia. Untuk transfer manual, unggah URL/file bukti pembayaran dan kirim untuk verifikasi admin.",
+  },
+  {
+    id: "10",
+    category: "Billing & Harga",
+    question: "Apa arti status Menunggu Verifikasi pada faktur?",
+    answer:
+      "Status ini berarti bukti pembayaran sudah dikirim tetapi belum disetujui admin. Tunggu proses verifikasi atau cek alasan penolakan jika status berubah.",
+  },
+  {
+    id: "11",
+    category: "Billing & Harga",
+    question: "Bagaimana jika bukti bayar transfer ditolak oleh admin?",
+    answer:
+      "Lihat alasan penolakan di detail faktur, perbaiki URL/file bukti pembayaran, lalu kirim ulang agar status kembali ke Menunggu Verifikasi.",
+  },
 ];
 
 const CATEGORY_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -78,15 +128,47 @@ const CATEGORY_ICONS: Record<string, React.ComponentType<{ className?: string }>
   "Izin & Cuti": FileText,
   Perangkat: Smartphone,
   Keamanan: Shield,
+  "Billing & Harga": Wallet,
+};
+
+const normalizeFaqSettings = (raw: unknown): FAQ[] => {
+  let items: unknown[] = [];
+  if (Array.isArray(raw)) {
+    items = raw;
+  } else if (raw && typeof raw === "object" && Array.isArray((raw as FAQSettingsValue).items)) {
+    items = (raw as FAQSettingsValue).items ?? [];
+  }
+
+  return items
+    .map((item, index) => {
+      const row = item as Partial<FAQ>;
+      if (typeof row.question !== "string" || typeof row.answer !== "string") return null;
+      const category = typeof row.category === "string" && row.category.trim() ? row.category.trim() : "Umum";
+      const sort_order =
+        typeof row.sort_order === "number" && Number.isFinite(row.sort_order) ? row.sort_order : null;
+      return {
+        id: typeof row.id === "string" && row.id.trim() ? row.id : `faq-${index + 1}`,
+        category,
+        question: row.question,
+        answer: row.answer,
+        sort_order,
+      } satisfies FAQ;
+    })
+    .filter((row): row is FAQ => Boolean(row))
+    .sort((a, b) => (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER));
 };
 
 export default function OrgHelp() {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [faqs, setFaqs] = useState<FAQ[]>([]);
-  const [supportEmail, setSupportEmail] = useState("support@absensi.app");
   const [supportPhone, setSupportPhone] = useState("6281234567890");
+  const [subscriptionStatus, setSubscriptionStatus] = useState<SubscriptionStatus>("unknown");
+  const activeTab = location.pathname === "/org/help/support" ? "support" : "faq";
+  const canCreateTicket = subscriptionStatus === "active";
 
   useEffect(() => {
     const loadData = async () => {
@@ -95,30 +177,54 @@ export default function OrgHelp() {
         const userId = authData.user?.id;
 
         if (!userId) {
+          setSubscriptionStatus("unknown");
           setFaqs(DUMMY_FAQS);
           return;
         }
 
-        const [roleRes, generalRes] = await Promise.all([
-          supabase
-            .from("user_roles")
-            .select("tenant_id")
-            .eq("user_id", userId)
-            .maybeSingle(),
+        const [generalRes, faqSettingsRes] = await Promise.all([
           supabase.from("system_settings").select("value").eq("key", "general_settings").maybeSingle(),
+          supabase.from("system_settings").select("value").eq("key", "faq_settings").maybeSingle(),
         ]);
 
         if (generalRes.data?.value && typeof generalRes.data.value === "object") {
           const v = generalRes.data.value as unknown as GeneralSettingsValue;
-          if (typeof v.supportEmail === "string" && v.supportEmail.trim()) {
-            setSupportEmail(v.supportEmail.trim());
-          }
           if (typeof v.supportPhone === "string" && v.supportPhone.trim()) {
             setSupportPhone(v.supportPhone.trim());
           }
         }
 
-        const tenantId = roleRes.data?.tenant_id;
+        const tenantId = await resolveOrgTenantId();
+
+        try {
+          if (!tenantId) {
+            setSubscriptionStatus("unknown");
+          } else {
+            const { data: subscriptionRow, error: subscriptionError } = await supabase
+              .from("subscriptions")
+              .select("status")
+              .eq("tenant_id", tenantId)
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            if (subscriptionError) throw subscriptionError;
+            if (subscriptionRow?.status) {
+              setSubscriptionStatus(subscriptionRow.status as SubscriptionStatus);
+            } else {
+              setSubscriptionStatus("unknown");
+            }
+          }
+        } catch (error) {
+          reportError(error, "org.help.check_subscription");
+          setSubscriptionStatus("unknown");
+        }
+
+        const managedFaqs = normalizeFaqSettings(faqSettingsRes.data?.value);
+        if (managedFaqs.length > 0) {
+          setFaqs(managedFaqs);
+          return;
+        }
+
         if (!tenantId) {
           setFaqs(DUMMY_FAQS);
           return;
@@ -204,6 +310,19 @@ export default function OrgHelp() {
     ? `https://wa.me/${waPhone.startsWith("0") ? `62${waPhone.slice(1)}` : waPhone}`
     : "";
 
+  const setTab = (tab: "faq" | "support") => {
+    navigate(tab === "support" ? "/org/help/support" : "/org/help/faq");
+  };
+
+  const handleOpenTicketModule = () => {
+    if (!canCreateTicket) {
+      toast.info("Tiket bantuan hanya untuk organisasi berlangganan aktif. Silakan gunakan FAQ.");
+      navigate("/org/help/faq");
+      return;
+    }
+    navigate("/org/help/tickets");
+  };
+
   if (isLoading) {
     return (
       <OrganizationLayout>
@@ -220,107 +339,134 @@ export default function OrgHelp() {
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <HelpCircle className="h-6 w-6" />
-            Pusat Bantuan
+            FAQ & Bantuan
           </h1>
           <p className="text-muted-foreground">
-            Temukan jawaban untuk pertanyaan umum seputar aplikasi absensi
+            Temukan jawaban FAQ, kategori bantuan, dan kanal dukungan seputar aplikasi absensi
           </p>
         </div>
 
         <Card>
           <CardContent className="pt-6">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Cari pertanyaan..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10"
-              />
+            <div className="flex flex-wrap gap-2">
+              <Button variant={activeTab === "faq" ? "default" : "outline"} size="sm" onClick={() => setTab("faq")}>
+                FAQ
+              </Button>
+              <Button variant={activeTab === "support" ? "default" : "outline"} size="sm" onClick={() => setTab("support")}>
+                Bantuan
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleOpenTicketModule} disabled={!canCreateTicket}>
+                Buat Tiket
+              </Button>
             </div>
+            {!canCreateTicket && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Tiket bantuan hanya tersedia untuk tenant dengan langganan aktif. Gunakan FAQ untuk bantuan mandiri.
+              </p>
+            )}
           </CardContent>
         </Card>
 
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant={selectedCategory === null ? "default" : "outline"}
-            size="sm"
-            onClick={() => setSelectedCategory(null)}
-          >
-            Semua
-          </Button>
-          {categories.map((cat) => {
-            const Icon = CATEGORY_ICONS[cat] || HelpCircle;
-            return (
-              <Button
-                key={cat}
-                variant={selectedCategory === cat ? "default" : "outline"}
-                size="sm"
-                onClick={() => setSelectedCategory(cat)}
-                className="flex items-center gap-1"
-              >
-                <Icon className="h-3 w-3" />
-                {cat}
-              </Button>
-            );
-          })}
-        </div>
+        {activeTab === "faq" && (
+          <>
+            <Card>
+              <CardContent className="pt-6">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Cari pertanyaan..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="pl-10"
+                  />
+                </div>
+              </CardContent>
+            </Card>
 
-        {Object.keys(groupedFaqs).length === 0 ? (
-          <Card>
-            <CardContent className="py-12 text-center">
-              <HelpCircle className="h-12 w-12 mx-auto text-muted-foreground/50 mb-4" />
-              <p className="text-muted-foreground">Tidak ada FAQ yang sesuai dengan pencarian Anda.</p>
-            </CardContent>
-          </Card>
-        ) : (
-          Object.entries(groupedFaqs).map(([category, items]) => {
-            const Icon = CATEGORY_ICONS[category] || HelpCircle;
-            return (
-              <Card key={category}>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-lg">
-                    <Icon className="h-5 w-5" />
-                    {category}
-                  </CardTitle>
-                  <CardDescription>{items.length} pertanyaan</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Accordion type="single" collapsible className="w-full">
-                    {items.map((faq) => (
-                      <AccordionItem key={faq.id} value={faq.id}>
-                        <AccordionTrigger className="text-left">{faq.question}</AccordionTrigger>
-                        <AccordionContent className="text-muted-foreground">{faq.answer}</AccordionContent>
-                      </AccordionItem>
-                    ))}
-                  </Accordion>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant={selectedCategory === null ? "default" : "outline"}
+                size="sm"
+                onClick={() => setSelectedCategory(null)}
+              >
+                Semua
+              </Button>
+              {categories.map((cat) => {
+                const Icon = CATEGORY_ICONS[cat] || HelpCircle;
+                return (
+                  <Button
+                    key={cat}
+                    variant={selectedCategory === cat ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => setSelectedCategory(cat)}
+                    className="flex items-center gap-1"
+                  >
+                    <Icon className="h-3 w-3" />
+                    {cat}
+                  </Button>
+                );
+              })}
+            </div>
+
+            {Object.keys(groupedFaqs).length === 0 ? (
+              <Card>
+                <CardContent className="py-12 text-center">
+                  <HelpCircle className="h-12 w-12 mx-auto text-muted-foreground/50 mb-4" />
+                  <p className="text-muted-foreground">Tidak ada FAQ yang sesuai dengan pencarian Anda.</p>
                 </CardContent>
               </Card>
-            );
-          })
+            ) : (
+              Object.entries(groupedFaqs).map(([category, items]) => {
+                const Icon = CATEGORY_ICONS[category] || HelpCircle;
+                return (
+                  <Card key={category}>
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-lg">
+                        <Icon className="h-5 w-5" />
+                        {category}
+                      </CardTitle>
+                      <CardDescription>{items.length} pertanyaan</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <Accordion type="single" collapsible className="w-full">
+                        {items.map((faq) => (
+                          <AccordionItem key={faq.id} value={faq.id}>
+                            <AccordionTrigger className="text-left">{faq.question}</AccordionTrigger>
+                            <AccordionContent className="text-muted-foreground">{faq.answer}</AccordionContent>
+                          </AccordionItem>
+                        ))}
+                      </Accordion>
+                    </CardContent>
+                  </Card>
+                );
+              })
+            )}
+          </>
         )}
 
-        <Card className="border-primary/30 bg-primary/5">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <MessageSquare className="h-5 w-5 text-primary" />
-              Butuh Bantuan Lebih Lanjut?
-            </CardTitle>
-            <CardDescription>
-              Jika pertanyaan Anda belum terjawab, silakan hubungi tim support kami
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-3">
-            <Button variant="outline" onClick={() => window.open(`mailto:${supportEmail}`, "_blank")}>
-              <MessageSquare className="h-4 w-4 mr-2" />
-              Kirim Email
-            </Button>
-            <Button variant="outline" onClick={() => waLink && window.open(waLink, "_blank")} disabled={!waLink}>
-              <ExternalLink className="h-4 w-4 mr-2" />
-              WhatsApp Support
-            </Button>
-          </CardContent>
-        </Card>
+        {activeTab === "support" && (
+          <Card className="border-primary/30 bg-primary/5">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <MessageSquare className="h-5 w-5 text-primary" />
+                Bantuan Langsung
+              </CardTitle>
+              <CardDescription>
+                Jika pertanyaan belum terjawab, hubungi tim support atau buat tiket bantuan.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-3">
+              <Button variant="outline" onClick={() => waLink && window.open(waLink, "_blank")} disabled={!waLink}>
+                <ExternalLink className="h-4 w-4 mr-2" />
+                WhatsApp Support
+              </Button>
+              <Button onClick={handleOpenTicketModule} disabled={!canCreateTicket}>
+                <HelpCircle className="h-4 w-4 mr-2" />
+                Buka Modul Tiket
+              </Button>
+            </CardContent>
+          </Card>
+        )}
 
         <PageGlossarySection preset="org_help_center" />
       </div>

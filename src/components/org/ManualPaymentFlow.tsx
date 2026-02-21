@@ -158,6 +158,17 @@ export function ManualPaymentFlow({
     setShowConfirmDialog(true);
   };
 
+  const generateInvoiceNumber = async () => {
+    const { data, error } = await supabase.rpc("generate_invoice_number");
+    if (error) throw error;
+
+    const invoiceNumber = typeof data === "string" ? data.trim() : "";
+    if (!invoiceNumber) {
+      throw new Error("Nomor faktur otomatis tidak tersedia");
+    }
+    return invoiceNumber;
+  };
+
   const handleSubmitPayment = async () => {
     const pkg = getSelectedPackageData();
     if (!pkg) return;
@@ -167,7 +178,12 @@ export function ManualPaymentFlow({
       const { unitPrice, subtotal, discount, total } = calculateTotal();
       const uniqueCode = generateUniqueCode();
       const finalAmount = total + uniqueCode;
-      const invoiceNumber = `INV-${format(new Date(), "yyyyMMdd")}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      let invoiceNumber = "";
+      try {
+        invoiceNumber = await generateInvoiceNumber();
+      } catch (error) {
+        console.warn("Invoice RPC generator failed, fallback to DB trigger:", error);
+      }
 
       const { error: invoiceError } = await supabase.from("invoices").insert({
         tenant_id: tenantId,
