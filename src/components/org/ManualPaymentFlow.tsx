@@ -43,6 +43,17 @@ interface BillingSettingsValue {
   bank_account_name?: string;
 }
 
+interface CreateOrGetManualInvoiceResult {
+  id: string;
+  invoice_number: string;
+  gross_amount: number;
+  status: string;
+  due_date: string;
+  payment_method_type: string;
+  unique_code: number;
+  reused: boolean;
+}
+
 const toJsonObject = (value: Json | null | undefined): Record<string, Json> | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -158,17 +169,6 @@ export function ManualPaymentFlow({
     setShowConfirmDialog(true);
   };
 
-  const generateInvoiceNumber = async () => {
-    const { data, error } = await supabase.rpc("generate_invoice_number");
-    if (error) throw error;
-
-    const invoiceNumber = typeof data === "string" ? data.trim() : "";
-    if (!invoiceNumber) {
-      throw new Error("Nomor faktur otomatis tidak tersedia");
-    }
-    return invoiceNumber;
-  };
-
   const handleSubmitPayment = async () => {
     const pkg = getSelectedPackageData();
     if (!pkg) return;
@@ -176,40 +176,47 @@ export function ManualPaymentFlow({
     setIsSubmitting(true);
     try {
       const { unitPrice, subtotal, discount, total } = calculateTotal();
-      const uniqueCode = generateUniqueCode();
-      const finalAmount = total + uniqueCode;
-      let invoiceNumber = "";
-      try {
-        invoiceNumber = await generateInvoiceNumber();
-      } catch (error) {
-        console.warn("Invoice RPC generator failed, fallback to DB trigger:", error);
-      }
+      const proposedUniqueCode = generateUniqueCode();
+      const proposedFinalAmount = total + proposedUniqueCode;
 
-      const { error: invoiceError } = await supabase.from("invoices").insert({
-        tenant_id: tenantId,
-        subscription_id: subscriptionId || null,
-        package_id: pkg.id,
-        package_name: pkg.name,
-        package_duration_months: pkg.duration_months,
-        package_discount_percentage: pkg.discount_percentage,
-        employee_count: employeeCount,
-        price_per_employee: unitPrice,
-        subtotal,
-        discount_amount: discount,
-        vat_percentage: 0,
-        vat_amount: 0,
-        gross_amount: finalAmount,
-        xendit_fee: 0,
-        net_amount: finalAmount,
-        invoice_number: invoiceNumber,
-        status: "PENDING",
-        payment_method_type: "MANUAL_TRANSFER",
-        due_date: format(addMonths(new Date(), 0), "yyyy-MM-dd"),
-        metadata: { unique_code: uniqueCode },
-        notes: `Angka unik: ${uniqueCode}`,
-      });
+      const { data: invoiceResult, error: invoiceError } = (await supabase.rpc(
+        "create_or_get_manual_invoice" as never,
+        {
+          p_tenant_id: tenantId,
+          p_subscription_id: subscriptionId || null,
+          p_package_id: pkg.id,
+          p_package_name: pkg.name,
+          p_package_duration_months: pkg.duration_months,
+          p_package_discount_percentage: pkg.discount_percentage,
+          p_employee_count: employeeCount,
+          p_price_per_employee: unitPrice,
+          p_subtotal: subtotal,
+          p_discount_amount: discount,
+          p_vat_percentage: 0,
+          p_vat_amount: 0,
+          p_gross_amount: proposedFinalAmount,
+          p_xendit_fee: 0,
+          p_net_amount: proposedFinalAmount,
+          p_due_date: format(addMonths(new Date(), 0), "yyyy-MM-dd"),
+          p_unique_code: proposedUniqueCode,
+          p_notes: `Angka unik: ${proposedUniqueCode}`,
+        } as never,
+      )) as { data: CreateOrGetManualInvoiceResult | null; error: Error | null };
 
       if (invoiceError) throw invoiceError;
+      if (!invoiceResult?.invoice_number) {
+        throw new Error("Gagal membuat atau mengambil invoice aktif");
+      }
+
+      const resolvedUniqueCode =
+        typeof invoiceResult.unique_code === "number" && Number.isFinite(invoiceResult.unique_code)
+          ? invoiceResult.unique_code
+          : proposedUniqueCode;
+      const resolvedFinalAmount =
+        typeof invoiceResult.gross_amount === "number" && Number.isFinite(invoiceResult.gross_amount)
+          ? invoiceResult.gross_amount
+          : proposedFinalAmount;
+      const resolvedBaseAmount = Math.max(0, resolvedFinalAmount - resolvedUniqueCode);
 
       const { data: billingSettings } = await supabase
         .from("system_settings")
@@ -233,14 +240,18 @@ export function ManualPaymentFlow({
           };
 
       setPaymentResult({
-        invoiceNumber,
-        totalAmount: total,
-        uniqueCode,
-        finalAmount,
+        invoiceNumber: invoiceResult.invoice_number,
+        totalAmount: resolvedBaseAmount,
+        uniqueCode: resolvedUniqueCode,
+        finalAmount: resolvedFinalAmount,
         bankInfo,
       });
 
-      toast.success("Invoice pembayaran berhasil dibuat. Langganan aktif setelah pembayaran tervalidasi.");
+      if (invoiceResult.reused) {
+        toast.info("Invoice aktif sebelumnya ditemukan. Silakan lanjutkan pembayaran pada invoice yang sama.");
+      } else {
+        toast.success("Invoice pembayaran berhasil dibuat. Langganan aktif setelah pembayaran tervalidasi.");
+      }
     } catch (error: unknown) {
       console.error("Error creating payment:", error);
       const errorMessage = error instanceof Error ? error.message : "Unknown error";

@@ -46,9 +46,14 @@ interface XenditSettingValue {
 
 interface XenditInvoiceResponse {
   success?: boolean;
+  reused?: boolean;
   error?: string;
   invoice?: {
+    id?: string;
+    invoice_number?: string | null;
     invoice_url?: string | null;
+    gross_amount?: number | null;
+    due_date?: string | null;
   };
 }
 
@@ -330,7 +335,11 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       if (error) throw error;
       if (!data?.success) throw new Error(data?.error || "Gagal membuat invoice");
 
-      toast.success("Invoice berhasil dibuat! Anda akan diarahkan ke halaman pembayaran.");
+      if (data.reused) {
+        toast.info("Invoice aktif sudah tersedia. Anda diarahkan ke invoice yang sama untuk dilanjutkan.");
+      } else {
+        toast.success("Invoice berhasil dibuat! Anda akan diarahkan ke halaman pembayaran.");
+      }
       
       // Open Xendit checkout URL
       if (data.invoice?.invoice_url) {

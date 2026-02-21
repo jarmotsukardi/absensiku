@@ -25,6 +25,16 @@ interface SubscriptionPriceRow {
   price_per_employee: number | null;
 }
 
+interface ActiveInvoiceRow {
+  id: string;
+  invoice_number: string;
+  invoice_url: string | null;
+  status: string;
+  gross_amount: number;
+  due_date: string;
+  payment_method_type: string | null;
+}
+
 const parseNumericSetting = (raw: unknown, fallback: number): number => {
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
   if (typeof raw === "string" && raw.trim() !== "") {
@@ -110,6 +120,55 @@ serve(async (req) => {
       return new Response(
         JSON.stringify(withTrace({ error: "Tenant not found" }, traceId)),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const { data: activeInvoice } = await supabase
+      .from("invoices")
+      .select("id, invoice_number, invoice_url, status, gross_amount, due_date, payment_method_type")
+      .eq("tenant_id", tenant_id)
+      .in("status", ["PENDING", "AWAITING_VERIFICATION"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const existingActive = (activeInvoice ?? null) as ActiveInvoiceRow | null;
+    if (existingActive) {
+      if (existingActive.invoice_url && existingActive.status === "PENDING") {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            reused: true,
+            invoice: {
+              id: existingActive.id,
+              invoice_number: existingActive.invoice_number,
+              invoice_url: existingActive.invoice_url,
+              gross_amount: existingActive.gross_amount,
+              due_date: existingActive.due_date,
+            },
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      return new Response(
+        JSON.stringify(
+          withTrace(
+            {
+              success: false,
+              error: `Masih ada invoice aktif (${existingActive.invoice_number}) yang harus diselesaikan terlebih dahulu.`,
+              active_invoice: {
+                id: existingActive.id,
+                invoice_number: existingActive.invoice_number,
+                status: existingActive.status,
+                payment_method_type: existingActive.payment_method_type,
+                due_date: existingActive.due_date,
+              },
+            },
+            traceId,
+          ),
+        ),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
@@ -316,6 +375,61 @@ serve(async (req) => {
       .single();
 
     if (invoiceError) {
+      const isUniqueActiveViolation =
+        invoiceError.code === "23505" ||
+        (invoiceError.message ?? "").includes("idx_invoices_one_active_per_tenant_unique");
+
+      if (isUniqueActiveViolation) {
+        const { data: latestActive } = await supabase
+          .from("invoices")
+          .select("id, invoice_number, invoice_url, status, gross_amount, due_date, payment_method_type")
+          .eq("tenant_id", tenant_id)
+          .in("status", ["PENDING", "AWAITING_VERIFICATION"])
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        const reusedInvoice = (latestActive ?? null) as ActiveInvoiceRow | null;
+        if (reusedInvoice?.invoice_url && reusedInvoice.status === "PENDING") {
+          return new Response(
+            JSON.stringify({
+              success: true,
+              reused: true,
+              invoice: {
+                id: reusedInvoice.id,
+                invoice_number: reusedInvoice.invoice_number,
+                invoice_url: reusedInvoice.invoice_url,
+                gross_amount: reusedInvoice.gross_amount,
+                due_date: reusedInvoice.due_date,
+              },
+            }),
+            { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+
+        return new Response(
+          JSON.stringify(
+            withTrace(
+              {
+                success: false,
+                error: "Invoice aktif sudah tersedia. Selesaikan invoice aktif terlebih dahulu.",
+                active_invoice: reusedInvoice
+                  ? {
+                      id: reusedInvoice.id,
+                      invoice_number: reusedInvoice.invoice_number,
+                      status: reusedInvoice.status,
+                      payment_method_type: reusedInvoice.payment_method_type,
+                      due_date: reusedInvoice.due_date,
+                    }
+                  : null,
+              },
+              traceId,
+            ),
+          ),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
       logTraceError(traceId, "Database error", invoiceError);
       return new Response(
         JSON.stringify(withTrace({ error: "Failed to save invoice", details: invoiceError.message }, traceId)),
