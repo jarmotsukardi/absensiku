@@ -228,6 +228,11 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
     if (invoices.length === 0) return null;
     return [...invoices].sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0];
   }, [invoices]);
+  const activeInvoice = useMemo(() => {
+    return [...invoices]
+      .filter((inv) => inv.status === "PENDING" || inv.status === "AWAITING_VERIFICATION")
+      .sort((left, right) => Date.parse(right.created_at) - Date.parse(left.created_at))[0] ?? null;
+  }, [invoices]);
   const hasOpenInvoice = useMemo(
     () => invoices.some((inv) => inv.status === "PENDING" || inv.status === "AWAITING_VERIFICATION"),
     [invoices],
@@ -333,7 +338,10 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       });
 
       if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || "Gagal membuat invoice");
+      if (!data?.success) {
+        toast.warning(data?.error || "Masih ada invoice aktif yang perlu diselesaikan.");
+        return;
+      }
 
       if (data.reused) {
         toast.info("Invoice aktif sudah tersedia. Anda diarahkan ke invoice yang sama untuk dilanjutkan.");
@@ -349,6 +357,10 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       // Refresh invoices
       void fetchAll();
     } catch (error: unknown) {
+      if (error instanceof Error && error.message.trim().length > 0) {
+        toast.error(error.message);
+        return;
+      }
       const errorRef = reportError(error, "org.activation.xendit_checkout", {
         tenant_id: tenantId,
         package_id: selectedPkg?.id || null,
@@ -852,12 +864,19 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
             </div>
           )}
 
+          {activeInvoice && (
+            <div className="rounded-lg border border-blue-300 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-100">
+              Invoice aktif terdeteksi: <strong>{activeInvoice.invoice_number}</strong>. Sistem akan menggunakan invoice ini
+              sampai statusnya berubah lunas/dibatalkan.
+            </div>
+          )}
+
           {/* Xendit Checkout Button */}
           {paymentMethod === "xendit" && selectedPkg && isXenditAllowed && (
             <div className="pt-2">
               <Button
                 onClick={handleXenditCheckout}
-                disabled={isCreatingXenditInvoice || !selectedPkg}
+                disabled={isCreatingXenditInvoice || !selectedPkg || hasOpenInvoice}
                 className="w-full"
                 size="lg"
               >
@@ -874,7 +893,9 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
                 )}
               </Button>
               <p className="text-xs text-muted-foreground text-center mt-2">
-                Anda akan diarahkan ke halaman pembayaran Xendit
+                {hasOpenInvoice
+                  ? "Masih ada invoice aktif. Selesaikan invoice tersebut terlebih dahulu."
+                  : "Anda akan diarahkan ke halaman pembayaran Xendit"}
               </p>
             </div>
           )}
