@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import {
   Loader2,
   Users,
   Calendar,
+  AlertTriangle,
   ExternalLink,
   Smartphone,
   Landmark,
@@ -52,6 +53,21 @@ interface XenditInvoiceResponse {
 }
 
 type PaymentMethod = "manual" | "xendit";
+type InvoicePriorityTone = "critical" | "warning" | "normal" | "ok";
+
+const toDueEndTimestamp = (dueDate?: string | null): number | null => {
+  if (!dueDate) return null;
+  const ts = Date.parse(`${dueDate}T23:59:59`);
+  return Number.isFinite(ts) ? ts : null;
+};
+
+const formatCountdown = (ms: number): string => {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+};
 
 const parseNumericSettingValue = (raw: unknown, fallback: number): number => {
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
@@ -83,6 +99,7 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
   const [b2bThreshold, setB2bThreshold] = useState(2000);
   const [isCentralizedBilling, setIsCentralizedBilling] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const fetchAll = useCallback(async () => {
     try {
@@ -151,16 +168,62 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
 
   const formatCurrency = (amount: number) =>
     new Intl.NumberFormat("id-ID", { style: "currency", currency: "IDR", minimumFractionDigits: 0 }).format(amount);
-  const totalPages = Math.max(1, Math.ceil(invoices.length / ITEMS_PER_PAGE));
-  const paginatedInvoices = invoices.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
-  );
+  const getInvoicePriorityMeta = useCallback((inv: Invoice) => {
+    const status = inv.status || "";
+    const dueAt = toDueEndTimestamp(inv.due_date);
+    const isPayableStatus = status === "PENDING";
+    const isWaitingVerification = status === "AWAITING_VERIFICATION";
+    if (status === "PAID") {
+      return { rank: 50, tone: "ok" as InvoicePriorityTone, note: "Lunas", dueAt };
+    }
+    if (status === "CANCELLED" || status === "EXPIRED") {
+      return { rank: 40, tone: "normal" as InvoicePriorityTone, note: status, dueAt };
+    }
+    if (isWaitingVerification) {
+      return { rank: 20, tone: "warning" as InvoicePriorityTone, note: "Menunggu verifikasi admin", dueAt };
+    }
+    if (!isPayableStatus) {
+      return { rank: 30, tone: "normal" as InvoicePriorityTone, note: status || "-", dueAt };
+    }
+    if (!dueAt) {
+      return { rank: 3, tone: "warning" as InvoicePriorityTone, note: "Belum ada jatuh tempo", dueAt: null };
+    }
+    if (nowMs > dueAt) {
+      const lateDays = Math.max(1, Math.floor((nowMs - dueAt) / (24 * 60 * 60 * 1000)));
+      return { rank: 0, tone: "critical" as InvoicePriorityTone, note: `Terlambat ${lateDays} hari`, dueAt };
+    }
+    const diffDays = Math.ceil((dueAt - nowMs) / (24 * 60 * 60 * 1000));
+    if (diffDays <= 0) {
+      return { rank: 1, tone: "critical" as InvoicePriorityTone, note: "Jatuh tempo hari ini", dueAt };
+    }
+    if (diffDays <= 3) {
+      return { rank: 2, tone: "warning" as InvoicePriorityTone, note: `Jatuh tempo H-${diffDays}`, dueAt };
+    }
+    return { rank: 3, tone: "normal" as InvoicePriorityTone, note: `Jatuh tempo H-${diffDays}`, dueAt };
+  }, [nowMs]);
+
+  const prioritizedInvoices = useMemo(() => {
+    return [...invoices].sort((left, right) => {
+      const leftMeta = getInvoicePriorityMeta(left);
+      const rightMeta = getInvoicePriorityMeta(right);
+      if (leftMeta.rank !== rightMeta.rank) return leftMeta.rank - rightMeta.rank;
+      const leftDue = leftMeta.dueAt ?? Number.MAX_SAFE_INTEGER;
+      const rightDue = rightMeta.dueAt ?? Number.MAX_SAFE_INTEGER;
+      if (leftDue !== rightDue) return leftDue - rightDue;
+      return Date.parse(right.created_at) - Date.parse(left.created_at);
+    });
+  }, [invoices, getInvoicePriorityMeta]);
+
+  const totalPages = Math.max(1, Math.ceil(prioritizedInvoices.length / ITEMS_PER_PAGE));
+  const paginatedInvoices = prioritizedInvoices.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+  const attentionInvoices = prioritizedInvoices.filter((inv) => getInvoicePriorityMeta(inv).rank <= 2);
+  const criticalInvoice = attentionInvoices[0] || null;
 
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "PAID": return <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Lunas</Badge>;
       case "PENDING": return <Badge variant="secondary">Menunggu</Badge>;
+      case "AWAITING_VERIFICATION": return <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">Menunggu Verifikasi</Badge>;
       case "CANCELLED": return <Badge variant="destructive">Batal</Badge>;
       default: return <Badge variant="outline">{status}</Badge>;
     }
@@ -220,6 +283,11 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       setPaymentMethod("manual");
     }
   }, [paymentMethod, isXenditAllowed]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   if (isLoading) {
     return (
@@ -281,6 +349,162 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
               </div>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Invoice Priority */}
+      <Card id="invoice-priority-table" className={criticalInvoice ? "border-red-300 shadow-sm" : undefined}>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Receipt className="h-5 w-5 text-primary" />
+            Daftar Invoice
+            {attentionInvoices.length > 0 && (
+              <Badge variant="destructive" className="animate-pulse">
+                {attentionInvoices.length} Butuh Tindakan
+              </Badge>
+            )}
+          </CardTitle>
+          <CardDescription>Invoice prioritas ditampilkan di urutan teratas agar cepat ditindaklanjuti.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {criticalInvoice && (() => {
+            const criticalMeta = getInvoicePriorityMeta(criticalInvoice);
+            const dueAt = criticalMeta.dueAt;
+            const countdownLabel =
+              dueAt && dueAt > nowMs
+                ? `Batas waktu: ${formatCountdown(dueAt - nowMs)}`
+                : criticalMeta.rank === 0
+                  ? "Tagihan sudah melewati jatuh tempo"
+                  : criticalMeta.note;
+            return (
+              <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-red-900 dark:border-red-800 dark:bg-red-950/30 dark:text-red-100">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="space-y-1">
+                    <p className="font-semibold flex items-center gap-2">
+                      <AlertTriangle className="h-4 w-4" />
+                      PERINGATAN TAGIHAN PRIORITAS
+                    </p>
+                    <p className="text-sm">
+                      Invoice <strong>{criticalInvoice.invoice_number}</strong> - {criticalMeta.note}
+                    </p>
+                    <p className="text-xs font-medium">{countdownLabel}</p>
+                  </div>
+                  {criticalInvoice.invoice_url && criticalInvoice.status === "PENDING" ? (
+                    <Button asChild size="lg" className="bg-red-700 hover:bg-red-800">
+                      <a href={criticalInvoice.invoice_url} target="_blank" rel="noopener noreferrer">
+                        <ExternalLink className="h-4 w-4 mr-2" />
+                        Bayar Sekarang
+                      </a>
+                    </Button>
+                  ) : (
+                    <Button
+                      size="lg"
+                      variant="destructive"
+                      onClick={() => setPaymentMethod("manual")}
+                    >
+                      Prioritaskan Pembayaran Manual
+                    </Button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
+          {prioritizedInvoices.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              <Receipt className="h-10 w-10 mx-auto mb-3 opacity-50" />
+              <p>Belum ada invoice</p>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>No. Invoice</TableHead>
+                  <TableHead>Jatuh Tempo</TableHead>
+                  <TableHead>Metode</TableHead>
+                  <TableHead>Jumlah</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Prioritas</TableHead>
+                  <TableHead></TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {paginatedInvoices.map((inv) => {
+                  const meta = getInvoicePriorityMeta(inv);
+                  const rowClass =
+                    meta.tone === "critical"
+                      ? "bg-red-50/70 hover:bg-red-50"
+                      : meta.tone === "warning"
+                        ? "bg-amber-50/60 hover:bg-amber-50"
+                        : "";
+                  return (
+                    <TableRow key={inv.id} className={rowClass}>
+                      <TableCell className="font-mono text-sm">{inv.invoice_number}</TableCell>
+                      <TableCell>{inv.due_date ? format(new Date(inv.due_date), "d MMM yyyy", { locale: idLocale }) : "-"}</TableCell>
+                      <TableCell>
+                        <Badge variant="outline" className="text-xs">
+                          {inv.payment_method_type === "XENDIT" ? "Online" : "Transfer"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="font-semibold">{formatCurrency(inv.gross_amount)}</TableCell>
+                      <TableCell>{getStatusBadge(inv.status)}</TableCell>
+                      <TableCell>
+                        <Badge
+                          className={
+                            meta.tone === "critical"
+                              ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+                              : meta.tone === "warning"
+                                ? "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200"
+                                : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                          }
+                        >
+                          {meta.note}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {inv.invoice_url && inv.status === "PENDING" && (
+                          <Button
+                            variant={meta.tone === "critical" ? "destructive" : "default"}
+                            size="sm"
+                            className={meta.tone === "critical" ? "animate-pulse" : ""}
+                            asChild
+                          >
+                            <a href={inv.invoice_url} target="_blank" rel="noopener noreferrer">
+                              <ExternalLink className="h-3 w-3 mr-1" />
+                              Bayar Sekarang
+                            </a>
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+          {prioritizedInvoices.length > 0 && (
+            <div className="mt-4 flex items-center justify-between">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                disabled={currentPage === 1}
+              >
+                Sebelumnya
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                Halaman {currentPage} dari {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                disabled={currentPage === totalPages}
+              >
+                Berikutnya
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -540,85 +764,6 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
         />
       )}
 
-      {/* Invoice History */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Receipt className="h-5 w-5 text-primary" />
-            Daftar Invoice
-          </CardTitle>
-          <CardDescription>Invoice jatuh tempo dan riwayat pembayaran</CardDescription>
-        </CardHeader>
-        <CardContent>
-          {invoices.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <Receipt className="h-10 w-10 mx-auto mb-3 opacity-50" />
-              <p>Belum ada invoice</p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>No. Invoice</TableHead>
-                  <TableHead>Tanggal</TableHead>
-                  <TableHead>Metode</TableHead>
-                  <TableHead>Jumlah</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {paginatedInvoices.map((inv) => (
-                  <TableRow key={inv.id}>
-                    <TableCell className="font-mono text-sm">{inv.invoice_number}</TableCell>
-                    <TableCell>{format(new Date(inv.created_at), "d MMM yyyy", { locale: idLocale })}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline" className="text-xs">
-                        {inv.payment_method_type === "XENDIT" ? "Online" : "Transfer"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="font-semibold">{formatCurrency(inv.gross_amount)}</TableCell>
-                    <TableCell>{getStatusBadge(inv.status)}</TableCell>
-                    <TableCell>
-                      {inv.invoice_url && inv.status === "PENDING" && (
-                        <Button variant="ghost" size="sm" asChild>
-                          <a href={inv.invoice_url} target="_blank" rel="noopener noreferrer">
-                            <ExternalLink className="h-3 w-3 mr-1" />
-                            Bayar
-                          </a>
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {invoices.length > 0 && (
-            <div className="mt-4 flex items-center justify-between">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
-                disabled={currentPage === 1}
-              >
-                Sebelumnya
-              </Button>
-              <span className="text-sm text-muted-foreground">
-                Halaman {currentPage} dari {totalPages}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
-                disabled={currentPage === totalPages}
-              >
-                Berikutnya
-              </Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
     </div>
   );
 }
