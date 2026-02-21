@@ -43,6 +43,10 @@ import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { cn } from "@/lib/utils";
+import {
+  DEFAULT_BILLING_INVOICE_TEMPLATE,
+  renderBillingInvoiceTemplate,
+} from "@/lib/billingInvoiceTemplate";
 
 type InvoiceRow = Pick<
   Tables<"invoices">,
@@ -111,6 +115,14 @@ const DEFAULT_BANK_INFO: BillingBankInfo = {
   bankName: "BCA",
   accountNumber: "1234567890",
   accountName: "PT AbsensiKu Indonesia",
+};
+
+const parseInvoiceTemplate = (value: unknown): string => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return DEFAULT_BILLING_INVOICE_TEMPLATE;
+  const raw = value as Record<string, unknown>;
+  const template = raw.html_template;
+  if (typeof template !== "string" || !template.trim()) return DEFAULT_BILLING_INVOICE_TEMPLATE;
+  return template;
 };
 
 const formatCurrency = (amount: number) =>
@@ -287,6 +299,7 @@ export default function OrgBilling() {
   const [tenantProfile, setTenantProfile] = useState<TenantBillingProfile | null>(null);
   const [subscriptionSnapshot, setSubscriptionSnapshot] = useState<SubscriptionSnapshot | null>(null);
   const [bankInfo, setBankInfo] = useState<BillingBankInfo>(DEFAULT_BANK_INFO);
+  const [invoiceTemplateHtml, setInvoiceTemplateHtml] = useState(DEFAULT_BILLING_INVOICE_TEMPLATE);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -333,7 +346,7 @@ export default function OrgBilling() {
       }
       setTenantId(resolvedTenantId);
 
-      const [invoicesRes, tenantRes, subscriptionRes, billingSettingsRes] = await Promise.all([
+      const [invoicesRes, tenantRes, subscriptionRes, billingSettingsRes, invoiceTemplateRes] = await Promise.all([
         supabase
           .from("invoices")
           .select(
@@ -352,6 +365,7 @@ export default function OrgBilling() {
           .limit(1)
           .maybeSingle(),
         supabase.from("system_settings").select("value").eq("key", "billing_settings").maybeSingle(),
+        supabase.from("system_settings").select("value").eq("key", "billing_invoice_template").maybeSingle(),
       ]);
 
       if (invoicesRes.error) throw invoicesRes.error;
@@ -364,11 +378,15 @@ export default function OrgBilling() {
       if (billingSettingsRes.error) {
         console.warn("Failed to load billing settings for bank info:", billingSettingsRes.error);
       }
+      if (invoiceTemplateRes.error) {
+        console.warn("Failed to load billing invoice template:", invoiceTemplateRes.error);
+      }
 
       setInvoices((invoicesRes.data as InvoiceRow[]) || []);
       setTenantProfile(tenantRes.data || null);
       setSubscriptionSnapshot((subscriptionRes.data as SubscriptionSnapshot | null) || null);
       setBankInfo(parseBillingSettings(billingSettingsRes.data?.value));
+      setInvoiceTemplateHtml(parseInvoiceTemplate(invoiceTemplateRes.data?.value));
     } catch (error) {
       const errorRef = reportError(error, "org.billing.fetch_invoices");
       const message = appendErrorReference("Gagal memuat data faktur", errorRef);
@@ -775,138 +793,34 @@ export default function OrgBilling() {
             .join("")
         : `<tr><td colspan="4" style="text-align:center;color:#6b7280">No Related Transactions Found</td></tr>`;
 
-      const printableHtml = `<!doctype html>
-<html lang="id">
-  <head>
-    <meta charset="utf-8" />
-    <title>Invoice ${escapeHtml(invoiceNo)}</title>
-    <style>
-      @page { size: A4; margin: 14mm; }
-      body { font-family: Arial, sans-serif; color: #111827; margin: 0; font-size: 12px; line-height: 1.45; }
-      .invoice { border: 1px solid #d1d5db; border-radius: 8px; padding: 20px; }
-      .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-      .brand { font-size: 14px; color: #374151; margin-bottom: 6px; }
-      .invoice-title { font-size: 34px; color: #1f2937; margin: 0 0 2px 0; }
-      .invoice-no { font-size: 24px; margin: 0; }
-      .status { padding: 6px 14px; border-radius: 6px; border: 1px solid; font-size: 13px; font-weight: 700; text-transform: uppercase; }
-      .status-paid { color: #166534; background: #dcfce7; border-color: #86efac; }
-      .status-unpaid { color: #991b1b; background: #fee2e2; border-color: #fca5a5; }
-      .divider { border-top: 1px solid #e5e7eb; margin: 14px 0; }
-      .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-      .label { font-weight: 700; margin-bottom: 4px; }
-      .muted { color: #6b7280; }
-      .box { border: 1px solid #e5e7eb; border-radius: 6px; margin-top: 14px; overflow: hidden; }
-      .box-head { font-weight: 700; background: #f9fafb; padding: 10px 12px; border-bottom: 1px solid #e5e7eb; }
-      table { width: 100%; border-collapse: collapse; }
-      th, td { padding: 8px 10px; border-bottom: 1px solid #e5e7eb; vertical-align: top; }
-      th { text-align: left; font-weight: 700; background: #f9fafb; }
-      .text-right { text-align: right; }
-      .summary td { border-bottom: none; padding: 4px 10px; }
-      .summary-total td { border-top: 1px solid #e5e7eb; font-weight: 700; padding-top: 8px; }
-      .actions-note { margin-top: 12px; color: #6b7280; font-size: 11px; }
-      @media print {
-        .actions-note { display: none; }
-      }
-    </style>
-  </head>
-  <body>
-    <div class="invoice">
-      <div class="head">
-        <div>
-          <p class="brand">AbsensiKu - Invoice</p>
-          <h1 class="invoice-title">Invoice</h1>
-          <p class="invoice-no">#${escapeHtml(invoiceNo)}</p>
-        </div>
-        <div>
-          <div class="status ${isInvoicePaid(invoice.status) ? "status-paid" : "status-unpaid"}">${escapeHtml(statusMeta.label)}</div>
-        </div>
-      </div>
-
-      <div class="divider"></div>
-
-      <div class="cols">
-        <div>
-          <div class="label">Invoiced To</div>
-          <div>${escapeHtml(tenantProfile?.name || "-")}</div>
-          <div class="muted">${escapeHtml(tenantProfile?.code || "-")}</div>
-          <div class="muted">${escapeHtml(tenantProfile?.address || "-")}</div>
-        </div>
-        <div style="text-align:right">
-          <div class="label">Pay To</div>
-          <div>${escapeHtml(bankInfo.accountName)}</div>
-          <div class="muted">${escapeHtml(bankInfo.bankName)} ${escapeHtml(bankInfo.accountNumber)}</div>
-          <div class="muted">Transfer Bank / Payment Gateway</div>
-        </div>
-      </div>
-
-      <div class="cols" style="margin-top: 12px;">
-        <div>
-          <div class="label">Invoice Date</div>
-          <div>${escapeHtml(issueDate)}</div>
-          <div class="label" style="margin-top:8px">Due Date</div>
-          <div>${escapeHtml(dueDate)}</div>
-        </div>
-        <div style="text-align:right">
-          <div class="label">Payment Method</div>
-          <div>${escapeHtml(getPaymentMethodLabel(invoice.payment_method_type))}</div>
-        </div>
-      </div>
-
-      <div class="box">
-        <div class="box-head">Invoice Items</div>
-        <table>
-          <thead>
-            <tr>
-              <th>Description</th>
-              <th class="text-right">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td>
-                ${escapeHtml(invoice.package_name || "Langganan Sistem Absensi")}
-                <div class="muted">${escapeHtml(`${invoice.employee_count || 0} pegawai${invoice.package_duration_months ? ` • ${invoice.package_duration_months} bulan` : ""}`)}</div>
-              </td>
-              <td class="text-right">${escapeHtml(subtotal)}</td>
-            </tr>
-          </tbody>
-        </table>
-        <table class="summary">
-          <tbody>
-            <tr><td class="text-right muted">Sub Total</td><td class="text-right">${escapeHtml(subtotal)}</td></tr>
-            <tr><td class="text-right muted">Diskon</td><td class="text-right">-${escapeHtml(discount)}</td></tr>
-            <tr><td class="text-right muted">PPN (${invoice.vat_percentage || 0}%)</td><td class="text-right">${escapeHtml(vatAmount)}</td></tr>
-            <tr><td class="text-right muted">Biaya Layanan</td><td class="text-right">${escapeHtml(serviceFee)}</td></tr>
-            <tr class="summary-total"><td class="text-right">Total</td><td class="text-right">${escapeHtml(total)}</td></tr>
-            <tr><td class="text-right">Net</td><td class="text-right">${escapeHtml(net)}</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div class="box">
-        <div class="box-head">Riwayat Transaksi</div>
-        <table>
-          <thead>
-            <tr>
-              <th>Transaction Date</th>
-              <th>Gateway</th>
-              <th>Transaction ID</th>
-              <th class="text-right">Amount</th>
-            </tr>
-          </thead>
-          <tbody>${transactionRows}</tbody>
-        </table>
-        <table class="summary">
-          <tbody>
-            <tr class="summary-total"><td class="text-right">Balance</td><td class="text-right">${escapeHtml(balanceFormatted)}</td></tr>
-          </tbody>
-        </table>
-      </div>
-
-      ${invoice.notes ? `<div class="actions-note">${escapeHtml(invoice.notes)}</div>` : ""}
-    </div>
-  </body>
-</html>`;
+      const printableHtml = renderBillingInvoiceTemplate(invoiceTemplateHtml, {
+        invoice_number: escapeHtml(invoiceNo),
+        invoice_status: escapeHtml(statusMeta.label),
+        invoice_status_class: isInvoicePaid(invoice.status) ? "status-paid" : "status-unpaid",
+        issue_date: escapeHtml(issueDate),
+        due_date: escapeHtml(dueDate),
+        tenant_name: escapeHtml(tenantProfile?.name || "-"),
+        tenant_code: escapeHtml(tenantProfile?.code || "-"),
+        tenant_address: escapeHtml(tenantProfile?.address || "-"),
+        bank_account_name: escapeHtml(bankInfo.accountName),
+        bank_name: escapeHtml(bankInfo.bankName),
+        bank_account_number: escapeHtml(bankInfo.accountNumber),
+        payment_method: escapeHtml(getPaymentMethodLabel(invoice.payment_method_type)),
+        invoice_item_name: escapeHtml(invoice.package_name || "Langganan Sistem Absensi"),
+        invoice_item_meta: escapeHtml(
+          `${invoice.employee_count || 0} pegawai${invoice.package_duration_months ? ` • ${invoice.package_duration_months} bulan` : ""}`,
+        ),
+        subtotal: escapeHtml(subtotal),
+        discount: escapeHtml(discount),
+        vat_percentage: escapeHtml(String(invoice.vat_percentage || 0)),
+        vat_amount: escapeHtml(vatAmount),
+        service_fee: escapeHtml(serviceFee),
+        total: escapeHtml(total),
+        net: escapeHtml(net),
+        transaction_rows: transactionRows,
+        balance: escapeHtml(balanceFormatted),
+        notes: invoice.notes ? `<div class="actions-note">${escapeHtml(invoice.notes)}</div>` : "",
+      });
 
       const popup = window.open("", "_blank", "noopener,noreferrer,width=1024,height=768");
       if (!popup) {

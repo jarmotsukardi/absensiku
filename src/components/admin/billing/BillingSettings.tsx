@@ -10,6 +10,10 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Save, DollarSign, Percent, Clock, CreditCard, Landmark } from "lucide-react";
 import { toast } from "sonner";
+import {
+  BILLING_INVOICE_TEMPLATE_TOKENS,
+  DEFAULT_BILLING_INVOICE_TEMPLATE,
+} from "@/lib/billingInvoiceTemplate";
 
 export function BillingSettings() {
   const { settings, isLoading, getSetting, updateSetting } = useBillingSettings();
@@ -28,6 +32,7 @@ export function BillingSettings() {
   const [bankAccount, setBankAccount] = useState("");
   const [bankAccountName, setBankAccountName] = useState("");
   const [paymentInstructions, setPaymentInstructions] = useState("");
+  const [invoiceTemplateHtml, setInvoiceTemplateHtml] = useState(DEFAULT_BILLING_INVOICE_TEMPLATE);
 
   // Only initialize form values ONCE when settings first load
   useEffect(() => {
@@ -52,18 +57,24 @@ export function BillingSettings() {
   // Fetch billing_settings (bank account info) from system_settings
   useEffect(() => {
     const fetchBankSettings = async () => {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "billing_settings")
-        .maybeSingle();
+      const [bankRes, templateRes] = await Promise.all([
+        supabase.from("system_settings").select("value").eq("key", "billing_settings").maybeSingle(),
+        supabase.from("system_settings").select("value").eq("key", "billing_invoice_template").maybeSingle(),
+      ]);
 
-      if (data?.value && typeof data.value === "object" && !Array.isArray(data.value)) {
-        const value = data.value as Record<string, unknown>;
+      if (bankRes.data?.value && typeof bankRes.data.value === "object" && !Array.isArray(bankRes.data.value)) {
+        const value = bankRes.data.value as Record<string, unknown>;
         setBankName(typeof value.bank_name === "string" ? value.bank_name : "");
         setBankAccount(typeof value.bank_account === "string" ? value.bank_account : "");
         setBankAccountName(typeof value.bank_account_name === "string" ? value.bank_account_name : "");
         setPaymentInstructions(typeof value.payment_instructions === "string" ? value.payment_instructions : "");
+      }
+
+      if (templateRes.data?.value && typeof templateRes.data.value === "object" && !Array.isArray(templateRes.data.value)) {
+        const value = templateRes.data.value as Record<string, unknown>;
+        if (typeof value.html_template === "string" && value.html_template.trim()) {
+          setInvoiceTemplateHtml(value.html_template);
+        }
       }
     };
     fetchBankSettings();
@@ -108,6 +119,30 @@ export function BillingSettings() {
             key: "billing_settings",
             value: bankPayload,
             description: "Pengaturan rekening bank pemilik aplikasi",
+          });
+      }
+
+      const templatePayload: Json = {
+        html_template: invoiceTemplateHtml.trim() || DEFAULT_BILLING_INVOICE_TEMPLATE,
+      };
+      const { data: existingTemplate } = await supabase
+        .from("system_settings")
+        .select("id")
+        .eq("key", "billing_invoice_template")
+        .maybeSingle();
+
+      if (existingTemplate) {
+        await supabase
+          .from("system_settings")
+          .update({ value: templatePayload, updated_at: new Date().toISOString() })
+          .eq("key", "billing_invoice_template");
+      } else {
+        await supabase
+          .from("system_settings")
+          .insert({
+            key: "billing_invoice_template",
+            value: templatePayload,
+            description: "Template HTML lembar faktur yang digunakan saat print/download invoice organisasi.",
           });
       }
 
@@ -185,6 +220,51 @@ export function BillingSettings() {
               ⚠️ No. Rekening dan Atas Nama wajib diisi agar pembayaran manual berfungsi
             </p>
           )}
+        </CardContent>
+      </Card>
+
+      <Card className="border-primary/30">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Landmark className="h-4 w-4" />
+            Format Lembar Faktur (Editable)
+          </CardTitle>
+          <CardDescription>
+            Template HTML untuk print/download faktur pada halaman organisasi.
+            Gunakan placeholder seperti {"{{invoice_number}}"} dan {"{{transaction_rows}}"}.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="rounded-md border bg-muted/30 p-3 text-xs">
+            <p className="mb-2 font-medium">Placeholder tersedia:</p>
+            <div className="flex flex-wrap gap-2">
+              {BILLING_INVOICE_TEMPLATE_TOKENS.map((token) => (
+                <code key={token} className="rounded bg-background px-2 py-1 text-[11px]">
+                  {`{{${token}}}`}
+                </code>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="invoiceTemplateHtml">Template HTML Faktur</Label>
+            <Textarea
+              id="invoiceTemplateHtml"
+              value={invoiceTemplateHtml}
+              onChange={(e) => setInvoiceTemplateHtml(e.target.value)}
+              rows={18}
+              className="font-mono text-xs"
+              placeholder="Masukkan HTML template faktur..."
+            />
+          </div>
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setInvoiceTemplateHtml(DEFAULT_BILLING_INVOICE_TEMPLATE)}
+            >
+              Reset Template Default
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
