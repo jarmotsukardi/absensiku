@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
 import { Separator } from "@/components/ui/separator";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   Calculator,
@@ -77,6 +78,7 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
   const [isLoading, setIsLoading] = useState(true);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("manual");
   const [isCreatingXenditInvoice, setIsCreatingXenditInvoice] = useState(false);
+  const [isCalculatorOpen, setIsCalculatorOpen] = useState(false);
   const [xenditEnabled, setXenditEnabled] = useState(false);
   const [b2bThreshold, setB2bThreshold] = useState(2000);
   const [isCentralizedBilling, setIsCentralizedBilling] = useState(true);
@@ -289,79 +291,116 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
             <Calculator className="h-5 w-5 text-primary" />
             Kalkulator Langganan
           </CardTitle>
-          <CardDescription>Geser slider untuk menghitung estimasi biaya berdasarkan jumlah member</CardDescription>
+          <CardDescription>Buka overlay kalkulator untuk simulasi paket dan jumlah member.</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-5">
-          {typeof subscription?.price_per_employee === "number" &&
-            Number.isFinite(subscription.price_per_employee) &&
-            subscription.price_per_employee > 0 && (
-              <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-100">
-                Harga negosiasi B2B aktif: <strong>{formatCurrency(subscription.price_per_employee)}</strong> per pegawai per bulan.
-              </div>
-            )}
-
-          {/* Package Selection */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {packages.map((pkg) => (
-              <button
-                key={pkg.id}
-                onClick={() => setSelectedPkgId(pkg.id)}
-                className={`p-4 rounded-xl border-2 text-left transition-all ${
-                  selectedPkgId === pkg.id ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
-                }`}
-              >
-                <p className="font-semibold">{pkg.name}</p>
-                <p className="text-sm text-muted-foreground">{pkg.duration_months} bulan</p>
-                <p className="text-sm font-medium mt-1">{formatCurrency(getEffectiveUnitPrice(pkg.base_price_per_month))}/org/bln</p>
-                {pkg.discount_percentage > 0 && (
-                  <Badge variant="secondary" className="mt-2 text-xs">Hemat {pkg.discount_percentage}%</Badge>
-                )}
-              </button>
-            ))}
-          </div>
-
-          {/* Member Slider */}
-          <div className="space-y-3">
-            <div className="flex justify-between items-center">
-              <span className="font-medium">Jumlah Member</span>
-              <span className="text-3xl font-bold text-primary">{memberSlider[0]}</span>
+        <CardContent className="space-y-4">
+          {selectedPkg ? (
+            <div className="rounded-lg border p-4 space-y-1">
+              <p className="text-sm text-muted-foreground">Ringkasan Simulasi Saat Ini</p>
+              <p className="font-semibold">
+                {selectedPkg.name} • {memberSlider[0]} member • {selectedPkg.duration_months} bulan
+              </p>
+              <p className="text-lg font-bold text-primary">{formatCurrency(total)}</p>
             </div>
-            <Slider
-              value={memberSlider}
-              onValueChange={setMemberSlider}
-              min={1}
-              max={1000}
-              step={1}
-              className="w-full"
-            />
-            <div className="flex justify-between text-xs text-muted-foreground">
-              <span>1</span>
-              <span>1000</span>
-            </div>
-          </div>
-
-          {/* Price Breakdown */}
-          {selectedPkg && (
-            <div className="rounded-lg border p-4 space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">
-                  {memberSlider[0]} member × {formatCurrency(unitPrice)} × {selectedPkg.duration_months} bln
-                </span>
-                <span>{formatCurrency(subtotal)}</span>
-              </div>
-              {discount > 0 && (
-                <div className="flex justify-between text-sm text-green-600">
-                  <span>Diskon ({selectedPkg.discount_percentage}%)</span>
-                  <span>- {formatCurrency(discount)}</span>
-                </div>
-              )}
-              <Separator />
-              <div className="flex justify-between font-bold text-lg">
-                <span>Total</span>
-                <span className="text-primary">{formatCurrency(total)}</span>
-              </div>
-            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Belum ada paket dipilih.</p>
           )}
+
+          <Dialog open={isCalculatorOpen} onOpenChange={setIsCalculatorOpen}>
+            <DialogTrigger asChild>
+              <Button className="w-full sm:w-auto">
+                <Calculator className="h-4 w-4 mr-2" />
+                Buka Kalkulator
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="w-[100vw] max-w-none h-[100dvh] rounded-none p-0 sm:h-auto sm:max-w-4xl sm:rounded-lg sm:p-6">
+              <DialogHeader className="px-4 pt-4 sm:px-0 sm:pt-0">
+                <DialogTitle className="flex items-center gap-2">
+                  <Calculator className="h-5 w-5 text-primary" />
+                  Kalkulator Langganan
+                </DialogTitle>
+                <DialogDescription>
+                  Pilih paket dan jumlah member untuk menghitung estimasi biaya langganan.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="px-4 pb-4 sm:px-0 sm:pb-0 max-h-[calc(100dvh-6rem)] sm:max-h-[70vh] overflow-y-auto space-y-5">
+                {typeof subscription?.price_per_employee === "number" &&
+                  Number.isFinite(subscription.price_per_employee) &&
+                  subscription.price_per_employee > 0 && (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-100">
+                      Harga negosiasi B2B aktif: <strong>{formatCurrency(subscription.price_per_employee)}</strong> per
+                      pegawai per bulan.
+                    </div>
+                  )}
+
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+                  {packages.map((pkg) => (
+                    <button
+                      key={pkg.id}
+                      onClick={() => setSelectedPkgId(pkg.id)}
+                      className={`p-4 rounded-xl border-2 text-left transition-all ${
+                        selectedPkgId === pkg.id ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
+                      }`}
+                    >
+                      <p className="font-semibold">{pkg.name}</p>
+                      <p className="text-sm text-muted-foreground">{pkg.duration_months} bulan</p>
+                      <p className="text-sm font-medium mt-1">{formatCurrency(getEffectiveUnitPrice(pkg.base_price_per_month))}/org/bln</p>
+                      {pkg.discount_percentage > 0 && (
+                        <Badge variant="secondary" className="mt-2 text-xs">Hemat {pkg.discount_percentage}%</Badge>
+                      )}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center">
+                    <span className="font-medium">Jumlah Member</span>
+                    <span className="text-3xl font-bold text-primary">{memberSlider[0]}</span>
+                  </div>
+                  <Slider
+                    value={memberSlider}
+                    onValueChange={setMemberSlider}
+                    min={1}
+                    max={1000}
+                    step={1}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>1</span>
+                    <span>1000</span>
+                  </div>
+                </div>
+
+                {selectedPkg && (
+                  <div className="rounded-lg border p-4 space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">
+                        {memberSlider[0]} member × {formatCurrency(unitPrice)} × {selectedPkg.duration_months} bln
+                      </span>
+                      <span>{formatCurrency(subtotal)}</span>
+                    </div>
+                    {discount > 0 && (
+                      <div className="flex justify-between text-sm text-green-600">
+                        <span>Diskon ({selectedPkg.discount_percentage}%)</span>
+                        <span>- {formatCurrency(discount)}</span>
+                      </div>
+                    )}
+                    <Separator />
+                    <div className="flex justify-between font-bold text-lg">
+                      <span>Total</span>
+                      <span className="text-primary">{formatCurrency(total)}</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-end">
+                  <Button variant="outline" onClick={() => setIsCalculatorOpen(false)}>
+                    Tutup
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
         </CardContent>
       </Card>
 
