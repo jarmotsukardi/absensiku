@@ -146,6 +146,7 @@ const isInvoiceExpired = (status: string | null | undefined) => status === "EXPI
 const isInvoiceCancelled = (status: string | null | undefined) => status === "CANCELLED";
 const isInvoicePayable = (status: string | null | undefined) =>
   isInvoicePending(status) || isInvoiceAwaitingVerification(status);
+const isInvoiceCancellableByOrg = (status: string | null | undefined) => isInvoicePending(status);
 
 const getInvoiceStatusMeta = (status: string | null | undefined) => {
   if (isInvoicePending(status)) {
@@ -319,6 +320,9 @@ export default function OrgBilling() {
   const [manualProofUrlInput, setManualProofUrlInput] = useState("");
   const [manualProofFile, setManualProofFile] = useState<File | null>(null);
   const [isSubmittingPaymentProof, setIsSubmittingPaymentProof] = useState(false);
+  const [cancelReasonInput, setCancelReasonInput] = useState("");
+  const [isCancellingInvoice, setIsCancellingInvoice] = useState(false);
+  const [isDuplicatingInvoice, setIsDuplicatingInvoice] = useState(false);
   const proofFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const fetchInvoices = useCallback(async (options?: { silent?: boolean }) => {
@@ -441,6 +445,7 @@ export default function OrgBilling() {
     if (!selectedInvoice) {
       setManualProofUrlInput("");
       setManualProofFile(null);
+      setCancelReasonInput("");
       if (proofFileInputRef.current) {
         proofFileInputRef.current.value = "";
       }
@@ -448,6 +453,7 @@ export default function OrgBilling() {
     }
     setManualProofUrlInput(selectedInvoice.payment_proof_url || "");
     setManualProofFile(null);
+    setCancelReasonInput("");
     if (proofFileInputRef.current) {
       proofFileInputRef.current.value = "";
     }
@@ -729,6 +735,129 @@ export default function OrgBilling() {
       toast.error(appendErrorReference("Gagal mengirim bukti pembayaran", errorRef));
     } finally {
       setIsSubmittingPaymentProof(false);
+    }
+  };
+
+  const cancelPendingInvoice = async () => {
+    if (!selectedInvoice || !tenantId) return;
+    if (!isInvoiceCancellableByOrg(selectedInvoice.status)) {
+      toast.warning("Hanya faktur berstatus menunggu pembayaran yang bisa dibatalkan.");
+      return;
+    }
+    const reason = cancelReasonInput.trim();
+    if (!reason) {
+      toast.error("Alasan pembatalan wajib diisi.");
+      return;
+    }
+
+    setIsCancellingInvoice(true);
+    try {
+      const nextNotes = [selectedInvoice.notes, `[USER_CANCEL] ${reason}`]
+        .filter((value) => typeof value === "string" && value.trim().length > 0)
+        .join("\n");
+
+      const { error } = await supabase
+        .from("invoices")
+        .update({
+          status: "CANCELLED",
+          notes: nextNotes,
+          rejection_reason: reason,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", selectedInvoice.id)
+        .eq("tenant_id", tenantId);
+
+      if (error) throw error;
+
+      toast.success("Faktur berhasil dibatalkan.");
+      await fetchInvoices({ silent: true });
+    } catch (error) {
+      const errorRef = reportError(error, "org.billing.cancel_invoice", {
+        invoice_id: selectedInvoice.id,
+      });
+      toast.error(appendErrorReference("Gagal membatalkan faktur", errorRef));
+    } finally {
+      setIsCancellingInvoice(false);
+    }
+  };
+
+  const duplicateInvoiceAsNew = async () => {
+    if (!selectedInvoice || !tenantId) return;
+    if (isInvoicePayable(selectedInvoice.status)) {
+      toast.warning("Faktur aktif tidak bisa diduplikasi. Batalkan atau selesaikan dulu faktur aktif.");
+      return;
+    }
+
+    setIsDuplicatingInvoice(true);
+    try {
+      const { data: invoiceNumberData, error: invoiceNumberError } = await supabase.rpc("generate_invoice_number");
+      if (invoiceNumberError) throw invoiceNumberError;
+      const invoiceNumber = typeof invoiceNumberData === "string" ? invoiceNumberData.trim() : "";
+      if (!invoiceNumber) {
+        throw new Error("Nomor faktur otomatis tidak tersedia");
+      }
+
+      const dueDate = new Date();
+      dueDate.setDate(dueDate.getDate() + 3);
+
+      const { data: insertedInvoice, error: insertError } = await supabase
+        .from("invoices")
+        .insert({
+          tenant_id: tenantId,
+          invoice_number: invoiceNumber,
+          package_name: selectedInvoice.package_name || "Langganan Sistem Absensi",
+          package_duration_months: selectedInvoice.package_duration_months || 1,
+          package_discount_percentage: 0,
+          employee_count: selectedInvoice.employee_count || 1,
+          price_per_employee:
+            (selectedInvoice.subtotal || selectedInvoice.gross_amount || 0) /
+            Math.max(1, (selectedInvoice.employee_count || 1) * (selectedInvoice.package_duration_months || 1)),
+          subtotal: selectedInvoice.subtotal || selectedInvoice.gross_amount || 0,
+          discount_amount: selectedInvoice.discount_amount || 0,
+          vat_percentage: selectedInvoice.vat_percentage || 0,
+          vat_amount: selectedInvoice.vat_amount || 0,
+          gross_amount: selectedInvoice.gross_amount || 0,
+          xendit_fee: 0,
+          net_amount: selectedInvoice.gross_amount || 0,
+          status: "PENDING",
+          payment_method_type: "MANUAL_TRANSFER",
+          due_date: dueDate.toISOString().slice(0, 10),
+          metadata: {
+            duplicated_from_invoice_id: selectedInvoice.id,
+            duplicated_from_invoice_number: getInvoiceNumber(selectedInvoice),
+          },
+          notes: [selectedInvoice.notes, `[DUPLICATED_FROM] ${getInvoiceNumber(selectedInvoice)}`]
+            .filter((value) => typeof value === "string" && value.trim().length > 0)
+            .join("\n"),
+        })
+        .select(
+          "id, invoice_number, issue_date, due_date, gross_amount, status, created_at, package_name, package_duration_months, employee_count, subtotal, discount_amount, vat_amount, vat_percentage, xendit_fee, net_amount, payment_method_type, payment_proof_url, invoice_url, external_id, paid_at, verified_at, rejection_reason, updated_at, metadata, notes",
+        )
+        .single();
+
+      if (insertError) throw insertError;
+
+      toast.success("Faktur baru berhasil dibuat dari duplikasi.");
+      await fetchInvoices({ silent: true });
+      if (insertedInvoice) {
+        setSelectedInvoice(insertedInvoice as InvoiceRow);
+        setIsDetailOpen(true);
+      }
+    } catch (error) {
+      const pgCode =
+        typeof error === "object" && error !== null && "code" in error
+          ? String((error as { code?: string }).code || "")
+          : "";
+      if (pgCode === "23505") {
+        toast.warning("Masih ada faktur aktif. Selesaikan atau batalkan faktur aktif sebelum membuat faktur baru.");
+        return;
+      }
+      const errorRef = reportError(error, "org.billing.duplicate_invoice", {
+        invoice_id: selectedInvoice.id,
+      });
+      toast.error(appendErrorReference("Gagal menduplikasi faktur", errorRef));
+    } finally {
+      setIsDuplicatingInvoice(false);
     }
   };
 
@@ -1447,6 +1576,53 @@ export default function OrgBilling() {
                   </div>
                 </div>
               ) : null}
+
+              <div className="rounded-md border">
+                <div className="border-b px-4 py-3 font-semibold">Aksi Faktur</div>
+                <div className="space-y-3 px-4 py-3">
+                  <p className="text-xs text-muted-foreground">
+                    Demi integritas audit, faktur terbit tidak bisa diedit. Gunakan pembatalan atau duplikasi sebagai faktur baru.
+                  </p>
+                  {isInvoiceCancellableByOrg(selectedInvoice.status) ? (
+                    <div className="grid gap-2 md:grid-cols-[1fr,auto] md:items-end">
+                      <div className="space-y-1">
+                        <Label htmlFor="cancel-reason">Alasan Pembatalan</Label>
+                        <Input
+                          id="cancel-reason"
+                          placeholder="Contoh: salah jumlah pegawai / metode pembayaran ingin diganti"
+                          value={cancelReasonInput}
+                          onChange={(event) => setCancelReasonInput(event.target.value)}
+                        />
+                      </div>
+                      <Button
+                        variant="destructive"
+                        onClick={() => void cancelPendingInvoice()}
+                        disabled={isCancellingInvoice}
+                      >
+                        {isCancellingInvoice ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        Batalkan Faktur
+                      </Button>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Faktur hanya bisa dibatalkan saat status <strong>Menunggu Pembayaran</strong>.
+                    </p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="outline"
+                      onClick={() => void duplicateInvoiceAsNew()}
+                      disabled={isDuplicatingInvoice || isInvoicePayable(selectedInvoice.status)}
+                    >
+                      {isDuplicatingInvoice ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                      Duplikasi jadi Faktur Baru
+                    </Button>
+                    <span className="text-xs text-muted-foreground">
+                      Faktur baru dibuat sebagai <strong>Transfer Manual</strong> dengan nomor baru.
+                    </span>
+                  </div>
+                </div>
+              </div>
 
               <div className="rounded-md border">
                 <div className="border-b px-4 py-3 font-semibold">Invoice Items</div>
