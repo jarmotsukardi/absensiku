@@ -38,6 +38,7 @@ import { id } from "date-fns/locale";
 import { supabase } from "@/integrations/supabase/client";
 import type { TablesUpdate } from "@/integrations/supabase/types";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat("id-ID", {
@@ -144,6 +145,11 @@ export function ManualPaymentVerification() {
             })
             .eq("id", currentSub.id);
           if (subUpdateError) {
+            reportError(subUpdateError, "admin.billing.manual_payment.subscription.update_failed", {
+              invoice_id: selectedInvoice.id,
+              tenant_id: selectedInvoice.tenant_id,
+              subscription_id: currentSub.id,
+            });
             console.error("Subscription update error:", subUpdateError);
           }
         } else {
@@ -159,6 +165,10 @@ export function ManualPaymentVerification() {
               updated_at: new Date().toISOString(),
             });
           if (subInsertError) {
+            reportError(subInsertError, "admin.billing.manual_payment.subscription.insert_failed", {
+              invoice_id: selectedInvoice.id,
+              tenant_id: selectedInvoice.tenant_id,
+            });
             console.error("Subscription insert error:", subInsertError);
           }
         }
@@ -171,6 +181,10 @@ export function ManualPaymentVerification() {
           .limit(1)
           .maybeSingle();
         if (existingLedgerError) {
+          reportError(existingLedgerError, "admin.billing.manual_payment.ledger.check_failed", {
+            invoice_id: selectedInvoice.id,
+            tenant_id: selectedInvoice.tenant_id,
+          });
           console.error("Failed to check existing financial ledger row:", existingLedgerError);
         } else if (!existingLedger) {
           const { error: ledgerInsertError } = await supabase.from("financial_ledger").insert({
@@ -187,6 +201,10 @@ export function ManualPaymentVerification() {
             notes: `Manual payment for ${selectedInvoice.invoice_number}`,
           });
           if (ledgerInsertError) {
+            reportError(ledgerInsertError, "admin.billing.manual_payment.ledger.insert_failed", {
+              invoice_id: selectedInvoice.id,
+              tenant_id: selectedInvoice.tenant_id,
+            });
             console.error("Failed to insert financial ledger row:", ledgerInsertError);
           }
         }
@@ -196,6 +214,10 @@ export function ManualPaymentVerification() {
           p_invoice_id: selectedInvoice.id,
         });
         if (streakSyncError) {
+          reportError(streakSyncError, "admin.billing.manual_payment.streak_sync_failed", {
+            invoice_id: selectedInvoice.id,
+            tenant_id: selectedInvoice.tenant_id,
+          });
           console.error("Failed to sync streak invoiced state:", streakSyncError);
         }
       }
@@ -206,7 +228,10 @@ export function ManualPaymentVerification() {
       refetch();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      toast.error("Gagal memproses: " + message);
+      const errorRef = reportError(error, "admin.billing.manual_payment.verify_process", {
+        invoice_id: selectedInvoice?.id || null,
+      });
+      toast.error(appendErrorReference("Gagal memproses: " + message, errorRef));
     } finally {
       setIsProcessing(false);
     }

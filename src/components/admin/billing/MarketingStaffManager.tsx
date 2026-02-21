@@ -24,6 +24,7 @@ import {
 import { Plus, Pencil, Trash2, Loader2, Users, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface MarketingStaff {
   id: string;
@@ -79,6 +80,7 @@ export function MarketingStaffManager() {
       if (error) throw error;
       setStaff(data || []);
     } catch (error) {
+      reportError(error, "admin.billing.marketing_staff.fetch");
       console.error("Error:", error);
     } finally {
       setIsLoading(false);
@@ -139,7 +141,10 @@ export function MarketingStaffManager() {
       setEditingStaff(null);
       fetchStaff();
     } catch (error) {
-      toast.error("Gagal menyimpan: " + getErrorMessage(error));
+      const errorRef = reportError(error, "admin.billing.marketing_staff.save", {
+        staff_id: editingStaff?.id || null,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan: " + getErrorMessage(error), errorRef));
     } finally {
       setIsSaving(false);
     }
@@ -162,7 +167,8 @@ export function MarketingStaffManager() {
       toast.success("Marketing dihapus");
       fetchStaff();
     } catch (error) {
-      toast.error("Gagal menghapus: " + getErrorMessage(error));
+      const errorRef = reportError(error, "admin.billing.marketing_staff.delete", { staff_id: id });
+      toast.error(appendErrorReference("Gagal menghapus: " + getErrorMessage(error), errorRef));
     }
   };
   const totalPages = Math.max(1, Math.ceil(staff.length / ITEMS_PER_PAGE));

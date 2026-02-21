@@ -33,6 +33,7 @@ import {
 import { Plus, Pencil, Trash2, Loader2, Package, Info, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat("id-ID", {
@@ -130,7 +131,8 @@ export function SubscriptionPackagesManager() {
       );
       toast.success(`${outOfSync.length} paket berhasil disinkronkan`);
     } catch {
-      toast.error("Gagal menyinkronkan paket");
+      const errorRef = reportError(new Error("Sinkronisasi paket gagal"), "admin.billing.packages.sync_all_prices");
+      toast.error(appendErrorReference("Gagal menyinkronkan paket", errorRef));
     } finally {
       setIsSyncing(false);
     }

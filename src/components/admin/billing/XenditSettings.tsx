@@ -11,6 +11,7 @@ import { Loader2, Save, Key, Webhook, Shield, ExternalLink, Copy, CheckCircle, A
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import type { Json } from "@/integrations/supabase/types";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 const parseNumericSettingValue = (raw: unknown, fallback: number): number => {
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
@@ -78,12 +79,17 @@ export function XenditSettings() {
   // Fetch B2B threshold from system_settings
   useEffect(() => {
     const fetchB2b = async () => {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "b2b_negotiation_threshold")
-        .maybeSingle();
-      setB2bThreshold(String(Math.max(1, Math.floor(parseNumericSettingValue(data?.value, 2000)))));
+      try {
+        const { data, error } = await supabase
+          .from("system_settings")
+          .select("value")
+          .eq("key", "b2b_negotiation_threshold")
+          .maybeSingle();
+        if (error) throw error;
+        setB2bThreshold(String(Math.max(1, Math.floor(parseNumericSettingValue(data?.value, 2000)))));
+      } catch (error) {
+        reportError(error, "admin.billing.xendit.fetch_b2b_threshold");
+      }
     };
     fetchB2b();
   }, []);
@@ -106,7 +112,8 @@ export function XenditSettings() {
       ]);
       toast.success("Pengaturan Xendit berhasil disimpan");
     } catch (error) {
-      toast.error("Gagal menyimpan pengaturan");
+      const errorRef = reportError(error, "admin.billing.xendit.save_settings");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan", errorRef));
     } finally {
       setIsSaving(false);
     }
@@ -139,7 +146,8 @@ export function XenditSettings() {
       }
       toast.success("Ambang batas B2B berhasil disimpan");
     } catch (error) {
-      toast.error("Gagal menyimpan");
+      const errorRef = reportError(error, "admin.billing.xendit.save_b2b_threshold");
+      toast.error(appendErrorReference("Gagal menyimpan", errorRef));
     } finally {
       setIsSavingB2b(false);
     }
@@ -177,6 +185,7 @@ export function XenditSettings() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
+      reportError(error, "admin.billing.xendit.test_connection");
       setTestResult({
         success: false,
         message: `Error: ${message}`,

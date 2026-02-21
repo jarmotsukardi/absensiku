@@ -358,6 +358,11 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       void fetchAll();
     } catch (error: unknown) {
       if (error instanceof Error && error.message.trim().length > 0) {
+        reportError(error, "org.activation.xendit_checkout", {
+          tenant_id: tenantId,
+          package_id: selectedPkg?.id || null,
+          source: "direct_error_message",
+        });
         toast.error(error.message);
         return;
       }

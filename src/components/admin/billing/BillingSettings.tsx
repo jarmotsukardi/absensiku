@@ -10,6 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Save, DollarSign, Percent, Clock, CreditCard, Landmark } from "lucide-react";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import {
   BILLING_INVOICE_TEMPLATE_TOKENS,
   DEFAULT_BILLING_INVOICE_TEMPLATE,
@@ -61,6 +62,13 @@ export function BillingSettings() {
         supabase.from("system_settings").select("value").eq("key", "billing_settings").maybeSingle(),
         supabase.from("system_settings").select("value").eq("key", "billing_invoice_template").maybeSingle(),
       ]);
+
+      if (bankRes.error) {
+        reportError(bankRes.error, "admin.billing.settings.fetch_bank_settings");
+      }
+      if (templateRes.error) {
+        reportError(templateRes.error, "admin.billing.settings.fetch_invoice_template");
+      }
 
       if (bankRes.data?.value && typeof bankRes.data.value === "object" && !Array.isArray(bankRes.data.value)) {
         const value = bankRes.data.value as Record<string, unknown>;
@@ -148,7 +156,8 @@ export function BillingSettings() {
 
       toast.success("Pengaturan billing berhasil disimpan");
     } catch (error) {
-      toast.error("Gagal menyimpan pengaturan");
+      const errorRef = reportError(error, "admin.billing.settings.save");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan", errorRef));
     } finally {
       setIsSaving(false);
     }

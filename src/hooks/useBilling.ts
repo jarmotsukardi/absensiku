@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { TablesUpdate } from "@/integrations/supabase/types";
-import { reportError } from "@/lib/errorLogger";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) return error.message;
@@ -97,6 +97,7 @@ export function useBillingSettings() {
       if (error) throw error;
       setSettings(data || []);
     } catch (error) {
+      reportError(error, "admin.billing.settings.fetch");
       console.error("Error fetching billing settings:", error);
     } finally {
       setIsLoading(false);
@@ -124,7 +125,8 @@ export function useBillingSettings() {
       await fetchSettings();
       return true;
     } catch (error: unknown) {
-      toast.error("Gagal menyimpan: " + getErrorMessage(error));
+      const errorRef = reportError(error, "admin.billing.settings.update", { key });
+      toast.error(appendErrorReference("Gagal menyimpan: " + getErrorMessage(error), errorRef));
       return false;
     }
   };
@@ -146,6 +148,7 @@ export function useSubscriptionPackages() {
       if (error) throw error;
       setPackages(data || []);
     } catch (error) {
+      reportError(error, "admin.billing.packages.fetch");
       console.error("Error fetching packages:", error);
     } finally {
       setIsLoading(false);
@@ -175,7 +178,8 @@ export function useSubscriptionPackages() {
       await fetchPackages();
       return true;
     } catch (error: unknown) {
-      toast.error("Gagal menambah paket: " + getErrorMessage(error));
+      const errorRef = reportError(error, "admin.billing.packages.create", { package_name: pkg.name || null });
+      toast.error(appendErrorReference("Gagal menambah paket: " + getErrorMessage(error), errorRef));
       return false;
     }
   };
@@ -191,7 +195,8 @@ export function useSubscriptionPackages() {
       await fetchPackages();
       return true;
     } catch (error: unknown) {
-      toast.error("Gagal memperbarui paket: " + getErrorMessage(error));
+      const errorRef = reportError(error, "admin.billing.packages.update", { package_id: id });
+      toast.error(appendErrorReference("Gagal memperbarui paket: " + getErrorMessage(error), errorRef));
       return false;
     }
   };
@@ -204,7 +209,8 @@ export function useSubscriptionPackages() {
       await fetchPackages();
       return true;
     } catch (error: unknown) {
-      toast.error("Gagal menghapus paket: " + getErrorMessage(error));
+      const errorRef = reportError(error, "admin.billing.packages.delete", { package_id: id });
+      toast.error(appendErrorReference("Gagal menghapus paket: " + getErrorMessage(error), errorRef));
       return false;
     }
   };
@@ -237,6 +243,10 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
       if (error) throw error;
       setInvoices(data || []);
     } catch (error) {
+      reportError(error, "admin.billing.invoices.fetch", {
+        status: filters?.status || null,
+        tenant_id: filters?.tenantId || null,
+      });
       console.error("Error fetching invoices:", error);
     } finally {
       setIsLoading(false);
@@ -298,6 +308,10 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
           .limit(1)
           .maybeSingle();
         if (currentSubError) {
+          reportError(currentSubError, "admin.billing.verify_payment.subscription.fetch_failed", {
+            invoice_id: invoice.id,
+            tenant_id: invoice.tenant_id,
+          });
           console.error("Failed to fetch current subscription:", currentSubError);
         }
 
@@ -322,6 +336,11 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
             })
             .eq("id", currentSub.id);
           if (subError) {
+            reportError(subError, "admin.billing.verify_payment.subscription.update_failed", {
+              invoice_id: invoice.id,
+              tenant_id: invoice.tenant_id,
+              subscription_id: currentSub.id,
+            });
             console.error("Failed to update subscription:", subError);
           }
         } else {
@@ -337,6 +356,10 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
               updated_at: new Date().toISOString(),
             });
           if (subInsertError) {
+            reportError(subInsertError, "admin.billing.verify_payment.subscription.insert_failed", {
+              invoice_id: invoice.id,
+              tenant_id: invoice.tenant_id,
+            });
             console.error("Failed to create subscription:", subInsertError);
           }
         }
@@ -349,6 +372,10 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
           .maybeSingle();
 
         if (ledgerCheckError) {
+          reportError(ledgerCheckError, "admin.billing.verify_payment.ledger.check_failed", {
+            invoice_id: invoice.id,
+            tenant_id: invoice.tenant_id,
+          });
           console.error("Failed to check financial ledger:", ledgerCheckError);
         } else if (!existingLedger) {
           const paymentSource = invoice.payment_method_type === "XENDIT" ? "XENDIT" : "MANUAL";
@@ -368,6 +395,10 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
               notes: `Payment for ${invoice.invoice_number}`,
             });
           if (ledgerError) {
+            reportError(ledgerError, "admin.billing.verify_payment.ledger.insert_failed", {
+              invoice_id: invoice.id,
+              tenant_id: invoice.tenant_id,
+            });
             console.error("Failed to insert financial ledger:", ledgerError);
           }
         }
@@ -377,6 +408,10 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
           p_invoice_id: invoice.id,
         });
         if (streakSyncError) {
+          reportError(streakSyncError, "admin.billing.verify_payment.streak_sync_failed", {
+            invoice_id: invoice.id,
+            tenant_id: invoice.tenant_id,
+          });
           console.error("Failed to sync streak invoiced state:", streakSyncError);
         }
 
@@ -434,7 +469,8 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
       await fetchInvoices();
       return true;
     } catch (error: unknown) {
-      toast.error("Gagal memproses: " + getErrorMessage(error));
+      const errorRef = reportError(error, "admin.billing.verify_payment.process", { invoice_id: invoiceId, approved });
+      toast.error(appendErrorReference("Gagal memproses: " + getErrorMessage(error), errorRef));
       return false;
     }
   };
@@ -485,6 +521,10 @@ export function useFinancialLedger(dateRange?: { start: string; end: string }) {
       );
       setSummary(sum);
     } catch (error) {
+      reportError(error, "admin.billing.ledger.fetch", {
+        start: dateRange?.start || null,
+        end: dateRange?.end || null,
+      });
       console.error("Error fetching ledger:", error);
     } finally {
       setIsLoading(false);

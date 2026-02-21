@@ -966,8 +966,12 @@ export default function OrgBilling() {
       }, 400);
 
       toast.success("Dokumen siap diunduh sebagai PDF");
-    } catch {
-      toast.error("Gagal menyiapkan dokumen PDF");
+    } catch (error) {
+      const errorRef = reportError(error, "org.billing.download_invoice_pdf", {
+        invoice_id: invoice.id,
+        tenant_id: tenantId,
+      });
+      toast.error(appendErrorReference("Gagal menyiapkan dokumen PDF", errorRef));
     }
   };
 

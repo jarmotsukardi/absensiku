@@ -142,6 +142,10 @@ export function ManualPaymentFlow({
         setNegotiatedPricePerEmployee(parsedPrice);
       }
     } catch (error) {
+      reportError(error, "org.activation.manual_payment.fetch_packages", {
+        tenant_id: tenantId,
+        subscription_id: subscriptionId || null,
+      });
       console.error("Error fetching packages:", error);
     } finally {
       setIsLoading(false);
@@ -167,6 +171,7 @@ export function ManualPaymentFlow({
       if (error) throw error;
       setActiveInvoice((data ?? null) as ActiveManualInvoiceSnapshot | null);
     } catch (error) {
+      reportError(error, "org.activation.manual_payment.fetch_active_invoice", { tenant_id: tenantId });
       console.error("Error checking active manual invoice:", error);
       setActiveInvoice(null);
     } finally {

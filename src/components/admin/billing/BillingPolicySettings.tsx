@@ -8,6 +8,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Building2, Users, CreditCard, Loader2, CheckCircle2, Info } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 interface BillingPolicySettingsProps {
   tenantId: string;
@@ -32,6 +33,7 @@ export function BillingPolicySettings({ tenantId, currentMode, onUpdate }: Billi
       if (error) throw error;
       setBillingMode(data?.billing_mode || "centralized");
     } catch (err) {
+      reportError(err, "admin.billing.policy.fetch_mode", { tenant_id: tenantId });
       console.error("Error fetching billing mode:", err);
     } finally {
       setIsLoading(false);
@@ -64,7 +66,8 @@ export function BillingPolicySettings({ tenantId, currentMode, onUpdate }: Billi
       onUpdate?.();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
-      toast.error("Gagal menyimpan: " + message);
+      const errorRef = reportError(err, "admin.billing.policy.save", { tenant_id: tenantId, billing_mode: billingMode });
+      toast.error(appendErrorReference("Gagal menyimpan: " + message, errorRef));
     } finally {
       setIsSaving(false);
     }
