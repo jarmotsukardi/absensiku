@@ -378,6 +378,28 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
         if (streakSyncError) {
           console.error("Failed to sync streak invoiced state:", streakSyncError);
         }
+
+        const waDispatch = await supabase.functions.invoke<{ success?: boolean; error?: string; trace_id?: string }>(
+          "dispatch-billing-whatsapp",
+          {
+            body: {
+              invoice_id: invoice.id,
+              trigger: "ADMIN_VERIFY",
+            },
+          },
+        );
+        if (waDispatch.error || waDispatch.data?.success === false) {
+          console.warn("Failed to dispatch billing whatsapp:", {
+            error: waDispatch.error,
+            data: waDispatch.data,
+          });
+          const traceId = waDispatch.data?.trace_id || null;
+          toast.warning(
+            traceId
+              ? `Pembayaran berhasil diverifikasi, tetapi notifikasi WhatsApp belum terkirim (Ref: ${traceId})`
+              : "Pembayaran berhasil diverifikasi, tetapi notifikasi WhatsApp belum terkirim.",
+          );
+        }
       }
       
       toast.success(approved ? "Pembayaran diverifikasi" : "Pembayaran ditolak");
