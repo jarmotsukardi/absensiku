@@ -96,6 +96,12 @@ const RECOMMENDED_FAQ_UPDATES: Array<{ question: string; answer: string; categor
     category: "Billing & Harga",
   },
   {
+    question: "Bagaimana jika notifikasi pembayaran (WhatsApp/Email) tidak terkirim?",
+    answer:
+      "Kegagalan pengiriman pasca verifikasi pembayaran dicatat ke pantauan error admin. Buka /admin/log-errors dan cari konteks notifikasi billing untuk melihat referensi error, trace, dan tindak lanjut konfigurasi gateway.",
+    category: "Billing & Harga",
+  },
+  {
     question: "Bagaimana workflow streak sampai suspend jika tenant tidak membayar?",
     answer:
       "Status bergerak dari tracking -> ready_for_invoicing -> invoiced -> grace period. Jika tetap unpaid sampai batas grace berakhir, tenant masuk suspend otomatis sesuai konfigurasi streak.",

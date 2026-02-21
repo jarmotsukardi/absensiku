@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { TablesUpdate } from "@/integrations/supabase/types";
+import { reportError } from "@/lib/errorLogger";
 
 const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error) return error.message;
@@ -379,25 +380,52 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
           console.error("Failed to sync streak invoiced state:", streakSyncError);
         }
 
-        const waDispatch = await supabase.functions.invoke<{ success?: boolean; error?: string; trace_id?: string }>(
-          "dispatch-billing-whatsapp",
-          {
-            body: {
-              invoice_id: invoice.id,
-              trigger: "ADMIN_VERIFY",
+        const [waDispatch, emailDispatch] = await Promise.all([
+          supabase.functions.invoke<{ success?: boolean; error?: string; trace_id?: string }>(
+            "dispatch-billing-whatsapp",
+            {
+              body: {
+                invoice_id: invoice.id,
+                trigger: "ADMIN_VERIFY",
+              },
             },
-          },
-        );
+          ),
+          supabase.functions.invoke<{ success?: boolean; error?: string; trace_id?: string }>(
+            "dispatch-billing-email",
+            {
+              body: {
+                invoice_id: invoice.id,
+                trigger: "ADMIN_VERIFY",
+              },
+            },
+          ),
+        ]);
+
         if (waDispatch.error || waDispatch.data?.success === false) {
-          console.warn("Failed to dispatch billing whatsapp:", {
-            error: waDispatch.error,
-            data: waDispatch.data,
-          });
           const traceId = waDispatch.data?.trace_id || null;
+          reportError(waDispatch.error || waDispatch.data || "WA dispatch failed", "admin.billing.verify_payment.whatsapp_notify_failed", {
+            invoice_id: invoice.id,
+            tenant_id: invoice.tenant_id,
+            trace_id: traceId,
+          });
           toast.warning(
             traceId
               ? `Pembayaran berhasil diverifikasi, tetapi notifikasi WhatsApp belum terkirim (Ref: ${traceId})`
               : "Pembayaran berhasil diverifikasi, tetapi notifikasi WhatsApp belum terkirim.",
+          );
+        }
+
+        if (emailDispatch.error || emailDispatch.data?.success === false) {
+          const traceId = emailDispatch.data?.trace_id || null;
+          reportError(emailDispatch.error || emailDispatch.data || "Email dispatch failed", "admin.billing.verify_payment.email_notify_failed", {
+            invoice_id: invoice.id,
+            tenant_id: invoice.tenant_id,
+            trace_id: traceId,
+          });
+          toast.warning(
+            traceId
+              ? `Pembayaran berhasil diverifikasi, tetapi notifikasi Email belum terkirim (Ref: ${traceId})`
+              : "Pembayaran berhasil diverifikasi, tetapi notifikasi Email belum terkirim.",
           );
         }
       }
