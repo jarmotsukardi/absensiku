@@ -34,6 +34,7 @@ import { toast } from "sonner";
 import { format, addMonths } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import type { Json, Tables } from "@/integrations/supabase/types";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 type SubscriptionPackage = Tables<"subscription_packages">;
 
@@ -296,7 +297,13 @@ export function ManualPaymentFlow({
     } catch (error: unknown) {
       console.error("Error creating payment:", error);
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      toast.error("Gagal membuat pembayaran: " + errorMessage);
+      const errorRef = reportError(error, "org.activation.manual_payment.create", {
+        tenant_id: tenantId,
+        subscription_id: subscriptionId ?? null,
+        selected_package_id: selectedPackage || null,
+        employee_count: employeeCount,
+      });
+      toast.error(appendErrorReference("Gagal membuat pembayaran: " + errorMessage, errorRef));
     } finally {
       setIsSubmitting(false);
       setShowConfirmDialog(false);
