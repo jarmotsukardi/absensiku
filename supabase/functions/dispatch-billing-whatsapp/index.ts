@@ -52,6 +52,11 @@ interface GatewaySettingRow {
   value: JsonObject | null;
 }
 
+interface UserRoleRow {
+  role: string;
+  tenant_id: string | null;
+}
+
 const toStringSafe = (value: unknown): string =>
   typeof value === "string" ? value.trim() : "";
 
@@ -220,6 +225,23 @@ serve(async (req) => {
     if (invoice.status !== "PAID") {
       return new Response(JSON.stringify(withTrace({ error: "Invoice belum status PAID" }, traceId)), {
         status: 409,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const { data: roleRows, error: roleError } = await admin
+      .from("user_roles")
+      .select("role, tenant_id")
+      .eq("user_id", authData.user.id)
+      .in("role", ["super_admin", "admin_instansi"]);
+    if (roleError) throw roleError;
+
+    const roles = (roleRows ?? []) as UserRoleRow[];
+    const isSuperAdmin = roles.some((row) => row.role === "super_admin");
+    const isTenantAdmin = roles.some((row) => row.role === "admin_instansi" && row.tenant_id === invoice.tenant_id);
+    if (!isSuperAdmin && !isTenantAdmin) {
+      return new Response(JSON.stringify(withTrace({ error: "Forbidden" }, traceId)), {
+        status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }

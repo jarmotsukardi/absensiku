@@ -90,6 +90,12 @@ const RECOMMENDED_FAQ_UPDATES: Array<{ question: string; answer: string; categor
     category: "Billing & Harga",
   },
   {
+    question: "Apakah user akan mendapat WhatsApp setelah pembayaran diverifikasi admin?",
+    answer:
+      "Ya. Saat admin menyetujui pembayaran dan status invoice menjadi Lunas, sistem mengirim notifikasi WhatsApp ke kontak tenant (prioritas: PIC WhatsApp -> WhatsApp -> nomor telepon). Pastikan gateway WhatsApp aktif di pengaturan sistem.",
+    category: "Billing & Harga",
+  },
+  {
     question: "Bagaimana workflow streak sampai suspend jika tenant tidak membayar?",
     answer:
       "Status bergerak dari tracking -> ready_for_invoicing -> invoiced -> grace period. Jika tetap unpaid sampai batas grace berakhir, tenant masuk suspend otomatis sesuai konfigurasi streak.",
