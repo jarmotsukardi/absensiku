@@ -897,6 +897,14 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
                   ? "Masih ada invoice aktif. Selesaikan invoice tersebut terlebih dahulu."
                   : "Anda akan diarahkan ke halaman pembayaran Xendit"}
               </p>
+              {activeInvoice?.status === "PENDING" && activeInvoice.invoice_url && (
+                <Button asChild variant="outline" className="w-full mt-2">
+                  <a href={activeInvoice.invoice_url} target="_blank" rel="noopener noreferrer">
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    Lanjutkan Invoice Aktif ({activeInvoice.invoice_number})
+                  </a>
+                </Button>
+              )}
             </div>
           )}
         </CardContent>
