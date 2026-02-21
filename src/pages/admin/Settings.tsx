@@ -26,26 +26,73 @@ const CronJobsInfoContent = lazy(() => import("@/pages/admin/CronJobsInfo"));
 const OrgOnboardingTemplatesContent = lazy(() => import("@/pages/admin/OrgOnboardingTemplates"));
 const AdminAbsenceLimitsContent = lazy(() => import("@/pages/admin/schedule/AbsenceLimitsManagement"));
 
-const settingsTabs = [
-  { id: "umum", label: "Umum" },
-  { id: "keamanan", label: "Keamanan" },
-  { id: "skalabilitas", label: "Skalabilitas" },
-  { id: "whatsapp", label: "WhatsApp Gateway" },
-  { id: "email", label: "Email Gateway" },
-  { id: "seo", label: "SEO" },
-  { id: "apk", label: "Upload Aplikasi" },
-  { id: "sistem", label: "Sistem" },
-  { id: "floating-wa", label: "Floating WhatsApp" },
-  { id: "rate-limit", label: "Rate Limit" },
-  { id: "streak", label: "Konfigurasi Streak" },
-  { id: "template-org", label: "Template Org" },
-  { id: "template-absence", label: "Template Batas Absen" },
-  { id: "monitoring-partition", label: "Monitoring Partisi" },
-  { id: "info-cron", label: "Informasi Cron" },
-  { id: "infra-cloud", label: "Supabase & Vercel" },
-  { id: "database", label: "Database" },
-  { id: "supabase", label: "Pengaturan Supabase" },
+type SettingsCategoryId =
+  | "general"
+  | "security"
+  | "integration"
+  | "operations"
+  | "onboarding"
+  | "billing";
+
+type SettingsTabId =
+  | "umum"
+  | "seo"
+  | "apk"
+  | "floating-wa"
+  | "keamanan"
+  | "rate-limit"
+  | "whatsapp"
+  | "email"
+  | "infra-cloud"
+  | "sistem"
+  | "skalabilitas"
+  | "monitoring-partition"
+  | "info-cron"
+  | "database"
+  | "supabase"
+  | "template-org"
+  | "template-absence"
+  | "streak";
+
+const settingsCategories: Array<{ id: SettingsCategoryId; label: string }> = [
+  { id: "general", label: "Umum & Branding" },
+  { id: "security", label: "Keamanan & Akses" },
+  { id: "integration", label: "Integrasi & Gateway" },
+  { id: "operations", label: "Operasional Sistem" },
+  { id: "onboarding", label: "Onboarding & Template" },
+  { id: "billing", label: "Billing & Kebijakan" },
 ];
+
+const settingsTabsByCategory: Record<SettingsCategoryId, Array<{ id: SettingsTabId; label: string }>> = {
+  general: [
+    { id: "umum", label: "Umum" },
+    { id: "seo", label: "SEO" },
+    { id: "apk", label: "Upload Aplikasi" },
+    { id: "floating-wa", label: "Floating WhatsApp" },
+  ],
+  security: [
+    { id: "keamanan", label: "Keamanan Akun" },
+    { id: "rate-limit", label: "Rate Limit" },
+  ],
+  integration: [
+    { id: "whatsapp", label: "WhatsApp Gateway" },
+    { id: "email", label: "Email Gateway" },
+    { id: "infra-cloud", label: "Supabase & Vercel" },
+  ],
+  operations: [
+    { id: "sistem", label: "Sistem" },
+    { id: "skalabilitas", label: "Skalabilitas" },
+    { id: "monitoring-partition", label: "Monitoring Partisi" },
+    { id: "info-cron", label: "Informasi Cron" },
+    { id: "database", label: "Database" },
+    { id: "supabase", label: "Pengaturan Supabase" },
+  ],
+  onboarding: [
+    { id: "template-org", label: "Template Onboarding Org" },
+    { id: "template-absence", label: "Template Batas Absen" },
+  ],
+  billing: [{ id: "streak", label: "Konfigurasi Streak" }],
+};
 
 const TabFallback = () => (
   <div className="space-y-4 p-4">
@@ -56,8 +103,20 @@ const TabFallback = () => (
 );
 
 export default function Settings() {
-  const [activeTab, setActiveTab] = useState("umum");
+  const [activeCategory, setActiveCategory] = useState<SettingsCategoryId>("general");
+  const [activeTab, setActiveTab] = useState<SettingsTabId>("umum");
   const [showForgotPassword, setShowForgotPassword] = useState(false);
+
+  const handleCategoryChange = (categoryId: string) => {
+    const nextCategory = categoryId as SettingsCategoryId;
+    setActiveCategory(nextCategory);
+    const firstTab = settingsTabsByCategory[nextCategory]?.[0];
+    if (firstTab) {
+      setActiveTab(firstTab.id);
+    }
+  };
+
+  const currentCategoryTabs = settingsTabsByCategory[activeCategory];
 
   return (
     <SuperAdminLayout
@@ -66,105 +125,121 @@ export default function Settings() {
     >
       <Card>
         <CardContent className="p-0">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <div className="border-b bg-muted/30 px-4 overflow-x-auto">
+          <Tabs value={activeCategory} onValueChange={handleCategoryChange} className="w-full">
+            <div className="border-b bg-muted/20 px-4 overflow-x-auto">
               <TabsList className="h-auto p-0 bg-transparent flex flex-nowrap gap-1">
-                {settingsTabs.map((tab) => (
+                {settingsCategories.map((category) => (
                   <TabsTrigger
-                    key={tab.id}
-                    value={tab.id}
+                    key={category.id}
+                    value={category.id}
                     className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-background data-[state=active]:shadow-none px-4 py-3 text-sm font-medium whitespace-nowrap"
                   >
-                    {tab.label}
+                    {category.label}
                   </TabsTrigger>
                 ))}
               </TabsList>
             </div>
 
-            <div className="p-6">
-              <TabsContent value="umum" className="mt-0">
-                <GeneralSettings />
-              </TabsContent>
-              <TabsContent value="keamanan" className="mt-0">
-                <div className="space-y-4">
-                  <div>
-                    <h3 className="text-lg font-semibold flex items-center gap-2">
-                      <Key className="h-5 w-5" />
+            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SettingsTabId)} className="w-full">
+              <div className="border-b bg-muted/30 px-4 overflow-x-auto">
+                <TabsList className="h-auto p-0 bg-transparent flex flex-nowrap gap-1">
+                  {currentCategoryTabs.map((tab) => (
+                    <TabsTrigger
+                      key={tab.id}
+                      value={tab.id}
+                      className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-background data-[state=active]:shadow-none px-4 py-3 text-sm font-medium whitespace-nowrap"
+                    >
+                      {tab.label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </div>
+
+              <div className="p-6">
+                <TabsContent value="umum" className="mt-0">
+                  <GeneralSettings />
+                </TabsContent>
+                <TabsContent value="keamanan" className="mt-0">
+                  <div className="space-y-4">
+                    <div>
+                      <h3 className="text-lg font-semibold flex items-center gap-2">
+                        <Key className="h-5 w-5" />
+                        Lupa / Ganti Password
+                      </h3>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Kelola password akun Super Admin Anda. Sistem akan memverifikasi email dan no. WhatsApp terdaftar.
+                      </p>
+                    </div>
+                    <Button onClick={() => setShowForgotPassword(true)}>
+                      <Key className="w-4 h-4 mr-2" />
                       Lupa / Ganti Password
-                    </h3>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Kelola password akun Super Admin Anda. Sistem akan memverifikasi email dan no. WhatsApp terdaftar.
-                    </p>
+                    </Button>
                   </div>
-                  <Button onClick={() => setShowForgotPassword(true)}>
-                    <Key className="w-4 h-4 mr-2" />
-                    Lupa / Ganti Password
-                  </Button>
-                </div>
-              </TabsContent>
-              <TabsContent value="skalabilitas" className="mt-0">
-                <ScalabilitySettings />
-              </TabsContent>
-              <TabsContent value="whatsapp" className="mt-0">
-                <WhatsAppGatewaySettings />
-              </TabsContent>
-              <TabsContent value="email" className="mt-0">
-                <EmailGatewaySettings />
-              </TabsContent>
-              <TabsContent value="seo" className="mt-0">
-                <SEOSettings />
-              </TabsContent>
-              <TabsContent value="apk" className="mt-0">
-                <APKUploadSettings />
-              </TabsContent>
-              <TabsContent value="sistem" className="mt-0">
-                <SystemSettings />
-              </TabsContent>
-              <TabsContent value="floating-wa" className="mt-0">
-                <FloatingWhatsappSettings />
-              </TabsContent>
-              <TabsContent value="rate-limit" className="mt-0">
-                <LoginRateLimitSettings />
-              </TabsContent>
-              <TabsContent value="streak" className="mt-0">
-                <Suspense fallback={<TabFallback />}>
-                  <TrialSettingsContent embedded />
-                </Suspense>
-              </TabsContent>
-              <TabsContent value="template-org" className="mt-0">
-                <Suspense fallback={<TabFallback />}>
-                  <OrgOnboardingTemplatesContent embedded />
-                </Suspense>
-              </TabsContent>
-              <TabsContent value="template-absence" className="mt-0">
-                <Suspense fallback={<TabFallback />}>
-                  <AdminAbsenceLimitsContent embedded />
-                </Suspense>
-              </TabsContent>
-              <TabsContent value="monitoring-partition" className="mt-0">
-                <Suspense fallback={<TabFallback />}>
-                  <PartitionMonitoringContent embedded />
-                </Suspense>
-              </TabsContent>
-              <TabsContent value="info-cron" className="mt-0">
-                <Suspense fallback={<TabFallback />}>
-                  <CronJobsInfoContent embedded />
-                </Suspense>
-              </TabsContent>
-              <TabsContent value="infra-cloud" className="mt-0">
-                <CloudCapacitySettings />
-              </TabsContent>
-              <TabsContent value="database" className="mt-0">
-                <Suspense fallback={<TabFallback />}>
-                  <DatabaseManagementContent embedded />
-                </Suspense>
-              </TabsContent>
-              <TabsContent value="supabase" className="mt-0">
-                <Suspense fallback={<TabFallback />}>
-                  <SupabaseSettingsContent embedded />
-                </Suspense>
-              </TabsContent>
-            </div>
+                </TabsContent>
+                <TabsContent value="skalabilitas" className="mt-0">
+                  <ScalabilitySettings />
+                </TabsContent>
+                <TabsContent value="whatsapp" className="mt-0">
+                  <WhatsAppGatewaySettings />
+                </TabsContent>
+                <TabsContent value="email" className="mt-0">
+                  <EmailGatewaySettings />
+                </TabsContent>
+                <TabsContent value="seo" className="mt-0">
+                  <SEOSettings />
+                </TabsContent>
+                <TabsContent value="apk" className="mt-0">
+                  <APKUploadSettings />
+                </TabsContent>
+                <TabsContent value="sistem" className="mt-0">
+                  <SystemSettings />
+                </TabsContent>
+                <TabsContent value="floating-wa" className="mt-0">
+                  <FloatingWhatsappSettings />
+                </TabsContent>
+                <TabsContent value="rate-limit" className="mt-0">
+                  <LoginRateLimitSettings />
+                </TabsContent>
+                <TabsContent value="streak" className="mt-0">
+                  <Suspense fallback={<TabFallback />}>
+                    <TrialSettingsContent embedded />
+                  </Suspense>
+                </TabsContent>
+                <TabsContent value="template-org" className="mt-0">
+                  <Suspense fallback={<TabFallback />}>
+                    <OrgOnboardingTemplatesContent embedded />
+                  </Suspense>
+                </TabsContent>
+                <TabsContent value="template-absence" className="mt-0">
+                  <Suspense fallback={<TabFallback />}>
+                    <AdminAbsenceLimitsContent embedded />
+                  </Suspense>
+                </TabsContent>
+                <TabsContent value="monitoring-partition" className="mt-0">
+                  <Suspense fallback={<TabFallback />}>
+                    <PartitionMonitoringContent embedded />
+                  </Suspense>
+                </TabsContent>
+                <TabsContent value="info-cron" className="mt-0">
+                  <Suspense fallback={<TabFallback />}>
+                    <CronJobsInfoContent embedded />
+                  </Suspense>
+                </TabsContent>
+                <TabsContent value="infra-cloud" className="mt-0">
+                  <CloudCapacitySettings />
+                </TabsContent>
+                <TabsContent value="database" className="mt-0">
+                  <Suspense fallback={<TabFallback />}>
+                    <DatabaseManagementContent embedded />
+                  </Suspense>
+                </TabsContent>
+                <TabsContent value="supabase" className="mt-0">
+                  <Suspense fallback={<TabFallback />}>
+                    <SupabaseSettingsContent embedded />
+                  </Suspense>
+                </TabsContent>
+              </div>
+            </Tabs>
           </Tabs>
         </CardContent>
       </Card>
