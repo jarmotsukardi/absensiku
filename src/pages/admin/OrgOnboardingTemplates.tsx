@@ -101,7 +101,7 @@ const parsePositiveNumber = (value: string, fallback: number): number => {
   return fallback;
 };
 
-export default function OrgOnboardingTemplates() {
+export default function OrgOnboardingTemplates({ embedded = false }: { embedded?: boolean }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [template, setTemplate] = useState<OrgOnboardingTemplate>(DEFAULT_ORG_ONBOARDING_TEMPLATE);
@@ -267,11 +267,8 @@ export default function OrgOnboardingTemplates() {
     }
   };
 
-  return (
-    <SuperAdminLayout
-      title="Template Onboarding Organisasi"
-      subtitle="Template setup awal untuk membantu member/tenant baru /org."
-    >
+  const pageContent = (
+    <>
       <div className="space-y-6">
         <Card>
           <CardHeader>
@@ -556,6 +553,15 @@ export default function OrgOnboardingTemplates() {
 
         <PageGlossarySection preset="admin_org_onboarding_templates" />
       </div>
+    </>
+  );
+  if (embedded) return pageContent;
+  return (
+    <SuperAdminLayout
+      title="Template Onboarding Organisasi"
+      subtitle="Template setup awal untuk membantu member/tenant baru /org."
+    >
+      {pageContent}
     </SuperAdminLayout>
   );
 }

@@ -22,7 +22,7 @@ import {
 
 const ITEMS_PER_PAGE = 10;
 
-export default function AbsenceLimitsManagement() {
+export default function AbsenceLimitsManagement({ embedded = false }: { embedded?: boolean }) {
   const confirmDialog = useConfirmDialog();
   const [limits, setLimits] = useState<AbsenceLimitTemplateItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -215,8 +215,8 @@ export default function AbsenceLimitsManagement() {
   const totalPages = Math.max(1, Math.ceil(limits.length / ITEMS_PER_PAGE));
   const paginatedLimits = limits.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
 
-  return (
-    <SuperAdminLayout>
+  const pageContent = (
+    <>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
@@ -419,6 +419,8 @@ export default function AbsenceLimitsManagement() {
           </CardContent>
         </Card>
       </div>
-    </SuperAdminLayout>
+    </>
   );
+  if (embedded) return pageContent;
+  return <SuperAdminLayout>{pageContent}</SuperAdminLayout>;
 }

@@ -16,12 +16,15 @@ import { ForgotPasswordDialog } from "@/components/auth/ForgotPasswordDialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Key } from "lucide-react";
-import { useNavigate } from "react-router-dom";
 
 // Lazy load heavy settings pages
 const DatabaseManagementContent = lazy(() => import("@/pages/admin/DatabaseManagement"));
 const TrialSettingsContent = lazy(() => import("@/pages/admin/TrialSettings"));
 const SupabaseSettingsContent = lazy(() => import("@/pages/admin/SupabaseSettings"));
+const PartitionMonitoringContent = lazy(() => import("@/pages/admin/PartitionMonitoring"));
+const CronJobsInfoContent = lazy(() => import("@/pages/admin/CronJobsInfo"));
+const OrgOnboardingTemplatesContent = lazy(() => import("@/pages/admin/OrgOnboardingTemplates"));
+const AdminAbsenceLimitsContent = lazy(() => import("@/pages/admin/schedule/AbsenceLimitsManagement"));
 
 const settingsTabs = [
   { id: "umum", label: "Umum" },
@@ -36,6 +39,9 @@ const settingsTabs = [
   { id: "rate-limit", label: "Rate Limit" },
   { id: "streak", label: "Konfigurasi Streak" },
   { id: "template-org", label: "Template Org" },
+  { id: "template-absence", label: "Template Batas Absen" },
+  { id: "monitoring-partition", label: "Monitoring Partisi" },
+  { id: "info-cron", label: "Informasi Cron" },
   { id: "infra-cloud", label: "Supabase & Vercel" },
   { id: "database", label: "Database" },
   { id: "supabase", label: "Pengaturan Supabase" },
@@ -50,7 +56,6 @@ const TabFallback = () => (
 );
 
 export default function Settings() {
-  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("umum");
   const [showForgotPassword, setShowForgotPassword] = useState(false);
 
@@ -127,17 +132,24 @@ export default function Settings() {
                 </Suspense>
               </TabsContent>
               <TabsContent value="template-org" className="mt-0">
-                <div className="space-y-4">
-                  <div>
-                    <h3 className="text-lg font-semibold">Template Onboarding Org</h3>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      Kelola template setup awal tenant/member baru (master data, jadwal kerja, fitur, dan pengumuman awal).
-                    </p>
-                  </div>
-                  <Button onClick={() => navigate("/admin/templates")}>
-                    Buka Halaman Template Onboarding
-                  </Button>
-                </div>
+                <Suspense fallback={<TabFallback />}>
+                  <OrgOnboardingTemplatesContent embedded />
+                </Suspense>
+              </TabsContent>
+              <TabsContent value="template-absence" className="mt-0">
+                <Suspense fallback={<TabFallback />}>
+                  <AdminAbsenceLimitsContent embedded />
+                </Suspense>
+              </TabsContent>
+              <TabsContent value="monitoring-partition" className="mt-0">
+                <Suspense fallback={<TabFallback />}>
+                  <PartitionMonitoringContent embedded />
+                </Suspense>
+              </TabsContent>
+              <TabsContent value="info-cron" className="mt-0">
+                <Suspense fallback={<TabFallback />}>
+                  <CronJobsInfoContent embedded />
+                </Suspense>
               </TabsContent>
               <TabsContent value="infra-cloud" className="mt-0">
                 <CloudCapacitySettings />

@@ -276,7 +276,7 @@ const callPublicRpc = async <T = unknown>(fn: string, payload?: Record<string, u
   return parsed as T;
 };
 
-export default function CronJobsInfo() {
+export default function CronJobsInfo({ embedded = false }: { embedded?: boolean }) {
   const [tasks, setTasks] = useState<CronTaskRow[]>([]);
   const [runs, setRuns] = useState<CronRunRow[]>([]);
   const [appLogs, setAppLogs] = useState<AppCronLogRow[]>([]);
@@ -471,8 +471,8 @@ export default function CronJobsInfo() {
     }
   };
 
-  return (
-    <SuperAdminLayout title="Informasi Cron Jobs" subtitle="Pusat informasi seluruh tugas cron sistem">
+  const pageContent = (
+    <>
       <div className="space-y-6">
         {loadError && (
           <Card className="border-destructive/30 bg-destructive/5">
@@ -818,6 +818,12 @@ export default function CronJobsInfo() {
 
         <PageGlossarySection preset="admin_cron_jobs" />
       </div>
+    </>
+  );
+  if (embedded) return pageContent;
+  return (
+    <SuperAdminLayout title="Informasi Cron Jobs" subtitle="Pusat informasi seluruh tugas cron sistem">
+      {pageContent}
     </SuperAdminLayout>
   );
 }

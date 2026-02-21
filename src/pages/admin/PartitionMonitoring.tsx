@@ -185,7 +185,7 @@ const CLEANUP_LOGS_PER_PAGE = 5;
 const CREATION_LOGS_PER_PAGE = 5;
 const GLOSSARY_PER_PAGE = 10;
 
-const PartitionMonitoring = () => {
+export default function PartitionMonitoring({ embedded = false }: { embedded?: boolean }) {
   const navigate = useNavigate();
   const [partitionStats, setPartitionStats] = useState<PartitionStat[]>([]);
   const [cleanupLogs, setCleanupLogs] = useState<CleanupLog[]>([]);
@@ -460,22 +460,27 @@ const PartitionMonitoring = () => {
   // Calculate totals
   const totalRows = partitionStats.reduce((acc, p) => acc + (p.row_count || 0), 0);
 
+  const loadingContent = (
+    <div className="space-y-6">
+      <Skeleton className="h-8 w-64" />
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {[1, 2, 3].map(i => <Skeleton key={i} className="h-32" />)}
+      </div>
+      <Skeleton className="h-96" />
+    </div>
+  );
+
   if (isLoading) {
+    if (embedded) return loadingContent;
     return (
       <SuperAdminLayout title="Monitoring Partisi" subtitle="Status tabel absensi partitioned dan log maintenance">
-        <div className="space-y-6">
-          <Skeleton className="h-8 w-64" />
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {[1, 2, 3].map(i => <Skeleton key={i} className="h-32" />)}
-          </div>
-          <Skeleton className="h-96" />
-        </div>
+        {loadingContent}
       </SuperAdminLayout>
     );
   }
 
-  return (
-    <SuperAdminLayout title="Monitoring Partisi" subtitle="Status tabel absensi partitioned dan log maintenance">
+  const pageContent = (
+    <>
       <div className="space-y-6">
         {loadError && (
           <Card className="border-destructive/30 bg-destructive/5">
@@ -930,8 +935,12 @@ const PartitionMonitoring = () => {
         </CardContent>
       </Card>
       </div>
+    </>
+  );
+  if (embedded) return pageContent;
+  return (
+    <SuperAdminLayout title="Monitoring Partisi" subtitle="Status tabel absensi partitioned dan log maintenance">
+      {pageContent}
     </SuperAdminLayout>
   );
-};
-
-export default PartitionMonitoring;
+}
