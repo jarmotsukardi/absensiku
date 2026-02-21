@@ -288,67 +288,28 @@ serve(async (req) => {
 
     // Generate invoice number
     const { data: invoiceNumber } = await supabase.rpc("generate_invoice_number");
+    const resolvedInvoiceNumber = typeof invoiceNumber === "string" ? invoiceNumber.trim() : "";
+    if (!resolvedInvoiceNumber) {
+      return new Response(
+        JSON.stringify(withTrace({ error: "Failed to generate invoice number" }, traceId)),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
 
     // Create external_id for Xendit
-    const externalId = `${invoiceNumber}-${Date.now()}`;
+    const externalId = `${resolvedInvoiceNumber}-${Date.now()}`;
 
     // Calculate due date (3 days from now)
     const dueDate = new Date();
     dueDate.setDate(dueDate.getDate() + 3);
+    const dueDateIso = dueDate.toISOString().slice(0, 10);
 
-    // Create Xendit invoice
-    const xenditResponse = await fetch("https://api.xendit.co/v2/invoices", {
-      method: "POST",
-      headers: {
-        "Authorization": `Basic ${btoa(xenditSecretKey + ":")}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        external_id: externalId,
-        amount: grossAmount,
-        payer_email: tenant.email,
-        description: description || `Langganan ${packageData?.name || "Custom"} - ${duration_months} bulan untuk ${employee_count} pegawai`,
-        invoice_duration: 259200, // 3 days in seconds
-        customer: {
-          given_names: tenant.name,
-          email: tenant.email,
-        },
-        success_redirect_url: `${Deno.env.get("PUBLIC_SITE_URL") || supabaseUrl}/org?payment=success`,
-        failure_redirect_url: `${Deno.env.get("PUBLIC_SITE_URL") || supabaseUrl}/org?payment=failed`,
-        currency: "IDR",
-        items: [
-          {
-            name: `Langganan ${packageData?.name || "Custom"} (${duration_months} bulan)`,
-            quantity: employee_count,
-            price: effectivePricePerEmployee * duration_months * (1 - discountPercentage / 100),
-          },
-        ],
-        fees: [
-          {
-            type: "PPN",
-            value: vatAmount,
-          },
-        ],
-      }),
-    });
-
-    if (!xenditResponse.ok) {
-      const xenditError = await xenditResponse.text();
-      logTraceError(traceId, "Xendit error", xenditError);
-      return new Response(
-        JSON.stringify(withTrace({ error: "Failed to create Xendit invoice", details: xenditError }, traceId)),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const xenditInvoice = await xenditResponse.json();
-
-    // Save invoice to database
-    const { data: invoice, error: invoiceError } = await supabase
+    // Reserve invoice row first to prevent duplicate active invoice creation race
+    const { data: reservedInvoice, error: reserveError } = await supabase
       .from("invoices")
       .insert({
         tenant_id,
-        invoice_number: invoiceNumber,
+        invoice_number: resolvedInvoiceNumber,
         external_id: externalId,
         package_id: package_id || null,
         package_name: packageData?.name || "Custom",
@@ -365,19 +326,17 @@ serve(async (req) => {
         net_amount: netAmount,
         status: "PENDING",
         payment_method_type: "XENDIT",
-        invoice_url: xenditInvoice.invoice_url,
-        issue_date: new Date().toISOString(),
-        due_date: dueDate.toISOString(),
+        due_date: dueDateIso,
         marketing_staff_id: marketing_staff_id || null,
         notes: description || null,
       })
-      .select()
+      .select("id, invoice_number, gross_amount, due_date")
       .single();
 
-    if (invoiceError) {
+    if (reserveError) {
       const isUniqueActiveViolation =
-        invoiceError.code === "23505" ||
-        (invoiceError.message ?? "").includes("idx_invoices_one_active_per_tenant_unique");
+        reserveError.code === "23505" ||
+        (reserveError.message ?? "").includes("idx_invoices_one_active_per_tenant_unique");
 
       if (isUniqueActiveViolation) {
         const { data: latestActive } = await supabase
@@ -430,9 +389,81 @@ serve(async (req) => {
         );
       }
 
-      logTraceError(traceId, "Database error", invoiceError);
+      logTraceError(traceId, "Database reserve error", reserveError);
       return new Response(
-        JSON.stringify(withTrace({ error: "Failed to save invoice", details: invoiceError.message }, traceId)),
+        JSON.stringify(withTrace({ error: "Failed to reserve invoice", details: reserveError.message }, traceId)),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    // Create Xendit invoice
+    const xenditResponse = await fetch("https://api.xendit.co/v2/invoices", {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${btoa(xenditSecretKey + ":")}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        external_id: externalId,
+        amount: grossAmount,
+        payer_email: tenant.email,
+        description: description || `Langganan ${packageData?.name || "Custom"} - ${duration_months} bulan untuk ${employee_count} pegawai`,
+        invoice_duration: 259200, // 3 days in seconds
+        customer: {
+          given_names: tenant.name,
+          email: tenant.email,
+        },
+        success_redirect_url: `${Deno.env.get("PUBLIC_SITE_URL") || supabaseUrl}/org?payment=success`,
+        failure_redirect_url: `${Deno.env.get("PUBLIC_SITE_URL") || supabaseUrl}/org?payment=failed`,
+        currency: "IDR",
+        items: [
+          {
+            name: `Langganan ${packageData?.name || "Custom"} (${duration_months} bulan)`,
+            quantity: employee_count,
+            price: effectivePricePerEmployee * duration_months * (1 - discountPercentage / 100),
+          },
+        ],
+        fees: [
+          {
+            type: "PPN",
+            value: vatAmount,
+          },
+        ],
+      }),
+    });
+
+    if (!xenditResponse.ok) {
+      const xenditError = await xenditResponse.text();
+      logTraceError(traceId, "Xendit error", xenditError);
+      await supabase
+        .from("invoices")
+        .update({
+          status: "CANCELLED",
+          notes: `${description || ""}\n[AUTO] Xendit invoice creation failed`,
+        })
+        .eq("id", reservedInvoice.id);
+      return new Response(
+        JSON.stringify(withTrace({ error: "Failed to create Xendit invoice", details: xenditError }, traceId)),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const xenditInvoice = await xenditResponse.json();
+
+    // Attach external checkout URL to reserved invoice
+    const { data: invoice, error: invoiceUpdateError } = await supabase
+      .from("invoices")
+      .update({
+        invoice_url: xenditInvoice.invoice_url,
+      })
+      .eq("id", reservedInvoice.id)
+      .select("id, invoice_number, gross_amount, due_date")
+      .single();
+
+    if (invoiceUpdateError) {
+      logTraceError(traceId, "Database update error", invoiceUpdateError);
+      return new Response(
+        JSON.stringify(withTrace({ error: "Failed to finalize invoice", details: invoiceUpdateError.message }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -454,10 +485,10 @@ serve(async (req) => {
         success: true,
         invoice: {
           id: invoice.id,
-          invoice_number: invoiceNumber,
+          invoice_number: invoice.invoice_number,
           invoice_url: xenditInvoice.invoice_url,
-          gross_amount: grossAmount,
-          due_date: dueDate.toISOString(),
+          gross_amount: invoice.gross_amount,
+          due_date: invoice.due_date,
         },
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
