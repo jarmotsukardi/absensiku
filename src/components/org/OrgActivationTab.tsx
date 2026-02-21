@@ -301,212 +301,214 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
 
   return (
     <div className="space-y-6">
-      {/* Current Subscription */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <CreditCard className="h-5 w-5 text-primary" />
-            Status Langganan
-          </CardTitle>
-          <CardDescription>Informasi langganan saat ini untuk {tenantName}</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-4 md:grid-cols-4">
-            <div className="p-4 rounded-lg border flex items-center gap-3">
-              {subscription?.status === "active" ? (
-                <CheckCircle2 className="h-5 w-5 text-green-500" />
-              ) : (
-                <Clock className="h-5 w-5 text-amber-500" />
-              )}
-              <div>
-                <p className="text-xs text-muted-foreground">Status</p>
-                <p className="font-semibold capitalize">{subscription?.status || "Trial"}</p>
-              </div>
-            </div>
-            <div className="p-4 rounded-lg border flex items-center gap-3">
-              <Users className="h-5 w-5 text-blue-500" />
-              <div>
-                <p className="text-xs text-muted-foreground">Pegawai Aktif</p>
-                <p className="font-semibold">{employeeCount}</p>
-              </div>
-            </div>
-            <div className="p-4 rounded-lg border flex items-center gap-3">
-              <Calendar className="h-5 w-5 text-purple-500" />
-              <div>
-                <p className="text-xs text-muted-foreground">Mulai</p>
-                <p className="font-semibold">
-                  {subscription?.start_date ? format(new Date(subscription.start_date), "d MMM yyyy", { locale: idLocale }) : "-"}
-                </p>
-              </div>
-            </div>
-            <div className="p-4 rounded-lg border flex items-center gap-3">
-              <Calendar className="h-5 w-5 text-orange-500" />
-              <div>
-                <p className="text-xs text-muted-foreground">Berakhir</p>
-                <p className="font-semibold">
-                  {subscription?.end_date ? format(new Date(subscription.end_date), "d MMM yyyy", { locale: idLocale }) : "-"}
-                </p>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Invoice Priority */}
-      <Card id="invoice-priority-table" className={criticalInvoice ? "border-red-300 shadow-sm" : undefined}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Receipt className="h-5 w-5 text-primary" />
-            Daftar Invoice
-            {attentionInvoices.length > 0 && (
-              <Badge variant="destructive" className="animate-pulse">
-                {attentionInvoices.length} Butuh Tindakan
-              </Badge>
-            )}
-          </CardTitle>
-          <CardDescription>Invoice prioritas ditampilkan di urutan teratas agar cepat ditindaklanjuti.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {criticalInvoice && (() => {
-            const criticalMeta = getInvoicePriorityMeta(criticalInvoice);
-            const dueAt = criticalMeta.dueAt;
-            const countdownLabel =
-              dueAt && dueAt > nowMs
-                ? `Batas waktu: ${formatCountdown(dueAt - nowMs)}`
-                : criticalMeta.rank === 0
-                  ? "Tagihan sudah melewati jatuh tempo"
-                  : criticalMeta.note;
-            return (
-              <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-red-900 dark:border-red-800 dark:bg-red-950/30 dark:text-red-100">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="space-y-1">
-                    <p className="font-semibold flex items-center gap-2">
-                      <AlertTriangle className="h-4 w-4" />
-                      PERINGATAN TAGIHAN PRIORITAS
-                    </p>
-                    <p className="text-sm">
-                      Invoice <strong>{criticalInvoice.invoice_number}</strong> - {criticalMeta.note}
-                    </p>
-                    <p className="text-xs font-medium">{countdownLabel}</p>
-                  </div>
-                  {criticalInvoice.invoice_url && criticalInvoice.status === "PENDING" ? (
-                    <Button asChild size="lg" className="bg-red-700 hover:bg-red-800">
-                      <a href={criticalInvoice.invoice_url} target="_blank" rel="noopener noreferrer">
-                        <ExternalLink className="h-4 w-4 mr-2" />
-                        Bayar Sekarang
-                      </a>
-                    </Button>
-                  ) : (
-                    <Button
-                      size="lg"
-                      variant="destructive"
-                      onClick={() => setPaymentMethod("manual")}
-                    >
-                      Prioritaskan Pembayaran Manual
-                    </Button>
-                  )}
+      <div className="grid gap-6 xl:grid-cols-[minmax(280px,360px),minmax(0,1fr)]">
+        {/* Current Subscription */}
+        <Card className="xl:sticky xl:top-6 self-start">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CreditCard className="h-5 w-5 text-primary" />
+              Status Langganan
+            </CardTitle>
+            <CardDescription>Informasi langganan saat ini untuk {tenantName}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+              <div className="p-4 rounded-lg border flex items-center gap-3">
+                {subscription?.status === "active" ? (
+                  <CheckCircle2 className="h-5 w-5 text-green-500" />
+                ) : (
+                  <Clock className="h-5 w-5 text-amber-500" />
+                )}
+                <div>
+                  <p className="text-xs text-muted-foreground">Status</p>
+                  <p className="font-semibold capitalize">{subscription?.status || "Trial"}</p>
                 </div>
               </div>
-            );
-          })()}
+              <div className="p-4 rounded-lg border flex items-center gap-3">
+                <Users className="h-5 w-5 text-blue-500" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Pegawai Aktif</p>
+                  <p className="font-semibold">{employeeCount}</p>
+                </div>
+              </div>
+              <div className="p-4 rounded-lg border flex items-center gap-3">
+                <Calendar className="h-5 w-5 text-purple-500" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Mulai</p>
+                  <p className="font-semibold">
+                    {subscription?.start_date ? format(new Date(subscription.start_date), "d MMM yyyy", { locale: idLocale }) : "-"}
+                  </p>
+                </div>
+              </div>
+              <div className="p-4 rounded-lg border flex items-center gap-3">
+                <Calendar className="h-5 w-5 text-orange-500" />
+                <div>
+                  <p className="text-xs text-muted-foreground">Berakhir</p>
+                  <p className="font-semibold">
+                    {subscription?.end_date ? format(new Date(subscription.end_date), "d MMM yyyy", { locale: idLocale }) : "-"}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
-          {prioritizedInvoices.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <Receipt className="h-10 w-10 mx-auto mb-3 opacity-50" />
-              <p>Belum ada invoice</p>
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>No. Invoice</TableHead>
-                  <TableHead>Jatuh Tempo</TableHead>
-                  <TableHead>Metode</TableHead>
-                  <TableHead>Jumlah</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Prioritas</TableHead>
-                  <TableHead></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {paginatedInvoices.map((inv) => {
-                  const meta = getInvoicePriorityMeta(inv);
-                  const rowClass =
-                    meta.tone === "critical"
-                      ? "bg-red-50/70 hover:bg-red-50"
-                      : meta.tone === "warning"
-                        ? "bg-amber-50/60 hover:bg-amber-50"
-                        : "";
-                  return (
-                    <TableRow key={inv.id} className={rowClass}>
-                      <TableCell className="font-mono text-sm">{inv.invoice_number}</TableCell>
-                      <TableCell>{inv.due_date ? format(new Date(inv.due_date), "d MMM yyyy", { locale: idLocale }) : "-"}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className="text-xs">
-                          {inv.payment_method_type === "XENDIT" ? "Online" : "Transfer"}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="font-semibold">{formatCurrency(inv.gross_amount)}</TableCell>
-                      <TableCell>{getStatusBadge(inv.status)}</TableCell>
-                      <TableCell>
-                        <Badge
-                          className={
-                            meta.tone === "critical"
-                              ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
-                              : meta.tone === "warning"
-                                ? "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200"
-                                : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                          }
-                        >
-                          {meta.note}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>
-                        {inv.invoice_url && inv.status === "PENDING" && (
-                          <Button
-                            variant={meta.tone === "critical" ? "destructive" : "default"}
-                            size="sm"
-                            className={meta.tone === "critical" ? "animate-pulse" : ""}
-                            asChild
+        {/* Invoice Priority */}
+        <Card id="invoice-priority-table" className={criticalInvoice ? "border-red-300 shadow-sm" : undefined}>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Receipt className="h-5 w-5 text-primary" />
+              Daftar Invoice
+              {attentionInvoices.length > 0 && (
+                <Badge variant="destructive" className="animate-pulse">
+                  {attentionInvoices.length} Butuh Tindakan
+                </Badge>
+              )}
+            </CardTitle>
+            <CardDescription>Invoice prioritas ditampilkan di urutan teratas agar cepat ditindaklanjuti.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {criticalInvoice && (() => {
+              const criticalMeta = getInvoicePriorityMeta(criticalInvoice);
+              const dueAt = criticalMeta.dueAt;
+              const countdownLabel =
+                dueAt && dueAt > nowMs
+                  ? `Batas waktu: ${formatCountdown(dueAt - nowMs)}`
+                  : criticalMeta.rank === 0
+                    ? "Tagihan sudah melewati jatuh tempo"
+                    : criticalMeta.note;
+              return (
+                <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-red-900 dark:border-red-800 dark:bg-red-950/30 dark:text-red-100">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="space-y-1">
+                      <p className="font-semibold flex items-center gap-2">
+                        <AlertTriangle className="h-4 w-4" />
+                        PERINGATAN TAGIHAN PRIORITAS
+                      </p>
+                      <p className="text-sm">
+                        Invoice <strong>{criticalInvoice.invoice_number}</strong> - {criticalMeta.note}
+                      </p>
+                      <p className="text-xs font-medium">{countdownLabel}</p>
+                    </div>
+                    {criticalInvoice.invoice_url && criticalInvoice.status === "PENDING" ? (
+                      <Button asChild size="lg" className="bg-red-700 hover:bg-red-800">
+                        <a href={criticalInvoice.invoice_url} target="_blank" rel="noopener noreferrer">
+                          <ExternalLink className="h-4 w-4 mr-2" />
+                          Bayar Sekarang
+                        </a>
+                      </Button>
+                    ) : (
+                      <Button
+                        size="lg"
+                        variant="destructive"
+                        onClick={() => setPaymentMethod("manual")}
+                      >
+                        Prioritaskan Pembayaran Manual
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {prioritizedInvoices.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                <Receipt className="h-10 w-10 mx-auto mb-3 opacity-50" />
+                <p>Belum ada invoice</p>
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>No. Invoice</TableHead>
+                    <TableHead>Jatuh Tempo</TableHead>
+                    <TableHead>Metode</TableHead>
+                    <TableHead>Jumlah</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Prioritas</TableHead>
+                    <TableHead></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {paginatedInvoices.map((inv) => {
+                    const meta = getInvoicePriorityMeta(inv);
+                    const rowClass =
+                      meta.tone === "critical"
+                        ? "bg-red-50/70 hover:bg-red-50"
+                        : meta.tone === "warning"
+                          ? "bg-amber-50/60 hover:bg-amber-50"
+                          : "";
+                    return (
+                      <TableRow key={inv.id} className={rowClass}>
+                        <TableCell className="font-mono text-sm">{inv.invoice_number}</TableCell>
+                        <TableCell>{inv.due_date ? format(new Date(inv.due_date), "d MMM yyyy", { locale: idLocale }) : "-"}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="text-xs">
+                            {inv.payment_method_type === "XENDIT" ? "Online" : "Transfer"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="font-semibold">{formatCurrency(inv.gross_amount)}</TableCell>
+                        <TableCell>{getStatusBadge(inv.status)}</TableCell>
+                        <TableCell>
+                          <Badge
+                            className={
+                              meta.tone === "critical"
+                                ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
+                                : meta.tone === "warning"
+                                  ? "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200"
+                                  : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                            }
                           >
-                            <a href={inv.invoice_url} target="_blank" rel="noopener noreferrer">
-                              <ExternalLink className="h-3 w-3 mr-1" />
-                              Bayar Sekarang
-                            </a>
-                          </Button>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          )}
-          {prioritizedInvoices.length > 0 && (
-            <div className="mt-4 flex items-center justify-between">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
-                disabled={currentPage === 1}
-              >
-                Sebelumnya
-              </Button>
-              <span className="text-sm text-muted-foreground">
-                Halaman {currentPage} dari {totalPages}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
-                disabled={currentPage === totalPages}
-              >
-                Berikutnya
-              </Button>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+                            {meta.note}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {inv.invoice_url && inv.status === "PENDING" && (
+                            <Button
+                              variant={meta.tone === "critical" ? "destructive" : "default"}
+                              size="sm"
+                              className={meta.tone === "critical" ? "animate-pulse" : ""}
+                              asChild
+                            >
+                              <a href={inv.invoice_url} target="_blank" rel="noopener noreferrer">
+                                <ExternalLink className="h-3 w-3 mr-1" />
+                                Bayar Sekarang
+                              </a>
+                            </Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
+            {prioritizedInvoices.length > 0 && (
+              <div className="mt-4 flex items-center justify-between">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                  disabled={currentPage === 1}
+                >
+                  Sebelumnya
+                </Button>
+                <span className="text-sm text-muted-foreground">
+                  Halaman {currentPage} dari {totalPages}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((prev) => Math.min(totalPages, prev + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  Berikutnya
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       {/* Subscription Calculator */}
       <Card>
