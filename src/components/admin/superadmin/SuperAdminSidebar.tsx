@@ -47,6 +47,7 @@ import {
   Activity,
   AlertTriangle,
   Wand2,
+  Ticket,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import {
@@ -94,7 +95,9 @@ const menuGroups: MenuGroup[] = [
     label: "Laporan",
     items: [
       { title: "Audit Log", icon: FileText, path: "/admin/reports/audit" },
+      { title: "Log Error", icon: AlertTriangle, path: "/admin/log-errors" },
       { title: "Feedback & Bug", icon: Bug, path: "/admin/feedback" },
+      { title: "Tiket Bantuan Org", icon: Ticket, path: "/admin/help/tickets" },
       { title: "Streak Monitoring", icon: Clock, path: "/admin/streak-monitoring" },
     ],
   },

@@ -36,7 +36,11 @@ interface APKInfo {
 
 type Tenant = Tables<"tenants">;
 
-export default function OrgLandingSettings() {
+interface OrgLandingSettingsProps {
+  embedded?: boolean;
+}
+
+export default function OrgLandingSettings({ embedded = false }: OrgLandingSettingsProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [tenant, setTenant] = useState<Tenant | null>(null);
@@ -162,6 +166,13 @@ export default function OrgLandingSettings() {
   const loginUrl = `${window.location.origin}/employee/login`;
 
   if (isLoading) {
+    if (embedded) {
+      return (
+        <div className="flex items-center justify-center h-48">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      );
+    }
     return (
       <OrganizationLayout>
         <div className="flex items-center justify-center h-64">
@@ -171,9 +182,9 @@ export default function OrgLandingSettings() {
     );
   }
 
-  return (
-    <OrganizationLayout>
-      <div className="space-y-6">
+  const content = (
+    <div className="space-y-6">
+      {!embedded && (
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Globe className="h-6 w-6" />
@@ -181,6 +192,7 @@ export default function OrgLandingSettings() {
           </h1>
           <p className="text-muted-foreground">Kelola halaman publik dan aplikasi mobile organisasi</p>
         </div>
+      )}
 
         <Tabs defaultValue="links" className="space-y-4">
           <TabsList className="grid w-full grid-cols-3 lg:w-[500px]">
@@ -486,8 +498,13 @@ export default function OrgLandingSettings() {
           </TabsContent>
         </Tabs>
 
-        <PageGlossarySection preset="org_landing_settings" />
-      </div>
-    </OrganizationLayout>
+      {!embedded && <PageGlossarySection preset="org_landing_settings" />}
+    </div>
   );
+
+  if (embedded) {
+    return content;
+  }
+
+  return <OrganizationLayout>{content}</OrganizationLayout>;
 }

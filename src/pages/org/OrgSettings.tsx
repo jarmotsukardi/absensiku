@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,7 @@ import { AccountDeletionDialog } from "@/components/org/AccountDeletionDialog";
 import { ForgotPasswordDialog } from "@/components/auth/ForgotPasswordDialog";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import OrgLandingSettings from "@/pages/org/OrgLandingSettings";
 
 const ORGANIZATION_TYPES = [
   { value: "pemerintah_daerah", label: "Pemerintah Daerah" },
@@ -49,7 +51,13 @@ const parseNumericSettingValue = (raw: unknown, fallback: number): number => {
 
 export default function OrgSettings() {
   const { organization, isLoading, updateOrganization, updateTimezone, refetch } = useOrganizationSettings();
-  const [activeTab, setActiveTab] = useState("general");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState(() => {
+    const tab = searchParams.get("tab");
+    return tab && ["general", "branding", "billing", "timezone", "whatsapp", "security", "landing", "danger"].includes(tab)
+      ? tab
+      : "general";
+  });
   const [isSaving, setIsSaving] = useState(false);
   const [currentTime, setCurrentTime] = useState<string>("");
   const [showForgotPassword, setShowForgotPassword] = useState(false);
@@ -67,6 +75,28 @@ export default function OrgSettings() {
   const [b2bThreshold, setB2bThreshold] = useState(2000);
   const [showB2bOverlay, setShowB2bOverlay] = useState(false);
   const [activeEmployeeCount, setActiveEmployeeCount] = useState(0);
+
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    const resolvedTab =
+      tab && ["general", "branding", "billing", "timezone", "whatsapp", "security", "landing", "danger"].includes(tab)
+        ? tab
+        : "general";
+    if (resolvedTab !== activeTab) {
+      setActiveTab(resolvedTab);
+    }
+  }, [activeTab, searchParams]);
+
+  const handleTabChange = (value: string) => {
+    setActiveTab(value);
+    const next = new URLSearchParams(searchParams);
+    if (value === "general") {
+      next.delete("tab");
+    } else {
+      next.set("tab", value);
+    }
+    setSearchParams(next, { replace: true });
+  };
 
   useEffect(() => {
     // Fetch B2B threshold from system settings
@@ -294,7 +324,7 @@ export default function OrgSettings() {
           <p className="text-muted-foreground">Konfigurasi organisasi Anda</p>
         </div>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <Tabs value={activeTab} onValueChange={handleTabChange}>
           <TabsList className="flex flex-wrap h-auto gap-1 w-full lg:w-[900px] p-1">
             <TabsTrigger value="general" className="flex items-center gap-2 flex-1 min-w-[80px]">
               <Building2 className="h-4 w-4" />
@@ -319,6 +349,10 @@ export default function OrgSettings() {
             <TabsTrigger value="security" className="flex items-center gap-2 flex-1 min-w-[80px]">
               <Key className="h-4 w-4" />
               <span className="hidden sm:inline">Keamanan</span>
+            </TabsTrigger>
+            <TabsTrigger value="landing" className="flex items-center gap-2 flex-1 min-w-[80px]">
+              <Globe className="h-4 w-4" />
+              <span className="hidden sm:inline">Landing & Aplikasi</span>
             </TabsTrigger>
             <TabsTrigger value="danger" className="flex items-center gap-2 flex-1 min-w-[80px] text-destructive data-[state=active]:text-destructive">
               <Trash2 className="h-4 w-4" />
@@ -766,6 +800,10 @@ export default function OrgSettings() {
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="landing" className="space-y-4">
+            <OrgLandingSettings embedded />
           </TabsContent>
 
           {/* Danger Zone Tab */}

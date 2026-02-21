@@ -14,6 +14,7 @@ import { Loader2, Save, FileText, Eye, EyeOff, ChevronLeft, ChevronRight, Plus, 
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { RichTextEditor } from "@/components/editor/RichTextEditor";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 interface ArticlesSectionSettings {
   section_title: string;
@@ -44,6 +45,7 @@ const defaultSettings: ArticlesSectionSettings = {
 const ITEMS_PER_PAGE = 10;
 
 export function ArticlesSettings() {
+  const confirmDialog = useConfirmDialog();
   const [settings, setSettings] = useState<ArticlesSectionSettings>(defaultSettings);
   const [articles, setArticles] = useState<Article[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -139,7 +141,16 @@ export function ArticlesSettings() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Hapus artikel ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Artikel",
+        description: "Hapus artikel ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
     try {
       await supabase.from("articles").delete().eq("id", id);
       setArticles(articles.filter(a => a.id !== id));

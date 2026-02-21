@@ -10,6 +10,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import {
   Pagination,
   PaginationContent,
@@ -24,6 +25,7 @@ type OPD = Tables<"opd">;
 const ITEMS_PER_PAGE = 15;
 
 export default function InactiveEmployees() {
+  const confirmDialog = useConfirmDialog();
   const [employees, setEmployees] = useState<(Employee & { opd?: OPD })[]>([]);
   const [totalEmployees, setTotalEmployees] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -71,7 +73,15 @@ export default function InactiveEmployees() {
   }, [fetchData]);
 
   const handleReactivate = async (id: string) => {
-    if (!confirm("Yakin ingin mengaktifkan kembali pegawai ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Aktifkan Kembali Pegawai",
+        description: "Yakin ingin mengaktifkan kembali pegawai ini?",
+        confirmText: "Ya, aktifkan",
+      }))
+    ) {
+      return;
+    }
 
     try {
       setLoadError(null);

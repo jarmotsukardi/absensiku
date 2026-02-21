@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 interface WorkHour {
   id: string;
@@ -47,6 +48,7 @@ const daysOfWeek = [
 ];
 
 export default function OrgWorkHoursManagement() {
+  const confirmDialog = useConfirmDialog();
   const [workHours, setWorkHours] = useState<WorkHour[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -274,7 +276,16 @@ export default function OrgWorkHoursManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin ingin menghapus jam kerja ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Jam Kerja",
+        description: "Yakin ingin menghapus jam kerja ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
       const { error } = await supabase.from("work_hours").delete().eq("id", id);

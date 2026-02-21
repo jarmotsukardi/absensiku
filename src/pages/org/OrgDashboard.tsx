@@ -799,7 +799,6 @@ export default function OrgDashboard() {
   const attendanceCoveragePct = stats.totalEmployees > 0
     ? Math.min(100, Math.round((stats.todayPresent / stats.totalEmployees) * 100))
     : 0;
-
   return (
     <OrganizationLayout>
       <OverdueRequestsOverlay tenantId={tenantId} />

@@ -14,6 +14,7 @@
  } from "lucide-react";
  import { format } from "date-fns";
  import { id } from "date-fns/locale";
+ import { useConfirmDialog } from "@/hooks/useConfirmDialog";
  
  interface OvertimeRequestListProps {
    employeeId: string;
@@ -27,12 +28,22 @@
  };
  
  export function OvertimeRequestList({ employeeId }: OvertimeRequestListProps) {
+   const confirmDialog = useConfirmDialog();
    const { requests, isLoading, cancelRequest } = useOvertimeRequests({ employeeId });
    const [selectedRequest, setSelectedRequest] = useState<OvertimeRequest | null>(null);
    const [isCancelling, setIsCancelling] = useState(false);
  
    const handleCancel = async (requestId: string) => {
-     if (!confirm("Batalkan pengajuan lembur ini?")) return;
+     if (
+       !(await confirmDialog({
+         title: "Batalkan Pengajuan Lembur",
+         description: "Batalkan pengajuan lembur ini?",
+         confirmText: "Ya, batalkan",
+         variant: "destructive",
+       }))
+     ) {
+       return;
+     }
      setIsCancelling(true);
      await cancelRequest(requestId);
      setIsCancelling(false);

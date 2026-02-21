@@ -4,6 +4,7 @@ import { OrganizationLayout } from "@/components/admin/organization/Organization
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -36,10 +37,10 @@ import { Plus, Pencil, Trash2, Search, Newspaper, Eye, EyeOff } from "lucide-rea
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
-import { RichTextEditor } from "@/components/editor/RichTextEditor";
 import { NewsThumbnailPreview } from "@/components/common/NewsThumbnailPreview";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 
 interface NewsItem {
   id: string;
@@ -51,6 +52,18 @@ interface NewsItem {
   created_at: string;
   tenant_id?: string;
 }
+
+const MAX_ANNOUNCEMENTS = 15;
+
+const htmlToPlainText = (value: string): string => {
+  if (!value) return "";
+  const withBreaks = value
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n");
+  const tmp = document.createElement("div");
+  tmp.innerHTML = withBreaks;
+  return (tmp.textContent || tmp.innerText || "").replace(/\n{3,}/g, "\n\n").trim();
+};
 
 export default function OrgNewsManagement() {
   const [news, setNews] = useState<NewsItem[]>([]);
@@ -72,7 +85,6 @@ export default function OrgNewsManagement() {
   const [formData, setFormData] = useState({
     title: "",
     content: "",
-    image_url: "",
     is_published: true,
     is_pinned: false,
   });
@@ -80,6 +92,35 @@ export default function OrgNewsManagement() {
   // Delete dialog
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const enforceAnnouncementLimit = useCallback(async (tid: string): Promise<number> => {
+    let totalDeleted = 0;
+    const batchSize = 100;
+
+    while (true) {
+      const { data: overflowRows, error: overflowError } = await supabase
+        .from("announcements")
+        .select("id")
+        .eq("tenant_id", tid)
+        .order("created_at", { ascending: false })
+        .range(MAX_ANNOUNCEMENTS, MAX_ANNOUNCEMENTS + batchSize - 1);
+      if (overflowError) throw overflowError;
+
+      const idsToDelete = (overflowRows || []).map((row) => row.id);
+      if (idsToDelete.length === 0) break;
+
+      const { error: deleteError } = await supabase
+        .from("announcements")
+        .delete()
+        .in("id", idsToDelete);
+      if (deleteError) throw deleteError;
+
+      totalDeleted += idsToDelete.length;
+      if (idsToDelete.length < batchSize) break;
+    }
+
+    return totalDeleted;
+  }, []);
 
   const fetchNews = useCallback(async (tid: string) => {
     setIsLoading(true);
@@ -123,24 +164,25 @@ export default function OrgNewsManagement() {
   }, [currentPage, filterStatus, itemsPerPage, searchQuery]);
 
   const fetchTenantAndNews = useCallback(async () => {
+    let shouldStopLoading = true;
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      const resolvedTenantId = await resolveOrgTenantId();
 
-      const { data: roleData } = await supabase
-        .from("user_roles")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .single();
-
-      if (roleData?.tenant_id) {
-        setTenantId(roleData.tenant_id);
+      if (resolvedTenantId) {
+        shouldStopLoading = false;
+        setTenantId(resolvedTenantId);
+      } else {
+        setLoadError("Tenant organisasi tidak ditemukan. Hubungi admin.");
       }
     } catch (error) {
       const errorRef = reportError(error, "org.news.fetch_tenant_and_news");
       const message = appendErrorReference("Gagal memuat halaman pengumuman", errorRef);
       setLoadError(message);
       toast.error(message);
+    } finally {
+      if (shouldStopLoading) {
+        setIsLoading(false);
+      }
     }
   }, []);
 
@@ -150,12 +192,21 @@ export default function OrgNewsManagement() {
 
   useEffect(() => {
     if (tenantId) {
-      void fetchNews(tenantId);
+      void (async () => {
+        try {
+          await enforceAnnouncementLimit(tenantId);
+        } catch (error) {
+          const errorRef = reportError(error, "org.news.enforce_limit", { tenant_id: tenantId });
+          toast.error(appendErrorReference("Gagal membersihkan pengumuman lama otomatis", errorRef));
+        }
+        await fetchNews(tenantId);
+      })();
     }
-  }, [fetchNews, tenantId]);
+  }, [enforceAnnouncementLimit, fetchNews, tenantId]);
 
   const handleSubmit = async () => {
-    if (!formData.title.trim() || !formData.content.trim()) {
+    const normalizedContent = htmlToPlainText(formData.content);
+    if (!formData.title.trim() || !normalizedContent) {
       toast.error("Judul dan konten harus diisi");
       return;
     }
@@ -166,8 +217,7 @@ export default function OrgNewsManagement() {
           .from("announcements")
           .update({
             title: formData.title,
-            content: formData.content,
-            image_url: formData.image_url || null,
+            content: normalizedContent,
             is_published: formData.is_published,
             is_pinned: formData.is_pinned,
             updated_at: new Date().toISOString(),
@@ -181,14 +231,17 @@ export default function OrgNewsManagement() {
           .from("announcements")
           .insert({
             title: formData.title,
-            content: formData.content,
-            image_url: formData.image_url || null,
+            content: normalizedContent,
             is_published: formData.is_published,
             is_pinned: formData.is_pinned,
             tenant_id: tenantId,
           });
 
         if (error) throw error;
+        const deletedCount = tenantId ? await enforceAnnouncementLimit(tenantId) : 0;
+        if (deletedCount > 0) {
+          toast.info(`${deletedCount} pengumuman terlama dihapus otomatis (maksimal ${MAX_ANNOUNCEMENTS} data).`);
+        }
         toast.success("Pengumuman berhasil ditambahkan");
       }
 
@@ -204,8 +257,7 @@ export default function OrgNewsManagement() {
   const handleEdit = (item: NewsItem) => {
     setFormData({
       title: item.title,
-      content: item.content,
-      image_url: item.image_url || "",
+      content: htmlToPlainText(item.content),
       is_published: item.is_published,
       is_pinned: item.is_pinned,
     });
@@ -253,7 +305,6 @@ export default function OrgNewsManagement() {
     setFormData({
       title: "",
       content: "",
-      image_url: "",
       is_published: true,
       is_pinned: false,
     });
@@ -291,7 +342,7 @@ export default function OrgNewsManagement() {
               Kelola Pengumuman
             </h1>
             <p className="text-muted-foreground">
-              Kelola pengumuman dan informasi untuk pegawai
+              Kelola pengumuman dan informasi untuk pegawai. Konten ditulis dalam teks biasa (non-HTML).
             </p>
           </div>
 
@@ -310,6 +361,9 @@ export default function OrgNewsManagement() {
                 <DialogTitle>
                   {isEditing ? "Edit Pengumuman" : "Tambah Pengumuman Baru"}
                 </DialogTitle>
+                <p className="text-sm text-muted-foreground">
+                  Gunakan konten teks biasa. Sistem menyimpan maksimal {MAX_ANNOUNCEMENTS} pengumuman terbaru.
+                </p>
               </DialogHeader>
               <div className="space-y-4 py-4">
                 <div className="space-y-2">
@@ -322,25 +376,12 @@ export default function OrgNewsManagement() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>URL Cover Pengumuman (opsional)</Label>
-                  <Input
-                    placeholder="https://example.com/cover-image.jpg"
-                    value={formData.image_url || ""}
-                    onChange={(e) => setFormData({ ...formData, image_url: e.target.value })}
-                  />
-                  {formData.image_url && (
-                    <div className="h-24 rounded-lg bg-muted overflow-hidden">
-                      <img src={formData.image_url} alt="Cover preview" className="w-full h-full object-cover" />
-                    </div>
-                  )}
-                </div>
-
-                <div className="space-y-2">
                   <Label>Konten</Label>
-                  <RichTextEditor
+                  <Textarea
                     value={formData.content}
-                    onChange={(value) => setFormData({ ...formData, content: value })}
-                    placeholder="Tulis konten pengumuman..."
+                    onChange={(e) => setFormData({ ...formData, content: e.target.value })}
+                    placeholder="Tulis konten pengumuman"
+                    rows={10}
                   />
                 </div>
 
@@ -429,6 +470,9 @@ export default function OrgNewsManagement() {
         <Card>
           <CardHeader>
             <CardTitle>Daftar Pengumuman ({totalNews})</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Maksimal {MAX_ANNOUNCEMENTS} pengumuman per organisasi. Saat melebihi batas, pengumuman terlama dihapus otomatis.
+            </p>
           </CardHeader>
           <CardContent>
             {isLoading ? (
@@ -449,6 +493,7 @@ export default function OrgNewsManagement() {
                       <TableHead className="w-16">Cover</TableHead>
                       <TableHead>Judul</TableHead>
                       <TableHead>Tanggal</TableHead>
+                      <TableHead>Jam</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead className="text-right">Aksi</TableHead>
                     </TableRow>
@@ -472,6 +517,9 @@ export default function OrgNewsManagement() {
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
                           {format(new Date(item.created_at), "dd MMM yyyy", { locale: id })}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {format(new Date(item.created_at), "HH:mm")}
                         </TableCell>
                         <TableCell>
                           <Badge variant={item.is_published ? "default" : "secondary"}>

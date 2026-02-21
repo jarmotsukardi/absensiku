@@ -15,6 +15,7 @@ import { Plus, Search, Edit, Trash2, Building2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 interface WorkUnit {
   id: string;
@@ -46,6 +47,7 @@ const INSTITUTION_TYPES = [
 const ITEMS_PER_PAGE = 10;
 
 export default function OrgWorkUnitsManagement() {
+  const confirmDialog = useConfirmDialog();
   const [workUnits, setWorkUnits] = useState<WorkUnit[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -176,7 +178,16 @@ export default function OrgWorkUnitsManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Apakah Anda yakin ingin menghapus satuan kerja ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Satuan Kerja",
+        description: "Apakah Anda yakin ingin menghapus satuan kerja ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
       const { error } = await supabase

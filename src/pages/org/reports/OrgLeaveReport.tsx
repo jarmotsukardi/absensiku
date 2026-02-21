@@ -16,6 +16,7 @@ import type { Database, Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { RequestReportsTabs } from "@/components/org/reports/RequestReportsTabs";
 
 type LeaveRequestRow = Tables<"leave_requests">;
 type OPD = Tables<"opd">;
@@ -437,6 +438,8 @@ export default function OrgLeaveReport() {
             </Button>
           </div>
         </div>
+
+        <RequestReportsTabs />
 
         {loadError && (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">

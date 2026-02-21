@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { useEmployee } from "@/hooks/useEmployee";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import type { Tables, TablesInsert, TablesUpdate } from "@/integrations/supabase/types";
 
 type WfhSchedule = Tables<"wfh_schedules">;
@@ -48,6 +49,7 @@ interface ScheduleFormData {
 }
 
 export default function OrgWfhScheduleManagement() {
+  const confirmDialog = useConfirmDialog();
   const { employee: currentUser } = useEmployee(null);
   const [schedules, setSchedules] = useState<WfhSchedule[]>([]);
   const [opds, setOpds] = useState<OPD[]>([]);
@@ -248,7 +250,16 @@ export default function OrgWfhScheduleManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin ingin menghapus jadwal ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Jadwal WFH",
+        description: "Yakin ingin menghapus jadwal ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
       const { error } = await supabase.from("wfh_schedules").delete().eq("id", id);

@@ -21,6 +21,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 type OPD = Tables<"opd">;
 
@@ -40,6 +41,7 @@ const CATEGORIES = [
 ];
 
 export default function WorkUnitsManagement() {
+  const confirmDialog = useConfirmDialog();
   const ITEMS_PER_PAGE = 15;
   const [workUnits, setWorkUnits] = useState<WorkUnit[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
@@ -111,8 +113,17 @@ export default function WorkUnitsManagement() {
     setIsDialogOpen(true);
   };
 
-  const handleDelete = (_id: string) => {
-    if (!confirm("Yakin ingin menghapus satuan kerja ini?")) return;
+  const handleDelete = async (_id: string) => {
+    if (
+      !(await confirmDialog({
+        title: "Hapus Satuan Kerja",
+        description: "Yakin ingin menghapus satuan kerja ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
     toast.info("Fitur hapus satuan kerja belum tersedia");
   };
 

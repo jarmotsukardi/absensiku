@@ -170,6 +170,18 @@ const CRON_CATALOG_FALLBACK: CronTaskRow[] = [
     command_preview: null,
   },
   {
+    job_name: "invoice-number-health-daily",
+    category: "Billing",
+    target: "SQL/RPC",
+    description: "Snapshot harian kesehatan nomor faktur (valid vs invalid format).",
+    timezone: "UTC (WIB +7)",
+    expected_schedule: "15 17 * * *",
+    current_schedule: null,
+    is_scheduled: false,
+    is_active: false,
+    command_preview: null,
+  },
+  {
     job_name: "billing-grace-notifier-10m",
     category: "Billing",
     target: "Edge Function",

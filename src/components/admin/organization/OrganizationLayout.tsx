@@ -1,13 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { OrganizationSidebar } from "./OrganizationSidebar";
+import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { withTimeout } from "@/lib/attendanceResilience";
 import { FloatingWhatsApp } from "@/components/common/FloatingWhatsApp";
 import { HardRequestNotifications } from "@/components/org/HardRequestNotifications";
+import { Building2, LogOut } from "lucide-react";
 
 interface OrganizationLayoutProps {
   children: React.ReactNode;
@@ -16,7 +26,16 @@ interface OrganizationLayoutProps {
 interface TenantInfo {
   name: string;
   organization_type: string;
+  logo_url?: string | null;
 }
+
+interface MenuUserInfo {
+  name: string;
+  email: string;
+  avatarUrl: string | null;
+}
+
+type OrgAccessLevel = "admin" | "operator";
 
 const ACCESS_CHECK_TIMEOUT_MS = 12000;
 const ACCESS_LOADING_WATCHDOG_MS = 20000;
@@ -24,11 +43,46 @@ const ORG_ACTIVE_TENANT_STORAGE_KEY = "org_active_tenant_id";
 
 export function OrganizationLayout({ children }: OrganizationLayoutProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
   const queryTenantId = searchParams.get("tenant_id");
   const [isLoading, setIsLoading] = useState(true);
   const [tenant, setTenant] = useState<TenantInfo | null>(null);
   const [activeTenantId, setActiveTenantId] = useState<string | null>(null);
+  const [accessLevel, setAccessLevel] = useState<OrgAccessLevel>("admin");
+  const [menuUserInfo, setMenuUserInfo] = useState<MenuUserInfo>({
+    name: "Pengguna",
+    email: "-",
+    avatarUrl: null,
+  });
+
+  const isOperatorAllowedPath = useCallback((pathname: string) => {
+    const allowedPrefixes = [
+      "/org",
+      "/org/dashboard",
+      "/org/leave",
+      "/org/reports",
+      "/org/help",
+      "/org/profile",
+    ];
+
+    if (pathname === "/org/settings/admin-operator") return false;
+    if (pathname.startsWith("/org/master")) return false;
+    if (pathname.startsWith("/org/schedule")) return false;
+    if (pathname.startsWith("/org/settings")) return false;
+    if (pathname.startsWith("/org/news")) return false;
+    if (pathname.startsWith("/org/notifications")) return false;
+    if (pathname.startsWith("/org/activation")) return false;
+    if (pathname.startsWith("/org/billing")) return false;
+    if (pathname.startsWith("/org/onboarding")) return false;
+    if (pathname.startsWith("/org/audit-log")) return false;
+    if (pathname.startsWith("/org/invitations")) return false;
+    if (pathname.startsWith("/org/employees")) return false;
+
+    return allowedPrefixes.some(
+      (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
+    );
+  }, []);
 
   const checkAccess = useCallback(async () => {
     try {
@@ -43,6 +97,13 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
         navigate("/org/login", { replace: true });
         return;
       }
+
+      const metadata = user.user_metadata as Record<string, unknown> | null;
+      const metadataName =
+        (typeof metadata?.name === "string" && metadata.name.trim()) ||
+        (typeof metadata?.full_name === "string" && metadata.full_name.trim()) ||
+        "";
+      const metadataAvatar = typeof metadata?.avatar_url === "string" ? metadata.avatar_url : null;
 
       // Check user roles
       const { data: roles, error: rolesError } = await withTimeout(
@@ -59,10 +120,40 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
 
       const isSuperAdmin = roles?.some((r) => r.role === "super_admin");
       const adminInstansiRole = roles?.find((r) => r.role === "admin_instansi" && r.tenant_id);
+      const operatorRole = roles?.find((r) => r.role === "atasan" && r.tenant_id);
+      const isOperator = roles?.some((r) => r.role === "atasan");
       const isPegawai = roles?.some((r) => r.role === "pegawai");
-      const resolvedTenantId = adminInstansiRole?.tenant_id || (isSuperAdmin ? queryTenantId : null);
+      const roleLabel = adminInstansiRole || isSuperAdmin ? "Admin Organisasi" : "Operator";
+      setMenuUserInfo({
+        name: metadataName || roleLabel,
+        email: user.email || "-",
+        avatarUrl: metadataAvatar,
+      });
+      let resolvedTenantId =
+        adminInstansiRole?.tenant_id ||
+        (isSuperAdmin ? queryTenantId : null) ||
+        operatorRole?.tenant_id ||
+        null;
+
+      if (!resolvedTenantId && (isOperator || isPegawai)) {
+        const { data: employeeRow, error: employeeError } = await withTimeout(
+          Promise.resolve(
+            supabase
+              .from("employees")
+              .select("tenant_id")
+              .eq("user_id", user.id)
+              .maybeSingle(),
+          ),
+          ACCESS_CHECK_TIMEOUT_MS,
+          "Timeout menentukan tenant operator",
+        );
+        if (employeeError) throw employeeError;
+        resolvedTenantId = employeeRow?.tenant_id || null;
+      }
+
       if (resolvedTenantId) {
         setActiveTenantId(resolvedTenantId);
+        setAccessLevel(adminInstansiRole || isSuperAdmin ? "admin" : "operator");
         try {
           sessionStorage.setItem(ORG_ACTIVE_TENANT_STORAGE_KEY, resolvedTenantId);
         } catch {
@@ -74,7 +165,7 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
           Promise.resolve(
             supabase
               .from("tenants")
-              .select("name, organization_type")
+              .select("name, organization_type, logo_url")
               .eq("id", resolvedTenantId)
               .maybeSingle()
           ),
@@ -87,15 +178,17 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
           setTenant({
             name: tenantData.name,
             organization_type: getOrganizationTypeLabel(tenantData.organization_type || ""),
+            logo_url: tenantData.logo_url || null,
           });
         } else {
-          setTenant({ name: "Organisasi", organization_type: "Admin Organisasi" });
+          setTenant({ name: "Organisasi", organization_type: "Admin Organisasi", logo_url: null });
         }
         setIsLoading(false);
         return;
       }
 
       if (isSuperAdmin) {
+        setAccessLevel("admin");
         setActiveTenantId(null);
         try {
           sessionStorage.removeItem(ORG_ACTIVE_TENANT_STORAGE_KEY);
@@ -150,6 +243,14 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
     return () => window.clearTimeout(timer);
   }, [isLoading, navigate, queryTenantId]);
 
+  useEffect(() => {
+    if (isLoading || accessLevel !== "operator") return;
+    if (isOperatorAllowedPath(location.pathname)) return;
+
+    toast.info("Akses operator dibatasi ke modul operasional.");
+    navigate("/org/leave/requests", { replace: true });
+  }, [accessLevel, isLoading, isOperatorAllowedPath, location.pathname, navigate]);
+
   const getOrganizationTypeLabel = (type: string) => {
     const types: Record<string, string> = {
       pemerintah_daerah: "Pemerintah Daerah",
@@ -159,6 +260,42 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
     };
     return types[type] || type;
   };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    navigate("/org/login");
+  };
+
+  const handleOpenDetailSaya = () => {
+    navigate("/org/profile");
+  };
+
+  const handleOpenKontak = () => {
+    navigate("/org/profile?section=contact");
+  };
+
+  const handleOpenKeamananAkun = () => {
+    navigate("/org/profile?section=security");
+  };
+
+  const handleOpenRiwayatEmail = () => {
+    navigate("/org/notifications");
+  };
+
+  const handleOpenProfilAnda = () => {
+    navigate("/org/profile");
+  };
+
+  const handleOpenGantiKataSandi = () => {
+    navigate("/org/profile?section=password");
+  };
+
+  const handleOpenSecuritySettings = () => {
+    navigate("/org/settings?tab=security");
+  };
+
+  const headerAvatarLabel = tenant?.name || menuUserInfo.name;
+  const headerAvatarUrl = tenant?.logo_url || menuUserInfo.avatarUrl;
 
   if (isLoading) {
     return (
@@ -174,13 +311,48 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
         <OrganizationSidebar 
           organizationName={tenant?.name} 
           organizationType={tenant?.organization_type}
+          accessLevel={accessLevel}
         />
         <main className="flex-1 overflow-auto">
           <header className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border">
-            <div className="flex items-center gap-4 px-4 py-3">
-              <SidebarTrigger />
-              <div className="h-6 w-px bg-border" />
-              <span className="text-sm text-muted-foreground">Admin Organisasi</span>
+            <div className="flex items-center justify-between gap-4 px-4 py-3">
+              <div className="flex items-center gap-4 min-w-0">
+                <SidebarTrigger />
+                <div className="h-6 w-px bg-border" />
+                <span className="text-sm text-muted-foreground">
+                  {accessLevel === "admin" ? "Admin Organisasi" : "Operator"}
+                </span>
+              </div>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" className="relative h-9 w-9 rounded-full">
+                    <Avatar className="h-9 w-9">
+                      {headerAvatarUrl ? <AvatarImage src={headerAvatarUrl} alt={headerAvatarLabel} /> : null}
+                      <AvatarFallback className="bg-primary text-primary-foreground">
+                        <Building2 className="h-4 w-4" />
+                      </AvatarFallback>
+                    </Avatar>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuItem onClick={handleOpenDetailSaya}>Detail Saya</DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleOpenKontak}>Kontak</DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleOpenKeamananAkun}>Keamanan Akun</DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleOpenRiwayatEmail}>Riwayat Email</DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={handleOpenProfilAnda}>Profil Anda</DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleOpenGantiKataSandi}>Ganti Kata Sandi</DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleOpenSecuritySettings}>Security Settings</DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    onClick={handleLogout}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <LogOut className="mr-2 h-4 w-4" />
+                    Keluar
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </header>
           <div className="p-6">{children}</div>

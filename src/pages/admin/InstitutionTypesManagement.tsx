@@ -22,6 +22,7 @@ import { Plus, Search, Edit, Trash2, Building, Hospital, GraduationCap, Landmark
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { RichTextEditor } from "@/components/editor/RichTextEditor";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 interface InstitutionType {
   id: string;
@@ -66,6 +67,7 @@ const iconOptions = [
 const ITEMS_PER_PAGE = 10;
 
 export default function AdminInstitutionTypesManagement({ embedded = false }: { embedded?: boolean }) {
+  const confirmDialog = useConfirmDialog();
   const [types, setTypes] = useState<InstitutionType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -158,7 +160,16 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin hapus jenis instansi ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Jenis Instansi",
+        description: "Yakin hapus jenis instansi ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
     try {
       const { error } = await supabase.from("institution_types").delete().eq("id", id);
       if (error) throw error;

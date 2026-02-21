@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { Plus, Search, Pencil, Trash2, Shield, Loader2 } from "lucide-react";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 interface OPDAdmin {
   id: string;
@@ -47,6 +48,7 @@ interface Employee {
 const ITEMS_PER_PAGE = 10;
 
 export default function OPDAdminsManagement() {
+  const confirmDialog = useConfirmDialog();
   const [admins, setAdmins] = useState<OPDAdmin[]>([]);
   const [opds, setOpds] = useState<OPD[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -232,7 +234,16 @@ export default function OPDAdminsManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin ingin menghapus admin OPD ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Admin OPD",
+        description: "Yakin ingin menghapus admin OPD ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     setLoadError(null);
     try {

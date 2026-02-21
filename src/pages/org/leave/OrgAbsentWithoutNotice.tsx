@@ -13,6 +13,7 @@ import type { Tables } from "@/integrations/supabase/types";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
 
 type AttendanceRecord = Tables<"attendance_records_partitioned">;
 type EmployeeSummary = {
@@ -125,12 +126,13 @@ export default function OrgAbsentWithoutNotice() {
               <FileWarning className="h-6 w-6" />
               Tanpa Keterangan
             </h1>
-            <p className="text-muted-foreground">Daftar ketidakhadiran tanpa keterangan</p>
+            <p className="text-muted-foreground">Kelola data ketidakhadiran tanpa keterangan</p>
           </div>
           <Button variant="outline" onClick={() => toast.info("Fitur export akan segera tersedia")}>
             <Download className="mr-2 h-4 w-4" /> Export
           </Button>
         </div>
+        <LeaveRequestTabs />
 
         {loadError && (
           <Card className="border-destructive/40">
@@ -142,7 +144,7 @@ export default function OrgAbsentWithoutNotice() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Daftar Absen Tanpa Keterangan</CardTitle>
+            <CardTitle>Daftar Tanpa Keterangan</CardTitle>
             <CardDescription>Total {filteredRecords.length} data</CardDescription>
           </CardHeader>
           <CardContent>

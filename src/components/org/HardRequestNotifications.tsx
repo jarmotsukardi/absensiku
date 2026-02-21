@@ -91,6 +91,8 @@ const EMPTY_COUNTS: PendingCounts = {
 const DAILY_SESSION_KEY_PREFIX = "org:hard-request-notif:seen";
 const FETCH_ERROR_SESSION_KEY_PREFIX = "org:hard-request-notif:fetch-error";
 const REALTIME_ERROR_SESSION_KEY_PREFIX = "org:hard-request-notif:realtime-error";
+const ACCESS_WARNING_SESSION_KEY_PREFIX = "org:hard-request-notif:access-warning";
+const NETWORK_WARNING_SESSION_KEY_PREFIX = "org:hard-request-notif:network-warning";
 
 function showToastOncePerSession(
   sessionKey: string,
@@ -103,6 +105,35 @@ function showToastOncePerSession(
   } catch {
     cb();
   }
+}
+
+function isAccessRestrictedError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: string; message?: string; details?: string; hint?: string; status?: number };
+  const text = `${candidate.message || ""} ${candidate.details || ""} ${candidate.hint || ""}`.toLowerCase();
+  return (
+    candidate.code === "42501" ||
+    candidate.status === 401 ||
+    candidate.status === 403 ||
+    text.includes("permission denied") ||
+    text.includes("insufficient privilege") ||
+    text.includes("row level security") ||
+    text.includes("not authorized") ||
+    text.includes("forbidden")
+  );
+}
+
+function isTransientNetworkError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { message?: string; details?: string; hint?: string; name?: string };
+  const text = `${candidate.message || ""} ${candidate.details || ""} ${candidate.hint || ""}`.toLowerCase();
+  return (
+    (candidate.name || "").toLowerCase() === "typeerror" &&
+    text.includes("networkerror") ||
+    text.includes("failed to fetch") ||
+    text.includes("network request failed") ||
+    text.includes("network error")
+  );
 }
 
 async function fetchPendingCount(tenantId: string, requestType: RequestType, employeeIds: string[]): Promise<number> {
@@ -230,6 +261,8 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
   const [isBootstrapped, setIsBootstrapped] = useState(false);
   const [counts, setCounts] = useState<PendingCounts>(EMPTY_COUNTS);
   const [recentItems, setRecentItems] = useState<RecentSubmissionView[]>([]);
+  const [accessRestrictedTypes, setAccessRestrictedTypes] = useState<RequestType[]>([]);
+  const [networkIssueTypes, setNetworkIssueTypes] = useState<RequestType[]>([]);
 
   const totalPending = useMemo(
     () => counts.leave + counts.wfh + counts.overtime + counts.flexible + counts.mutation,
@@ -241,19 +274,39 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
       if (!tenantId) {
         setCounts(EMPTY_COUNTS);
         setRecentItems([]);
+        setAccessRestrictedTypes([]);
+        setNetworkIssueTypes([]);
         setIsBootstrapped(true);
         return;
       }
 
       setIsLoading(true);
       try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        if (!session) {
+          setCounts(EMPTY_COUNTS);
+          setRecentItems([]);
+          setAccessRestrictedTypes([]);
+          setNetworkIssueTypes([]);
+          setIsBootstrapped(true);
+          return;
+        }
+
         let employeeIds: string[] = [];
+        let employeeIdFetchAccessRestricted = false;
+        let employeeIdFetchNetworkTransient = false;
         try {
           employeeIds = await getTenantEmployeeIds(tenantId);
         } catch (employeeIdError) {
-          reportError(employeeIdError, "org.hard_request_notifications.fetch_employee_ids", {
-            tenant_id: tenantId,
-          });
+          employeeIdFetchAccessRestricted = isAccessRestrictedError(employeeIdError);
+          employeeIdFetchNetworkTransient = isTransientNetworkError(employeeIdError);
+          if (!employeeIdFetchAccessRestricted && !employeeIdFetchNetworkTransient) {
+            reportError(employeeIdError, "org.hard_request_notifications.fetch_employee_ids", {
+              tenant_id: tenantId,
+            });
+          }
           employeeIds = [];
         }
 
@@ -265,23 +318,42 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
             ]);
 
             if (countResult.status === "rejected") {
-              reportError(countResult.reason, "org.hard_request_notifications.fetch_count", {
-                tenant_id: tenantId,
-                request_type: type,
-              });
+              if (!isAccessRestrictedError(countResult.reason) && !isTransientNetworkError(countResult.reason)) {
+                reportError(countResult.reason, "org.hard_request_notifications.fetch_count", {
+                  tenant_id: tenantId,
+                  request_type: type,
+                });
+              }
             }
             if (latestResult.status === "rejected") {
-              reportError(latestResult.reason, "org.hard_request_notifications.fetch_latest", {
-                tenant_id: tenantId,
-                request_type: type,
-              });
+              if (!isAccessRestrictedError(latestResult.reason) && !isTransientNetworkError(latestResult.reason)) {
+                reportError(latestResult.reason, "org.hard_request_notifications.fetch_latest", {
+                  tenant_id: tenantId,
+                  request_type: type,
+                });
+              }
             }
+
+            const accessRestricted =
+              (countResult.status === "rejected" && isAccessRestrictedError(countResult.reason)) ||
+              (latestResult.status === "rejected" && isAccessRestrictedError(latestResult.reason)) ||
+              (employeeIdFetchAccessRestricted && (type === "leave" || type === "wfh"));
+            const networkTransient =
+              (countResult.status === "rejected" && isTransientNetworkError(countResult.reason)) ||
+              (latestResult.status === "rejected" && isTransientNetworkError(latestResult.reason)) ||
+              (employeeIdFetchNetworkTransient && (type === "leave" || type === "wfh"));
 
             return {
               type,
               count: countResult.status === "fulfilled" ? countResult.value || 0 : 0,
               latest: latestResult.status === "fulfilled" ? latestResult.value || [] : [],
-              hasError: countResult.status === "rejected" || latestResult.status === "rejected",
+              hasError:
+                countResult.status === "rejected" ||
+                latestResult.status === "rejected" ||
+                (employeeIdFetchAccessRestricted && (type === "leave" || type === "wfh")) ||
+                (employeeIdFetchNetworkTransient && (type === "leave" || type === "wfh")),
+              accessRestricted,
+              networkTransient,
             };
           })
         );
@@ -328,6 +400,12 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
 
         setCounts(nextCounts);
         setRecentItems(viewItems);
+        setAccessRestrictedTypes(
+          perType.filter((item) => item.accessRestricted).map((item) => item.type)
+        );
+        setNetworkIssueTypes(
+          perType.filter((item) => item.networkTransient).map((item) => item.type)
+        );
 
         const todayKey = `${DAILY_SESSION_KEY_PREFIX}:${tenantId}:${new Date().toISOString().slice(0, 10)}`;
         if (!isBootstrapped) {
@@ -348,10 +426,35 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
         }
 
         const partialFailures = perType.filter((item) => item.hasError);
-        if (partialFailures.length > 0) {
+        const accessFailures = partialFailures.filter((item) => item.accessRestricted);
+        const networkFailures = partialFailures.filter((item) => item.networkTransient);
+        const systemFailures = partialFailures.filter((item) => !item.accessRestricted && !item.networkTransient);
+
+        if (accessFailures.length > 0) {
+          showToastOncePerSession(
+            `${ACCESS_WARNING_SESSION_KEY_PREFIX}:${tenantId}:${new Date().toISOString().slice(0, 10)}`,
+            () =>
+              toast.warning(
+                "Sebagian notifikasi pengajuan tidak ditampilkan karena akses role terbatas."
+              )
+          );
+        }
+
+        if (networkFailures.length > 0) {
+          showToastOncePerSession(
+            `${NETWORK_WARNING_SESSION_KEY_PREFIX}:${tenantId}:${new Date().toISOString().slice(0, 10)}`,
+            () =>
+              toast.warning(
+                "Koneksi jaringan tidak stabil. Sebagian notifikasi pengajuan belum termuat."
+              )
+          );
+        }
+
+        if (systemFailures.length > 0) {
           const errorRef = reportError(new Error("Sebagian sumber notifikasi pengajuan gagal dimuat"), "org.hard_request_notifications.partial_failure", {
             tenant_id: tenantId,
-            failed_types: partialFailures.map((item) => item.type),
+            failed_types: systemFailures.map((item) => item.type),
+            access_restricted_types: accessFailures.map((item) => item.type),
           });
           showToastOncePerSession(
             `${FETCH_ERROR_SESSION_KEY_PREFIX}:${tenantId}:${new Date().toISOString().slice(0, 10)}`,
@@ -365,6 +468,17 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
           );
         }
       } catch (error) {
+        if (isTransientNetworkError(error)) {
+          setNetworkIssueTypes(REQUEST_ORDER);
+          showToastOncePerSession(
+            `${NETWORK_WARNING_SESSION_KEY_PREFIX}:${tenantId}:${new Date().toISOString().slice(0, 10)}`,
+            () =>
+              toast.warning(
+                "Koneksi jaringan tidak stabil. Sebagian notifikasi pengajuan belum termuat."
+              )
+          );
+          return;
+        }
         const errorRef = reportError(error, "org.hard_request_notifications.fetch", {
           tenant_id: tenantId,
         });
@@ -511,6 +625,20 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
                 Refresh
               </Button>
             </div>
+
+            {accessRestrictedTypes.length > 0 && (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                Sebagian sumber notifikasi tidak dapat diakses oleh role Anda:{" "}
+                {accessRestrictedTypes.map((type) => REQUEST_META[type].label).join(", ")}.
+              </div>
+            )}
+
+            {networkIssueTypes.length > 0 && (
+              <div className="rounded-lg border border-blue-300 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+                Koneksi sedang tidak stabil untuk: {networkIssueTypes.map((type) => REQUEST_META[type].label).join(", ")}.
+                Coba klik Refresh beberapa saat lagi.
+              </div>
+            )}
 
             <div className="rounded-lg border">
               <div className="border-b px-3 py-2 text-sm font-medium">Pengajuan Terbaru</div>

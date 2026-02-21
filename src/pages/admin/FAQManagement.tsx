@@ -54,6 +54,42 @@ const RECOMMENDED_FAQ_UPDATES: Array<{ question: string; answer: string; categor
     category: "Billing & Harga",
   },
   {
+    question: "Apa arti indikator Kesehatan Nomor Faktur di /admin/billing?",
+    answer:
+      "Indikator ini memeriksa format nomor faktur terhadap pola INV-YYYYMM-####. Status Sehat berarti semua format valid. Status Tidak Sehat berarti ada faktur yang formatnya tidak standar dan perlu ditinjau.",
+    category: "Billing & Harga",
+  },
+  {
+    question: "Bagaimana menindaklanjuti status Kesehatan Nomor Faktur yang Tidak Sehat?",
+    answer:
+      "Klik kartu Kesehatan Nomor Faktur di /admin/billing untuk membuka daftar faktur bermasalah. Perbaiki sumber pembuatan invoice (UI/RPC/trigger) lalu cek ulang sampai jumlah invalid menjadi 0.",
+    category: "Billing & Harga",
+  },
+  {
+    question: "Kapan snapshot kesehatan nomor faktur dijalankan otomatis?",
+    answer:
+      "Snapshot dijalankan harian oleh job cron invoice-number-health-daily pada 00:15 WIB (17:15 UTC). Data ini dipakai untuk monitoring tren valid/invalid nomor faktur di panel admin.",
+    category: "Operasional",
+  },
+  {
+    question: "Bagaimana cara membayar faktur dari menu /org/billing?",
+    answer:
+      "Buka /org/billing lalu klik nomor faktur atau status untuk membuka detail. Jika invoice memiliki link online, gunakan tombol Buka Link Pembayaran. Untuk transfer manual, isi URL bukti bayar atau upload file bukti lalu kirim untuk verifikasi admin.",
+    category: "Billing & Harga",
+  },
+  {
+    question: "Apa arti status Menunggu Pembayaran, Menunggu Verifikasi, Lunas, dan Kedaluwarsa pada faktur?",
+    answer:
+      "Menunggu Pembayaran berarti tagihan belum dibayar. Menunggu Verifikasi berarti bukti bayar sudah dikirim dan sedang ditinjau admin. Lunas berarti pembayaran sudah tervalidasi. Kedaluwarsa berarti melewati jatuh tempo dan perlu invoice/aksi lanjutan sesuai kebijakan billing.",
+    category: "Billing & Harga",
+  },
+  {
+    question: "Bagaimana jika bukti bayar transfer ditolak oleh admin?",
+    answer:
+      "Alasan penolakan akan tampil pada detail faktur di /org/billing. Perbaiki bukti pembayaran (URL/file) lalu kirim ulang agar status kembali ke Menunggu Verifikasi.",
+    category: "Billing & Harga",
+  },
+  {
     question: "Bagaimana workflow streak sampai suspend jika tenant tidak membayar?",
     answer:
       "Status bergerak dari tracking -> ready_for_invoicing -> invoiced -> grace period. Jika tetap unpaid sampai batas grace berakhir, tenant masuk suspend otomatis sesuai konfigurasi streak.",
@@ -228,9 +264,39 @@ const RECOMMENDED_FAQ_UPDATES: Array<{ question: string; answer: string; categor
     category: "Lifecycle Tenant",
   },
   {
-    question: "Bagaimana membaca Ref ID atau trace_id pada pesan error?",
+    question: "Bagaimana membaca Nomor Error (Ref) atau trace_id pada pesan gagal memuat data?",
     answer:
-      "Ref ID (frontend) dan trace_id (backend) dipakai untuk menelusuri error spesifik di log. Sertakan kode tersebut saat melapor agar triase cepat.",
+      "Nomor Error (Ref) dari frontend dan trace_id dari backend dipakai untuk menelusuri kejadian yang sama di log. Gunakan tombol Copy di kolom Ref Error agar kode cepat ditempel ke tiket, chat, atau catatan investigasi.",
+    category: "Troubleshooting",
+  },
+  {
+    question: "Apa fungsi tab Kritis, Non Kritis, Selesai, dan Arsip Kritis di /admin/log-errors?",
+    answer:
+      "Tab Kritis menampilkan gagal muat data prioritas tinggi yang masih aktif. Non Kritis berisi gangguan ringan/intermiten. Selesai berisi insiden kritis yang sudah diperbaiki, sedangkan Arsip Kritis menyimpan histori insiden kritis yang tidak lagi aktif.",
+    category: "Troubleshooting",
+  },
+  {
+    question: "Kenapa daftar /admin/log-errors terlihat kosong padahal error pernah terjadi?",
+    answer:
+      "Default filter halaman ini adalah 24 jam. Jika data kosong, periksa filter rentang waktu/konteks dan ubah ke 7 hari, 30 hari, atau Semua Waktu. Pastikan juga Anda sedang melihat tab yang sesuai (Kritis, Non Kritis, Selesai, atau Arsip Kritis).",
+    category: "Troubleshooting",
+  },
+  {
+    question: "Bagaimana cara memakai status Selesai (resolved) pada log error?",
+    answer:
+      "Gunakan tombol Selesai pada baris error kritis setelah perbaikan diverifikasi. Log akan pindah ke tab Selesai agar antrian kritis aktif tetap bersih. Jika perlu investigasi ulang, gunakan Buka Lagi untuk mengembalikannya ke tab Kritis.",
+    category: "Troubleshooting",
+  },
+  {
+    question: "Bagaimana mekanisme retensi otomatis di /admin/log-errors?",
+    answer:
+      "Retensi Otomatis berjalan berkala agar log lama tidak menumpuk. Untuk non-kritis, data lama akan diarsipkan lalu dihapus sesuai umur simpan. Untuk kritis, penghapusan otomatis hanya berlaku pada data yang sudah masuk Arsip Kritis atau sudah berstatus Selesai melewati masa simpan. Admin juga bisa menjalankan Retensi Sekarang dari UI.",
+    category: "Troubleshooting",
+  },
+  {
+    question: "Kenapa notifikasi alert realtime kritis kadang gagal terkirim?",
+    answer:
+      "Sistem mengirim lewat Edge Function relay agar tidak tergantung CORS browser. Jika relay gagal/timeout, sistem fallback ke kirim langsung dari browser admin. Pastikan URL webhook valid, endpoint menerima POST JSON, dan jaringan keluar tidak diblokir firewall.",
     category: "Troubleshooting",
   },
   {
@@ -239,9 +305,43 @@ const RECOMMENDED_FAQ_UPDATES: Array<{ question: string; answer: string; categor
       "Hubungkan repository ke project Vercel pada branch produksi (umumnya main). Setiap push ke branch itu akan memicu build/deploy otomatis.",
     category: "DevOps",
   },
+  {
+    question: "Di mana menu Laporan Permohonan dan apa isinya?",
+    answer:
+      "Menu Laporan Permohonan ada di sidebar /org pada grup Laporan. Di dalamnya tersedia tab Izin/Cuti, Lembur, WFH & Absensi Khusus, serta Riwayat Mutasi agar semua laporan permohonan terpusat di satu tempat.",
+    category: "Laporan",
+  },
+  {
+    question: "Kenapa Laporan Absensi atau Rekapitulasi tidak bisa ditarik saat jam tertentu?",
+    answer:
+      "Untuk menjaga performa saat trafik absensi puncak, penarikan data Laporan Absensi dan Rekapitulasi dibatasi pada jam sibuk: 06:00-09:00 dan 15:00-18:00. Silakan tarik laporan di luar rentang jam tersebut.",
+    category: "Laporan",
+  },
+  {
+    question: "Apakah export/print Laporan Absensi dan Rekapitulasi ikut dibatasi jam sibuk?",
+    answer:
+      "Ya. Saat jam sibuk absensi, aksi Tampilkan, Export CSV, dan Print PDF pada modul Laporan Absensi serta Rekapitulasi dinonaktifkan sementara, lalu aktif kembali di luar jam sibuk.",
+    category: "Laporan",
+  },
+  {
+    question: "Apa arti Status Checklist Setup Modul (SIAP/TIDAK SIAP) di sidebar organisasi?",
+    answer:
+      "Indikator ini menunjukkan progres 7 modul setup awal organisasi. SIAP (hijau) berarti seluruh modul checklist sudah terisi, sedangkan TIDAK SIAP (merah) berarti masih ada modul yang belum lengkap.",
+    category: "Onboarding Org",
+  },
+  {
+    question: "Di mana lokasi indikator Status Checklist Setup Modul dan apa aksinya?",
+    answer:
+      "Indikator berada di sidebar /org, tepat di bawah menu Setup Awal. Saat diklik, pengguna akan diarahkan ke /org/onboarding untuk melanjutkan checklist modul.",
+    category: "Onboarding Org",
+  },
 ];
 
 const normalizeQuestion = (value: string) => value.trim().toLowerCase();
+const RECOMMENDED_FAQ_QUESTION_ALIASES: Record<string, string> = {
+  [normalizeQuestion("Bagaimana membaca Ref ID atau trace_id pada pesan error?")]:
+    normalizeQuestion("Bagaimana membaca Nomor Error (Ref) atau trace_id pada pesan gagal memuat data?"),
+};
 
 export default function FAQManagement() {
   const [faqs, setFaqs] = useState<FAQ[]>([]);
@@ -399,13 +499,51 @@ export default function FAQManagement() {
   };
 
   const handleApplyRecommendedFaqs = () => {
-    const existingQuestions = new Set(faqs.map((faq) => normalizeQuestion(faq.question)));
+    const nextFaqs = [...faqs];
+    const indexByQuestion = new Map<string, number>();
+    for (const [index, faq] of nextFaqs.entries()) {
+      indexByQuestion.set(normalizeQuestion(faq.question), index);
+    }
+
     const nextSortBase = faqs.reduce((max, faq) => Math.max(max, faq.sort_order), 0);
     const additions: FAQ[] = [];
+    let updatedCount = 0;
     let sortOffset = 1;
 
     for (const item of RECOMMENDED_FAQ_UPDATES) {
-      if (existingQuestions.has(normalizeQuestion(item.question))) continue;
+      const targetKey = normalizeQuestion(item.question);
+      let targetIndex = indexByQuestion.get(targetKey);
+
+      if (targetIndex === undefined) {
+        const aliasSourceKey = Object.entries(RECOMMENDED_FAQ_QUESTION_ALIASES).find(
+          ([legacyKey, mappedKey]) => mappedKey === targetKey && indexByQuestion.has(legacyKey),
+        )?.[0];
+        if (aliasSourceKey) {
+          targetIndex = indexByQuestion.get(aliasSourceKey);
+        }
+      }
+
+      if (targetIndex !== undefined) {
+        const existing = nextFaqs[targetIndex];
+        const needsUpdate =
+          existing.question !== item.question ||
+          existing.answer !== item.answer ||
+          existing.category !== item.category;
+        if (needsUpdate) {
+          const oldKey = normalizeQuestion(existing.question);
+          nextFaqs[targetIndex] = {
+            ...existing,
+            question: item.question,
+            answer: item.answer,
+            category: item.category,
+          };
+          indexByQuestion.delete(oldKey);
+          indexByQuestion.set(targetKey, targetIndex);
+          updatedCount += 1;
+        }
+        continue;
+      }
+
       additions.push({
         id: `recommended-${Date.now()}-${sortOffset}`,
         question: item.question,
@@ -413,17 +551,20 @@ export default function FAQManagement() {
         category: item.category,
         sort_order: nextSortBase + sortOffset,
       });
+      indexByQuestion.set(targetKey, nextFaqs.length + additions.length - 1);
       sortOffset += 1;
     }
 
-    if (additions.length === 0) {
-      toast.info("FAQ rekomendasi terbaru sudah ada semua.");
+    if (additions.length === 0 && updatedCount === 0) {
+      toast.info("FAQ rekomendasi terbaru sudah sinkron.");
       return;
     }
 
-    const merged = [...faqs, ...additions].sort((a, b) => a.sort_order - b.sort_order);
+    const merged = [...nextFaqs, ...additions].sort((a, b) => a.sort_order - b.sort_order);
     setFaqs(merged);
-    toast.success(`${additions.length} FAQ rekomendasi ditambahkan. Klik 'Simpan Semua' untuk menerapkan.`);
+    toast.success(
+      `Sinkronisasi selesai: ${additions.length} ditambahkan, ${updatedCount} diperbarui. Klik 'Simpan Semua' untuk menerapkan.`,
+    );
   };
 
   // Pagination logic
@@ -459,7 +600,7 @@ export default function FAQManagement() {
           <div className="flex gap-2">
             <Button onClick={handleApplyRecommendedFaqs} variant="outline">
               <Sparkles className="h-4 w-4 mr-2" />
-              Tambah FAQ Rekomendasi
+              Sinkronkan FAQ Rekomendasi
             </Button>
             <Button onClick={handleAdd}>
               <Plus className="h-4 w-4 mr-2" />

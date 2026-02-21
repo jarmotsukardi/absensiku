@@ -51,6 +51,7 @@ import {
 } from "@/components/ui/pagination";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 interface OPDAdmin {
   id: string;
@@ -90,6 +91,7 @@ interface Employee {
 const ITEMS_PER_PAGE = 10;
 
 export default function OrgOPDAdminsManagement() {
+  const confirmDialog = useConfirmDialog();
   const [admins, setAdmins] = useState<OPDAdmin[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -253,7 +255,16 @@ export default function OrgOPDAdminsManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin ingin menghapus admin OPD ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Admin OPD",
+        description: "Yakin ingin menghapus admin OPD ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
       const { error } = await supabase

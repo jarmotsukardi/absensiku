@@ -16,6 +16,7 @@ import { LocationPicker } from "@/components/maps/LocationPicker";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { validateOfficeCoordinateInput } from "@/lib/officeCoordinates";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 type Office = Tables<"offices">;
 type OPD = Tables<"opd">;
@@ -23,6 +24,7 @@ type OPD = Tables<"opd">;
 const ITEMS_PER_PAGE = 15;
 
 export default function OrgWorkLocationsManagement() {
+  const confirmDialog = useConfirmDialog();
   const [offices, setOffices] = useState<(Office & { opd?: OPD | null })[]>([]);
   const [opds, setOpds] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -148,7 +150,16 @@ export default function OrgWorkLocationsManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin ingin menghapus lokasi kerja ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Lokasi Kerja",
+        description: "Yakin ingin menghapus lokasi kerja ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
       const { error } = await supabase.from("offices").delete().eq("id", id);

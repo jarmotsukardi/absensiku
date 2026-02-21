@@ -35,6 +35,7 @@ import {
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 type Organization = Tables<"tenants"> & {
   employees_count?: number;
@@ -61,6 +62,7 @@ const orgTypeLabels: Record<string, string> = {
 };
 
 export function OrganizationList({ filterType }: OrganizationListProps) {
+  const confirmDialog = useConfirmDialog();
   const navigate = useNavigate();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -120,7 +122,16 @@ export function OrganizationList({ filterType }: OrganizationListProps) {
   }, [fetchOrganizations]);
 
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Apakah Anda yakin ingin menghapus "${name}"?`)) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Organisasi",
+        description: `Apakah Anda yakin ingin menghapus "${name}"?`,
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
       const { error } = await supabase.from("tenants").delete().eq("id", id);

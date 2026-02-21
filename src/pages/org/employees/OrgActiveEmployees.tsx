@@ -16,6 +16,8 @@ import type { Tables } from "@/integrations/supabase/types";
 import { SearchableSelect, SearchableSelectOption } from "@/components/ui/searchable-select";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { EmployeeDataTabs } from "@/components/org/employees/EmployeeDataTabs";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 type Employee = Tables<"employees">;
 type OPD = Tables<"opd">;
@@ -62,6 +64,7 @@ const GOLONGAN_OPTIONS = [
 const ITEMS_PER_PAGE = 10;
 
 export default function OrgActiveEmployees() {
+  const confirmDialog = useConfirmDialog();
   const [employees, setEmployees] = useState<EmployeeWithRelations[]>([]);
   const [opds, setOpds] = useState<OPD[]>([]);
   const [offices, setOffices] = useState<Office[]>([]);
@@ -343,7 +346,16 @@ export default function OrgActiveEmployees() {
   };
 
   const handleDeactivate = async (id: string) => {
-    if (!confirm("Yakin ingin menonaktifkan pegawai ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Nonaktifkan Pegawai",
+        description: "Yakin ingin menonaktifkan pegawai ini?",
+        confirmText: "Ya, nonaktifkan",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
     try {
       const { error } = await supabase.from("employees").update({ is_active: false }).eq("id", id);
       if (error) throw error;
@@ -355,7 +367,15 @@ export default function OrgActiveEmployees() {
   };
 
   const handleResetPassword = async (email: string, name: string) => {
-    if (!confirm(`Kirim link reset password ke ${email}?`)) return;
+    if (
+      !(await confirmDialog({
+        title: "Kirim Reset Password",
+        description: `Kirim link reset password ke ${email}?`,
+        confirmText: "Kirim link",
+      }))
+    ) {
+      return;
+    }
     try {
       const { error } = await supabase.auth.resetPasswordForEmail(email, {
         redirectTo: `${window.location.origin}/employee/reset-password`,
@@ -445,7 +465,16 @@ export default function OrgActiveEmployees() {
   };
 
   const handleResetDeviceId = async (emp: Employee) => {
-    if (!confirm(`Reset Device ID untuk ${emp.name}? Pegawai akan mendapat 1 kesempatan reset dan harus absen ulang untuk mendaftarkan perangkat baru.`)) return;
+    if (
+      !(await confirmDialog({
+        title: "Reset Device ID",
+        description: `Reset Device ID untuk ${emp.name}? Pegawai akan mendapat 1 kesempatan reset dan harus absen ulang untuk mendaftarkan perangkat baru.`,
+        confirmText: "Ya, reset",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
     
     try {
       // Reset device dan berikan 1 kesempatan reset ke pegawai
@@ -727,6 +756,7 @@ export default function OrgActiveEmployees() {
             </DialogContent>
           </Dialog>
         </div>
+        <EmployeeDataTabs />
 
         {loadError && (
           <Card className="border-destructive/40">

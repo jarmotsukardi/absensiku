@@ -31,6 +31,7 @@ import { addDays, format } from "date-fns";
 import type { TablesInsert } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import {
   Pagination,
   PaginationContent,
@@ -73,6 +74,7 @@ type InvitationType = "individual" | "opd" | "office";
 const ITEMS_PER_PAGE = 15;
 
 export default function OrgEmployeeInvitations() {
+  const confirmDialog = useConfirmDialog();
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [totalInvitations, setTotalInvitations] = useState(0);
@@ -421,7 +423,12 @@ export default function OrgEmployeeInvitations() {
   };
 
   const handleDeleteInvitation = async (id: string) => {
-    const confirmed = window.confirm("Hapus undangan ini? Tindakan ini tidak dapat dibatalkan.");
+    const confirmed = await confirmDialog({
+      title: "Hapus Undangan",
+      description: "Hapus undangan ini? Tindakan ini tidak dapat dibatalkan.",
+      confirmText: "Ya, hapus",
+      variant: "destructive",
+    });
     if (!confirmed) return;
 
     try {

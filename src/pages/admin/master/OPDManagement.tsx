@@ -12,6 +12,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { buildOpdCodeFromName, normalizeOpdCode } from "@/lib/opdCode";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import {
   Pagination,
   PaginationContent,
@@ -24,6 +26,7 @@ import {
 type OPD = Tables<"opd">;
 
 export default function OPDManagement() {
+  const confirmDialog = useConfirmDialog();
   const PAGE_SIZE = 20;
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -34,6 +37,7 @@ export default function OPDManagement() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingOpd, setEditingOpd] = useState<OPD | null>(null);
   const [formData, setFormData] = useState({ code: "", name: "" });
+  const [isCodeManuallyEdited, setIsCodeManuallyEdited] = useState(false);
 
   const fetchOPD = useCallback(async () => {
     setLoadError(null);
@@ -81,11 +85,41 @@ export default function OPDManagement() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoadError(null);
+
+    const normalizedName = formData.name.trim();
+    const generatedCode = buildOpdCodeFromName(normalizedName);
+    const normalizedCode = normalizeOpdCode(formData.code || generatedCode);
+
+    if (!normalizedName) {
+      toast.error("Nama OPD wajib diisi terlebih dahulu");
+      return;
+    }
+
+    if (!normalizedCode) {
+      toast.error("Kode/Singkatan OPD wajib diisi");
+      return;
+    }
+
     try {
+      let duplicateQuery = supabase
+        .from("opd")
+        .select("id")
+        .ilike("code", normalizedCode)
+        .limit(1);
+      if (editingOpd) {
+        duplicateQuery = duplicateQuery.neq("id", editingOpd.id);
+      }
+      const { data: duplicateCode, error: duplicateError } = await duplicateQuery;
+      if (duplicateError) throw duplicateError;
+      if (duplicateCode && duplicateCode.length > 0) {
+        toast.error(`Kode/Singkatan OPD "${normalizedCode}" sudah digunakan`);
+        return;
+      }
+
       if (editingOpd) {
         const { error } = await supabase
           .from("opd")
-          .update({ code: formData.code, name: formData.name })
+          .update({ code: normalizedCode, name: normalizedName })
           .eq("id", editingOpd.id);
 
         if (error) throw error;
@@ -106,8 +140,8 @@ export default function OPDManagement() {
         const { error } = await supabase
           .from("opd")
           .insert({ 
-            code: formData.code, 
-            name: formData.name,
+            code: normalizedCode, 
+            name: normalizedName,
             tenant_id: employee.tenant_id
           });
 
@@ -117,6 +151,7 @@ export default function OPDManagement() {
 
       setIsDialogOpen(false);
       setEditingOpd(null);
+      setIsCodeManuallyEdited(false);
       setFormData({ code: "", name: "" });
       void fetchOPD();
     } catch (error) {
@@ -133,11 +168,21 @@ export default function OPDManagement() {
   const handleEdit = (opd: OPD) => {
     setEditingOpd(opd);
     setFormData({ code: opd.code, name: opd.name });
+    setIsCodeManuallyEdited(opd.code.toUpperCase() !== buildOpdCodeFromName(opd.name));
     setIsDialogOpen(true);
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin ingin menghapus OPD ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus OPD",
+        description: "Yakin ingin menghapus OPD ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     setLoadError(null);
     try {
@@ -175,7 +220,7 @@ export default function OPDManagement() {
           </div>
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
-              <Button onClick={() => { setEditingOpd(null); setFormData({ code: "", name: "" }); }}>
+              <Button onClick={() => { setEditingOpd(null); setIsCodeManuallyEdited(false); setFormData({ code: "", name: "" }); }}>
                 <Plus className="mr-2 h-4 w-4" />
                 Tambah OPD
               </Button>
@@ -190,24 +235,40 @@ export default function OPDManagement() {
               <form onSubmit={handleSubmit}>
                 <div className="space-y-4 py-4">
                   <div className="space-y-2">
-                    <Label htmlFor="code">Singkatan/Kode OPD</Label>
-                    <Input
-                      id="code"
-                      value={formData.code}
-                      onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-                      placeholder="Contoh: DISKOMINFO"
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
                     <Label htmlFor="name">Nama OPD</Label>
                     <Input
                       id="name"
                       value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      onChange={(e) => {
+                        const nextName = e.target.value;
+                        const prevGeneratedCode = buildOpdCodeFromName(formData.name);
+                        const shouldAutoGenerate = !isCodeManuallyEdited || formData.code === prevGeneratedCode;
+                        setFormData({
+                          ...formData,
+                          name: nextName,
+                          code: shouldAutoGenerate ? buildOpdCodeFromName(nextName) : formData.code,
+                        });
+                      }}
                       placeholder="Contoh: Dinas Komunikasi dan Informatika"
                       required
                     />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="code">Singkatan/Kode OPD</Label>
+                    <Input
+                      id="code"
+                      value={formData.code}
+                      onChange={(e) => {
+                        setIsCodeManuallyEdited(true);
+                        setFormData({ ...formData, code: normalizeOpdCode(e.target.value) });
+                      }}
+                      placeholder={formData.name.trim() ? "Contoh: DPKD atau DPKDLPSA" : "Isi Nama OPD terlebih dahulu"}
+                      disabled={!formData.name.trim()}
+                      required
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Kode otomatis dari huruf pertama tiap kata. Anda tetap bisa mengedit manual bila diperlukan.
+                    </p>
                   </div>
                 </div>
                 <DialogFooter>

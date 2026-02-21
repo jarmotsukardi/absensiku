@@ -19,6 +19,7 @@ import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 interface WorkHoliday {
   id: string;
@@ -58,6 +59,7 @@ const currentYear = new Date().getFullYear();
 const years = Array.from({ length: 5 }, (_, i) => currentYear - 2 + i);
 
 export default function OrgHolidaysManagement() {
+  const confirmDialog = useConfirmDialog();
   const [holidays, setHolidays] = useState<WorkHoliday[]>([]);
   const [workHours, setWorkHours] = useState<{ day_of_week: number; institution_type: string }[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -164,7 +166,15 @@ export default function OrgHolidaysManagement() {
     const targetYear = parseInt(filterYear === "all" ? currentYear.toString() : filterYear);
     const targetInstitution = filterInstitution === "all" ? "pemerintahan" : filterInstitution;
     
-    if (!confirm(`Salin semua libur dari tahun ${previousYear} ke tahun ${targetYear} untuk jenis instansi ${targetInstitution}?`)) return;
+    if (
+      !(await confirmDialog({
+        title: "Salin Libur Kerja",
+        description: `Salin semua libur dari tahun ${previousYear} ke tahun ${targetYear} untuk jenis instansi ${targetInstitution}?`,
+        confirmText: "Ya, salin",
+      }))
+    ) {
+      return;
+    }
     
     setIsCopying(true);
     try {
@@ -328,7 +338,16 @@ export default function OrgHolidaysManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin ingin menghapus libur kerja ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Libur Kerja",
+        description: "Yakin ingin menghapus libur kerja ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
       const { error } = await supabase.from("work_holidays").delete().eq("id", id);

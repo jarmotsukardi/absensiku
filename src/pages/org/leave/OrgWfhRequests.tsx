@@ -26,6 +26,7 @@ import type { Tables } from "@/integrations/supabase/types";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
 
 type WfhRequest = Tables<"wfh_requests"> & {
   employees: {
@@ -183,8 +184,9 @@ export default function OrgWfhRequests() {
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2"><Home className="h-6 w-6" />Pengajuan WFH</h1>
-          <p className="text-muted-foreground">Kelola pengajuan work from home pegawai</p>
+          <p className="text-muted-foreground">Kelola data pengajuan WFH pegawai</p>
         </div>
+        <LeaveRequestTabs />
 
         {loadError && (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
@@ -194,7 +196,7 @@ export default function OrgWfhRequests() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Daftar Pengajuan</CardTitle>
+            <CardTitle>Daftar Pengajuan WFH</CardTitle>
             <CardDescription>Total {totalCount} pengajuan WFH</CardDescription>
           </CardHeader>
           <CardContent>

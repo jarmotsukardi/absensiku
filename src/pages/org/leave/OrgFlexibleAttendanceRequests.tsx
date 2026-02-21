@@ -18,6 +18,7 @@ import { id as localeId } from "date-fns/locale";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
 
 // Mapping ikon untuk jenis alasan
 const REASON_ICONS: Record<string, React.ElementType> = {
@@ -282,12 +283,13 @@ export default function OrgFlexibleAttendanceRequests() {
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <MapPinOff className="h-6 w-6" />
-            Permohonan Absensi Khusus
+            Absensi Khusus
           </h1>
           <p className="text-muted-foreground">
-            Kelola permohonan absensi khusus dari pegawai
+            Kelola data permohonan absensi khusus pegawai
           </p>
         </div>
+        <LeaveRequestTabs />
 
         {loadError && (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
@@ -297,7 +299,7 @@ export default function OrgFlexibleAttendanceRequests() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Daftar Permohonan</CardTitle>
+            <CardTitle>Daftar Absensi Khusus</CardTitle>
             <CardDescription>
               {filteredRequests.length} permohonan ditemukan
             </CardDescription>

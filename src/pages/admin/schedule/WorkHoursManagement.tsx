@@ -13,6 +13,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 type Office = Tables<"offices">;
 
@@ -42,6 +43,7 @@ interface WorkHour {
 const ITEMS_PER_PAGE = 10;
 
 export default function WorkHoursManagement() {
+  const confirmDialog = useConfirmDialog();
   const [workHours, setWorkHours] = useState<WorkHour[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -141,8 +143,17 @@ export default function WorkHoursManagement() {
     setIsDialogOpen(true);
   };
 
-  const handleDelete = (id: string) => {
-    if (!confirm("Yakin ingin menghapus jam kerja ini?")) return;
+  const handleDelete = async (id: string) => {
+    if (
+      !(await confirmDialog({
+        title: "Hapus Jam Kerja",
+        description: "Yakin ingin menghapus jam kerja ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
     try {
       setLoadError(null);
       setWorkHours(prev => prev.filter(h => h.id !== id));

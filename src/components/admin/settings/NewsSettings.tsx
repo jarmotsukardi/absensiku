@@ -15,6 +15,7 @@ import { Loader2, Save, Newspaper, Plus, Edit, Trash2, Eye, EyeOff, ChevronLeft,
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { RichTextEditor } from "@/components/editor/RichTextEditor";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 interface NewsSettingsData {
   title: string;
@@ -48,6 +49,7 @@ const defaultSettings: NewsSettingsData = {
 const ITEMS_PER_PAGE = 10;
 
 export function NewsSettings() {
+  const confirmDialog = useConfirmDialog();
   const [settings, setSettings] = useState<NewsSettingsData>(defaultSettings);
   const [newsList, setNewsList] = useState<NewsItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -138,7 +140,16 @@ export function NewsSettings() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Hapus berita ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Berita",
+        description: "Hapus berita ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
     try {
       await supabase.from("articles").delete().eq("id", id);
       setNewsList(newsList.filter(n => n.id !== id));

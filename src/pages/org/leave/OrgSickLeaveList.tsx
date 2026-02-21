@@ -13,6 +13,7 @@ import type { Tables } from "@/integrations/supabase/types";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
 
 type SickLeaveRequest = Tables<"leave_requests"> & {
   employees: {
@@ -106,12 +107,13 @@ export default function OrgSickLeaveList() {
               <HeartPulse className="h-6 w-6" />
               Data Sakit
             </h1>
-            <p className="text-muted-foreground">Daftar permohonan sakit pegawai</p>
+            <p className="text-muted-foreground">Kelola data pengajuan sakit pegawai</p>
           </div>
           <Button variant="outline" onClick={() => toast.info("Fitur export akan segera tersedia")}>
             <Download className="mr-2 h-4 w-4" /> Export
           </Button>
         </div>
+        <LeaveRequestTabs />
 
         {loadError && (
           <Card className="border-destructive/40">
@@ -123,7 +125,7 @@ export default function OrgSickLeaveList() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Daftar Sakit</CardTitle>
+            <CardTitle>Daftar Pengajuan Sakit</CardTitle>
             <CardDescription>Total {filteredRequests.length} data</CardDescription>
           </CardHeader>
           <CardContent>

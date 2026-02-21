@@ -15,6 +15,7 @@ import { Pagination, PaginationContent, PaginationItem, PaginationLink, Paginati
 import { Switch } from "@/components/ui/switch";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import {
   ABSENCE_LIMIT_TEMPLATE_SETTING_KEY,
   normalizeAbsenceLimitTemplate,
@@ -52,6 +53,7 @@ const parseNotificationSetting = (value: unknown, fallback: boolean): boolean =>
 };
 
 export default function OrgAbsenceLimitsManagement() {
+  const confirmDialog = useConfirmDialog();
   const [limits, setLimits] = useState<AbsenceLimit[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -502,7 +504,16 @@ export default function OrgAbsenceLimitsManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin ingin menghapus batas absen ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Batas Absen",
+        description: "Yakin ingin menghapus batas absen ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
       const { error } = await supabase.from("absence_limits").delete().eq("id", id);

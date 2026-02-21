@@ -14,18 +14,22 @@ import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { buildOpdCodeFromName, normalizeOpdCode } from "@/lib/opdCode";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 type OPD = Tables<"opd">;
 
 const ITEMS_PER_PAGE = 10;
 
 export default function OrgOPDManagement() {
+  const confirmDialog = useConfirmDialog();
   const [opds, setOpds] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState({ id: "", code: "", name: "", is_active: true });
+  const [isCodeManuallyEdited, setIsCodeManuallyEdited] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -54,8 +58,25 @@ export default function OrgOPDManagement() {
   }, [fetchData]);
 
   const handleSubmit = async () => {
-    if (!formData.code || !formData.name) {
-      toast.error("Semua field harus diisi");
+    const normalizedName = formData.name.trim();
+    const generatedCode = buildOpdCodeFromName(normalizedName);
+    const normalizedCode = normalizeOpdCode(formData.code || generatedCode);
+
+    if (!normalizedName) {
+      toast.error("Nama OPD wajib diisi terlebih dahulu");
+      return;
+    }
+
+    if (!normalizedCode) {
+      toast.error("Kode/Singkatan OPD wajib diisi");
+      return;
+    }
+
+    const hasDuplicateCode = opds.some((opd) =>
+      opd.id !== formData.id && opd.code.toUpperCase() === normalizedCode,
+    );
+    if (hasDuplicateCode) {
+      toast.error(`Kode/Singkatan OPD "${normalizedCode}" sudah digunakan`);
       return;
     }
 
@@ -77,20 +98,21 @@ export default function OrgOPDManagement() {
       if (isEditing) {
         const { error } = await supabase
           .from("opd")
-          .update({ code: formData.code, name: formData.name, is_active: formData.is_active })
+          .update({ code: normalizedCode, name: normalizedName, is_active: formData.is_active })
           .eq("id", formData.id);
         if (error) throw error;
         toast.success("OPD berhasil diperbarui");
       } else {
         const { error } = await supabase
           .from("opd")
-          .insert({ code: formData.code, name: formData.name, tenant_id: roleData.tenant_id, is_active: formData.is_active });
+          .insert({ code: normalizedCode, name: normalizedName, tenant_id: roleData.tenant_id, is_active: formData.is_active });
         if (error) throw error;
         toast.success("OPD berhasil ditambahkan");
       }
 
       setIsDialogOpen(false);
       setFormData({ id: "", code: "", name: "", is_active: true });
+      setIsCodeManuallyEdited(false);
       setIsEditing(false);
       void fetchData();
     } catch (error) {
@@ -100,7 +122,14 @@ export default function OrgOPDManagement() {
   };
 
   const handleEdit = (opd: OPD) => {
-    setFormData({ id: opd.id, code: opd.code, name: opd.name, is_active: opd.is_active ?? true });
+    const generatedFromName = buildOpdCodeFromName(opd.name);
+    setFormData({
+      id: opd.id,
+      code: opd.code,
+      name: opd.name,
+      is_active: opd.is_active ?? true,
+    });
+    setIsCodeManuallyEdited(opd.code.toUpperCase() !== generatedFromName);
     setIsEditing(true);
     setIsDialogOpen(true);
   };
@@ -121,7 +150,16 @@ export default function OrgOPDManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin ingin menghapus OPD ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus OPD",
+        description: "Yakin ingin menghapus OPD ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
       const { error } = await supabase.from("opd").delete().eq("id", id);
@@ -162,7 +200,7 @@ export default function OrgOPDManagement() {
           </div>
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
-              <Button onClick={() => { setIsEditing(false); setFormData({ id: "", code: "", name: "", is_active: true }); }}>
+              <Button onClick={() => { setIsEditing(false); setIsCodeManuallyEdited(false); setFormData({ id: "", code: "", name: "", is_active: true }); }}>
                 <Plus className="mr-2 h-4 w-4" /> Tambah OPD
               </Button>
             </DialogTrigger>
@@ -175,20 +213,36 @@ export default function OrgOPDManagement() {
               </DialogHeader>
               <div className="grid gap-4 py-4">
                 <div className="grid gap-2">
-                  <Label>Kode/Singkatan OPD</Label>
-                  <Input
-                    value={formData.code}
-                    onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-                    placeholder="Contoh: BPKAD"
-                  />
-                </div>
-                <div className="grid gap-2">
                   <Label>Nama OPD</Label>
                   <Input
                     value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    onChange={(e) => {
+                      const nextName = e.target.value;
+                      const prevGeneratedCode = buildOpdCodeFromName(formData.name);
+                      const shouldAutoGenerate = !isCodeManuallyEdited || formData.code === prevGeneratedCode;
+                      setFormData({
+                        ...formData,
+                        name: nextName,
+                        code: shouldAutoGenerate ? buildOpdCodeFromName(nextName) : formData.code,
+                      });
+                    }}
                     placeholder="Contoh: Badan Pengelolaan Keuangan dan Aset Daerah"
                   />
+                </div>
+                <div className="grid gap-2">
+                  <Label>Kode/Singkatan OPD</Label>
+                  <Input
+                    value={formData.code}
+                    onChange={(e) => {
+                      setIsCodeManuallyEdited(true);
+                      setFormData({ ...formData, code: normalizeOpdCode(e.target.value) });
+                    }}
+                    placeholder={formData.name.trim() ? "Contoh: DPKD atau DPKDLPSA" : "Isi Nama OPD terlebih dahulu"}
+                    disabled={!formData.name.trim()}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Kode otomatis dari huruf pertama tiap kata. Anda tetap bisa mengedit manual bila diperlukan.
+                  </p>
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Status Aktif</Label>

@@ -33,6 +33,8 @@ import {
 } from "lucide-react";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { isRealOfficeCoordinate } from "@/lib/officeCoordinates";
+import { EmployeeDataTabs } from "@/components/org/employees/EmployeeDataTabs";
+import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 
 interface ImportRow {
   rowNum: number;
@@ -127,19 +129,15 @@ export default function OrgEmployeeImport() {
   const fetchUserTenant = async () => {
     setLoadError(null);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data: employee, error } = await supabase
-          .from("employees")
-          .select("tenant_id")
-          .eq("user_id", user.id)
-          .single();
-        if (error) throw error;
-
-        if (employee) {
-          setTenantId(employee.tenant_id);
-        }
+      const resolvedTenantId = await resolveOrgTenantId();
+      if (!resolvedTenantId) {
+        const message = "Tenant organisasi tidak ditemukan. Pastikan akun memiliki akses admin instansi.";
+        setTenantId(null);
+        setLoadError(message);
+        toast.error(message);
+        return;
       }
+      setTenantId(resolvedTenantId);
     } catch (error) {
       const errorRef = reportError(error, "org.employee_import.fetch_user_tenant");
       const message = appendErrorReference("Gagal menentukan tenant import", errorRef);
@@ -526,6 +524,7 @@ export default function OrgEmployeeImport() {
           <h1 className="text-2xl font-bold text-foreground">Import Pegawai</h1>
           <p className="text-sm text-muted-foreground">Import data pegawai dari file CSV</p>
         </div>
+        <EmployeeDataTabs />
 
         {loadError && (
           <Card className="border-destructive/40">

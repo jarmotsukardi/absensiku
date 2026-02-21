@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,7 @@ interface EmployeeProfileRow {
 }
 
 export default function OrgProfile() {
+  const [searchParams] = useSearchParams();
   const [isLoading, setIsLoading] = useState(true);
   const [userId, setUserId] = useState<string | null>(null);
   const [email, setEmail] = useState("");
@@ -120,6 +122,24 @@ export default function OrgProfile() {
 
     void loadProfile();
   }, []);
+
+  useEffect(() => {
+    if (isLoading) return;
+    const section = searchParams.get("section");
+    if (!section) return;
+
+    let targetId = "org-profile-detail";
+    if (section === "contact") targetId = "org-profile-contact";
+    if (section === "security" || section === "password") targetId = "org-profile-security";
+
+    if (section === "password") {
+      setShowPasswordForm(true);
+    }
+
+    window.requestAnimationFrame(() => {
+      document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [isLoading, searchParams]);
 
   const handleChangePassword = async () => {
     if (newPassword !== confirmPassword) {
@@ -226,7 +246,7 @@ export default function OrgProfile() {
   return (
     <OrganizationLayout>
       <div className="max-w-xl space-y-4">
-        <Card>
+        <Card id="org-profile-detail">
           <CardHeader>
             <div className="flex items-center gap-3">
               <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
@@ -260,7 +280,7 @@ export default function OrgProfile() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card id="org-profile-security">
           <CardHeader>
             <CardTitle className="text-base">Keamanan</CardTitle>
             <CardDescription className="text-xs">Perbarui password akun admin organisasi</CardDescription>
@@ -333,7 +353,7 @@ export default function OrgProfile() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card id="org-profile-contact">
           <CardHeader>
             <CardTitle className="text-base">Kontak Pemulihan</CardTitle>
             <CardDescription className="text-xs">

@@ -25,8 +25,9 @@ import {
   PaginationPrevious,
 } from "@/components/ui/pagination";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
-import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
 
 type MutationRequestRow = Tables<"mutation_requests">;
 type MutationStatus = Enums<"request_status">;
@@ -162,17 +163,10 @@ export default function OrgMutationRequests() {
         return;
       }
 
-      const employeeIds = await getTenantEmployeeIds(tenantId);
-      if (employeeIds.length === 0) {
-        setRequests([]);
-        setTotalCount(0);
-        return;
-      }
-
       let query = supabase
         .from("mutation_requests")
-        .select("*, employees!mutation_requests_employee_id_fkey(id, name, nip, opd(name))", { count: "exact" })
-        .in("employee_id", employeeIds)
+        .select("*", { count: "exact" })
+        .eq("tenant_id", tenantId)
         .order("created_at", { ascending: false })
         .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
 
@@ -183,13 +177,49 @@ export default function OrgMutationRequests() {
       const { data, error, count } = await query;
       if (error) throw error;
 
-      const requestsWithEmployees = (data || []).map((req: MutationRequestRow & {
-        employees?: MutationRequest["employees"] | null;
-      }) => ({
+      const employeeIds = Array.from(new Set((data || []).map((req) => req.employee_id)));
+      let employeeMap = new Map<string, MutationRequest["employees"]>();
+
+      if (employeeIds.length > 0) {
+        const { data: employeesData, error: employeesError } = await supabase
+          .from("employees")
+          .select("id, name, nip, opd:opd_id(name)")
+          .in("id", employeeIds);
+
+        if (employeesError) {
+          const { data: employeesFallback, error: employeesFallbackError } = await supabase
+            .from("employees")
+            .select("id, name, nip")
+            .in("id", employeeIds);
+
+          if (employeesFallbackError) throw employeesFallbackError;
+
+          employeeMap = new Map(
+            (employeesFallback || []).map((employee) => [
+              employee.id,
+              { id: employee.id, name: employee.name, nip: employee.nip, opd: null },
+            ])
+          );
+        } else {
+          employeeMap = new Map(
+            (employeesData || []).map((employee) => [
+              employee.id,
+              {
+                id: employee.id,
+                name: employee.name,
+                nip: employee.nip,
+                opd: (employee.opd as { name: string } | null) || null,
+              },
+            ])
+          );
+        }
+      }
+
+      const requestsWithEmployees = (data || []).map((req: MutationRequestRow) => ({
         ...req,
         requested_changes: toJsonRecord(req.requested_changes),
         original_data: toJsonRecord(req.original_data),
-        employees: req.employees || { id: "", name: "-", nip: "-", opd: null },
+        employees: employeeMap.get(req.employee_id) || { id: req.employee_id, name: "-", nip: "-", opd: null },
       })) as MutationRequest[];
 
       setRequests(requestsWithEmployees);
@@ -391,6 +421,7 @@ export default function OrgMutationRequests() {
           </h1>
           <p className="text-muted-foreground">Kelola permohonan mutasi dan perubahan profil pegawai</p>
         </div>
+        <LeaveRequestTabs />
 
         {loadError && (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">

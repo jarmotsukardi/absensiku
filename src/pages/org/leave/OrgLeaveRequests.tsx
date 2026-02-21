@@ -23,6 +23,7 @@ import type { Enums, Tables } from "@/integrations/supabase/types";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
 
 type RequestStatus = Enums<"request_status">;
 type LeaveRequest = Tables<"leave_requests"> & {
@@ -229,8 +230,9 @@ export default function OrgLeaveRequests() {
             <ClipboardList className="h-6 w-6" />
             Permohonan Cuti
           </h1>
-          <p className="text-muted-foreground">Kelola permohonan izin dan cuti pegawai</p>
+          <p className="text-muted-foreground">Kelola data permohonan izin/cuti pegawai</p>
         </div>
+        <LeaveRequestTabs />
 
         {loadError && (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
@@ -240,7 +242,7 @@ export default function OrgLeaveRequests() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Daftar Permohonan</CardTitle>
+            <CardTitle>Daftar Permohonan Cuti</CardTitle>
             <CardDescription>Total {totalCount} permohonan</CardDescription>
           </CardHeader>
           <CardContent>

@@ -21,6 +21,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 type OPD = Tables<"opd">;
 
@@ -33,6 +34,7 @@ interface Position {
 }
 
 export default function PositionsManagement() {
+  const confirmDialog = useConfirmDialog();
   const ITEMS_PER_PAGE = 15;
   const [positions, setPositions] = useState<Position[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
@@ -86,8 +88,17 @@ export default function PositionsManagement() {
     setIsDialogOpen(true);
   };
 
-  const handleDelete = (_id: string) => {
-    if (!confirm("Yakin ingin menghapus jabatan ini?")) return;
+  const handleDelete = async (_id: string) => {
+    if (
+      !(await confirmDialog({
+        title: "Hapus Jabatan",
+        description: "Yakin ingin menghapus jabatan ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
     toast.info("Fitur hapus jabatan belum tersedia");
   };
 

@@ -10,6 +10,7 @@ import { Loader2, Upload, Smartphone, Download, Trash2, Building2, Users } from 
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import type { Json } from "@/integrations/supabase/types";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 interface APKInfo {
   url: string;
@@ -21,6 +22,7 @@ interface APKInfo {
 type APKType = "reguler" | "pemda";
 
 export function APKUploadSettings() {
+  const confirmDialog = useConfirmDialog();
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [activeTab, setActiveTab] = useState<APKType>("reguler");
@@ -158,7 +160,14 @@ export function APKUploadSettings() {
     const apkInfo = type === "reguler" ? apkReguler : apkPemda;
     const settingsKey = type === "reguler" ? "global_apk" : "global_apk_pemda";
     
-    if (!apkInfo || !confirm(`Yakin ingin menghapus aplikasi ${type === "reguler" ? "Reguler" : "Pemda"}?`)) return;
+    if (!apkInfo) return;
+    const confirmed = await confirmDialog({
+      title: "Hapus Aplikasi APK",
+      description: `Yakin ingin menghapus aplikasi ${type === "reguler" ? "Reguler" : "Pemda"}?`,
+      confirmText: "Ya, hapus",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
 
     try {
       // Delete from storage

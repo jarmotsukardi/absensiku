@@ -15,11 +15,13 @@ import { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { validateOfficeCoordinateInput } from "@/lib/officeCoordinates";
 import { LocationPicker } from "@/components/maps/LocationPicker";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 type Office = Tables<"offices">;
 type OPD = Tables<"opd">;
 
 export default function WorkLocationsManagement() {
+  const confirmDialog = useConfirmDialog();
   const ITEMS_PER_PAGE = 15;
   const [locations, setLocations] = useState<(Office & { opd?: OPD })[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
@@ -146,7 +148,16 @@ export default function WorkLocationsManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin ingin menghapus lokasi kerja ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Lokasi Kerja",
+        description: "Yakin ingin menghapus lokasi kerja ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
       const { error } = await supabase.from("offices").delete().eq("id", id);

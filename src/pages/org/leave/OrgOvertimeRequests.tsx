@@ -38,6 +38,7 @@ import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
 import {
   Pagination,
   PaginationContent,
@@ -161,8 +162,9 @@ export default function OrgOvertimeRequests() {
       <div className="space-y-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Pengajuan Lembur</h1>
-          <p className="text-sm text-muted-foreground">Kelola pengajuan lembur pegawai</p>
+          <p className="text-sm text-muted-foreground">Kelola data pengajuan lembur pegawai</p>
         </div>
+        <LeaveRequestTabs />
         {activeLoadError && (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
             {activeLoadError}

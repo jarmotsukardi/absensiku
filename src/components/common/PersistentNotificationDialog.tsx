@@ -26,6 +26,18 @@ interface Notification {
   link?: string;
 }
 
+const REALTIME_WARNING_SESSION_KEY = "employee:persistent_notifications:realtime_warning";
+
+const showRealtimeWarningOncePerSession = (cb: () => void) => {
+  try {
+    if (sessionStorage.getItem(REALTIME_WARNING_SESSION_KEY) === "1") return;
+    cb();
+    sessionStorage.setItem(REALTIME_WARNING_SESSION_KEY, "1");
+  } catch {
+    cb();
+  }
+};
+
 export function PersistentNotificationDialog() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -95,8 +107,10 @@ export function PersistentNotificationDialog() {
           }
         )
         .subscribe((status) => {
-          if (status === "CHANNEL_ERROR") {
-            reportError(new Error("Realtime notifications channel error"), "employee.persistent_notifications.realtime_channel");
+          if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+            showRealtimeWarningOncePerSession(() => {
+              toast.warning("Realtime notifikasi sedang bermasalah. Notifikasi baru mungkin terlambat muncul.");
+            });
           }
         });
     };

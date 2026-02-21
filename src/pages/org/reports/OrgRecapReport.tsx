@@ -12,6 +12,8 @@ import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { isPeakHours } from "@/lib/attendanceResilience";
+import { AttendanceRecapTabs } from "@/components/org/reports/AttendanceRecapTabs";
 
 type OPD = Tables<"opd">;
 
@@ -57,7 +59,10 @@ export default function OrgRecapReport() {
   const [totalRows, setTotalRows] = useState(0);
   const [hasQueried, setHasQueried] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isBusyHours, setIsBusyHours] = useState<boolean>(() => isPeakHours());
   const ITEMS_PER_PAGE = 15;
+  const busyHoursMessage =
+    "Jam sibuk absensi sedang berlangsung. Penarikan Rekapitulasi sementara dibatasi. Coba lagi di luar jam sibuk (06:00-09:00 dan 15:00-18:00).";
 
   useEffect(() => {
     const fetchOpds = async () => {
@@ -75,7 +80,18 @@ export default function OrgRecapReport() {
     void fetchOpds();
   }, []);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setIsBusyHours(isPeakHours());
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const fetchRecapPage = useCallback(async (page: number) => {
+    if (isPeakHours()) {
+      setLoadError(busyHoursMessage);
+      return;
+    }
     setIsLoading(true);
     try {
       setLoadError(null);
@@ -118,9 +134,12 @@ export default function OrgRecapReport() {
     } finally {
       setIsLoading(false);
     }
-  }, [ITEMS_PER_PAGE, filterOpd, month, searchTerm, year]);
+  }, [ITEMS_PER_PAGE, busyHoursMessage, filterOpd, month, searchTerm, year]);
 
   const fetchAllRecapForOutput = useCallback(async (): Promise<RecapData[]> => {
+    if (isPeakHours()) {
+      return [];
+    }
     const pageSize = 200;
     let page = 1;
     let allRows: RecapData[] = [];
@@ -161,6 +180,10 @@ export default function OrgRecapReport() {
   }, [filterOpd, month, searchTerm, year]);
 
   const handleShow = async () => {
+    if (isBusyHours) {
+      toast.error(busyHoursMessage);
+      return;
+    }
     setCurrentPage(1);
     setHasQueried(true);
     await fetchRecapPage(1);
@@ -179,6 +202,10 @@ export default function OrgRecapReport() {
   }, [filterOpd, month, year, searchTerm, hasQueried, fetchRecapPage]);
 
   const handleExport = async () => {
+    if (isBusyHours) {
+      toast.error(busyHoursMessage);
+      return;
+    }
     if (!hasQueried) {
       toast.error("Klik Tampilkan terlebih dahulu");
       return;
@@ -225,6 +252,10 @@ export default function OrgRecapReport() {
   };
 
   const handlePrintPdf = async () => {
+    if (isBusyHours) {
+      toast.error(busyHoursMessage);
+      return;
+    }
     if (!hasQueried) {
       toast.error("Klik Tampilkan terlebih dahulu");
       return;
@@ -330,18 +361,26 @@ export default function OrgRecapReport() {
             <p className="text-muted-foreground">Rekap bulanan kehadiran pegawai</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={handlePrintPdf} disabled={totalRows === 0 || isLoading}>
+            <Button variant="outline" onClick={handlePrintPdf} disabled={totalRows === 0 || isLoading || isBusyHours}>
               <Printer className="mr-2 h-4 w-4" /> Print PDF
             </Button>
-            <Button variant="outline" onClick={handleExport} disabled={totalRows === 0 || isLoading}>
+            <Button variant="outline" onClick={handleExport} disabled={totalRows === 0 || isLoading || isBusyHours}>
               <Download className="mr-2 h-4 w-4" /> Export CSV
             </Button>
           </div>
         </div>
 
+        <AttendanceRecapTabs />
+
         {loadError && (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
             {loadError}
+          </div>
+        )}
+
+        {isBusyHours && (
+          <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            {busyHoursMessage}
           </div>
         )}
 
@@ -379,7 +418,7 @@ export default function OrgRecapReport() {
                 <Input type="number" value={year} onChange={(e) => setYear(parseInt(e.target.value || "0", 10) || new Date().getFullYear())} />
               </div>
               <div className="flex items-end">
-                <Button onClick={handleShow} className="w-full" disabled={isLoading}>
+                <Button onClick={handleShow} className="w-full" disabled={isLoading || isBusyHours}>
                   {isLoading ? "Memuat..." : "Tampilkan"}
                 </Button>
               </div>

@@ -30,6 +30,10 @@ const GLOSSARY_TERMS: GlossaryTerm[] = [
   { term: "Paket Langganan", description: "Pilihan durasi berlangganan (1, 3, 6, atau 12 bulan) dengan harga per-pegawai yang sudah ditentukan.", category: "billing" },
   { term: "PPN/VAT", description: "Pajak Pertambahan Nilai sebesar 11% yang dikenakan pada setiap transaksi pembayaran langganan.", category: "billing" },
   { term: "Grace Period", description: "Masa tenggang setelah langganan berakhir dimana layanan masih dapat diakses sebelum diblokir.", category: "billing" },
+  { term: "Menunggu Verifikasi", description: "Status invoice saat bukti pembayaran sudah dikirim tenant tetapi belum disetujui admin billing.", category: "billing" },
+  { term: "Due Date (Jatuh Tempo)", description: "Tanggal batas akhir pembayaran invoice. Setelah lewat, invoice dapat masuk status terlambat atau kedaluwarsa.", category: "billing" },
+  { term: "Bukti Pembayaran", description: "URL atau file (gambar/PDF) yang diunggah tenant untuk verifikasi pembayaran transfer manual.", category: "billing" },
+  { term: "Invoice URL", description: "Tautan pembayaran online dari payment gateway yang dapat dibuka langsung dari detail invoice.", category: "billing" },
 
   // Streak
   { term: "Stability Streak", description: "Hitungan hari berturut-turut dimana organisasi aktif menggunakan sistem absensi. Target 30 hari untuk aktivasi.", category: "streak" },

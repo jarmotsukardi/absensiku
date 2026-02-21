@@ -6,13 +6,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { supabase } from "@/integrations/supabase/client";
 import type { Json } from "@/integrations/supabase/types";
 import { formatToTimezone } from "@/lib/timezone";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { toast } from "sonner";
-import { History, Search, Filter, Plus, Pencil, Trash2, User, Calendar, Loader2, RefreshCw } from "lucide-react";
+import { History, Search, Filter, Plus, Pencil, Trash2, Loader2, RefreshCw } from "lucide-react";
 
 interface AuditLog {
   id: string;
@@ -308,44 +309,56 @@ export default function OrgAuditLog() {
                 <p className="text-muted-foreground">Belum ada log aktivitas</p>
               </div>
             ) : (
-              <div className="space-y-3">
-                {filteredLogs.map((log) => {
-                  const action = actionLabels[log.action] || actionLabels.UPDATE;
-                  const ActionIcon = action.icon;
-                  
-                  return (
-                    <div
-                      key={log.id}
-                      className="flex items-start gap-4 p-4 rounded-lg border bg-card hover:bg-muted/50 transition-colors"
-                    >
-                      <div className={`p-2 rounded-full ${action.color}`}>
-                        <ActionIcon className="h-4 w-4" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <Badge variant="outline">
-                            {tableLabels[log.table_name] || log.table_name}
+              <Table className="min-w-[980px] text-xs">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="h-10 px-3">Waktu</TableHead>
+                    <TableHead className="h-10 px-3">Aksi</TableHead>
+                    <TableHead className="h-10 px-3">Modul</TableHead>
+                    <TableHead className="h-10 px-3">Ringkasan</TableHead>
+                    <TableHead className="h-10 px-3">Pengguna</TableHead>
+                    <TableHead className="h-10 px-3">Record ID</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredLogs.map((log) => {
+                    const action = actionLabels[log.action] || actionLabels.UPDATE;
+                    const ActionIcon = action.icon;
+                    const summary = getChangeSummary(log);
+                    const recordLabel = log.record_id || "-";
+
+                    return (
+                      <TableRow key={log.id}>
+                        <TableCell className="px-3 py-2 whitespace-nowrap">
+                          {formatToTimezone(new Date(log.created_at), "Asia/Jakarta", "dd MMM yyyy HH:mm")}
+                        </TableCell>
+                        <TableCell className="px-3 py-2">
+                          <Badge variant="outline" className={`gap-1 ${action.color}`}>
+                            <ActionIcon className="h-3 w-3" />
+                            {action.label}
                           </Badge>
-                          <span className="text-sm font-medium">{action.label}</span>
-                        </div>
-                        <p className="text-sm text-muted-foreground mt-1">
-                          {getChangeSummary(log)}
-                        </p>
-                        <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
-                          <span className="flex items-center gap-1">
-                            <User className="h-3 w-3" />
-                            {log.employee?.name || "Sistem"}
+                        </TableCell>
+                        <TableCell className="px-3 py-2 whitespace-nowrap">
+                          {tableLabels[log.table_name] || log.table_name}
+                        </TableCell>
+                        <TableCell className="px-3 py-2">
+                          <span className="block max-w-[420px] truncate" title={summary}>
+                            {summary}
                           </span>
-                          <span className="flex items-center gap-1">
-                            <Calendar className="h-3 w-3" />
-                            {formatToTimezone(new Date(log.created_at), "Asia/Jakarta", "dd MMM yyyy HH:mm")}
+                        </TableCell>
+                        <TableCell className="px-3 py-2 whitespace-nowrap">
+                          {log.employee?.name || "Sistem"}
+                        </TableCell>
+                        <TableCell className="px-3 py-2">
+                          <span className="block max-w-[220px] truncate font-mono" title={recordLabel}>
+                            {recordLabel}
                           </span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             )}
 
             {/* Pagination */}

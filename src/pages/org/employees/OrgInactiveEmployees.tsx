@@ -11,6 +11,8 @@ import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { EmployeeDataTabs } from "@/components/org/employees/EmployeeDataTabs";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 type Employee = Tables<"employees">;
 type OPD = Tables<"opd">;
@@ -19,6 +21,7 @@ type Position = Tables<"positions">;
 const ITEMS_PER_PAGE = 10;
 
 export default function OrgInactiveEmployees() {
+  const confirmDialog = useConfirmDialog();
   const [employees, setEmployees] = useState<(Employee & { opd?: OPD | null; position_rel?: Position | null })[]>([]);
   const [totalEmployees, setTotalEmployees] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -64,7 +67,15 @@ export default function OrgInactiveEmployees() {
   }, [fetchData]);
 
   const handleReactivate = async (id: string) => {
-    if (!confirm("Yakin ingin mengaktifkan kembali pegawai ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Aktifkan Kembali Pegawai",
+        description: "Yakin ingin mengaktifkan kembali pegawai ini?",
+        confirmText: "Ya, aktifkan",
+      }))
+    ) {
+      return;
+    }
     try {
       const { error } = await supabase.from("employees").update({ is_active: true }).eq("id", id);
       if (error) throw error;
@@ -104,6 +115,7 @@ export default function OrgInactiveEmployees() {
           </h1>
           <p className="text-muted-foreground">Daftar pegawai yang sudah tidak aktif</p>
         </div>
+        <EmployeeDataTabs />
 
         {loadError && (
           <Card className="border-destructive/40">

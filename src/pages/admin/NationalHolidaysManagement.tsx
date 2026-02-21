@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { format, parseISO } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { 
   Calendar, 
   Plus, 
@@ -92,6 +93,7 @@ const fetchExternalNationalHolidays = async (year: string): Promise<{ holidays: 
 };
 
 export default function NationalHolidaysManagement() {
+  const confirmDialog = useConfirmDialog();
   const [holidays, setHolidays] = useState<NationalHoliday[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isFetchingAPI, setIsFetchingAPI] = useState(false);
@@ -248,7 +250,16 @@ export default function NationalHolidaysManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin ingin menghapus hari libur ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Hari Libur",
+        description: "Yakin ingin menghapus hari libur ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
       const { error } = await supabase
@@ -327,7 +338,15 @@ export default function NationalHolidaysManagement() {
     const sourceYear = parseInt(selectedYear) - 1;
     const targetYear = parseInt(selectedYear);
     
-    if (!confirm(`Salin semua libur nasional dari tahun ${sourceYear} ke tahun ${targetYear}?`)) return;
+    if (
+      !(await confirmDialog({
+        title: "Salin Libur Nasional",
+        description: `Salin semua libur nasional dari tahun ${sourceYear} ke tahun ${targetYear}?`,
+        confirmText: "Ya, salin",
+      }))
+    ) {
+      return;
+    }
 
     try {
       const { data: sourceHolidays } = await supabase

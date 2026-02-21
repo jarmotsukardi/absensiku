@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import {
   Pagination,
   PaginationContent,
@@ -47,6 +48,7 @@ const GOLONGAN_OPTIONS = [
 const ITEMS_PER_PAGE = 15;
 
 export default function ActiveEmployees() {
+  const confirmDialog = useConfirmDialog();
   const [employees, setEmployees] = useState<(Employee & { opd?: OPD; office?: Office })[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [officeList, setOfficeList] = useState<Office[]>([]);
@@ -241,7 +243,16 @@ export default function ActiveEmployees() {
   };
 
   const handleDeactivate = async (id: string) => {
-    if (!confirm("Yakin ingin menonaktifkan pegawai ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Nonaktifkan Pegawai",
+        description: "Yakin ingin menonaktifkan pegawai ini?",
+        confirmText: "Ya, nonaktifkan",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
       setLoadError(null);

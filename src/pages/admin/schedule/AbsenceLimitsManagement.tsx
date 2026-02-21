@@ -12,6 +12,7 @@ import { Plus, Pencil, Trash2, AlertTriangle, Loader2, RefreshCcw } from "lucide
 import { toast } from "sonner";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { supabase } from "@/integrations/supabase/client";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import {
   ABSENCE_LIMIT_TEMPLATE_SETTING_KEY,
   DEFAULT_ABSENCE_LIMIT_TEMPLATE,
@@ -22,6 +23,7 @@ import {
 const ITEMS_PER_PAGE = 10;
 
 export default function AbsenceLimitsManagement() {
+  const confirmDialog = useConfirmDialog();
   const [limits, setLimits] = useState<AbsenceLimitTemplateItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -174,7 +176,16 @@ export default function AbsenceLimitsManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin ingin menghapus batas absen ini dari template admin?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Template Batas Absen",
+        description: "Yakin ingin menghapus batas absen ini dari template admin?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
     const next = limits.filter((item) => item.id !== id);
     await saveTemplate(next, "Template batas absen berhasil dihapus.");
   };
