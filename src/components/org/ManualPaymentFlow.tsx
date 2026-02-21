@@ -54,6 +54,14 @@ interface CreateOrGetManualInvoiceResult {
   reused: boolean;
 }
 
+interface ActiveManualInvoiceSnapshot {
+  id: string;
+  invoice_number: string;
+  status: string;
+  due_date: string;
+  gross_amount: number;
+}
+
 const toJsonObject = (value: Json | null | undefined): Record<string, Json> | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -79,6 +87,8 @@ export function ManualPaymentFlow({
   const [employeeCount, setEmployeeCount] = useState(currentEmployeeCount || 5);
   const [negotiatedPricePerEmployee, setNegotiatedPricePerEmployee] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isCheckingActiveInvoice, setIsCheckingActiveInvoice] = useState(false);
+  const [activeInvoice, setActiveInvoice] = useState<ActiveManualInvoiceSnapshot | null>(null);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [paymentResult, setPaymentResult] = useState<{
@@ -141,6 +151,32 @@ export function ManualPaymentFlow({
     void fetchPackages();
   }, [fetchPackages]);
 
+  const fetchActiveInvoice = useCallback(async () => {
+    setIsCheckingActiveInvoice(true);
+    try {
+      const { data, error } = await supabase
+        .from("invoices")
+        .select("id, invoice_number, status, due_date, gross_amount")
+        .eq("tenant_id", tenantId)
+        .in("status", ["PENDING", "AWAITING_VERIFICATION"])
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (error) throw error;
+      setActiveInvoice((data ?? null) as ActiveManualInvoiceSnapshot | null);
+    } catch (error) {
+      console.error("Error checking active manual invoice:", error);
+      setActiveInvoice(null);
+    } finally {
+      setIsCheckingActiveInvoice(false);
+    }
+  }, [tenantId]);
+
+  useEffect(() => {
+    void fetchActiveInvoice();
+  }, [fetchActiveInvoice]);
+
   const getSelectedPackageData = () => packages.find((p) => p.id === selectedPackage);
 
   const calculateTotal = () => {
@@ -166,6 +202,10 @@ export function ManualPaymentFlow({
     }).format(amount);
 
   const handleInitiatePayment = async () => {
+    if (activeInvoice) {
+      toast.info(`Invoice aktif ${activeInvoice.invoice_number} masih berjalan. Selesaikan invoice tersebut terlebih dahulu.`);
+      return;
+    }
     setShowConfirmDialog(true);
   };
 
@@ -252,6 +292,7 @@ export function ManualPaymentFlow({
       } else {
         toast.success("Invoice pembayaran berhasil dibuat. Langganan aktif setelah pembayaran tervalidasi.");
       }
+      void fetchActiveInvoice();
     } catch (error: unknown) {
       console.error("Error creating payment:", error);
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
@@ -392,6 +433,36 @@ export function ManualPaymentFlow({
             </div>
           )}
 
+          {activeInvoice && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100 space-y-2">
+              <p>
+                Invoice aktif terdeteksi: <strong>{activeInvoice.invoice_number}</strong>. Pembuatan invoice baru dinonaktifkan
+                sampai invoice ini selesai.
+              </p>
+              <p className="text-xs">
+                Status: <strong>{activeInvoice.status}</strong> • Jatuh tempo:{" "}
+                <strong>{format(new Date(activeInvoice.due_date), "d MMM yyyy", { locale: idLocale })}</strong> • Nilai:{" "}
+                <strong>{formatCurrency(activeInvoice.gross_amount)}</strong>
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void fetchActiveInvoice()}
+                disabled={isCheckingActiveInvoice}
+              >
+                {isCheckingActiveInvoice ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                    Mengecek...
+                  </>
+                ) : (
+                  "Cek Ulang Status Invoice"
+                )}
+              </Button>
+            </div>
+          )}
+
           {/* Package Selection */}
           <div className="space-y-2">
             <Label>Paket Langganan</Label>
@@ -454,7 +525,7 @@ export function ManualPaymentFlow({
           <Button
             className="w-full"
             size="lg"
-            disabled={!selectedPackage || employeeCount < 1}
+            disabled={!selectedPackage || employeeCount < 1 || isCheckingActiveInvoice || Boolean(activeInvoice)}
             onClick={handleInitiatePayment}
           >
             <Receipt className="h-4 w-4 mr-2" />
