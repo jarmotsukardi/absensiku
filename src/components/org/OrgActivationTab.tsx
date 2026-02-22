@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
 import { Separator } from "@/components/ui/separator";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   Calculator,
@@ -26,6 +26,7 @@ import {
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
+import { useNavigate } from "react-router-dom";
 import { ManualPaymentFlow } from "@/components/org/ManualPaymentFlow";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import type { Tables } from "@/integrations/supabase/types";
@@ -60,6 +61,11 @@ interface XenditInvoiceResponse {
 type PaymentMethod = "manual" | "xendit";
 type InvoicePriorityTone = "critical" | "warning" | "normal" | "ok";
 type ActivationStepState = "done" | "current" | "pending";
+type ScrollFlashTarget = "invoice" | "xendit" | "manual" | null;
+
+const PPN_PERCENTAGE = 11;
+const PPH_PERCENTAGE = 2;
+const INTERNAL_TAX_PERCENTAGE = PPN_PERCENTAGE + PPH_PERCENTAGE;
 
 const toDueEndTimestamp = (dueDate?: string | null): number | null => {
   if (!dueDate) return null;
@@ -90,22 +96,31 @@ const parseNumericSettingValue = (raw: unknown, fallback: number): number => {
 };
 
 export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps) {
+  const navigate = useNavigate();
   const ITEMS_PER_PAGE = 10;
+  const CALCULATOR_PREFS_KEY = `org_activation_calculator:${tenantId}`;
+  const PAYMENT_METHOD_PREFS_KEY = `org_activation_payment_method:${tenantId}`;
+  const PAYMENT_METHOD_CARD_ID = "org-activation-payment-method";
+  const XENDIT_CHECKOUT_SECTION_ID = "org-activation-xendit-checkout";
+  const MANUAL_PAYMENT_SECTION_ID = "org-activation-manual-payment";
   const [packages, setPackages] = useState<SubscriptionPackage[]>([]);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [employeeCount, setEmployeeCount] = useState(0);
   const [selectedPkgId, setSelectedPkgId] = useState<string>("");
   const [memberSlider, setMemberSlider] = useState([10]);
+  const [hasHydratedCalculatorState, setHasHydratedCalculatorState] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("manual");
   const [isCreatingXenditInvoice, setIsCreatingXenditInvoice] = useState(false);
   const [isCalculatorOpen, setIsCalculatorOpen] = useState(false);
+  const [manualFlowPrefill, setManualFlowPrefill] = useState<{ packageId: string; employeeCount: number } | null>(null);
   const [xenditEnabled, setXenditEnabled] = useState(false);
   const [b2bThreshold, setB2bThreshold] = useState(2000);
   const [isCentralizedBilling, setIsCentralizedBilling] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [scrollFlashTarget, setScrollFlashTarget] = useState<ScrollFlashTarget>(null);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -123,7 +138,6 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       setSubscription(subRes.data);
       setInvoices(invRes.data || []);
       setEmployeeCount(empRes.count || 0);
-      setMemberSlider([empRes.count || 10]);
       const xenditSetting = xenditRes.data as SystemSetting | null;
       const settingValue = xenditSetting?.value;
       const isObjectSetting = typeof settingValue === "object" && settingValue !== null && !Array.isArray(settingValue);
@@ -134,9 +148,6 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       setB2bThreshold(Math.max(1, Math.floor(parseNumericSettingValue(b2bRaw, 2000))));
       setIsCentralizedBilling(tenantRes.data?.billing_mode !== "individual");
 
-      if (pkgRes.data && pkgRes.data.length > 0) {
-        setSelectedPkgId(pkgRes.data[0].id);
-      }
     } catch (error) {
       const errorRef = reportError(error, "org.activation.fetch_all", { tenant_id: tenantId });
       toast.error(appendErrorReference("Gagal memuat data aktivasi", errorRef));
@@ -148,6 +159,68 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
   useEffect(() => {
     void fetchAll();
   }, [fetchAll]);
+
+  useEffect(() => {
+    setHasHydratedCalculatorState(false);
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (hasHydratedCalculatorState || packages.length === 0) return;
+    const defaultPkgId = packages[0]?.id ?? "";
+    const defaultMemberCount = employeeCount > 0 ? employeeCount : 10;
+    if (typeof window === "undefined") {
+      setSelectedPkgId(defaultPkgId);
+      setMemberSlider([defaultMemberCount]);
+      setHasHydratedCalculatorState(true);
+      return;
+    }
+    try {
+      const persistedRaw = window.localStorage.getItem(CALCULATOR_PREFS_KEY);
+      if (!persistedRaw) {
+        setSelectedPkgId(defaultPkgId);
+        setMemberSlider([defaultMemberCount]);
+        setHasHydratedCalculatorState(true);
+        return;
+      }
+      const persisted = JSON.parse(persistedRaw) as { packageId?: string; memberCount?: number } | null;
+      const persistedMemberCount = Number(persisted?.memberCount);
+      const memberCount = Number.isFinite(persistedMemberCount)
+        ? Math.min(1000, Math.max(1, Math.floor(persistedMemberCount)))
+        : defaultMemberCount;
+      const packageId = packages.some((pkg) => pkg.id === persisted?.packageId)
+        ? (persisted?.packageId as string)
+        : defaultPkgId;
+      setSelectedPkgId(packageId);
+      setMemberSlider([memberCount]);
+    } catch {
+      setSelectedPkgId(defaultPkgId);
+      setMemberSlider([defaultMemberCount]);
+    } finally {
+      setHasHydratedCalculatorState(true);
+    }
+  }, [CALCULATOR_PREFS_KEY, employeeCount, hasHydratedCalculatorState, packages]);
+
+  useEffect(() => {
+    if (!hasHydratedCalculatorState || typeof window === "undefined") return;
+    const payload = JSON.stringify({
+      packageId: selectedPkgId,
+      memberCount: memberSlider[0],
+    });
+    window.localStorage.setItem(CALCULATOR_PREFS_KEY, payload);
+  }, [CALCULATOR_PREFS_KEY, hasHydratedCalculatorState, memberSlider, selectedPkgId]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const persisted = window.localStorage.getItem(PAYMENT_METHOD_PREFS_KEY);
+    if (persisted === "manual" || persisted === "xendit") {
+      setPaymentMethod(persisted);
+    }
+  }, [PAYMENT_METHOD_PREFS_KEY]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(PAYMENT_METHOD_PREFS_KEY, paymentMethod);
+  }, [PAYMENT_METHOD_PREFS_KEY, paymentMethod]);
 
   const selectedPkg = packages.find((p) => p.id === selectedPkgId);
   const hasNegotiatedB2BPrice =
@@ -165,11 +238,13 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
   };
 
   const calculateTotal = () => {
-    if (!selectedPkg) return { unitPrice: 0, subtotal: 0, discount: 0, total: 0 };
+    if (!selectedPkg) return { unitPrice: 0, subtotal: 0, discount: 0, baseAmount: 0, internalTaxAmount: 0, total: 0 };
     const unitPrice = getEffectiveUnitPrice(selectedPkg.base_price_per_month);
     const subtotal = unitPrice * memberSlider[0] * selectedPkg.duration_months;
     const discount = subtotal * (selectedPkg.discount_percentage / 100);
-    return { unitPrice, subtotal, discount, total: subtotal - discount };
+    const baseAmount = subtotal - discount;
+    const internalTaxAmount = Math.round(baseAmount * (INTERNAL_TAX_PERCENTAGE / 100));
+    return { unitPrice, subtotal, discount, baseAmount, internalTaxAmount, total: baseAmount + internalTaxAmount };
   };
 
   const formatCurrency = (amount: number) =>
@@ -248,8 +323,8 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
     if (isSubscriptionHealthy) {
       return [
         { title: "Pilih Paket", description: "Paket langganan aktif.", state: "done" as ActivationStepState },
-        { title: "Konfirmasi & Buat Invoice", description: "Invoice terakhir sudah diproses.", state: "done" as ActivationStepState },
-        { title: "Bayar Invoice", description: "Pembayaran tercatat.", state: "done" as ActivationStepState },
+        { title: "Mau Bayar (Buat Invoice)", description: "Invoice terakhir sudah diproses.", state: "done" as ActivationStepState },
+        { title: "Konfirmasi Pembayaran", description: "Pembayaran tercatat.", state: "done" as ActivationStepState },
         { title: "Verifikasi & Aktivasi", description: "Langganan sudah aktif.", state: "done" as ActivationStepState },
       ];
     }
@@ -276,19 +351,19 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
         state: step1,
       },
       {
-        title: "Konfirmasi & Buat Invoice",
+        title: "Mau Bayar (Buat Invoice)",
         description: hasCreatedInvoice
           ? `Invoice ${latestInvoice?.invoice_number || "-"} sudah dibuat.`
           : "Buat invoice berdasarkan simulasi.",
         state: step2,
       },
       {
-        title: "Bayar Invoice",
+        title: "Konfirmasi Pembayaran",
         description:
           isPaid || isAwaitingVerification
-            ? "Pembayaran sudah dikirim."
+            ? "Pembayaran sudah dikonfirmasi."
             : hasCreatedInvoice
-              ? "Selesaikan pembayaran invoice."
+              ? "Setelah transfer, kirim bukti dan konfirmasi pembayaran."
               : "Menunggu invoice dibuat.",
         state: step3,
       },
@@ -376,6 +451,67 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
     }
   };
 
+  const handleContinueToInvoice = () => {
+    const scrollAndFlash = (targetId: string, flashTarget: Exclude<ScrollFlashTarget, null>) => {
+      const targetEl = document.getElementById(targetId);
+      targetEl?.scrollIntoView({ behavior: "smooth", block: "start" });
+      setScrollFlashTarget(flashTarget);
+      window.setTimeout(() => setScrollFlashTarget((prev) => (prev === flashTarget ? null : prev)), 1400);
+    };
+
+    if (hasOpenInvoice) {
+      setIsCalculatorOpen(false);
+      if (activeInvoice?.invoice_number) {
+        navigate(
+          `/org/billing?menu=invoices&invoice=${encodeURIComponent(activeInvoice.invoice_number)}&focus=payment-proof`,
+        );
+        toast.info(`Invoice aktif ${activeInvoice.invoice_number} masih berjalan. Anda diarahkan ke form konfirmasi pembayarannya.`);
+        return;
+      }
+      window.setTimeout(() => {
+        scrollAndFlash("invoice-priority-table", "invoice");
+      }, 120);
+      toast.info("Masih ada invoice aktif yang perlu diselesaikan terlebih dahulu.");
+      return;
+    }
+    if (selectedPkgId) {
+      setManualFlowPrefill({
+        packageId: selectedPkgId,
+        employeeCount: memberSlider[0],
+      });
+    }
+    setIsCalculatorOpen(false);
+    const nextPaymentMethod: PaymentMethod = isXenditAllowed ? "xendit" : "manual";
+    setPaymentMethod(nextPaymentMethod);
+    window.setTimeout(() => {
+      const targetId =
+        nextPaymentMethod === "xendit" ? XENDIT_CHECKOUT_SECTION_ID : MANUAL_PAYMENT_SECTION_ID;
+      scrollAndFlash(targetId, nextPaymentMethod === "xendit" ? "xendit" : "manual");
+    }, 120);
+  };
+
+  const handleResetCalculatorPreferences = () => {
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(CALCULATOR_PREFS_KEY);
+      window.localStorage.removeItem(PAYMENT_METHOD_PREFS_KEY);
+    }
+    const defaultPkgId = packages[0]?.id ?? "";
+    const defaultMemberCount = employeeCount > 0 ? employeeCount : 10;
+    setSelectedPkgId(defaultPkgId);
+    setMemberSlider([defaultMemberCount]);
+    setManualFlowPrefill(null);
+    setPaymentMethod("manual");
+    toast.success("Simulasi dikembalikan ke default organisasi.");
+  };
+
+  const handleOpenCalculator = () => {
+    if (hasOpenInvoice) {
+      handleContinueToInvoice();
+      return;
+    }
+    setIsCalculatorOpen(true);
+  };
+
   useEffect(() => {
     setCurrentPage(1);
   }, [invoices.length]);
@@ -385,6 +521,12 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       setPaymentMethod("manual");
     }
   }, [paymentMethod, isXenditAllowed]);
+
+  useEffect(() => {
+    if (isB2BManualOnly && paymentMethod !== "manual") {
+      setPaymentMethod("manual");
+    }
+  }, [isB2BManualOnly, paymentMethod]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
@@ -407,12 +549,18 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
           <Calculator className="h-5 w-5 text-primary" />
           Kalkulator Langganan
         </CardTitle>
-        <CardDescription>Buka overlay kalkulator untuk simulasi paket dan jumlah member.</CardDescription>
+        <CardDescription>
+          Buka overlay kalkulator untuk simulasi paket dan jumlah member. Pilihan terakhir disimpan otomatis per
+          organisasi.
+        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         {selectedPkg ? (
           <div className="rounded-lg border p-4 space-y-1">
-            <p className="text-sm text-muted-foreground">Ringkasan Simulasi Saat Ini</p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-sm text-muted-foreground">Ringkasan Simulasi Saat Ini</p>
+              {hasOpenInvoice && <Badge variant="secondary">Invoice Aktif</Badge>}
+            </div>
             <p className="font-semibold">
               {selectedPkg.name} • {memberSlider[0]} member • {selectedPkg.duration_months} bulan
             </p>
@@ -421,14 +569,18 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
         ) : (
           <p className="text-sm text-muted-foreground">Belum ada paket dipilih.</p>
         )}
+        <div className="flex justify-end">
+          <Button type="button" variant="ghost" size="sm" onClick={handleResetCalculatorPreferences}>
+            Reset Simulasi
+          </Button>
+        </div>
+
+        <Button className="w-full sm:w-auto" onClick={handleOpenCalculator}>
+          <Calculator className="h-4 w-4 mr-2" />
+          {hasOpenInvoice ? "Lihat Invoice Aktif" : "Buka Kalkulator"}
+        </Button>
 
         <Dialog open={isCalculatorOpen} onOpenChange={setIsCalculatorOpen}>
-          <DialogTrigger asChild>
-            <Button className="w-full sm:w-auto">
-              <Calculator className="h-4 w-4 mr-2" />
-              Buka Kalkulator
-            </Button>
-          </DialogTrigger>
           <DialogContent className="w-[100vw] max-w-none h-[100dvh] rounded-none p-0 sm:h-auto sm:max-w-4xl sm:rounded-lg sm:p-6">
             <DialogHeader className="px-4 pt-4 sm:px-0 sm:pt-0">
               <DialogTitle className="flex items-center gap-2">
@@ -448,15 +600,42 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
                     pegawai per bulan.
                   </div>
                 )}
+              {hasOpenInvoice && activeInvoice && (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100 space-y-2">
+                  <p>
+                    Invoice aktif: <strong>{activeInvoice.invoice_number}</strong> masih berjalan.
+                  </p>
+                  <p className="text-xs">
+                    Status <strong>{activeInvoice.status}</strong>
+                    {activeInvoice.due_date
+                      ? ` • Jatuh tempo ${format(new Date(activeInvoice.due_date), "d MMM yyyy", { locale: idLocale })}`
+                      : ""}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" variant="outline" onClick={handleContinueToInvoice}>
+                      Lihat Invoice Aktif
+                    </Button>
+                    {activeInvoice.status === "PENDING" && activeInvoice.invoice_url && (
+                      <Button size="sm" asChild>
+                        <a href={activeInvoice.invoice_url} target="_blank" rel="noopener noreferrer">
+                          <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+                          Bayar Sekarang
+                        </a>
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
                 {packages.map((pkg) => (
                   <button
                     key={pkg.id}
-                    onClick={() => setSelectedPkgId(pkg.id)}
+                    onClick={() => !hasOpenInvoice && setSelectedPkgId(pkg.id)}
+                    disabled={hasOpenInvoice}
                     className={`p-4 rounded-xl border-2 text-left transition-all ${
                       selectedPkgId === pkg.id ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
-                    }`}
+                    } ${hasOpenInvoice ? "opacity-60 cursor-not-allowed" : ""}`}
                   >
                     <p className="font-semibold">{pkg.name}</p>
                     <p className="text-sm text-muted-foreground">{pkg.duration_months} bulan</p>
@@ -479,12 +658,18 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
                   min={1}
                   max={1000}
                   step={1}
+                  disabled={hasOpenInvoice}
                   className="w-full"
                 />
                 <div className="flex justify-between text-xs text-muted-foreground">
                   <span>1</span>
                   <span>1000</span>
                 </div>
+                {hasOpenInvoice && (
+                  <p className="text-xs text-amber-700 dark:text-amber-300">
+                    Simulasi dikunci sementara karena masih ada invoice aktif.
+                  </p>
+                )}
               </div>
 
               {selectedPkg && (
@@ -506,13 +691,30 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
                     <span>Total</span>
                     <span className="text-primary">{formatCurrency(total)}</span>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    Total tagihan sudah final sesuai kebijakan biaya internal.
+                  </p>
                 </div>
               )}
 
-              <div className="flex justify-end">
-                <Button variant="outline" onClick={() => setIsCalculatorOpen(false)}>
-                  Tutup
-                </Button>
+              <div className="sticky bottom-0 z-10 -mx-4 border-t bg-background/95 px-4 py-3 backdrop-blur sm:-mx-0 sm:px-0">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="space-y-0.5">
+                    <p className="text-xs text-muted-foreground">Ringkasan Cepat</p>
+                    <p className="text-sm font-semibold">
+                      {selectedPkg ? `${selectedPkg.name} • ${memberSlider[0]} member` : "Pilih paket"}
+                    </p>
+                    <p className="text-lg font-bold text-primary">{formatCurrency(total)}</p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => setIsCalculatorOpen(false)}>
+                      Tutup
+                    </Button>
+                    <Button onClick={handleContinueToInvoice} disabled={!selectedPkg}>
+                      {hasOpenInvoice ? "Lihat Invoice Aktif" : "Lanjut Buat Invoice"}
+                    </Button>
+                  </div>
+                </div>
               </div>
             </div>
           </DialogContent>
@@ -576,7 +778,12 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
         </Card>
 
         {/* Invoice Priority */}
-        <Card id="invoice-priority-table" className={criticalInvoice ? "border-red-300 shadow-sm" : undefined}>
+        <Card
+          id="invoice-priority-table"
+          className={`${criticalInvoice ? "border-red-300 shadow-sm" : ""} ${
+            scrollFlashTarget === "invoice" ? "ring-2 ring-primary/50 animate-pulse" : ""
+          }`}
+        >
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Receipt className="h-5 w-5 text-primary" />
@@ -773,13 +980,18 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       </Card>
 
       {/* Payment Method Selection */}
-      <Card>
+      <Card id={PAYMENT_METHOD_CARD_ID}>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Wallet className="h-5 w-5 text-primary" />
             Metode Pembayaran
           </CardTitle>
           <CardDescription>Pilih cara pembayaran yang Anda inginkan</CardDescription>
+          {isB2BManualOnly && (
+            <p className="text-xs font-medium text-amber-700 dark:text-amber-300">
+              Mode otomatis: tenant B2B menggunakan transfer manual.
+            </p>
+          )}
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -878,7 +1090,10 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
 
           {/* Xendit Checkout Button */}
           {paymentMethod === "xendit" && selectedPkg && isXenditAllowed && (
-            <div className="pt-2">
+            <div
+              id={XENDIT_CHECKOUT_SECTION_ID}
+              className={`pt-2 rounded-md ${scrollFlashTarget === "xendit" ? "ring-2 ring-primary/50 animate-pulse" : ""}`}
+            >
               <Button
                 onClick={handleXenditCheckout}
                 disabled={isCreatingXenditInvoice || !selectedPkg || hasOpenInvoice}
@@ -916,13 +1131,20 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       </Card>
 
       {paymentMethod === "manual" ? (
-        <div className="grid gap-6 xl:grid-cols-[minmax(320px,420px),minmax(0,1fr)] items-start">
+        <div
+          id={MANUAL_PAYMENT_SECTION_ID}
+          className={`grid gap-6 xl:grid-cols-[minmax(320px,420px),minmax(0,1fr)] items-start rounded-md ${
+            scrollFlashTarget === "manual" ? "ring-2 ring-primary/50 animate-pulse p-1" : ""
+          }`}
+        >
           {calculatorCard}
           <ManualPaymentFlow
             tenantId={tenantId}
             tenantName={tenantName}
             currentEmployeeCount={employeeCount}
             subscriptionId={subscription?.id}
+            initialPackageId={manualFlowPrefill?.packageId}
+            initialEmployeeCount={manualFlowPrefill?.employeeCount}
           />
         </div>
       ) : (

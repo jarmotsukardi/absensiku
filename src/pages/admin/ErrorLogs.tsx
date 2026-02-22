@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -33,7 +34,7 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
-import { Search, Download, Trash2, AlertTriangle, RefreshCw, Copy, Archive, BellRing, CheckCircle2, Clock3, Eye } from "lucide-react";
+import { Search, Download, Trash2, AlertTriangle, RefreshCw, Copy, Archive, BellRing, CheckCircle2, Clock3, Eye, ExternalLink } from "lucide-react";
 import {
   appendErrorReference,
   clearStoredErrorLogs,
@@ -42,6 +43,11 @@ import {
   reportError,
   type AppErrorLogEntry,
 } from "@/lib/errorLogger";
+import {
+  getTopupRequestIdFromErrorEntry,
+  resolveTabForErrorEntry,
+  type ErrorSeverityTab,
+} from "@/lib/errorLogRouting";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { toast } from "sonner";
@@ -83,7 +89,7 @@ const downloadFile = (filename: string, content: string, mimeType: string) => {
   URL.revokeObjectURL(url);
 };
 
-type SeverityTab = "critical" | "non_critical" | "resolved_critical" | "archived_critical";
+type SeverityTab = ErrorSeverityTab;
 type TimeWindow = "all" | "24h" | "7d" | "30d";
 type OwnershipFilter = "all" | "mine";
 type TenantScopeFilter = "all_tenants" | "my_tenant" | "no_tenant";
@@ -262,7 +268,8 @@ const readPersistedFilters = (key: string): PersistedFilterState | null => {
         value.activeTab === "critical" ||
         value.activeTab === "non_critical" ||
         value.activeTab === "resolved_critical" ||
-        value.activeTab === "archived_critical"
+        value.activeTab === "archived_critical" ||
+        value.activeTab === "archived_non_critical"
           ? value.activeTab
           : undefined,
       selectedContext: typeof value.selectedContext === "string" ? value.selectedContext : undefined,
@@ -321,6 +328,14 @@ const mapRemoteRowToEntry = (row: Record<string, unknown>): ErrorLogRow => ({
   resolutionNote: row.resolution_note ? String(row.resolution_note) : null,
 });
 
+const getTopupRequestIdFromEntry = (entry: ErrorLogRow): string | null => {
+  return getTopupRequestIdFromErrorEntry(entry);
+};
+
+const resolveTabForEntry = (entry: ErrorLogRow): SeverityTab => {
+  return resolveTabForErrorEntry(entry, isNonCriticalEntry(entry));
+};
+
 const toWebhookTargets = (settings: ErrorAlertSettings): Array<{ channel: string; url: string }> =>
   [
     { channel: "webhook", url: settings.webhookUrl.trim() },
@@ -330,8 +345,11 @@ const toWebhookTargets = (settings: ErrorAlertSettings): Array<{ channel: string
   ].filter((item) => item.url.length > 0);
 
 export default function ErrorLogs() {
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const realtimeNotifiedRefs = useRef<Set<string>>(new Set());
   const hasHydratedFiltersRef = useRef(false);
+  const hasHandledFocusRef = useRef(false);
   const [search, setSearch] = useState("");
   const [entries, setEntries] = useState<ErrorLogRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -362,6 +380,7 @@ export default function ErrorLogs() {
   const [currentUserLabel, setCurrentUserLabel] = useState<string | null>(null);
   const [selectedDetailEntry, setSelectedDetailEntry] = useState<ErrorLogRow | null>(null);
   const [alertSettings, setAlertSettings] = useState<ErrorAlertSettings>(DEFAULT_ALERT_SETTINGS);
+  const focusErrorRef = searchParams.get("errorRef");
 
   const filterStorageKey = useMemo(() => resolveFilterStorageKey(currentUserId), [currentUserId]);
 
@@ -594,6 +613,15 @@ export default function ErrorLogs() {
       ),
     [filteredEntries],
   );
+  const archivedNonCriticalEntries = useMemo(
+    () =>
+      filteredEntries.filter(
+        (entry) =>
+          isNonCriticalEntry(entry) &&
+          Boolean(entry.isArchived),
+      ),
+    [filteredEntries],
+  );
   const visibleNonCriticalEntries = useMemo(
     () => nonCriticalEntries.slice(0, NON_CRITICAL_MAX_VISIBLE),
     [nonCriticalEntries],
@@ -605,7 +633,9 @@ export default function ErrorLogs() {
         ? visibleNonCriticalEntries
         : activeTab === "resolved_critical"
           ? resolvedCriticalEntries
-          : archivedCriticalEntries;
+          : activeTab === "archived_critical"
+            ? archivedCriticalEntries
+            : archivedNonCriticalEntries;
 
   const totalPages = Math.max(1, Math.ceil(tabbedEntries.length / itemsPerPage));
   const safePage = Math.min(currentPage, totalPages);
@@ -625,12 +655,16 @@ export default function ErrorLogs() {
     const criticalArchived = withinWindowEntries.filter(
       (entry) => !isNonCriticalEntry(entry) && Boolean(entry.isArchived),
     ).length;
+    const nonCriticalArchived = withinWindowEntries.filter(
+      (entry) => isNonCriticalEntry(entry) && Boolean(entry.isArchived),
+    ).length;
     return {
       total: withinWindowEntries.length,
       criticalOpen,
       nonCritical,
       criticalResolved,
       criticalArchived,
+      nonCriticalArchived,
     };
   }, [withinWindowEntries]);
 
@@ -735,6 +769,33 @@ export default function ErrorLogs() {
       setIsSavingAlertSettings(false);
     }
   }, [alertSettings]);
+
+  const openTopupRequest = useCallback(
+    (entry: ErrorLogRow) => {
+      const topupRequestId = getTopupRequestIdFromEntry(entry);
+      if (!topupRequestId) return;
+      navigate(
+        `/admin/billing?tab=wallet_topup&topupRequestId=${encodeURIComponent(topupRequestId)}&errorRef=${encodeURIComponent(entry.id)}`,
+      );
+    },
+    [navigate],
+  );
+
+  useEffect(() => {
+    if (!focusErrorRef) return;
+    hasHandledFocusRef.current = false;
+    setSelectedWindow("all");
+    setSearch(focusErrorRef);
+  }, [focusErrorRef]);
+
+  useEffect(() => {
+    if (!focusErrorRef || entries.length === 0 || hasHandledFocusRef.current) return;
+    const matched = entries.find((entry) => entry.id === focusErrorRef);
+    if (!matched) return;
+    hasHandledFocusRef.current = true;
+    setActiveTab(resolveTabForEntry(matched));
+    setSelectedDetailEntry(matched);
+  }, [entries, focusErrorRef]);
 
   useEffect(() => {
     if (!alertSettings.enableRealtimeAlerts) return;
@@ -1052,7 +1113,7 @@ export default function ErrorLogs() {
           item.id === entry.id ? { ...item, isArchived: false, archivedAt: null } : item,
         ),
       );
-      toast.success("Arsip error lokal berhasil dipulihkan ke kritis.");
+      toast.success("Arsip error lokal berhasil dipulihkan.");
       return;
     }
 
@@ -1072,7 +1133,7 @@ export default function ErrorLogs() {
           item.rowId === entry.rowId ? { ...item, isArchived: false, archivedAt: null } : item,
         ),
       );
-      toast.success("Arsip error kritis berhasil dipulihkan.");
+      toast.success("Arsip error berhasil dipulihkan.");
     } catch (error) {
       const errorRef = reportError(error, "admin.error_logs.unarchive_critical", {
         error_ref: entry.id,
@@ -1125,12 +1186,12 @@ export default function ErrorLogs() {
           targetRefs.has(entry.id) ? { ...entry, isArchived: true, archivedAt: nowIso } : entry,
         ),
       );
-      toast.success(`${targets.length} log kritis pada halaman ini dipindahkan ke arsip.`);
+      toast.success(`${targets.length} log pada halaman ini dipindahkan ke arsip.`);
     } catch (error) {
       const errorRef = reportError(error, "admin.error_logs.bulk_archive_critical", {
         affected_count: targets.length,
       });
-      toast.error(appendErrorReference("Gagal mengarsipkan log kritis secara bulk", errorRef));
+      toast.error(appendErrorReference("Gagal mengarsipkan log secara bulk", errorRef));
     } finally {
       setIsBulkArchiving(false);
     }
@@ -1176,12 +1237,12 @@ export default function ErrorLogs() {
           targetRefs.has(entry.id) ? { ...entry, isArchived: false, archivedAt: null } : entry,
         ),
       );
-      toast.success(`${targets.length} arsip kritis pada halaman ini dipulihkan.`);
+      toast.success(`${targets.length} arsip pada halaman ini dipulihkan.`);
     } catch (error) {
       const errorRef = reportError(error, "admin.error_logs.bulk_unarchive_critical", {
         affected_count: targets.length,
       });
-      toast.error(appendErrorReference("Gagal memulihkan arsip kritis secara bulk", errorRef));
+      toast.error(appendErrorReference("Gagal memulihkan arsip secara bulk", errorRef));
     } finally {
       setIsBulkUnarchiving(false);
     }
@@ -1527,23 +1588,26 @@ export default function ErrorLogs() {
               <Badge className="border-amber-300 bg-amber-50 text-amber-700">Non Kritis: {headerWindowCounts.nonCritical}</Badge>
               <Badge className="border-blue-300 bg-blue-50 text-blue-700">Selesai: {headerWindowCounts.criticalResolved}</Badge>
               <Badge className="border-slate-300 bg-slate-100 text-slate-700">Arsip Kritis: {headerWindowCounts.criticalArchived}</Badge>
+              <Badge className="border-zinc-300 bg-zinc-100 text-zinc-700">Arsip Non Kritis: {headerWindowCounts.nonCriticalArchived}</Badge>
               <Badge variant="secondary">Total: {headerWindowCounts.total}</Badge>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SeverityTab)}>
-              <TabsList className="grid w-full grid-cols-4">
+              <TabsList className="grid w-full grid-cols-5">
                 <TabsTrigger value="critical">Kritis ({criticalEntries.length})</TabsTrigger>
                 <TabsTrigger value="non_critical">Non Kritis ({nonCriticalEntries.length})</TabsTrigger>
                 <TabsTrigger value="resolved_critical">Selesai ({resolvedCriticalEntries.length})</TabsTrigger>
                 <TabsTrigger value="archived_critical">Arsip Kritis ({archivedCriticalEntries.length})</TabsTrigger>
+                <TabsTrigger value="archived_non_critical">Arsip Non Kritis ({archivedNonCriticalEntries.length})</TabsTrigger>
               </TabsList>
             </Tabs>
 
             {(activeTab === "critical" ||
               activeTab === "non_critical" ||
               activeTab === "resolved_critical" ||
-              activeTab === "archived_critical") && (
+              activeTab === "archived_critical" ||
+              activeTab === "archived_non_critical") && (
               <div className="flex justify-end">
                 {activeTab === "critical" ? (
                   <div className="flex gap-2">
@@ -1588,8 +1652,9 @@ export default function ErrorLogs() {
                     </Button>
                   </div>
                 ) : activeTab === "non_critical" ? (
-                  <Button
-                    type="button"
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
                       variant="outline"
                       size="sm"
                       onClick={() => void handleBulkSetNonCritical(false)}
@@ -1604,6 +1669,23 @@ export default function ErrorLogs() {
                     >
                       Tandai Halaman Ini Kritis
                     </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={openBulkArchiveConfirmDialog}
+                      disabled={
+                        isBulkClassifying ||
+                        isBulkArchiving ||
+                        isBulkUnarchiving ||
+                        isBulkResolving ||
+                        isBulkReopening ||
+                        paginatedEntries.length === 0
+                      }
+                    >
+                      Arsipkan Halaman Ini
+                    </Button>
+                  </div>
                 ) : activeTab === "resolved_critical" ? (
                   <div className="flex gap-2">
                     <Button
@@ -1639,7 +1721,7 @@ export default function ErrorLogs() {
                       Arsipkan Halaman Ini
                     </Button>
                   </div>
-                ) : (
+                ) : activeTab === "archived_critical" ? (
                   <Button
                     type="button"
                     variant="outline"
@@ -1656,6 +1738,41 @@ export default function ErrorLogs() {
                   >
                     Pulihkan Halaman Ini
                   </Button>
+                ) : (
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleBulkSetNonCritical(false)}
+                      disabled={
+                        isBulkClassifying ||
+                        isBulkArchiving ||
+                        isBulkUnarchiving ||
+                        isBulkResolving ||
+                        isBulkReopening ||
+                        paginatedEntries.length === 0
+                      }
+                    >
+                      Tandai Halaman Ini Kritis
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={openBulkUnarchiveConfirmDialog}
+                      disabled={
+                        isBulkUnarchiving ||
+                        isBulkClassifying ||
+                        isBulkArchiving ||
+                        isBulkResolving ||
+                        isBulkReopening ||
+                        paginatedEntries.length === 0
+                      }
+                    >
+                      Pulihkan Halaman Ini
+                    </Button>
+                  </div>
                 )}
               </div>
             )}
@@ -1744,9 +1861,12 @@ export default function ErrorLogs() {
               </div>
             </div>
 
-            {selectedWindow !== "all" && (activeTab === "resolved_critical" || activeTab === "archived_critical") && (
+            {selectedWindow !== "all" &&
+              (activeTab === "resolved_critical" ||
+                activeTab === "archived_critical" ||
+                activeTab === "archived_non_critical") && (
               <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                Filter waktu aktif ({selectedWindow.toUpperCase()}). Data tab Selesai/Arsip Kritis di luar rentang ini
+                Filter waktu aktif ({selectedWindow.toUpperCase()}). Data tab Selesai/Arsip di luar rentang ini
                 tidak ditampilkan.
                 <Button
                   type="button"
@@ -1824,6 +1944,17 @@ export default function ErrorLogs() {
                                 <Eye className="mr-1 h-3.5 w-3.5" />
                                 Detail
                               </Button>
+                              {getTopupRequestIdFromEntry(entry) ? (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => openTopupRequest(entry)}
+                                >
+                                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                                  Buka Topup
+                                </Button>
+                              ) : null}
                               <Button
                                 type="button"
                                 variant="outline"
@@ -1886,6 +2017,17 @@ export default function ErrorLogs() {
                                 <Eye className="mr-1 h-3.5 w-3.5" />
                                 Detail
                               </Button>
+                              {getTopupRequestIdFromEntry(entry) ? (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => openTopupRequest(entry)}
+                                >
+                                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                                  Buka Topup
+                                </Button>
+                              ) : null}
                               <Button
                                 type="button"
                                 variant="outline"
@@ -1914,6 +2056,17 @@ export default function ErrorLogs() {
                                 <Eye className="mr-1 h-3.5 w-3.5" />
                                 Detail
                               </Button>
+                              {getTopupRequestIdFromEntry(entry) ? (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => openTopupRequest(entry)}
+                                >
+                                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                                  Buka Topup
+                                </Button>
+                              ) : null}
                               <span className="text-xs text-muted-foreground whitespace-nowrap">
                                 {entry.resolvedAt
                                   ? format(new Date(entry.resolvedAt), "dd MMM yyyy HH:mm:ss", { locale: id })
@@ -1963,11 +2116,77 @@ export default function ErrorLogs() {
                                 <Eye className="mr-1 h-3.5 w-3.5" />
                                 Detail
                               </Button>
+                              {getTopupRequestIdFromEntry(entry) ? (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => openTopupRequest(entry)}
+                                >
+                                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                                  Buka Topup
+                                </Button>
+                              ) : null}
                               <span className="text-xs text-muted-foreground">
                                 {entry.archivedAt
                                   ? format(new Date(entry.archivedAt), "dd MMM yyyy HH:mm:ss", { locale: id })
                                   : "-"}
                               </span>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => void handleUnarchiveCritical(entry)}
+                                disabled={
+                                  unarchivingRefId === entry.id ||
+                                  isBulkClassifying ||
+                                  isBulkArchiving ||
+                                  isBulkUnarchiving ||
+                                  isBulkResolving ||
+                                  isBulkReopening
+                                }
+                              >
+                                Pulihkan
+                              </Button>
+                            </div>
+                          ) : activeTab === "archived_non_critical" ? (
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setSelectedDetailEntry(entry)}
+                              >
+                                <Eye className="mr-1 h-3.5 w-3.5" />
+                                Detail
+                              </Button>
+                              {getTopupRequestIdFromEntry(entry) ? (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => openTopupRequest(entry)}
+                                >
+                                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                                  Buka Topup
+                                </Button>
+                              ) : null}
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => void handleSetNonCritical(entry, false)}
+                                disabled={
+                                  classifyingRefId === entry.id ||
+                                  isBulkClassifying ||
+                                  isBulkArchiving ||
+                                  isBulkUnarchiving ||
+                                  isBulkResolving ||
+                                  isBulkReopening
+                                }
+                              >
+                                Tandai Kritis
+                              </Button>
                               <Button
                                 type="button"
                                 variant="outline"
@@ -2069,18 +2288,26 @@ export default function ErrorLogs() {
           <AlertDialogHeader>
             <AlertDialogTitle>
               {bulkConfirmDialog?.action === "archive"
-                ? "Arsipkan Log Kritis Halaman Ini?"
+                ? activeTab === "non_critical"
+                  ? "Arsipkan Log Non Kritis Halaman Ini?"
+                  : "Arsipkan Log Kritis Halaman Ini?"
                 : bulkConfirmDialog?.action === "unarchive"
-                  ? "Pulihkan Arsip Kritis Halaman Ini?"
+                  ? activeTab === "archived_non_critical"
+                    ? "Pulihkan Arsip Non Kritis Halaman Ini?"
+                    : "Pulihkan Arsip Kritis Halaman Ini?"
                   : bulkConfirmDialog?.action === "resolve"
                     ? "Tandai Log Kritis Selesai?"
                     : "Buka Kembali Log Kritis Selesai?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {bulkConfirmDialog?.action === "archive"
-                ? `Sebanyak ${bulkConfirmDialog.count} log kritis pada halaman ini akan dipindahkan ke arsip.`
+                ? activeTab === "non_critical"
+                  ? `Sebanyak ${bulkConfirmDialog.count} log non-kritis pada halaman ini akan dipindahkan ke arsip.`
+                  : `Sebanyak ${bulkConfirmDialog.count} log kritis pada halaman ini akan dipindahkan ke arsip.`
                 : bulkConfirmDialog?.action === "unarchive"
-                  ? `Sebanyak ${bulkConfirmDialog?.count ?? 0} arsip kritis pada halaman ini akan dipulihkan ke daftar kritis.`
+                  ? activeTab === "archived_non_critical"
+                    ? `Sebanyak ${bulkConfirmDialog?.count ?? 0} arsip non-kritis pada halaman ini akan dipulihkan ke daftar non-kritis.`
+                    : `Sebanyak ${bulkConfirmDialog?.count ?? 0} arsip kritis pada halaman ini akan dipulihkan ke daftar kritis.`
                   : bulkConfirmDialog?.action === "resolve"
                     ? `Sebanyak ${bulkConfirmDialog?.count ?? 0} log kritis pada halaman ini akan ditandai selesai.`
                     : `Sebanyak ${bulkConfirmDialog?.count ?? 0} log selesai pada halaman ini akan dibuka kembali.`}
@@ -2116,6 +2343,14 @@ export default function ErrorLogs() {
           </DialogHeader>
           {selectedDetailEntry ? (
             <div className="space-y-3 text-sm">
+              {getTopupRequestIdFromEntry(selectedDetailEntry) ? (
+                <div className="flex justify-end">
+                  <Button type="button" variant="outline" size="sm" onClick={() => openTopupRequest(selectedDetailEntry)}>
+                    <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                    Buka Request Topup
+                  </Button>
+                </div>
+              ) : null}
               <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                 <div><span className="text-muted-foreground">Ref:</span> <code>{selectedDetailEntry.id}</code></div>
                 <div><span className="text-muted-foreground">Waktu:</span> {format(new Date(selectedDetailEntry.timestamp), "dd MMM yyyy HH:mm:ss", { locale: id })}</div>
