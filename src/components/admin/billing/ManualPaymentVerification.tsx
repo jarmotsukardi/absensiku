@@ -71,6 +71,11 @@ export function ManualPaymentVerification() {
   
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [showVerifyDialog, setShowVerifyDialog] = useState(false);
+  const [proofPreview, setProofPreview] = useState<{
+    url: string;
+    invoiceNumber: string;
+    tenantName: string;
+  } | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [verificationNotes, setVerificationNotes] = useState("");
@@ -98,6 +103,21 @@ export function ManualPaymentVerification() {
     setVerificationMethod("manual");
     setShowVerifyDialog(true);
   };
+
+  const openProofPreview = (invoice: Invoice) => {
+    if (!invoice.payment_proof_url) return;
+    setProofPreview({
+      url: invoice.payment_proof_url,
+      invoiceNumber: invoice.invoice_number || "-",
+      tenantName: invoice.tenant?.name || "Unknown",
+    });
+  };
+
+  const closeProofPreview = () => {
+    setProofPreview(null);
+  };
+
+  const isPdfProofPreview = Boolean(proofPreview?.url && /\.pdf($|[?#])/i.test(proofPreview.url));
 
   const handleVerify = async (approved: boolean) => {
     if (!selectedInvoice) return;
@@ -660,11 +680,9 @@ export function ManualPaymentVerification() {
 
                   <div className="flex items-center gap-2">
                     {invoice.payment_proof_url && (
-                      <Button variant="outline" size="sm" asChild>
-                        <a href={invoice.payment_proof_url} target="_blank" rel="noopener noreferrer">
-                          <FileImage className="mr-2 h-4 w-4" />
-                          Bukti
-                        </a>
+                      <Button variant="outline" size="sm" onClick={() => openProofPreview(invoice)}>
+                        <FileImage className="mr-2 h-4 w-4" />
+                        Bukti
                       </Button>
                     )}
                     <Button size="sm" onClick={() => handleVerifyClick(invoice)}>
@@ -727,11 +745,9 @@ export function ManualPaymentVerification() {
               </Card>
 
               {selectedInvoice.payment_proof_url && (
-                <Button variant="outline" className="w-full" asChild>
-                  <a href={selectedInvoice.payment_proof_url} target="_blank" rel="noopener noreferrer">
-                    <ExternalLink className="mr-2 h-4 w-4" />
-                    Lihat Bukti Pembayaran
-                  </a>
+                <Button variant="outline" className="w-full" onClick={() => openProofPreview(selectedInvoice)}>
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  Lihat Bukti Pembayaran
                 </Button>
               )}
 
@@ -803,6 +819,48 @@ export function ManualPaymentVerification() {
               <CheckCircle className="mr-2 h-4 w-4" />
               Setujui Pembayaran
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(proofPreview)}
+        onOpenChange={(open) => {
+          if (!open) closeProofPreview();
+        }}
+      >
+        <DialogContent className="max-h-[92vh] max-w-5xl overflow-hidden p-0">
+          <DialogHeader className="border-b px-4 py-3">
+            <DialogTitle>Bukti Pembayaran • {proofPreview?.invoiceNumber || "-"}</DialogTitle>
+          </DialogHeader>
+          <div className="flex max-h-[75vh] items-center justify-center overflow-auto bg-slate-50 p-4">
+            {proofPreview ? (
+              isPdfProofPreview ? (
+                <iframe
+                  src={proofPreview.url}
+                  title={`Bukti pembayaran ${proofPreview.invoiceNumber}`}
+                  className="h-[72vh] w-full rounded-md border bg-white"
+                />
+              ) : (
+                <img
+                  src={proofPreview.url}
+                  alt={`Bukti pembayaran ${proofPreview.invoiceNumber}`}
+                  className="max-h-[72vh] w-auto rounded-md border bg-white object-contain shadow-sm"
+                />
+              )
+            ) : null}
+          </div>
+          <DialogFooter className="border-t px-4 py-3">
+            <div className="mr-auto text-xs text-muted-foreground">{proofPreview?.tenantName || "-"}</div>
+            {proofPreview?.url ? (
+              <Button variant="outline" asChild>
+                <a href={proofPreview.url} target="_blank" rel="noopener noreferrer">
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  Buka Tab Baru
+                </a>
+              </Button>
+            ) : null}
+            <Button onClick={closeProofPreview}>Tutup</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

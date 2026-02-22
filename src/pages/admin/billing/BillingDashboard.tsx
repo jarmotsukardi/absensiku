@@ -72,6 +72,14 @@ export default function BillingDashboard() {
   const { summary, isLoading: isLoadingLedger } = useFinancialLedger(currentMonth);
   const { invoices, isLoading: isLoadingInvoices } = useInvoices();
 
+  const manualVerificationStatuses = new Set([
+    "AWAITING_VERIFICATION",
+    "AWAITING_VERIFICATION_FULL",
+    "PENDING_VERIFICATION_PARTIAL",
+  ]);
+  const manualVerificationCount = invoices.filter((i) =>
+    manualVerificationStatuses.has((i.status || "").toUpperCase()),
+  ).length;
   const pendingStatuses = new Set([
     "PENDING",
     "AWAITING_VERIFICATION",
@@ -161,10 +169,10 @@ export default function BillingDashboard() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-yellow-600">
-                {isLoadingInvoices ? "..." : pendingCount}
+                {isLoadingInvoices ? "..." : manualVerificationCount}
               </div>
               <p className="text-xs text-muted-foreground">
-                Invoice perlu diproses
+                Antrean tab Verifikasi Manual
               </p>
             </CardContent>
           </Card>
@@ -227,18 +235,20 @@ export default function BillingDashboard() {
         <Card>
           <CardContent className="p-0">
             <Tabs value={activeTab} onValueChange={setActiveTab}>
-              <div className="border-b bg-muted/30 px-4 overflow-x-auto">
-                <TabsList className="h-auto p-0 bg-transparent flex flex-nowrap gap-1">
-                  {BILLING_TABS.map((tab) => (
-                    <TabsTrigger
-                      key={tab.id}
-                      value={tab.id}
-                      className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-background data-[state=active]:shadow-none px-4 py-3 text-sm font-medium whitespace-nowrap"
-                    >
-                      {tab.label}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
+              <div className="border-b border-slate-200/80 bg-gradient-to-b from-slate-50 to-white px-3 py-3">
+                <div className="overflow-x-auto pb-1">
+                  <TabsList className="min-w-max h-auto gap-1.5 rounded-2xl border border-slate-200 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+                    {BILLING_TABS.map((tab) => (
+                      <TabsTrigger
+                        key={tab.id}
+                        value={tab.id}
+                        className="rounded-xl border-0 px-4 py-2.5 text-sm font-medium text-slate-600 shadow-none transition-all duration-200 hover:bg-slate-100 hover:text-slate-900 hover:shadow-none data-[state=active]:bg-slate-900 data-[state=active]:text-white data-[state=active]:shadow-[0_8px_20px_rgba(15,23,42,0.28)]"
+                      >
+                        {tab.label}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </div>
               </div>
 
               <div className="p-6">
