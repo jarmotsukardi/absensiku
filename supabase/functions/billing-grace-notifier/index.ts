@@ -79,6 +79,15 @@ interface BillingLogRow {
   metadata: JsonObject | null;
 }
 
+interface ArchivedManualPaymentRow {
+  id: string;
+  tenant_id: string;
+  invoice_number: string | null;
+  transfer_proof_url: string | null;
+  transfer_proof_path: string | null;
+  archive_expires_at: string | null;
+}
+
 interface SendResult {
   ok: boolean;
   provider?: string;
@@ -90,6 +99,46 @@ type NotificationReason =
   | "GRACE_PERIOD_REMINDER"
   | "GRACE_PERIOD_LAST_DAY"
   | "GRACE_PERIOD_EXPIRED";
+
+const createErrorRef = (): string => {
+  const compactIso = new Date()
+    .toISOString()
+    .replaceAll("-", "")
+    .replaceAll(":", "")
+    .replace("T", "")
+    .replaceAll(".", "")
+    .replace("Z", "")
+    .slice(0, 14);
+  const random = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `ERR-${compactIso}-${random}`;
+};
+
+const logClientError = async (
+  supabase: ReturnType<typeof createClient>,
+  params: {
+    traceId: string;
+    context: string;
+    message: string;
+    tenantId?: string | null;
+    metadata?: JsonObject;
+  },
+) => {
+  const payload = {
+    error_ref: createErrorRef(),
+    context: params.context,
+    message: params.message,
+    tenant_id: params.tenantId ?? null,
+    source: "edge:billing-grace-notifier",
+    metadata: {
+      trace_id: params.traceId,
+      ...(params.metadata || {}),
+    },
+  };
+  const { error } = await supabase.from("client_error_logs").insert(payload);
+  if (error) {
+    logTraceError(params.traceId, "Failed to persist client_error_logs from billing-grace-notifier", error);
+  }
+};
 
 const toStringSafe = (value: unknown): string => (typeof value === "string" ? value : "");
 
@@ -124,6 +173,29 @@ const normalizePhone = (raw: string | null): string | null => {
   if (!value) return null;
   if (value.startsWith("0")) value = `62${value.slice(1)}`;
   return value;
+};
+
+const parseRetentionDays = (raw: unknown, fallback: number): number => {
+  const min = 1;
+  const max = 365;
+  if (typeof raw === "number" && Number.isFinite(raw)) return Math.min(max, Math.max(min, Math.floor(raw)));
+  if (typeof raw === "string" && raw.trim() && /^\d+$/.test(raw.trim())) {
+    return Math.min(max, Math.max(min, Number.parseInt(raw.trim(), 10)));
+  }
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const value = (raw as Record<string, unknown>).value;
+    return parseRetentionDays(value, fallback);
+  }
+  return Math.min(max, Math.max(min, fallback));
+};
+
+const toProofPathFromPublicUrl = (url: string | null): string | null => {
+  if (!url) return null;
+  const marker = "/storage/v1/object/public/payment-proofs/";
+  const idx = url.indexOf(marker);
+  if (idx < 0) return null;
+  const rest = url.slice(idx + marker.length);
+  return rest || null;
 };
 
 const parseDateOnlyUtc = (value: string): Date => {
@@ -453,6 +525,147 @@ const mapReasonToInAppTitle = (reason: NotificationReason): string => {
   return "Tenant Masuk Grace Period";
 };
 
+const runArchivedManualPaymentCleanup = async (
+  supabase: ReturnType<typeof createClient>,
+  traceId: string,
+  dryRun: boolean,
+) => {
+  const defaultRetentionDays = 7;
+  let retentionDays = defaultRetentionDays;
+  const summary = {
+    retention_days: defaultRetentionDays,
+    scanned: 0,
+    deleted_rows: 0,
+    deleted_files: 0,
+    failed_rows: 0,
+    dry_run: dryRun,
+  };
+
+  const { data: retentionSetting, error: retentionError } = await supabase
+    .from("system_settings")
+    .select("value")
+    .eq("key", "payment_archive_retention_days")
+    .maybeSingle();
+  if (retentionError) {
+    logTraceError(traceId, "Failed to load payment archive retention setting", retentionError);
+    await logClientError(supabase, {
+      traceId,
+      context: "billing.archive_cleanup.retention_setting.fetch_failed",
+      message: retentionError.message || "Failed to load payment archive retention setting",
+      metadata: { code: retentionError.code || null },
+    });
+  } else {
+    retentionDays = parseRetentionDays((retentionSetting?.value as unknown) ?? defaultRetentionDays, defaultRetentionDays);
+    summary.retention_days = retentionDays;
+  }
+
+  const { data: archivedRows, error: archivedError } = await supabase
+    .from("manual_payments")
+    .select("id, tenant_id, invoice_number, transfer_proof_url, transfer_proof_path, archive_expires_at")
+    .eq("is_archived", true)
+    .not("archive_expires_at", "is", null)
+    .lte("archive_expires_at", new Date().toISOString())
+    .order("archive_expires_at", { ascending: true })
+    .limit(300);
+
+  if (archivedError) {
+    logTraceError(traceId, "Failed to load expired archived manual payments", archivedError);
+    await logClientError(supabase, {
+      traceId,
+      context: "billing.archive_cleanup.expired_rows.fetch_failed",
+      message: archivedError.message || "Failed to load expired archived manual payments",
+      metadata: { code: archivedError.code || null },
+    });
+    return summary;
+  }
+
+  const rows = (archivedRows ?? []) as ArchivedManualPaymentRow[];
+  summary.scanned = rows.length;
+  if (rows.length === 0) return summary;
+
+  if (dryRun) {
+    return {
+      ...summary,
+      deleted_rows: rows.length,
+    };
+  }
+
+  for (const row of rows) {
+    try {
+      const proofPath = row.transfer_proof_path || toProofPathFromPublicUrl(row.transfer_proof_url);
+      if (proofPath) {
+        const { error: removeFileError } = await supabase.storage.from("payment-proofs").remove([proofPath]);
+        if (removeFileError) {
+          summary.failed_rows += 1;
+          logTraceError(traceId, `Failed to remove proof file for manual payment ${row.id}`, removeFileError);
+          await logClientError(supabase, {
+            traceId,
+            context: "billing.archive_cleanup.storage.remove_failed",
+            message: removeFileError.message || `Failed to remove proof file for manual payment ${row.id}`,
+            tenantId: row.tenant_id,
+            metadata: {
+              manual_payment_id: row.id,
+              invoice_number: row.invoice_number,
+              proof_path: proofPath,
+              code: removeFileError.code || null,
+            },
+          });
+          continue;
+        }
+        summary.deleted_files += 1;
+      }
+
+      const { error: deleteRowError } = await supabase.from("manual_payments").delete().eq("id", row.id);
+      if (deleteRowError) {
+        summary.failed_rows += 1;
+        logTraceError(traceId, `Failed to delete archived manual payment ${row.id}`, deleteRowError);
+        await logClientError(supabase, {
+          traceId,
+          context: "billing.archive_cleanup.manual_payment.delete_failed",
+          message: deleteRowError.message || `Failed to delete archived manual payment ${row.id}`,
+          tenantId: row.tenant_id,
+          metadata: {
+            manual_payment_id: row.id,
+            invoice_number: row.invoice_number,
+            code: deleteRowError.code || null,
+          },
+        });
+        continue;
+      }
+      summary.deleted_rows += 1;
+    } catch (error) {
+      summary.failed_rows += 1;
+      logTraceError(traceId, `Unhandled cleanup error for archived manual payment ${row.id}`, error);
+      await logClientError(supabase, {
+        traceId,
+        context: "billing.archive_cleanup.unhandled",
+        message: error instanceof Error ? error.message : `Unhandled cleanup error for manual payment ${row.id}`,
+        tenantId: row.tenant_id,
+        metadata: {
+          manual_payment_id: row.id,
+          invoice_number: row.invoice_number,
+        },
+      });
+    }
+  }
+
+  if (summary.failed_rows > 0) {
+    await logClientError(supabase, {
+      traceId,
+      context: "billing.archive_cleanup.summary.partial_failure",
+      message: `Cleanup arsip pembayaran gagal pada ${summary.failed_rows} dari ${summary.scanned} baris`,
+      metadata: {
+        scanned: summary.scanned,
+        deleted_rows: summary.deleted_rows,
+        deleted_files: summary.deleted_files,
+        failed_rows: summary.failed_rows,
+      },
+    });
+  }
+
+  return summary;
+};
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -539,6 +752,8 @@ serve(async (req) => {
       cleanupLifecycleResult = lifecycleData as JsonObject;
     }
 
+    const paymentArchiveCleanupResult = await runArchivedManualPaymentCleanup(supabase, traceId, dryRun);
+
     let streakQuery = supabase
       .from("stability_streaks")
       .select("tenant_id, status, grace_period_end, reached_target, reached_target_at")
@@ -569,6 +784,7 @@ serve(async (req) => {
           processed: 0,
           message: "Tidak ada tenant grace period.",
           cleanup_lifecycle: cleanupLifecycleResult,
+          payment_archive_cleanup: paymentArchiveCleanupResult,
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
@@ -730,6 +946,7 @@ serve(async (req) => {
           processed: 0,
           message: "Tenant grace period belum memiliki invoice pending.",
           cleanup_lifecycle: cleanupLifecycleResult,
+          payment_archive_cleanup: paymentArchiveCleanupResult,
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
@@ -1086,6 +1303,7 @@ serve(async (req) => {
         whatsapp_sent: waSent,
         failed,
         cleanup_lifecycle: cleanupLifecycleResult,
+        payment_archive_cleanup: paymentArchiveCleanupResult,
         details,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
