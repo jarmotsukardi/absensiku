@@ -66,6 +66,10 @@ const formatCurrency = (amount: number) => {
 const statusColors: Record<string, string> = {
   PENDING: "bg-yellow-100 text-yellow-800",
   AWAITING_VERIFICATION: "bg-blue-100 text-blue-800",
+  AWAITING_VERIFICATION_FULL: "bg-blue-100 text-blue-800",
+  PENDING_VERIFICATION_PARTIAL: "bg-indigo-100 text-indigo-800",
+  PARTIALLY_PAID: "bg-indigo-100 text-indigo-800",
+  REJECTED_NEEDS_REVISION: "bg-red-100 text-red-800",
   PAID: "bg-green-100 text-green-800",
   EXPIRED: "bg-gray-100 text-gray-800",
   CANCELLED: "bg-red-100 text-red-800",
@@ -75,6 +79,10 @@ const statusColors: Record<string, string> = {
 const statusLabels: Record<string, string> = {
   PENDING: "Menunggu",
   AWAITING_VERIFICATION: "Verifikasi",
+  AWAITING_VERIFICATION_FULL: "Verifikasi Penuh",
+  PENDING_VERIFICATION_PARTIAL: "Verifikasi Parsial",
+  PARTIALLY_PAID: "Cicilan Aktif",
+  REJECTED_NEEDS_REVISION: "Ditolak - Revisi",
   PAID: "Lunas",
   EXPIRED: "Kedaluwarsa",
   CANCELLED: "Dibatalkan",
@@ -181,6 +189,10 @@ export function InvoicesManager({ filterMode = "all", onClearFilterMode }: Invoi
             <SelectItem value="all">Semua Status</SelectItem>
             <SelectItem value="PENDING">Menunggu</SelectItem>
             <SelectItem value="AWAITING_VERIFICATION">Perlu Verifikasi</SelectItem>
+            <SelectItem value="AWAITING_VERIFICATION_FULL">Verifikasi Penuh</SelectItem>
+            <SelectItem value="PENDING_VERIFICATION_PARTIAL">Verifikasi Parsial</SelectItem>
+            <SelectItem value="PARTIALLY_PAID">Cicilan Aktif</SelectItem>
+            <SelectItem value="REJECTED_NEEDS_REVISION">Ditolak - Revisi</SelectItem>
             <SelectItem value="PAID">Lunas</SelectItem>
             <SelectItem value="EXPIRED">Kedaluwarsa</SelectItem>
             <SelectItem value="CANCELLED">Dibatalkan</SelectItem>
@@ -370,8 +382,16 @@ export function InvoicesManager({ filterMode = "all", onClearFilterMode }: Invoi
                     </div>
                   )}
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">PPN ({selectedInvoice.vat_percentage}%)</span>
-                    <span>{formatCurrency(selectedInvoice.vat_amount)}</span>
+                    <span className="text-muted-foreground">
+                      PPN ({selectedInvoice.ppn_percentage ?? 11}%)
+                    </span>
+                    <span>{formatCurrency(selectedInvoice.ppn_amount ?? selectedInvoice.vat_amount)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">
+                      PPH ({selectedInvoice.pph_percentage ?? 0}%)
+                    </span>
+                    <span>{formatCurrency(selectedInvoice.pph_amount ?? 0)}</span>
                   </div>
                   {selectedInvoice.xendit_fee > 0 && (
                     <div className="flex justify-between">

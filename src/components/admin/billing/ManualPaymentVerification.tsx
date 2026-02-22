@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useInvoices, Invoice } from "@/hooks/useBilling";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -14,16 +14,14 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { 
   Search, 
-  Eye, 
   CheckCircle, 
   XCircle, 
   Loader2, 
@@ -31,7 +29,6 @@ import {
   FileImage,
   Building2,
   Calendar,
-  Upload
 } from "lucide-react";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
@@ -50,19 +47,38 @@ const formatCurrency = (amount: number) => {
 
 export function ManualPaymentVerification() {
   const [searchQuery, setSearchQuery] = useState("");
-  const { invoices, isLoading, refetch } = useInvoices({ status: "AWAITING_VERIFICATION" });
+  const {
+    invoices: legacyVerificationInvoices,
+    isLoading: isLoadingLegacyVerification,
+    refetch: refetchLegacyVerification,
+  } = useInvoices({
+    status: "AWAITING_VERIFICATION",
+  });
+  const {
+    invoices: fullVerificationInvoices,
+    isLoading: isLoadingFullVerification,
+    refetch: refetchFullVerification,
+  } = useInvoices({
+    status: "AWAITING_VERIFICATION_FULL",
+  });
+  const {
+    invoices: partialVerificationInvoices,
+    isLoading: isLoadingPartialVerification,
+    refetch: refetchPartialVerification,
+  } = useInvoices({
+    status: "PENDING_VERIFICATION_PARTIAL",
+  });
   
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [showVerifyDialog, setShowVerifyDialog] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [verificationNotes, setVerificationNotes] = useState("");
+  const [verifiedAmountInput, setVerifiedAmountInput] = useState("");
+  const [verificationMethod, setVerificationMethod] = useState("manual");
 
-  // Also get pending manual invoices
-  const { invoices: pendingInvoices } = useInvoices({ status: "PENDING" });
-  const manualPendingInvoices = pendingInvoices.filter(inv => inv.payment_method_type === "MANUAL_TRANSFER");
-
-  const allManualInvoices = [...invoices, ...manualPendingInvoices];
+  const allManualInvoices = [...legacyVerificationInvoices, ...fullVerificationInvoices, ...partialVerificationInvoices];
+  const isLoading = isLoadingLegacyVerification || isLoadingFullVerification || isLoadingPartialVerification;
   
   const filteredInvoices = allManualInvoices.filter((inv) => {
     if (!searchQuery) return true;
@@ -78,6 +94,8 @@ export function ManualPaymentVerification() {
     setSelectedInvoice(invoice);
     setRejectionReason("");
     setVerificationNotes("");
+    setVerifiedAmountInput(String(Math.max(0, Math.round(invoice.gross_amount || 0))));
+    setVerificationMethod("manual");
     setShowVerifyDialog(true);
   };
 
@@ -86,22 +104,282 @@ export function ManualPaymentVerification() {
     setIsProcessing(true);
 
     try {
+      const nowIso = new Date().toISOString();
+      const expectedAmount = Number(selectedInvoice.gross_amount || 0);
+      const { data: manualPaymentRows, error: manualPaymentFetchError } = await supabase
+        .from("manual_payments")
+        .select("id, amount, confirmed_amount, verified_amount, verification_method, status, reference_number, transfer_proof_url, payment_date, created_at")
+        .eq("tenant_id", selectedInvoice.tenant_id)
+        .eq("invoice_number", selectedInvoice.invoice_number)
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (manualPaymentFetchError) {
+        const errorRef = reportError(
+          manualPaymentFetchError,
+          "admin.billing.manual_payment.evidence.fetch_failed",
+          {
+            invoice_id: selectedInvoice.id,
+            tenant_id: selectedInvoice.tenant_id,
+            invoice_number: selectedInvoice.invoice_number,
+          },
+        );
+        toast.error(appendErrorReference("Gagal membaca bukti pembayaran manual.", errorRef));
+        return;
+      }
+
+      const manualPayments = manualPaymentRows || [];
+      const pendingManualPayment =
+        manualPayments.find((row) =>
+          ["pending", "awaiting_verification_full", "pending_verification_partial"].includes(
+            (row.status || "").toLowerCase(),
+          ),
+        ) || null;
+      const verifiedAmount = manualPayments
+        .filter((row) => (row.status || "").toLowerCase() === "verified")
+        .reduce((sum, row) => sum + Number(row.verified_amount ?? row.amount ?? 0), 0);
+
       // Update invoice status
       const updates: TablesUpdate<"invoices"> = {
-        status: approved ? "PAID" : "CANCELLED",
-        updated_at: new Date().toISOString(),
+        status: approved ? "PAID" : "REJECTED_NEEDS_REVISION",
+        updated_at: nowIso,
       };
 
       if (approved) {
-        updates.paid_at = new Date().toISOString();
-        updates.notes = verificationNotes || "Pembayaran manual diverifikasi";
-        
+        if (!pendingManualPayment) {
+          const errorRef = reportError(
+            new Error("MANUAL_PAYMENT_PENDING_NOT_FOUND"),
+            "admin.billing.manual_payment.evidence.pending_not_found",
+            {
+              invoice_id: selectedInvoice.id,
+              tenant_id: selectedInvoice.tenant_id,
+              invoice_number: selectedInvoice.invoice_number,
+            },
+          );
+          toast.error(appendErrorReference("Belum ada konfirmasi pembayaran baru untuk diverifikasi.", errorRef));
+          return;
+        }
+
+        const hasTransferProof = Boolean(selectedInvoice.payment_proof_url || pendingManualPayment.transfer_proof_url);
+        if (!hasTransferProof) {
+          const errorRef = reportError(
+            new Error("MANUAL_PAYMENT_PROOF_MISSING"),
+            "admin.billing.manual_payment.evidence.missing_proof",
+            {
+              invoice_id: selectedInvoice.id,
+              tenant_id: selectedInvoice.tenant_id,
+              invoice_number: selectedInvoice.invoice_number,
+            },
+          );
+          toast.error(appendErrorReference("Bukti pembayaran belum tersedia. Approval diblokir.", errorRef));
+          return;
+        }
+
+        const paidAmount = Number(pendingManualPayment.amount ?? 0);
+        if (!Number.isFinite(paidAmount) || paidAmount <= 0) {
+          const errorRef = reportError(
+            new Error("MANUAL_PAYMENT_AMOUNT_UNAVAILABLE"),
+            "admin.billing.manual_payment.evidence.missing_amount",
+            {
+              invoice_id: selectedInvoice.id,
+              tenant_id: selectedInvoice.tenant_id,
+              invoice_number: selectedInvoice.invoice_number,
+              manual_payment_id: pendingManualPayment.id,
+            },
+          );
+          toast.error(appendErrorReference("Nominal pembayaran belum valid. Approval diblokir.", errorRef));
+          return;
+        }
+
+        const confirmedAmount = Number(pendingManualPayment.confirmed_amount ?? pendingManualPayment.amount ?? 0);
+        const verifiedInputAmount = Number((verifiedAmountInput || "").replace(/[^\d.]/g, ""));
+        if (!Number.isFinite(verifiedInputAmount) || verifiedInputAmount <= 0) {
+          const errorRef = reportError(
+            new Error("MANUAL_PAYMENT_VERIFIED_AMOUNT_INVALID"),
+            "admin.billing.manual_payment.evidence.verified_amount_invalid",
+            {
+              invoice_id: selectedInvoice.id,
+              tenant_id: selectedInvoice.tenant_id,
+              invoice_number: selectedInvoice.invoice_number,
+              manual_payment_id: pendingManualPayment.id,
+            },
+          );
+          toast.error(appendErrorReference("Nominal verifikasi admin wajib diisi.", errorRef));
+          return;
+        }
+
+        const verifiedInputCents = Math.round(verifiedInputAmount * 100);
+        const confirmedCents = Math.round(confirmedAmount * 100);
+        if (verifiedInputCents !== confirmedCents) {
+          const { error: auditError } = await supabase.rpc("log_manual_payment_verification_audit" as never, {
+            p_invoice_id: selectedInvoice.id,
+            p_manual_payment_id: pendingManualPayment.id,
+            p_tenant_id: selectedInvoice.tenant_id,
+            p_claimed_amount: Math.round(confirmedAmount),
+            p_verified_amount: Math.round(verifiedInputAmount),
+            p_decision: "reject",
+            p_notes: verificationNotes || "Mismatch nominal klaim user vs verifikasi admin",
+          } as never);
+          if (auditError) {
+            reportError(auditError, "admin.billing.manual_payment.audit.mismatch_log_failed", {
+              invoice_id: selectedInvoice.id,
+              tenant_id: selectedInvoice.tenant_id,
+              manual_payment_id: pendingManualPayment.id,
+            });
+          }
+          const errorRef = reportError(
+            new Error("MANUAL_PAYMENT_CONFIRMED_VERIFIED_MISMATCH"),
+            "admin.billing.manual_payment.evidence.confirmed_verified_mismatch",
+            {
+              invoice_id: selectedInvoice.id,
+              tenant_id: selectedInvoice.tenant_id,
+              invoice_number: selectedInvoice.invoice_number,
+              manual_payment_id: pendingManualPayment.id,
+              confirmed_amount: confirmedAmount,
+              verified_amount: verifiedInputAmount,
+            },
+          );
+          toast.error(
+            appendErrorReference(
+              "Nominal klaim user tidak sama dengan nominal verifikasi admin. Tolak dulu sebagai wajib revisi.",
+              errorRef,
+            ),
+          );
+          return;
+        }
+
+        const amountAfterApproval = verifiedAmount + verifiedInputAmount;
+        const expectedCents = Math.round(expectedAmount * 100);
+        const afterApprovalCents = Math.round(amountAfterApproval * 100);
+        const amountDelta = amountAfterApproval - expectedAmount;
+        if (afterApprovalCents > expectedCents) {
+          const mismatchReason =
+            `Akumulasi pembayaran melebihi tagihan sebesar ${formatCurrency(Math.abs(amountDelta))}.`;
+          const errorRef = reportError(
+            new Error("MANUAL_PAYMENT_AMOUNT_OVERPAYMENT"),
+            "admin.billing.manual_payment.evidence.amount_mismatch",
+            {
+              invoice_id: selectedInvoice.id,
+              tenant_id: selectedInvoice.tenant_id,
+              invoice_number: selectedInvoice.invoice_number,
+              manual_payment_id: pendingManualPayment.id,
+              expected_amount: expectedAmount,
+              paid_amount: amountAfterApproval,
+              delta: amountDelta,
+            },
+          );
+          toast.error(appendErrorReference(`${mismatchReason} Approval diblokir, cek kembali nominal konfirmasi.`, errorRef));
+          return;
+        }
+
         // Get current user for verified_by
         const { data: { user } } = await supabase.auth.getUser();
-        updates.verified_by = user?.id;
-        updates.verified_at = new Date().toISOString();
+        const { error: manualPaymentVerifyError } = await supabase
+          .from("manual_payments")
+          .update({
+            status: "verified",
+            is_archived: true,
+            verified_amount: verifiedInputAmount,
+            verification_method: verificationMethod,
+            verified_at: nowIso,
+            verified_by: user?.id ?? null,
+            updated_at: nowIso,
+          })
+          .eq("id", pendingManualPayment.id);
+
+        if (manualPaymentVerifyError) {
+          const errorRef = reportError(
+            manualPaymentVerifyError,
+            "admin.billing.manual_payment.evidence.verify_failed",
+            {
+              invoice_id: selectedInvoice.id,
+              tenant_id: selectedInvoice.tenant_id,
+              invoice_number: selectedInvoice.invoice_number,
+              manual_payment_id: pendingManualPayment.id,
+            },
+          );
+          toast.error(appendErrorReference("Gagal sinkron status pembayaran manual.", errorRef));
+          return;
+        }
+
+        if (afterApprovalCents < expectedCents) {
+          const remaining = expectedAmount - amountAfterApproval;
+          updates.status = "PARTIALLY_PAID";
+          updates.rejection_reason = null;
+          updates.notes = [
+            selectedInvoice.notes,
+            verificationNotes || null,
+            `[PARTIAL_PAYMENT] Terverifikasi ${formatCurrency(amountAfterApproval)} dari ${formatCurrency(expectedAmount)}. Sisa ${formatCurrency(remaining)}.`,
+          ]
+            .filter((line) => typeof line === "string" && line.trim().length > 0)
+            .join("\n");
+          updates.paid_at = null;
+          updates.verified_by = null;
+          updates.verified_at = null;
+        } else {
+          updates.paid_at = nowIso;
+          updates.rejection_reason = null;
+          updates.notes = verificationNotes || "Pembayaran manual diverifikasi";
+          updates.verified_by = user?.id;
+          updates.verified_at = nowIso;
+        }
       } else {
         updates.rejection_reason = rejectionReason;
+        updates.notes = [selectedInvoice.notes, verificationNotes || null, `[REQUIRES_REVISION] ${rejectionReason}`]
+          .filter((line) => typeof line === "string" && line.trim().length > 0)
+          .join("\n");
+        updates.paid_at = null;
+        updates.verified_by = null;
+        updates.verified_at = null;
+
+        if (pendingManualPayment?.id) {
+          const { error: manualPaymentRejectError } = await supabase
+            .from("manual_payments")
+            .update({
+              status: "rejected",
+              rejection_reason: rejectionReason,
+              verification_method: verificationMethod,
+              verified_amount: null,
+              verified_at: nowIso,
+              updated_at: nowIso,
+            })
+            .eq("id", pendingManualPayment.id);
+
+          if (manualPaymentRejectError) {
+            const errorRef = reportError(
+              manualPaymentRejectError,
+              "admin.billing.manual_payment.evidence.reject_sync_failed",
+              {
+                invoice_id: selectedInvoice.id,
+                tenant_id: selectedInvoice.tenant_id,
+                invoice_number: selectedInvoice.invoice_number,
+                manual_payment_id: pendingManualPayment.id,
+              },
+            );
+            toast.error(appendErrorReference("Gagal sinkron penolakan pembayaran manual.", errorRef));
+            return;
+          }
+
+          const claimedAmount = Number(pendingManualPayment.confirmed_amount ?? pendingManualPayment.amount ?? 0);
+          const parsedVerifiedInput = Number((verifiedAmountInput || "").replace(/[^\d.]/g, ""));
+          const verifiedAmountForAudit = Number.isFinite(parsedVerifiedInput) ? parsedVerifiedInput : 0;
+          const { error: auditError } = await supabase.rpc("log_manual_payment_verification_audit" as never, {
+            p_invoice_id: selectedInvoice.id,
+            p_manual_payment_id: pendingManualPayment.id,
+            p_tenant_id: selectedInvoice.tenant_id,
+            p_claimed_amount: Math.round(claimedAmount),
+            p_verified_amount: Math.round(verifiedAmountForAudit),
+            p_decision: "reject",
+            p_notes: rejectionReason,
+          } as never);
+          if (auditError) {
+            reportError(auditError, "admin.billing.manual_payment.audit.reject_log_failed", {
+              invoice_id: selectedInvoice.id,
+              tenant_id: selectedInvoice.tenant_id,
+              manual_payment_id: pendingManualPayment.id,
+            });
+          }
+        }
       }
 
       const { error: updateError } = await supabase
@@ -111,8 +389,9 @@ export function ManualPaymentVerification() {
 
       if (updateError) throw updateError;
 
-      // If approved, extend subscription
-      if (approved) {
+      // If approved & fully paid, extend subscription and run downstream workflow.
+      const isFullyPaid = updates.status === "PAID";
+      if (approved && isFullyPaid) {
         // Get current subscription
         const { data: currentSub } = await supabase
           .from("subscriptions")
@@ -285,10 +564,17 @@ export function ManualPaymentVerification() {
         }
       }
 
-      toast.success(approved ? "Pembayaran berhasil diverifikasi" : "Pembayaran ditolak");
+      if (approved && !isFullyPaid) {
+        const parsedVerifiedInput = Number((verifiedAmountInput || "").replace(/[^\d.]/g, ""));
+        const totalVerifiedAfter = verifiedAmount + (Number.isFinite(parsedVerifiedInput) ? parsedVerifiedInput : 0);
+        const remaining = Math.max(0, expectedAmount - totalVerifiedAfter);
+        toast.success(`Pembayaran cicilan diverifikasi. Sisa tagihan: ${formatCurrency(remaining)}.`);
+      } else {
+        toast.success(approved ? "Pembayaran berhasil diverifikasi" : "Konfirmasi pembayaran ditolak");
+      }
       setShowVerifyDialog(false);
       setSelectedInvoice(null);
-      refetch();
+      await Promise.all([refetchLegacyVerification(), refetchFullVerification(), refetchPartialVerification()]);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       const errorRef = reportError(error, "admin.billing.manual_payment.verify_process", {
@@ -460,6 +746,32 @@ export function ManualPaymentVerification() {
                   />
                 </div>
 
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label>Nominal Verifikasi Admin</Label>
+                    <Input
+                      inputMode="decimal"
+                      value={verifiedAmountInput}
+                      onChange={(event) => setVerifiedAmountInput(event.target.value)}
+                      placeholder="Nominal yang benar-benar diterima"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Metode Verifikasi</Label>
+                    <Select value={verificationMethod} onValueChange={setVerificationMethod}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Pilih metode verifikasi" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="manual">Manual</SelectItem>
+                        <SelectItem value="bank_mutation">Mutasi Bank</SelectItem>
+                        <SelectItem value="ocr">OCR Bukti</SelectItem>
+                        <SelectItem value="other">Lainnya</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
                 <div className="space-y-2">
                   <Label>Alasan Penolakan (jika ditolak)</Label>
                   <Textarea
@@ -489,7 +801,7 @@ export function ManualPaymentVerification() {
             <Button onClick={() => handleVerify(true)} disabled={isProcessing}>
               {isProcessing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               <CheckCircle className="mr-2 h-4 w-4" />
-              Setujui & Aktifkan
+              Setujui Pembayaran
             </Button>
           </DialogFooter>
         </DialogContent>

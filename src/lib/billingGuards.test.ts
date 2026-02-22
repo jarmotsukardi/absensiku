@@ -10,6 +10,10 @@ describe("billingGuards", () => {
   it("recognizes active invoice statuses", () => {
     expect(isActiveInvoiceStatus("PENDING")).toBe(true);
     expect(isActiveInvoiceStatus("AWAITING_VERIFICATION")).toBe(true);
+    expect(isActiveInvoiceStatus("AWAITING_VERIFICATION_FULL")).toBe(true);
+    expect(isActiveInvoiceStatus("PENDING_VERIFICATION_PARTIAL")).toBe(true);
+    expect(isActiveInvoiceStatus("PARTIALLY_PAID")).toBe(true);
+    expect(isActiveInvoiceStatus("REJECTED_NEEDS_REVISION")).toBe(true);
     expect(isActiveInvoiceStatus("PAID")).toBe(false);
     expect(isActiveInvoiceStatus(null)).toBe(false);
   });
@@ -30,4 +34,3 @@ describe("billingGuards", () => {
     expect(isAmountOverRemaining(100001, 100000)).toBe(true);
   });
 });
-

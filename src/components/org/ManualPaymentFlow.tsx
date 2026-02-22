@@ -186,7 +186,7 @@ export function ManualPaymentFlow({
         .from("invoices")
         .select("id, invoice_number, status, due_date, gross_amount")
         .eq("tenant_id", tenantId)
-        .in("status", ["PENDING", "AWAITING_VERIFICATION"])
+        .in("status", [...ACTIVE_INVOICE_STATUSES])
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();

@@ -26,7 +26,18 @@ import { GlossaryPanel } from "@/components/common/GlossaryPanel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -150,6 +161,18 @@ interface WalletTopupRequestRow {
   created_at: string | null;
 }
 
+const CANCEL_REASON_OPTIONS = [
+  { value: "employee_count_changed", label: "Jumlah pegawai berubah" },
+  { value: "duration_changed", label: "Durasi paket berubah" },
+  { value: "payment_method_changed", label: "Salah metode pembayaran" },
+  { value: "invoice_data_mismatch", label: "Data invoice tidak sesuai" },
+  { value: "other", label: "Lainnya" },
+] as const;
+
+const CANCEL_REASON_LABEL_MAP: Record<string, string> = Object.fromEntries(
+  CANCEL_REASON_OPTIONS.map((option) => [option.value, option.label]),
+);
+
 type BillingStatusFilter = "all" | "paid" | "unpaid";
 type BillingMenu = "invoices" | "offers" | "topup";
 type BillingSortField = "invoice_number" | "issue_date" | "due_date" | "gross_amount" | "status";
@@ -184,6 +207,12 @@ const formatCurrency = (amount: number) =>
     minimumFractionDigits: 0,
   }).format(amount);
 
+const formatRupiahInput = (raw: string): string => {
+  const value = parseIntegerAmountInput(raw);
+  if (!value) return "";
+  return `Rp ${new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(value)}`;
+};
+
 const formatInvoiceDate = (value: string | null) => {
   if (!value) return "-";
   const parsedDate = new Date(value);
@@ -192,12 +221,20 @@ const formatInvoiceDate = (value: string | null) => {
 };
 
 const isInvoicePaid = (status: string | null | undefined) => status === "PAID";
-const isInvoiceAwaitingVerification = (status: string | null | undefined) => status === "AWAITING_VERIFICATION";
+const isInvoiceAwaitingVerification = (status: string | null | undefined) =>
+  ["AWAITING_VERIFICATION", "AWAITING_VERIFICATION_FULL", "PENDING_VERIFICATION_PARTIAL"].includes(
+    (status || "").toUpperCase(),
+  );
 const isInvoicePending = (status: string | null | undefined) => status === "PENDING";
+const isInvoicePartiallyPaid = (status: string | null | undefined) => status === "PARTIALLY_PAID";
+const isInvoiceRejectedNeedsRevision = (status: string | null | undefined) => status === "REJECTED_NEEDS_REVISION";
 const isInvoiceExpired = (status: string | null | undefined) => status === "EXPIRED";
 const isInvoiceCancelled = (status: string | null | undefined) => status === "CANCELLED";
 const isInvoicePayable = (status: string | null | undefined) =>
-  isInvoicePending(status) || isInvoiceAwaitingVerification(status);
+  isInvoicePending(status) ||
+  isInvoiceAwaitingVerification(status) ||
+  isInvoicePartiallyPaid(status) ||
+  isInvoiceRejectedNeedsRevision(status);
 const isInvoiceCancellableByOrg = (status: string | null | undefined) => isInvoicePending(status);
 
 const getInvoiceStatusMeta = (status: string | null | undefined) => {
@@ -211,6 +248,18 @@ const getInvoiceStatusMeta = (status: string | null | undefined) => {
     return {
       label: "Menunggu Verifikasi",
       className: "border-blue-300 bg-blue-50 text-blue-700",
+    };
+  }
+  if (isInvoicePartiallyPaid(status)) {
+    return {
+      label: "Cicilan Terverifikasi",
+      className: "border-indigo-300 bg-indigo-50 text-indigo-700",
+    };
+  }
+  if (isInvoiceRejectedNeedsRevision(status)) {
+    return {
+      label: "Ditolak - Wajib Revisi",
+      className: "border-red-300 bg-red-50 text-red-700",
     };
   }
   if (isInvoicePaid(status)) {
@@ -255,6 +304,10 @@ const getManualPaymentStatusMeta = (status: string | null | undefined) => {
   switch ((status || "").toLowerCase()) {
     case "verified":
       return { label: "Terverifikasi", className: "border-green-300 bg-green-50 text-green-700" };
+    case "awaiting_verification_full":
+      return { label: "Menunggu Verifikasi Penuh", className: "border-blue-300 bg-blue-50 text-blue-700" };
+    case "pending_verification_partial":
+      return { label: "Menunggu Verifikasi Parsial", className: "border-indigo-300 bg-indigo-50 text-indigo-700" };
     case "rejected":
       return { label: "Ditolak", className: "border-red-300 bg-red-50 text-red-700" };
     case "pending":
@@ -422,16 +475,18 @@ export default function OrgBilling() {
   const [detailManualPaymentError, setDetailManualPaymentError] = useState<string | null>(null);
   const [issueDateFrom, setIssueDateFrom] = useState("");
   const [issueDateTo, setIssueDateTo] = useState("");
-  const [manualProofUrlInput, setManualProofUrlInput] = useState("");
   const [manualPaidAmountInput, setManualPaidAmountInput] = useState("");
-  const [manualReferenceInput, setManualReferenceInput] = useState("");
   const [manualProofFile, setManualProofFile] = useState<File | null>(null);
+  const [isActualTransferDeclared, setIsActualTransferDeclared] = useState(false);
   const [isSubmittingPaymentProof, setIsSubmittingPaymentProof] = useState(false);
-  const [cancelReasonInput, setCancelReasonInput] = useState("");
+  const [cancelReasonCode, setCancelReasonCode] = useState<string>("");
+  const [cancelReasonDetail, setCancelReasonDetail] = useState("");
   const [isCancellingInvoice, setIsCancellingInvoice] = useState(false);
+  const [isRevisingInvoice, setIsRevisingInvoice] = useState(false);
   const [isDuplicatingInvoice, setIsDuplicatingInvoice] = useState(false);
   const [shouldAutoFocusPaymentSection, setShouldAutoFocusPaymentSection] = useState(false);
   const [paymentSectionFlash, setPaymentSectionFlash] = useState(false);
+  const [isProofUploadConfirmOpen, setIsProofUploadConfirmOpen] = useState(false);
   const proofFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const fetchWalletSnapshot = useCallback(async (resolvedTenantId: string) => {
@@ -663,17 +718,19 @@ export default function OrgBilling() {
 
   useEffect(() => {
     if (!selectedInvoice) {
-      setManualProofUrlInput("");
       setManualProofFile(null);
-      setCancelReasonInput("");
+      setIsActualTransferDeclared(false);
+      setCancelReasonCode("");
+      setCancelReasonDetail("");
       if (proofFileInputRef.current) {
         proofFileInputRef.current.value = "";
       }
       return;
     }
-    setManualProofUrlInput(selectedInvoice.payment_proof_url || "");
     setManualProofFile(null);
-    setCancelReasonInput("");
+    setIsActualTransferDeclared(false);
+    setCancelReasonCode("");
+    setCancelReasonDetail("");
     if (proofFileInputRef.current) {
       proofFileInputRef.current.value = "";
     }
@@ -846,10 +903,11 @@ export default function OrgBilling() {
 
     setActiveBillingMenu("invoices");
     setSelectedInvoice(targetInvoice);
-    setManualProofUrlInput(targetInvoice.payment_proof_url || "");
-    setManualPaidAmountInput(String(Math.max(0, Math.round(targetInvoice.gross_amount || 0))));
-    setManualReferenceInput("");
+    setManualPaidAmountInput(formatRupiahInput(String(Math.max(0, Math.round(targetInvoice.gross_amount || 0)))));
+    setCancelReasonCode("");
+    setCancelReasonDetail("");
     setManualProofFile(null);
+    setIsActualTransferDeclared(false);
     if (proofFileInputRef.current) {
       proofFileInputRef.current.value = "";
     }
@@ -999,15 +1057,17 @@ export default function OrgBilling() {
   const submitPaymentProof = async () => {
     if (!selectedInvoice || !tenantId) return;
 
-    const urlInput = manualProofUrlInput.trim();
     const paidAmount = parseIntegerAmountInput(manualPaidAmountInput);
-    const referenceNumber = manualReferenceInput.trim();
-    if (!urlInput && !manualProofFile) {
-      toast.error("Masukkan URL bukti bayar atau unggah file bukti");
+    if (!manualProofFile) {
+      toast.error("Unggah file bukti bayar terlebih dahulu.");
       return;
     }
     if (!Number.isFinite(paidAmount) || paidAmount <= 0) {
       toast.error("Nominal transfer wajib diisi dan harus lebih dari 0");
+      return;
+    }
+    if (!isActualTransferDeclared) {
+      toast.error("Centang deklarasi bahwa nominal sesuai transfer aktual sebelum kirim.");
       return;
     }
     if (isAmountOverRemaining(paidAmount, selectedInvoiceRemaining)) {
@@ -1016,30 +1076,23 @@ export default function OrgBilling() {
       );
       return;
     }
-    if (urlInput && !/^https?:\/\//i.test(urlInput)) {
-      toast.error("URL bukti bayar harus diawali http:// atau https://");
-      return;
-    }
-
     setIsSubmittingPaymentProof(true);
     try {
-      let paymentProofUrl = urlInput;
+      let paymentProofUrl = "";
       let paymentProofPath: string | null = null;
-      if (manualProofFile) {
-        const safeName = manualProofFile.name.replace(/[^a-zA-Z0-9._-]/g, "-");
-        const objectPath = `${tenantId}/${selectedInvoice.id}/${Date.now()}-${safeName}`;
-        const { error: uploadError } = await supabase.storage
-          .from(PAYMENT_PROOF_BUCKET)
-          .upload(objectPath, manualProofFile, {
-            cacheControl: "3600",
-            contentType: manualProofFile.type || undefined,
-            upsert: false,
-          });
+      const safeName = manualProofFile.name.replace(/[^a-zA-Z0-9._-]/g, "-");
+      const objectPath = `${tenantId}/${selectedInvoice.id}/${Date.now()}-${safeName}`;
+      const { error: uploadError } = await supabase.storage
+        .from(PAYMENT_PROOF_BUCKET)
+        .upload(objectPath, manualProofFile, {
+          cacheControl: "3600",
+          contentType: manualProofFile.type || undefined,
+          upsert: false,
+        });
 
-        if (uploadError) throw uploadError;
-        paymentProofUrl = supabase.storage.from(PAYMENT_PROOF_BUCKET).getPublicUrl(objectPath).data.publicUrl;
-        paymentProofPath = objectPath;
-      }
+      if (uploadError) throw uploadError;
+      paymentProofUrl = supabase.storage.from(PAYMENT_PROOF_BUCKET).getPublicUrl(objectPath).data.publicUrl;
+      paymentProofPath = objectPath;
 
       if (!paymentProofUrl) {
         throw new Error("URL bukti bayar tidak tersedia");
@@ -1055,9 +1108,9 @@ export default function OrgBilling() {
           payment_method: "bank_transfer",
           transfer_proof_url: paymentProofUrl,
           transfer_proof_path: paymentProofPath,
-          reference_number: referenceNumber || null,
+          reference_number: null,
           payment_date: new Date().toISOString().slice(0, 10),
-          status: "pending",
+          status: paidAmount < selectedInvoiceRemaining ? "pending_verification_partial" : "awaiting_verification_full",
           invoice_number: invoiceNumber,
           notes: "Konfirmasi pembayaran dari /org/billing",
         });
@@ -1067,7 +1120,7 @@ export default function OrgBilling() {
         .from("invoices")
         .update({
           payment_proof_url: paymentProofUrl,
-          status: "AWAITING_VERIFICATION",
+          status: paidAmount < selectedInvoiceRemaining ? "PENDING_VERIFICATION_PARTIAL" : "AWAITING_VERIFICATION_FULL",
           rejection_reason: null,
           updated_at: new Date().toISOString(),
         })
@@ -1077,9 +1130,8 @@ export default function OrgBilling() {
       if (updateError) throw updateError;
 
       toast.success("Bukti pembayaran berhasil dikirim. Menunggu verifikasi admin.");
-      setManualProofUrlInput(paymentProofUrl);
-      setManualReferenceInput("");
       setManualProofFile(null);
+      setIsActualTransferDeclared(false);
       if (proofFileInputRef.current) {
         proofFileInputRef.current.value = "";
       }
@@ -1100,15 +1152,22 @@ export default function OrgBilling() {
       toast.warning("Hanya faktur berstatus menunggu pembayaran yang bisa dibatalkan.");
       return;
     }
-    const reason = cancelReasonInput.trim();
-    if (!reason) {
-      toast.error("Alasan pembatalan wajib diisi.");
+    if (!cancelReasonCode) {
+      toast.error("Pilih alasan pembatalan.");
       return;
     }
+    const detail = cancelReasonDetail.trim();
+    if (cancelReasonCode === "other" && !detail) {
+      toast.error("Isi detail alasan pembatalan untuk opsi Lainnya.");
+      return;
+    }
+    const reasonLabel = CANCEL_REASON_LABEL_MAP[cancelReasonCode] || "Lainnya";
+    const reason = cancelReasonCode === "other" ? detail : reasonLabel;
+    const reasonAudit = `[${reasonLabel}] ${reason}`;
 
     setIsCancellingInvoice(true);
     try {
-      const nextNotes = [selectedInvoice.notes, `[USER_CANCEL] ${reason}`]
+      const nextNotes = [selectedInvoice.notes, `[USER_CANCEL] ${reasonAudit}`]
         .filter((value) => typeof value === "string" && value.trim().length > 0)
         .join("\n");
 
@@ -1117,7 +1176,7 @@ export default function OrgBilling() {
         .update({
           status: "CANCELLED",
           notes: nextNotes,
-          rejection_reason: reason,
+          rejection_reason: reasonAudit,
           updated_at: new Date().toISOString(),
         })
         .eq("id", selectedInvoice.id)
@@ -1134,6 +1193,86 @@ export default function OrgBilling() {
       toast.error(appendErrorReference("Gagal membatalkan faktur", errorRef));
     } finally {
       setIsCancellingInvoice(false);
+    }
+  };
+
+  const reviseInvoiceViaActivation = async () => {
+    if (!selectedInvoice || !tenantId) return;
+    if (!isInvoiceCancellableByOrg(selectedInvoice.status)) {
+      toast.warning("Revisi hanya bisa dilakukan saat faktur berstatus Menunggu Pembayaran.");
+      return;
+    }
+
+    if (!cancelReasonCode) {
+      toast.error("Pilih alasan pembatalan sebelum membuat revisi faktur.");
+      return;
+    }
+    const detail = cancelReasonDetail.trim();
+    if (cancelReasonCode === "other" && !detail) {
+      toast.error("Isi detail alasan pembatalan untuk opsi Lainnya.");
+      return;
+    }
+    const reasonLabel = CANCEL_REASON_LABEL_MAP[cancelReasonCode] || "Lainnya";
+    const reason = cancelReasonCode === "other" ? detail : reasonLabel;
+    const reasonAudit = `[${reasonLabel}] ${reason}`;
+
+    setIsRevisingInvoice(true);
+    try {
+      const nextNotes = [selectedInvoice.notes, `[USER_REVISE] ${reasonAudit}`]
+        .filter((value) => typeof value === "string" && value.trim().length > 0)
+        .join("\n");
+
+      const { error: cancelError } = await supabase
+        .from("invoices")
+        .update({
+          status: "CANCELLED",
+          notes: nextNotes,
+          rejection_reason: reasonAudit,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", selectedInvoice.id)
+        .eq("tenant_id", tenantId);
+
+      if (cancelError) throw cancelError;
+
+      const { data: activePackages, error: packageError } = await supabase
+        .from("subscription_packages")
+        .select("id, name, duration_months")
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true });
+      if (packageError) throw packageError;
+
+      const matchedPackage = (activePackages || []).find(
+        (pkg) =>
+          pkg.name === (selectedInvoice.package_name || "") &&
+          Number(pkg.duration_months || 0) === Number(selectedInvoice.package_duration_months || 0),
+      );
+
+      if (typeof window !== "undefined") {
+        const calculatorKey = `org_activation_calculator:${tenantId}`;
+        const nextMemberCount = Math.max(1, Number(selectedInvoice.employee_count || 1));
+        window.localStorage.setItem(
+          calculatorKey,
+          JSON.stringify({
+            packageId: matchedPackage?.id || "",
+            memberCount: nextMemberCount,
+          }),
+        );
+        window.localStorage.setItem(`org_activation_payment_method:${tenantId}`, "manual");
+      }
+
+      toast.success("Faktur lama dibatalkan. Lanjutkan revisi jumlah pegawai/bulan di halaman aktivasi.");
+      await fetchInvoices({ silent: true });
+      setIsDetailOpen(false);
+      navigate("/org/activation?from=invoice-revision");
+    } catch (error) {
+      const errorRef = reportError(error, "org.billing.revise_invoice_via_activation", {
+        invoice_id: selectedInvoice.id,
+        tenant_id: tenantId,
+      });
+      toast.error(appendErrorReference("Gagal menyiapkan revisi faktur", errorRef));
+    } finally {
+      setIsRevisingInvoice(false);
     }
   };
 
@@ -1245,10 +1384,11 @@ export default function OrgBilling() {
 
   const openInvoiceDetail = (invoice: InvoiceRow) => {
     setSelectedInvoice(invoice);
-    setManualProofUrlInput(invoice.payment_proof_url || "");
-    setManualPaidAmountInput(String(Math.max(0, Math.round(invoice.gross_amount || 0))));
-    setManualReferenceInput("");
+    setManualPaidAmountInput(formatRupiahInput(String(Math.max(0, Math.round(invoice.gross_amount || 0)))));
+    setCancelReasonCode("");
+    setCancelReasonDetail("");
     setManualProofFile(null);
+    setIsActualTransferDeclared(false);
     if (proofFileInputRef.current) {
       proofFileInputRef.current.value = "";
     }
@@ -1442,11 +1582,67 @@ export default function OrgBilling() {
     [detailTransactions],
   );
   const effectivePaidTotal = Math.max(verifiedManualPaidTotal, ledgerPaidTotal);
+  const latestRejectedManualAmount = useMemo(() => {
+    const latestRejected = detailManualPayments.find((entry) => (entry.status || "").toLowerCase() === "rejected");
+    if (!latestRejected) return 0;
+    return Number(latestRejected.confirmed_amount ?? latestRejected.amount ?? 0);
+  }, [detailManualPayments]);
   const selectedInvoiceRemaining = selectedInvoice
     ? isInvoicePaid(selectedInvoice.status)
       ? 0
       : Math.max(0, Number(selectedInvoice.gross_amount || 0) - effectivePaidTotal)
     : 0;
+  const manualPaidAmountValue = useMemo(
+    () => parseIntegerAmountInput(manualPaidAmountInput),
+    [manualPaidAmountInput],
+  );
+  const manualPaidAmountInlineError = useMemo(() => {
+    if (!manualPaidAmountInput.trim()) return null;
+    if (!Number.isFinite(manualPaidAmountValue) || manualPaidAmountValue <= 0) {
+      return "Nominal transfer harus lebih dari Rp 0.";
+    }
+    if (isAmountOverRemaining(manualPaidAmountValue, selectedInvoiceRemaining)) {
+      return `Nominal melebihi sisa tagihan (${formatCurrency(selectedInvoiceRemaining)}).`;
+    }
+    return null;
+  }, [manualPaidAmountInput, manualPaidAmountValue, selectedInvoiceRemaining]);
+
+  const handleManualPaidAmountChange = (value: string) => {
+    if (isActualTransferDeclared) {
+      setIsActualTransferDeclared(false);
+    }
+    setManualPaidAmountInput(formatRupiahInput(value));
+  };
+
+  useEffect(() => {
+    if (!selectedInvoice) return;
+    if (!isInvoicePayable(selectedInvoice.status)) return;
+    if (selectedInvoiceRemaining <= 0) return;
+
+    const currentAmount = parseIntegerAmountInput(manualPaidAmountInput);
+    const normalizedRemaining = Math.max(0, Math.round(selectedInvoiceRemaining));
+    if (!normalizedRemaining) return;
+    if (currentAmount === normalizedRemaining) return;
+
+    if (currentAmount <= 0 || currentAmount > normalizedRemaining) {
+      setManualPaidAmountInput(formatRupiahInput(String(normalizedRemaining)));
+    }
+  }, [manualPaidAmountInput, selectedInvoice, selectedInvoiceRemaining]);
+
+  const handleChooseProofFileClick = () => {
+    setIsProofUploadConfirmOpen(true);
+  };
+
+  const handleConfirmChooseProofFile = () => {
+    setIsProofUploadConfirmOpen(false);
+    proofFileInputRef.current?.click();
+  };
+
+  const handleBackToNominal = () => {
+    setIsProofUploadConfirmOpen(false);
+    const nominalInput = document.getElementById("payment-amount");
+    nominalInput?.focus();
+  };
 
   return (
     <OrganizationLayout>
@@ -2025,13 +2221,13 @@ export default function OrgBilling() {
       </div>
 
       <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
-        <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto p-0">
+        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto p-0">
           <DialogHeader className="sr-only">
             <DialogTitle>Detail Faktur</DialogTitle>
           </DialogHeader>
           {selectedInvoice && (
-            <div className="space-y-6 p-6 md:p-8">
-              <div className="flex flex-col gap-4 border-b pb-5 sm:flex-row sm:items-start sm:justify-between">
+            <div className="space-y-4 p-4 md:p-6">
+              <div className="flex flex-col gap-3 border-b pb-4 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                   <p className="text-sm text-muted-foreground">Invoice</p>
                   <h2 className="text-2xl font-bold text-slate-900">#{getInvoiceNumber(selectedInvoice)}</h2>
@@ -2091,7 +2287,36 @@ export default function OrgBilling() {
                 </div>
               </div>
 
-              {selectedInvoice.rejection_reason ? (
+              {isInvoiceRejectedNeedsRevision(selectedInvoice.status) ? (
+                <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
+                  <CircleAlert className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                  <div className="space-y-1">
+                    <p className="font-semibold">Ditolak - Wajib Revisi Pembayaran</p>
+                    <p>
+                      {selectedInvoice.rejection_reason || "Admin menolak konfirmasi sebelumnya. Lakukan revisi dan unggah ulang bukti transfer."}
+                    </p>
+                    <p className="text-xs">
+                      Total tagihan: <span className="font-semibold">{formatCurrency(selectedInvoice.gross_amount || 0)}</span> ·
+                      Total terverifikasi: <span className="font-semibold">{formatCurrency(verifiedManualPaidTotal)}</span> ·
+                      Nominal ditolak: <span className="font-semibold">{formatCurrency(latestRejectedManualAmount)}</span> ·
+                      Sisa wajib bayar: <span className="font-semibold">{formatCurrency(selectedInvoiceRemaining)}</span>
+                    </p>
+                    <div className="pt-1">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="destructive"
+                        onClick={() => {
+                          const target = document.getElementById("invoice-payment-confirmation-section");
+                          target?.scrollIntoView({ behavior: "smooth", block: "start" });
+                        }}
+                      >
+                        Revisi Pembayaran
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ) : selectedInvoice.rejection_reason ? (
                 <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
                   <CircleAlert className="mt-0.5 h-4 w-4 flex-shrink-0" />
                   <div>
@@ -2107,7 +2332,7 @@ export default function OrgBilling() {
                   className={cn("rounded-md border", paymentSectionFlash && "ring-2 ring-primary/50 animate-pulse")}
                 >
                   <div className="border-b px-4 py-3 font-semibold">Aksi Pembayaran</div>
-                  <div className="space-y-4 px-4 py-3">
+                  <div className="space-y-3 px-4 py-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <Button
                         variant="outline"
@@ -2136,60 +2361,96 @@ export default function OrgBilling() {
                       </div>
                     ) : null}
 
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <div className="space-y-1">
-                        <Label htmlFor="payment-proof-url">URL Bukti Bayar</Label>
-                        <Input
-                          id="payment-proof-url"
-                          placeholder="https://..."
-                          value={manualProofUrlInput}
-                          onChange={(event) => setManualProofUrlInput(event.target.value)}
+                    <div className="space-y-1">
+                      <Label htmlFor="payment-amount">Nominal Transfer Aktual</Label>
+                      <Input
+                        id="payment-amount"
+                        inputMode="numeric"
+                        placeholder="Contoh: Rp 445.940"
+                        value={manualPaidAmountInput}
+                        onChange={(event) => handleManualPaidAmountChange(event.target.value)}
+                      />
+                      {manualPaidAmountInlineError ? (
+                        <p className="text-xs text-destructive">{manualPaidAmountInlineError}</p>
+                      ) : (
+                        <div className="space-y-0.5">
+                          <p className="text-xs text-muted-foreground">
+                            Sisa tagihan saat ini: <span className="font-medium">{formatCurrency(selectedInvoiceRemaining)}</span>
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            Nominal otomatis diarahkan ke sisa tagihan untuk pembayaran susulan.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                    <div className="rounded-md border bg-muted/20 px-3 py-2">
+                      <label htmlFor="declare-actual-transfer" className="flex cursor-pointer items-start gap-2">
+                        <Checkbox
+                          id="declare-actual-transfer"
+                          checked={isActualTransferDeclared}
+                          onCheckedChange={(checked) => setIsActualTransferDeclared(Boolean(checked))}
                         />
-                      </div>
-                      <div className="space-y-1">
-                        <Label htmlFor="payment-proof-file">Upload Bukti (opsional)</Label>
-                        <Input
+                        <span className="text-xs text-muted-foreground">
+                          Saya menyatakan nominal di atas adalah nominal transfer aktual sesuai bukti pembayaran.
+                        </span>
+                      </label>
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="payment-proof-file">Upload Bukti Pembayaran</Label>
+                        <input
                           id="payment-proof-file"
                           ref={proofFileInputRef}
                           type="file"
                           accept="image/*,.pdf"
+                          className="hidden"
                           onChange={(event) => {
                             const nextFile = event.target.files?.[0] || null;
                             setManualProofFile(nextFile);
+                            setIsActualTransferDeclared(false);
                           }}
                         />
+                      <div className="rounded-md border border-dashed p-2.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={handleChooseProofFileClick}
+                          >
+                            <FileUp className="mr-1 h-3.5 w-3.5" />
+                            {manualProofFile ? "Ganti File Bukti" : "Pilih File Bukti"}
+                          </Button>
+                          {manualProofFile ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                setManualProofFile(null);
+                                if (proofFileInputRef.current) proofFileInputRef.current.value = "";
+                              }}
+                            >
+                              Hapus File
+                            </Button>
+                          ) : null}
+                        </div>
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          Format JPG/PNG/PDF, rekomendasi maksimal 5MB.
+                        </p>
                         {manualProofFile ? (
-                          <p className="text-xs text-muted-foreground">
-                            <FileUp className="mr-1 inline h-3.5 w-3.5" />
-                            {manualProofFile.name}
+                          <p className="mt-1 text-xs font-medium text-slate-700">
+                            File dipilih: {manualProofFile.name}
                           </p>
                         ) : null}
                       </div>
                     </div>
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <div className="space-y-1">
-                        <Label htmlFor="payment-amount">Nominal Transfer</Label>
-                        <Input
-                          id="payment-amount"
-                          inputMode="numeric"
-                          placeholder="Contoh: 445940"
-                          value={manualPaidAmountInput}
-                          onChange={(event) => setManualPaidAmountInput(event.target.value)}
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label htmlFor="payment-reference">Referensi Transfer (opsional)</Label>
-                        <Input
-                          id="payment-reference"
-                          placeholder="Contoh: TRX-123456789"
-                          value={manualReferenceInput}
-                          onChange={(event) => setManualReferenceInput(event.target.value)}
-                        />
-                      </div>
-                    </div>
-                    <Button onClick={() => void submitPaymentProof()} disabled={isSubmittingPaymentProof}>
+                    <Button
+                      className="w-full md:w-auto"
+                      onClick={() => void submitPaymentProof()}
+                      disabled={isSubmittingPaymentProof || Boolean(manualPaidAmountInlineError) || !isActualTransferDeclared}
+                    >
                       {isSubmittingPaymentProof ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                      Konfirmasi Pembayaran
+                      Kirim Konfirmasi Pembayaran
                     </Button>
                   </div>
                 </div>
@@ -2205,17 +2466,37 @@ export default function OrgBilling() {
                     <div className="grid gap-2 md:grid-cols-[1fr,auto] md:items-end">
                       <div className="space-y-1">
                         <Label htmlFor="cancel-reason">Alasan Pembatalan</Label>
-                        <Input
-                          id="cancel-reason"
-                          placeholder="Contoh: salah jumlah pegawai / metode pembayaran ingin diganti"
-                          value={cancelReasonInput}
-                          onChange={(event) => setCancelReasonInput(event.target.value)}
-                        />
+                        <Select
+                          value={cancelReasonCode}
+                          onValueChange={(value) => {
+                            setCancelReasonCode(value);
+                            if (value !== "other") setCancelReasonDetail("");
+                          }}
+                        >
+                          <SelectTrigger id="cancel-reason">
+                            <SelectValue placeholder="Pilih alasan pembatalan" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {CANCEL_REASON_OPTIONS.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {cancelReasonCode === "other" ? (
+                          <Textarea
+                            placeholder="Tulis detail alasan pembatalan"
+                            value={cancelReasonDetail}
+                            onChange={(event) => setCancelReasonDetail(event.target.value)}
+                            rows={2}
+                          />
+                        ) : null}
                       </div>
                       <Button
                         variant="destructive"
                         onClick={() => void cancelPendingInvoice()}
-                        disabled={isCancellingInvoice}
+                        disabled={isCancellingInvoice || isRevisingInvoice}
                       >
                         {isCancellingInvoice ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
                         Batalkan Faktur
@@ -2224,6 +2505,25 @@ export default function OrgBilling() {
                   ) : (
                     <p className="text-xs text-muted-foreground">
                       Faktur hanya bisa dibatalkan saat status <strong>Menunggu Pembayaran</strong>.
+                    </p>
+                  )}
+                  {isInvoiceCancellableByOrg(selectedInvoice.status) ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        variant="outline"
+                        onClick={() => void reviseInvoiceViaActivation()}
+                        disabled={isRevisingInvoice || isCancellingInvoice}
+                      >
+                        {isRevisingInvoice ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        Ubah Detail & Buat Revisi
+                      </Button>
+                      <span className="text-xs text-muted-foreground">
+                        Sistem akan membatalkan faktur ini dulu, lalu membuka kalkulator aktivasi dengan data prefill.
+                      </span>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Revisi detail via aktivasi hanya tersedia untuk faktur berstatus <strong>Menunggu Pembayaran</strong>.
                     </p>
                   )}
                   <div className="flex flex-wrap items-center gap-2">
@@ -2277,7 +2577,13 @@ export default function OrgBilling() {
               ) : null}
 
               <div className="rounded-md border">
-                <div className="border-b px-4 py-3 font-semibold">Riwayat Cicilan Pembayaran</div>
+                <div className="border-b px-4 py-3">
+                  <p className="font-semibold">Riwayat Cicilan Pembayaran</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Kebijakan cicilan digunakan ketika pembayaran belum penuh (misalnya kurang transfer atau transfer bertahap).
+                    Invoice dinyatakan lunas setelah total pembayaran terverifikasi sama dengan total tagihan.
+                  </p>
+                </div>
                 <div className="grid gap-2 border-b bg-muted/20 px-4 py-3 text-sm md:grid-cols-3">
                   <div>
                     <p className="text-xs text-muted-foreground">Total Tagihan</p>
@@ -2451,6 +2757,34 @@ export default function OrgBilling() {
           )}
         </DialogContent>
       </Dialog>
+      <AlertDialog open={isProofUploadConfirmOpen} onOpenChange={setIsProofUploadConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Konfirmasi Nominal Transfer</AlertDialogTitle>
+            <AlertDialogDescription>
+              Nominal transfer saat ini harus sama dengan nominal pada bukti transfer yang akan Anda upload, dan deklarasi wajib dicentang.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="rounded-md border bg-muted/30 px-3 py-2">
+            <p className="text-xs text-muted-foreground">Nominal saat ini</p>
+            <p className="text-base font-semibold">
+              {manualPaidAmountValue > 0 ? formatCurrency(manualPaidAmountValue) : "Rp 0"}
+            </p>
+            {manualPaidAmountInlineError ? (
+              <p className="mt-1 text-xs text-destructive">{manualPaidAmountInlineError}</p>
+            ) : null}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={handleBackToNominal}>Kembali Isi Nominal</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleConfirmChooseProofFile}
+              disabled={manualPaidAmountValue <= 0 || Boolean(manualPaidAmountInlineError) || !isActualTransferDeclared}
+            >
+              Lanjut Pilih File
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </OrganizationLayout>
   );
 }

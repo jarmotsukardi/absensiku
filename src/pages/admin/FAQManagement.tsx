@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Loader2, Plus, Trash2, Edit, HelpCircle, Save, Search, Sparkles } from "lucide-react";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
@@ -25,6 +26,13 @@ interface FAQ {
 interface FAQSettingsValue {
   items?: FAQ[];
   banner_image_url?: string;
+  auto_sync_recommended?: boolean;
+  auto_sync_last_run_at?: string;
+  auto_sync_last_result?: {
+    additions: number;
+    updated: number;
+    source: string;
+  } | null;
 }
 
 const ITEMS_PER_PAGE = 10;
@@ -74,19 +82,49 @@ const RECOMMENDED_FAQ_UPDATES: Array<{ question: string; answer: string; categor
   {
     question: "Bagaimana cara membayar faktur dari menu /org/billing?",
     answer:
-      "Buka /org/billing lalu klik nomor faktur atau status untuk membuka detail. Jika invoice memiliki link online, gunakan tombol Buka Link Pembayaran. Untuk transfer manual, isi URL bukti bayar atau upload file bukti lalu kirim untuk verifikasi admin.",
+      "Buka /org/billing lalu klik nomor faktur atau status untuk membuka detail. Jika invoice memiliki link online, gunakan tombol Buka Link Pembayaran. Untuk transfer manual, isi Nominal Transfer Aktual, centang deklarasi kesesuaian nominal, upload file bukti, lalu kirim untuk verifikasi admin.",
     category: "Billing & Harga",
   },
   {
-    question: "Apa arti status Menunggu Pembayaran, Menunggu Verifikasi, Lunas, dan Kedaluwarsa pada faktur?",
+    question: "Apa arti status faktur terbaru seperti Verifikasi Penuh, Verifikasi Parsial, Cicilan Aktif, dan Ditolak - Revisi?",
     answer:
-      "Menunggu Pembayaran berarti tagihan belum dibayar. Menunggu Verifikasi berarti bukti bayar sudah dikirim dan sedang ditinjau admin. Lunas berarti pembayaran sudah tervalidasi. Kedaluwarsa berarti melewati jatuh tempo dan perlu invoice/aksi lanjutan sesuai kebijakan billing.",
+      "Menunggu Pembayaran berarti tagihan belum dibayar. Verifikasi Penuh berarti nominal yang diklaim user sama dengan nominal tagihan dan menunggu verifikasi admin. Verifikasi Parsial berarti user mengirim nominal kurang dari sisa tagihan. Cicilan Aktif berarti ada pembayaran parsial yang sudah diverifikasi dan invoice masih memiliki sisa tagihan. Ditolak - Revisi berarti konfirmasi ditolak admin dan user wajib kirim ulang data pembayaran yang benar.",
     category: "Billing & Harga",
   },
   {
     question: "Bagaimana jika bukti bayar transfer ditolak oleh admin?",
     answer:
-      "Alasan penolakan akan tampil pada detail faktur di /org/billing. Perbaiki bukti pembayaran (URL/file) lalu kirim ulang agar status kembali ke Menunggu Verifikasi.",
+      "Alasan penolakan akan tampil pada detail faktur di /org/billing dengan banner merah Ditolak - Wajib Revisi. Sistem juga menampilkan total tagihan, total terverifikasi, nominal ditolak, dan sisa wajib bayar. User harus revisi nominal transfer aktual dan upload bukti baru.",
+    category: "Billing & Harga",
+  },
+  {
+    question: "Bagaimana sistem mencegah overpayment saat verifikasi manual?",
+    answer:
+      "Backend memblokir jika total pembayaran terverifikasi melebihi gross amount invoice. Saat klaim user tidak sama dengan verifikasi admin, sistem mencatat audit log mismatch agar bisa ditelusuri.",
+    category: "Billing & Harga",
+  },
+  {
+    question: "Kenapa rincian PPN/PPH tidak ditampilkan di invoice klien?",
+    answer:
+      "Sistem menghitung komponen pajak sebagai biaya internal platform. Tampilan invoice klien disederhanakan menjadi nilai total akhir tanpa menampilkan baris PPN/PPH secara terpisah.",
+    category: "Billing & Harga",
+  },
+  {
+    question: "Apakah kolom PPN dan PPH sekarang dipisah di admin billing?",
+    answer:
+      "Ya. Di tab Paket Langganan dan Laporan Keuangan, PPN dan PPH ditampilkan sebagai kolom terpisah agar mudah rekonsiliasi pajak. Namun invoice klien tetap menampilkan total final.",
+    category: "Billing & Harga",
+  },
+  {
+    question: "Apakah total invoice di /org/billing sudah final?",
+    answer:
+      "Ya. Nilai total invoice adalah nominal final yang harus dibayar tenant sesuai kebijakan billing aktif, sehingga admin organisasi tidak perlu menambahkan perhitungan pajak lagi di sisi klien.",
+    category: "Billing & Harga",
+  },
+  {
+    question: "Apakah kalkulator langganan di /org/activation menyimpan pilihan terakhir?",
+    answer:
+      "Ya. Pilihan paket dan jumlah member disimpan otomatis per tenant. Admin organisasi bisa klik 'Lanjut Buat Invoice' dari overlay kalkulator untuk langsung menuju blok metode pembayaran.",
     category: "Billing & Harga",
   },
   {
@@ -355,6 +393,104 @@ const RECOMMENDED_FAQ_QUESTION_ALIASES: Record<string, string> = {
     normalizeQuestion("Bagaimana membaca Nomor Error (Ref) atau trace_id pada pesan gagal memuat data?"),
 };
 
+const getRecommendedFaqId = (question: string, sortOrder: number) => {
+  const slug = normalizeQuestion(question)
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  return `recommended-${sortOrder}-${slug || "faq"}`;
+};
+
+const mergeRecommendedFaqs = (currentFaqs: FAQ[]) => {
+  const nextFaqs = [...currentFaqs];
+  const indexByQuestion = new Map<string, number>();
+  for (const [index, faq] of nextFaqs.entries()) {
+    indexByQuestion.set(normalizeQuestion(faq.question), index);
+  }
+
+  const nextSortBase = currentFaqs.reduce((max, faq) => Math.max(max, faq.sort_order), 0);
+  const additions: FAQ[] = [];
+  let updatedCount = 0;
+  let sortOffset = 1;
+
+  for (const item of RECOMMENDED_FAQ_UPDATES) {
+    const targetKey = normalizeQuestion(item.question);
+    let targetIndex = indexByQuestion.get(targetKey);
+
+    if (targetIndex === undefined) {
+      const aliasSourceKey = Object.entries(RECOMMENDED_FAQ_QUESTION_ALIASES).find(
+        ([legacyKey, mappedKey]) => mappedKey === targetKey && indexByQuestion.has(legacyKey),
+      )?.[0];
+      if (aliasSourceKey) {
+        targetIndex = indexByQuestion.get(aliasSourceKey);
+      }
+    }
+
+    if (targetIndex !== undefined) {
+      const existing = nextFaqs[targetIndex];
+      const needsUpdate =
+        existing.question !== item.question ||
+        existing.answer !== item.answer ||
+        existing.category !== item.category;
+      if (needsUpdate) {
+        const oldKey = normalizeQuestion(existing.question);
+        nextFaqs[targetIndex] = {
+          ...existing,
+          question: item.question,
+          answer: item.answer,
+          category: item.category,
+        };
+        indexByQuestion.delete(oldKey);
+        indexByQuestion.set(targetKey, targetIndex);
+        updatedCount += 1;
+      }
+      continue;
+    }
+
+    additions.push({
+      id: getRecommendedFaqId(item.question, nextSortBase + sortOffset),
+      question: item.question,
+      answer: item.answer,
+      category: item.category,
+      sort_order: nextSortBase + sortOffset,
+    });
+    indexByQuestion.set(targetKey, nextFaqs.length + additions.length - 1);
+    sortOffset += 1;
+  }
+
+  return {
+    merged: [...nextFaqs, ...additions].sort((a, b) => a.sort_order - b.sort_order),
+    additionsCount: additions.length,
+    updatedCount,
+  };
+};
+
+const buildFaqSettingsPayload = (
+  items: FAQ[],
+  legacyFaqValue: FAQSettingsValue | null,
+  options?: {
+    autoSyncRecommended?: boolean;
+    autoSyncLastRunAt?: string | null;
+    autoSyncLastResult?: FAQSettingsValue["auto_sync_last_result"];
+  },
+): FAQSettingsValue => {
+  const payload: FAQSettingsValue = {
+    ...(legacyFaqValue || {}),
+    items,
+    auto_sync_recommended:
+      options?.autoSyncRecommended ??
+      legacyFaqValue?.auto_sync_recommended ??
+      true,
+  };
+  if (options?.autoSyncLastRunAt !== undefined) {
+    payload.auto_sync_last_run_at = options.autoSyncLastRunAt || undefined;
+  }
+  if (options?.autoSyncLastResult !== undefined) {
+    payload.auto_sync_last_result = options.autoSyncLastResult;
+  }
+  return payload;
+};
+
 export default function FAQManagement() {
   const [faqs, setFaqs] = useState<FAQ[]>([]);
   const [filteredFaqs, setFilteredFaqs] = useState<FAQ[]>([]);
@@ -367,6 +503,10 @@ export default function FAQManagement() {
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [legacyFaqValue, setLegacyFaqValue] = useState<FAQSettingsValue | null>(null);
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
+  const [autoSyncLastRunAt, setAutoSyncLastRunAt] = useState<string | null>(null);
+  const [autoSyncLastResult, setAutoSyncLastResult] =
+    useState<FAQSettingsValue["auto_sync_last_result"]>(null);
 
   useEffect(() => {
     fetchFAQs();
@@ -389,35 +529,83 @@ export default function FAQManagement() {
     try {
       const { data } = await supabase
         .from("system_settings")
-        .select("value")
+        .select("id, value")
         .eq("key", "faq_settings")
         .maybeSingle();
-      
-      if (!data?.value) {
-        setFaqs([]);
-        setFilteredFaqs([]);
-        setLegacyFaqValue(null);
-        return;
-      }
 
-      const value = data.value as unknown;
+      const value = data?.value as unknown;
       let faqItems: FAQ[] = [];
       let storedObject: FAQSettingsValue | null = null;
+      let runtimeAutoSyncEnabled = true;
 
-      if (Array.isArray(value)) {
+      if (!value) {
+        faqItems = [];
+      } else if (Array.isArray(value)) {
         faqItems = value as FAQ[];
       } else if (value && typeof value === "object") {
         const parsed = value as FAQSettingsValue;
         storedObject = parsed;
+        runtimeAutoSyncEnabled = parsed.auto_sync_recommended ?? true;
         if (Array.isArray(parsed.items)) {
           faqItems = parsed.items;
         }
       }
 
       const sortedFaqs = faqItems.sort((a, b) => a.sort_order - b.sort_order);
-      setLegacyFaqValue(storedObject);
-      setFaqs(sortedFaqs);
-      setFilteredFaqs(sortedFaqs);
+      const mergedResult = mergeRecommendedFaqs(sortedFaqs);
+      const shouldPersistAutoSync =
+        runtimeAutoSyncEnabled &&
+        (!data?.id || !storedObject || mergedResult.additionsCount > 0 || mergedResult.updatedCount > 0);
+      const nextFaqs = mergedResult.merged;
+      const autoSyncRunAt =
+        shouldPersistAutoSync && (mergedResult.additionsCount > 0 || mergedResult.updatedCount > 0)
+          ? new Date().toISOString()
+          : storedObject?.auto_sync_last_run_at;
+      const autoSyncRunResult =
+        shouldPersistAutoSync && (mergedResult.additionsCount > 0 || mergedResult.updatedCount > 0)
+          ? {
+              additions: mergedResult.additionsCount,
+              updated: mergedResult.updatedCount,
+              source: "auto_sync_on_load",
+            }
+          : storedObject?.auto_sync_last_result ?? null;
+
+      const nextLegacyValue = buildFaqSettingsPayload(nextFaqs, storedObject, {
+        autoSyncRecommended: runtimeAutoSyncEnabled,
+        autoSyncLastRunAt: autoSyncRunAt || null,
+        autoSyncLastResult: autoSyncRunResult,
+      });
+
+      if (shouldPersistAutoSync && nextFaqs.length > 0) {
+        const nextValue = nextLegacyValue;
+        if (data?.id) {
+          const { error: updateError } = await supabase
+            .from("system_settings")
+            .update({ value: nextValue, updated_at: new Date().toISOString() })
+            .eq("key", "faq_settings");
+          if (updateError) throw updateError;
+        } else {
+          const { error: insertError } = await supabase
+            .from("system_settings")
+            .insert({ key: "faq_settings", value: nextValue });
+          if (insertError) throw insertError;
+        }
+
+        if (mergedResult.additionsCount > 0 || mergedResult.updatedCount > 0) {
+          toast.success(
+            `FAQ auto-sync: ${mergedResult.additionsCount} ditambahkan, ${mergedResult.updatedCount} diperbarui.`,
+          );
+        } else {
+          toast.success("FAQ default berhasil diinisialisasi otomatis.");
+        }
+      }
+
+      setLegacyFaqValue(nextLegacyValue);
+      setAutoSyncEnabled(runtimeAutoSyncEnabled);
+      setAutoSyncLastRunAt(nextLegacyValue.auto_sync_last_run_at || null);
+      setAutoSyncLastResult(nextLegacyValue.auto_sync_last_result || null);
+      setFaqs(nextFaqs);
+      setFilteredFaqs(nextFaqs);
     } catch (error) {
       const errorRef = reportError(error, "admin.faq.fetch");
       const message = appendErrorReference("Gagal memuat data FAQ", errorRef);
@@ -441,12 +629,11 @@ export default function FAQManagement() {
         .maybeSingle();
 
       const jsonValue = JSON.parse(JSON.stringify(faqs));
-      const nextValue = legacyFaqValue
-        ? {
-            ...legacyFaqValue,
-            items: jsonValue,
-          }
-        : jsonValue;
+      const nextValue = buildFaqSettingsPayload(jsonValue, legacyFaqValue, {
+        autoSyncRecommended: autoSyncEnabled,
+        autoSyncLastRunAt: autoSyncLastRunAt,
+        autoSyncLastResult: autoSyncLastResult,
+      });
       
       if (existing) {
         await supabase
@@ -459,6 +646,7 @@ export default function FAQManagement() {
           .insert({ key: "faq_settings", value: nextValue });
       }
       
+      setLegacyFaqValue(nextValue);
       toast.success("FAQ berhasil disimpan");
     } catch (error) {
       const errorRef = reportError(error, "admin.faq.save_all", {
@@ -470,6 +658,19 @@ export default function FAQManagement() {
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const formatAutoSyncTimestamp = (value: string | null) => {
+    if (!value) return "-";
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return "-";
+    return parsed.toLocaleString("id-ID", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   };
 
   const handleAdd = () => {
@@ -511,71 +712,15 @@ export default function FAQManagement() {
   };
 
   const handleApplyRecommendedFaqs = () => {
-    const nextFaqs = [...faqs];
-    const indexByQuestion = new Map<string, number>();
-    for (const [index, faq] of nextFaqs.entries()) {
-      indexByQuestion.set(normalizeQuestion(faq.question), index);
-    }
-
-    const nextSortBase = faqs.reduce((max, faq) => Math.max(max, faq.sort_order), 0);
-    const additions: FAQ[] = [];
-    let updatedCount = 0;
-    let sortOffset = 1;
-
-    for (const item of RECOMMENDED_FAQ_UPDATES) {
-      const targetKey = normalizeQuestion(item.question);
-      let targetIndex = indexByQuestion.get(targetKey);
-
-      if (targetIndex === undefined) {
-        const aliasSourceKey = Object.entries(RECOMMENDED_FAQ_QUESTION_ALIASES).find(
-          ([legacyKey, mappedKey]) => mappedKey === targetKey && indexByQuestion.has(legacyKey),
-        )?.[0];
-        if (aliasSourceKey) {
-          targetIndex = indexByQuestion.get(aliasSourceKey);
-        }
-      }
-
-      if (targetIndex !== undefined) {
-        const existing = nextFaqs[targetIndex];
-        const needsUpdate =
-          existing.question !== item.question ||
-          existing.answer !== item.answer ||
-          existing.category !== item.category;
-        if (needsUpdate) {
-          const oldKey = normalizeQuestion(existing.question);
-          nextFaqs[targetIndex] = {
-            ...existing,
-            question: item.question,
-            answer: item.answer,
-            category: item.category,
-          };
-          indexByQuestion.delete(oldKey);
-          indexByQuestion.set(targetKey, targetIndex);
-          updatedCount += 1;
-        }
-        continue;
-      }
-
-      additions.push({
-        id: `recommended-${Date.now()}-${sortOffset}`,
-        question: item.question,
-        answer: item.answer,
-        category: item.category,
-        sort_order: nextSortBase + sortOffset,
-      });
-      indexByQuestion.set(targetKey, nextFaqs.length + additions.length - 1);
-      sortOffset += 1;
-    }
-
-    if (additions.length === 0 && updatedCount === 0) {
+    const mergedResult = mergeRecommendedFaqs(faqs);
+    if (mergedResult.additionsCount === 0 && mergedResult.updatedCount === 0) {
       toast.info("FAQ rekomendasi terbaru sudah sinkron.");
       return;
     }
 
-    const merged = [...nextFaqs, ...additions].sort((a, b) => a.sort_order - b.sort_order);
-    setFaqs(merged);
+    setFaqs(mergedResult.merged);
     toast.success(
-      `Sinkronisasi selesai: ${additions.length} ditambahkan, ${updatedCount} diperbarui. Klik 'Simpan Semua' untuk menerapkan.`,
+      `Sinkronisasi selesai: ${mergedResult.additionsCount} ditambahkan, ${mergedResult.updatedCount} diperbarui. Klik 'Simpan Semua' untuk menerapkan.`,
     );
   };
 
@@ -609,7 +754,19 @@ export default function FAQManagement() {
               className="pl-10"
             />
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="rounded-md border px-3 py-2">
+              <div className="flex items-center gap-2">
+                <Switch checked={autoSyncEnabled} onCheckedChange={setAutoSyncEnabled} />
+                <span className="text-sm font-medium">Auto-sync FAQ Rekomendasi</span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Terakhir: {formatAutoSyncTimestamp(autoSyncLastRunAt)}
+                {autoSyncLastResult
+                  ? ` • +${autoSyncLastResult.additions} / ~${autoSyncLastResult.updated}`
+                  : ""}
+              </p>
+            </div>
             <Button onClick={handleApplyRecommendedFaqs} variant="outline">
               <Sparkles className="h-4 w-4 mr-2" />
               Sinkronkan FAQ Rekomendasi
