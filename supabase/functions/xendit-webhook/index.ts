@@ -193,6 +193,8 @@ serve(async (req) => {
           gross_amount: invoice.gross_amount,
           xendit_fee: invoice.xendit_fee,
           vat_amount: invoice.vat_amount,
+          ppn_amount: invoice.ppn_amount ?? invoice.vat_amount,
+          pph_amount: invoice.pph_amount ?? 0,
           net_amount: invoice.net_amount,
           payment_source: "XENDIT",
           payment_method: invoice.payment_method_type,

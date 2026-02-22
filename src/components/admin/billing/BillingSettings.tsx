@@ -22,7 +22,9 @@ export function BillingSettings() {
   
   const [pricePerEmployee, setPricePerEmployee] = useState(15000);
   const [vatPercentage, setVatPercentage] = useState(11);
+  const [pphPercentage, setPphPercentage] = useState(2);
   const [gracePeriodDays, setGracePeriodDays] = useState(3);
+  const [paymentArchiveRetentionDays, setPaymentArchiveRetentionDays] = useState(7);
   const [individualMinDuration, setIndividualMinDuration] = useState(6);
   const [xenditEnabled, setXenditEnabled] = useState(false);
   const [manualPaymentEnabled, setManualPaymentEnabled] = useState(true);
@@ -40,14 +42,21 @@ export function BillingSettings() {
     if (!isLoading && settings.length > 0 && !initialized) {
       const price = getSetting("price_per_employee");
       const vat = getSetting("vat_percentage");
+      const pph = getSetting("pph_percentage");
       const grace = getSetting("grace_period_days");
+      const archiveRetention = getSetting("payment_archive_retention_days");
       const minDuration = getSetting("individual_min_duration_months");
       const xendit = getSetting("xendit_enabled");
       const manual = getSetting("manual_payment_enabled");
 
       if (price) setPricePerEmployee(price.amount || 15000);
       if (vat) setVatPercentage(vat.value || 11);
+      if (pph) setPphPercentage(pph.value || 2);
       if (grace) setGracePeriodDays(grace.value || 3);
+      if (archiveRetention) {
+        const raw = Number(archiveRetention.value || 7);
+        setPaymentArchiveRetentionDays(Math.min(365, Math.max(1, Number.isFinite(raw) ? raw : 7)));
+      }
       if (minDuration) setIndividualMinDuration(minDuration.value || 6);
       if (xendit) setXenditEnabled(xendit.value || false);
       if (manual) setManualPaymentEnabled(manual.value !== false);
@@ -95,7 +104,11 @@ export function BillingSettings() {
       await Promise.all([
         updateSetting("price_per_employee", { amount: pricePerEmployee, currency: "IDR" }),
         updateSetting("vat_percentage", { value: vatPercentage }),
+        updateSetting("pph_percentage", { value: pphPercentage }),
         updateSetting("grace_period_days", { value: gracePeriodDays }),
+        updateSetting("payment_archive_retention_days", {
+          value: Math.min(365, Math.max(1, Number.isFinite(paymentArchiveRetentionDays) ? paymentArchiveRetentionDays : 7)),
+        }),
         updateSetting("individual_min_duration_months", { value: individualMinDuration }),
         updateSetting("xendit_enabled", { value: xenditEnabled }),
         updateSetting("manual_payment_enabled", { value: manualPaymentEnabled }),
@@ -287,7 +300,7 @@ export function BillingSettings() {
           <CardDescription>Konfigurasi harga dasar dan perpajakan</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-3">
             <div className="space-y-2">
               <Label htmlFor="pricePerEmployee">Harga per Pegawai (per bulan)</Label>
               <div className="relative">
@@ -314,6 +327,19 @@ export function BillingSettings() {
                 <Percent className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               </div>
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="pphPercentage">PPH (%)</Label>
+              <div className="relative">
+                <Input
+                  id="pphPercentage"
+                  type="number"
+                  value={pphPercentage}
+                  onChange={(e) => setPphPercentage(Number(e.target.value))}
+                  className="pr-8"
+                />
+                <Percent className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              </div>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -328,7 +354,7 @@ export function BillingSettings() {
           <CardDescription>Aturan durasi dan grace period</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-3">
             <div className="space-y-2">
               <Label htmlFor="gracePeriodDays">Grace Period (hari)</Label>
               <Input
@@ -341,6 +367,20 @@ export function BillingSettings() {
               />
               <p className="text-xs text-muted-foreground">
                 Jumlah hari akses terbatas setelah langganan expired
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="paymentArchiveRetentionDays">Masa Simpan Arsip Pembayaran (hari)</Label>
+              <Input
+                id="paymentArchiveRetentionDays"
+                type="number"
+                value={paymentArchiveRetentionDays}
+                onChange={(e) => setPaymentArchiveRetentionDays(Number(e.target.value))}
+                min={1}
+                max={365}
+              />
+              <p className="text-xs text-muted-foreground">
+                Setelah validasi, bukti transfer masuk arsip dan dihapus otomatis saat melewati masa simpan.
               </p>
             </div>
             <div className="space-y-2">

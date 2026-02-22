@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -25,7 +25,10 @@ import { XenditSettings } from "@/components/admin/billing/XenditSettings";
 import { ManualPaymentVerification } from "@/components/admin/billing/ManualPaymentVerification";
 import { XenditSandboxTester } from "@/components/admin/billing/XenditSandboxTester";
 import { BillingPolicySettings } from "@/components/admin/billing/BillingPolicySettings";
+import { ManualPaymentArchive } from "@/components/admin/billing/ManualPaymentArchive";
+import { WalletTopupVerification } from "@/components/admin/billing/WalletTopupVerification";
 import { GlossaryPanel } from "@/components/common/GlossaryPanel";
+import { useSearchParams } from "react-router-dom";
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat("id-ID", {
@@ -42,7 +45,23 @@ const isInvoiceNumberValid = (invoiceNumber: string | null | undefined): boolean
   return INVOICE_NUMBER_PATTERN.test(invoiceNumber.trim());
 };
 
+const BILLING_TABS = [
+  { id: "overview", label: "Ringkasan" },
+  { id: "invoices", label: "Semua Tagihan" },
+  { id: "manual", label: "Verifikasi Manual" },
+  { id: "manual_archive", label: "Arsip Validasi" },
+  { id: "wallet_topup", label: "Topup Saldo" },
+  { id: "packages", label: "Paket Langganan" },
+  { id: "report", label: "Laporan Keuangan" },
+  { id: "marketing", label: "Tim Marketing" },
+  { id: "sandbox", label: "Uji Coba Payment" },
+  { id: "xendit", label: "Pengaturan Xendit" },
+  { id: "settings", label: "Pengaturan Billing" },
+  { id: "policy", label: "Kebijakan Billing" },
+] as const;
+
 export default function BillingDashboard() {
+  const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState("overview");
   const [invoiceFilterMode, setInvoiceFilterMode] = useState<"all" | "invalid_number">("all");
   const currentMonth = {
@@ -53,7 +72,15 @@ export default function BillingDashboard() {
   const { summary, isLoading: isLoadingLedger } = useFinancialLedger(currentMonth);
   const { invoices, isLoading: isLoadingInvoices } = useInvoices();
 
-  const pendingCount = invoices.filter(i => i.status === "PENDING" || i.status === "AWAITING_VERIFICATION").length;
+  const pendingStatuses = new Set([
+    "PENDING",
+    "AWAITING_VERIFICATION",
+    "AWAITING_VERIFICATION_FULL",
+    "PENDING_VERIFICATION_PARTIAL",
+    "PARTIALLY_PAID",
+    "REJECTED_NEEDS_REVISION",
+  ]);
+  const pendingCount = invoices.filter((i) => pendingStatuses.has((i.status || "").toUpperCase())).length;
   const paidCount = invoices.filter(i => i.status === "PAID").length;
   const expiredCount = invoices.filter(i => i.status === "EXPIRED" || i.status === "CANCELLED").length;
   const invoiceNumberHealth = useMemo(() => {
@@ -70,18 +97,16 @@ export default function BillingDashboard() {
     };
   }, [invoices]);
 
-  const tabs = [
-    { id: "overview", label: "Ringkasan" },
-    { id: "invoices", label: "Semua Tagihan" },
-    { id: "manual", label: "Verifikasi Manual" },
-    { id: "packages", label: "Paket Langganan" },
-    { id: "report", label: "Laporan Keuangan" },
-    { id: "marketing", label: "Tim Marketing" },
-     { id: "sandbox", label: "Uji Coba Payment" },
-    { id: "xendit", label: "Pengaturan Xendit" },
-    { id: "settings", label: "Pengaturan Billing" },
-    { id: "policy", label: "Kebijakan Billing" },
-  ];
+  const validTabIds = useMemo(() => new Set(BILLING_TABS.map((tab) => tab.id)), []);
+  const focusTopupRequestId = searchParams.get("topupRequestId");
+  const sourceErrorRef = searchParams.get("errorRef");
+
+  useEffect(() => {
+    const tab = searchParams.get("tab");
+    if (tab && validTabIds.has(tab)) {
+      setActiveTab(tab);
+    }
+  }, [searchParams, validTabIds]);
 
   const openInvalidInvoiceNumbers = () => {
     setActiveTab("invoices");
@@ -204,7 +229,7 @@ export default function BillingDashboard() {
             <Tabs value={activeTab} onValueChange={setActiveTab}>
               <div className="border-b bg-muted/30 px-4 overflow-x-auto">
                 <TabsList className="h-auto p-0 bg-transparent flex flex-nowrap gap-1">
-                  {tabs.map((tab) => (
+                  {BILLING_TABS.map((tab) => (
                     <TabsTrigger
                       key={tab.id}
                       value={tab.id}
@@ -228,6 +253,12 @@ export default function BillingDashboard() {
                 </TabsContent>
                 <TabsContent value="manual" className="mt-0">
                   <ManualPaymentVerification />
+                </TabsContent>
+                <TabsContent value="manual_archive" className="mt-0">
+                  <ManualPaymentArchive />
+                </TabsContent>
+                <TabsContent value="wallet_topup" className="mt-0">
+                  <WalletTopupVerification focusRequestId={focusTopupRequestId} sourceErrorRef={sourceErrorRef} />
                 </TabsContent>
                 <TabsContent value="packages" className="mt-0">
                   <SubscriptionPackagesManager />
@@ -260,7 +291,11 @@ export default function BillingDashboard() {
 }
 
 function OverviewContent() {
-  const { invoices, isLoading } = useInvoices({ status: "AWAITING_VERIFICATION" });
+  const { invoices: legacyInvoices, isLoading: isLoadingLegacy } = useInvoices({ status: "AWAITING_VERIFICATION" });
+  const { invoices: fullInvoices, isLoading: isLoadingFull } = useInvoices({ status: "AWAITING_VERIFICATION_FULL" });
+  const { invoices: partialInvoices, isLoading: isLoadingPartial } = useInvoices({ status: "PENDING_VERIFICATION_PARTIAL" });
+  const invoices = [...legacyInvoices, ...fullInvoices, ...partialInvoices];
+  const isLoading = isLoadingLegacy || isLoadingFull || isLoadingPartial;
 
   return (
     <div className="space-y-6">

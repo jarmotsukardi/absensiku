@@ -43,6 +43,20 @@ const formatCurrency = (amount: number) => {
   }).format(amount);
 };
 
+const getNumericSettingValue = (value: unknown, fallback: number): number => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const objectValue = value as Record<string, unknown>;
+    if ("value" in objectValue) return getNumericSettingValue(objectValue.value, fallback);
+    if ("amount" in objectValue) return getNumericSettingValue(objectValue.amount, fallback);
+  }
+  return fallback;
+};
+
 export function SubscriptionPackagesManager() {
   const confirmDialog = useConfirmDialog();
   const ITEMS_PER_PAGE = 10;
@@ -55,8 +69,9 @@ export function SubscriptionPackagesManager() {
   const [currentPage, setCurrentPage] = useState(1);
 
   // Global billing settings
-  const globalPrice = getSetting("price_per_employee")?.amount || 15000;
-  const globalVat = getSetting("vat_percentage")?.value || 11;
+  const globalPrice = getNumericSettingValue(getSetting("price_per_employee"), 15000);
+  const globalVat = getNumericSettingValue(getSetting("vat_percentage"), 11);
+  const globalPph = getNumericSettingValue(getSetting("pph_percentage"), 2);
 
   const getEmptyPackage = (): Partial<SubscriptionPackage> => ({
     name: "",
@@ -144,9 +159,10 @@ export function SubscriptionPackagesManager() {
     return base - discount;
   };
 
-  const calculateWithVat = (subtotal: number) => {
-    const vatAmount = subtotal * (globalVat / 100);
-    return { vatAmount, total: subtotal + vatAmount };
+  const calculateWithTax = (subtotal: number) => {
+    const ppnAmount = subtotal * (globalVat / 100);
+    const pphAmount = subtotal * (globalPph / 100);
+    return { ppnAmount, pphAmount, total: subtotal + ppnAmount + pphAmount };
   };
 
   // Check if any package is out of sync
@@ -183,6 +199,10 @@ export function SubscriptionPackagesManager() {
               <div>
                 <p className="text-xs text-muted-foreground">PPN</p>
                 <p className="text-lg font-bold">{globalVat}%</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">PPH</p>
+                <p className="text-lg font-bold">{globalPph}%</p>
               </div>
             </div>
             <p className="text-xs text-muted-foreground flex items-center gap-1">
@@ -226,7 +246,9 @@ export function SubscriptionPackagesManager() {
               <TableHead>Harga/Bulan</TableHead>
               <TableHead>Diskon</TableHead>
               <TableHead>Subtotal/Pegawai</TableHead>
-              <TableHead>+ PPN ({globalVat}%)</TableHead>
+              <TableHead>PPN ({globalVat}%)</TableHead>
+              <TableHead>PPH ({globalPph}%)</TableHead>
+              <TableHead>Total/Pegawai</TableHead>
               <TableHead>Target</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="w-[100px]">Aksi</TableHead>
@@ -235,14 +257,14 @@ export function SubscriptionPackagesManager() {
           <TableBody>
             {packages.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center text-muted-foreground">
+                <TableCell colSpan={11} className="text-center text-muted-foreground">
                   Belum ada paket langganan
                 </TableCell>
               </TableRow>
             ) : (
               paginatedPackages.map((pkg) => {
                 const subtotal = calculateSubtotal(pkg);
-                const { total } = calculateWithVat(subtotal);
+                const { ppnAmount, pphAmount, total } = calculateWithTax(subtotal);
                 const isOutOfSync = pkg.base_price_per_month !== globalPrice;
 
                 return (
@@ -268,6 +290,12 @@ export function SubscriptionPackagesManager() {
                     </TableCell>
                     <TableCell className="font-medium">
                       {formatCurrency(subtotal)}
+                    </TableCell>
+                    <TableCell className="font-medium text-blue-600">
+                      {formatCurrency(ppnAmount)}
+                    </TableCell>
+                    <TableCell className="font-medium text-indigo-600">
+                      {formatCurrency(pphAmount)}
                     </TableCell>
                     <TableCell className="font-bold text-primary">
                       {formatCurrency(total)}
@@ -458,11 +486,15 @@ export function SubscriptionPackagesManager() {
                   </div>
                   <div className="flex justify-between text-sm text-blue-600">
                     <span>PPN {globalVat}%</span>
-                    <span>+{formatCurrency(calculateWithVat(calculateSubtotal(editingPackage)).vatAmount)}</span>
+                    <span>+{formatCurrency(calculateWithTax(calculateSubtotal(editingPackage)).ppnAmount)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm text-indigo-600">
+                    <span>PPH {globalPph}%</span>
+                    <span>+{formatCurrency(calculateWithTax(calculateSubtotal(editingPackage)).pphAmount)}</span>
                   </div>
                   <div className="border-t pt-1 flex justify-between">
                     <span className="font-semibold">Total/pegawai</span>
-                    <span className="text-lg font-bold">{formatCurrency(calculateWithVat(calculateSubtotal(editingPackage)).total)}</span>
+                    <span className="text-lg font-bold">{formatCurrency(calculateWithTax(calculateSubtotal(editingPackage)).total)}</span>
                   </div>
                   <p className="text-xs text-muted-foreground text-right">
                     untuk {editingPackage.duration_months || 1} bulan

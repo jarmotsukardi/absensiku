@@ -42,6 +42,10 @@ export interface Invoice {
   discount_amount: number;
   vat_percentage: number;
   vat_amount: number;
+  ppn_percentage?: number | null;
+  pph_percentage?: number | null;
+  ppn_amount?: number | null;
+  pph_amount?: number | null;
   gross_amount: number;
   xendit_fee: number;
   net_amount: number;
@@ -70,6 +74,8 @@ export interface FinancialSummary {
   total_gross: number;
   total_xendit_fee: number;
   total_vat: number;
+  total_ppn: number;
+  total_pph: number;
   total_net: number;
   transaction_count: number;
 }
@@ -79,6 +85,8 @@ export interface FinancialTransaction {
   gross_amount: number | null;
   xendit_fee: number | null;
   vat_amount: number | null;
+  ppn_amount?: number | null;
+  pph_amount?: number | null;
   net_amount: number | null;
   [key: string]: unknown;
 }
@@ -268,6 +276,8 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
           package_duration_months,
           gross_amount,
           vat_amount,
+          ppn_amount,
+          pph_amount,
           net_amount,
           xendit_fee,
           payment_method_type
@@ -483,6 +493,8 @@ export function useFinancialLedger(dateRange?: { start: string; end: string }) {
     total_gross: 0,
     total_xendit_fee: 0,
     total_vat: 0,
+    total_ppn: 0,
+    total_pph: 0,
     total_net: 0,
     transaction_count: 0,
   });
@@ -510,14 +522,21 @@ export function useFinancialLedger(dateRange?: { start: string; end: string }) {
 
       // Calculate summary
       const sum = (data || []).reduce(
-        (acc, tx) => ({
-          total_gross: acc.total_gross + (tx.gross_amount || 0),
-          total_xendit_fee: acc.total_xendit_fee + (tx.xendit_fee || 0),
-          total_vat: acc.total_vat + (tx.vat_amount || 0),
-          total_net: acc.total_net + (tx.net_amount || 0),
-          transaction_count: acc.transaction_count + 1,
-        }),
-        { total_gross: 0, total_xendit_fee: 0, total_vat: 0, total_net: 0, transaction_count: 0 }
+        (acc, tx) => {
+          const vatAmount = tx.vat_amount || 0;
+          const ppnAmount = tx.ppn_amount ?? vatAmount;
+          const pphAmount = tx.pph_amount || 0;
+          return {
+            total_gross: acc.total_gross + (tx.gross_amount || 0),
+            total_xendit_fee: acc.total_xendit_fee + (tx.xendit_fee || 0),
+            total_vat: acc.total_vat + vatAmount,
+            total_ppn: acc.total_ppn + ppnAmount,
+            total_pph: acc.total_pph + pphAmount,
+            total_net: acc.total_net + (tx.net_amount || 0),
+            transaction_count: acc.transaction_count + 1,
+          };
+        },
+        { total_gross: 0, total_xendit_fee: 0, total_vat: 0, total_ppn: 0, total_pph: 0, total_net: 0, transaction_count: 0 }
       );
       setSummary(sum);
     } catch (error) {

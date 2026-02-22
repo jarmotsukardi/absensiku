@@ -184,7 +184,9 @@ serve(async (req) => {
     };
 
     const pricePerEmployee = getSettingValue("price_per_employee", 15000);
-    const vatPercentage = getSettingValue("vat_percentage", 11);
+    const ppnPercentage = getSettingValue("vat_percentage", 11);
+    const pphPercentage = getSettingValue("pph_percentage", 2);
+    const internalTaxPercentage = ppnPercentage + pphPercentage;
 
     const [
       subPriceResult,
@@ -279,7 +281,9 @@ serve(async (req) => {
     const subtotal = employee_count * effectivePricePerEmployee * duration_months;
     const discountAmount = subtotal * (discountPercentage / 100);
     const amountAfterDiscount = subtotal - discountAmount;
-    const vatAmount = amountAfterDiscount * (vatPercentage / 100);
+    const ppnAmount = amountAfterDiscount * (ppnPercentage / 100);
+    const pphAmount = amountAfterDiscount * (pphPercentage / 100);
+    const vatAmount = ppnAmount + pphAmount;
     const grossAmount = amountAfterDiscount + vatAmount;
 
     // Estimate Xendit fee (VA: Rp 4,000, QR: 0.7%, Cards: 2.9%)
@@ -319,8 +323,12 @@ serve(async (req) => {
         price_per_employee: effectivePricePerEmployee,
         subtotal,
         discount_amount: discountAmount,
-        vat_percentage: vatPercentage,
+        vat_percentage: internalTaxPercentage,
         vat_amount: vatAmount,
+        ppn_percentage: ppnPercentage,
+        pph_percentage: pphPercentage,
+        ppn_amount: ppnAmount,
+        pph_amount: pphAmount,
         gross_amount: grossAmount,
         xendit_fee: xenditFee,
         net_amount: netAmount,
@@ -419,14 +427,8 @@ serve(async (req) => {
         items: [
           {
             name: `Langganan ${packageData?.name || "Custom"} (${duration_months} bulan)`,
-            quantity: employee_count,
-            price: effectivePricePerEmployee * duration_months * (1 - discountPercentage / 100),
-          },
-        ],
-        fees: [
-          {
-            type: "PPN",
-            value: vatAmount,
+            quantity: 1,
+            price: grossAmount,
           },
         ],
       }),
