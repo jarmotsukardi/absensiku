@@ -123,16 +123,54 @@ function isAccessRestrictedError(error: unknown): boolean {
   );
 }
 
+function toErrorText(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return `${error.name || ""} ${error.message || ""}`.trim();
+  if (!error || typeof error !== "object") return "";
+
+  const candidate = error as { name?: string; message?: unknown; details?: unknown; hint?: unknown; error?: unknown };
+  const chunks: string[] = [];
+  if (typeof candidate.name === "string") chunks.push(candidate.name);
+  if (typeof candidate.message === "string") chunks.push(candidate.message);
+  if (typeof candidate.details === "string") chunks.push(candidate.details);
+  if (typeof candidate.hint === "string") chunks.push(candidate.hint);
+  if (typeof candidate.error === "string") chunks.push(candidate.error);
+
+  if (typeof candidate.message === "string") {
+    const raw = candidate.message.trim();
+    if ((raw.startsWith("{") && raw.endsWith("}")) || (raw.startsWith("[") && raw.endsWith("]"))) {
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        for (const key of ["message", "details", "hint", "error", "code"]) {
+          const value = parsed[key];
+          if (typeof value === "string") chunks.push(value);
+        }
+      } catch {
+        // Ignore parse error and continue with raw string chunks only.
+      }
+    }
+  }
+
+  if (chunks.length > 0) return chunks.join(" ");
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "";
+  }
+}
+
 function isTransientNetworkError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const candidate = error as { message?: string; details?: string; hint?: string; name?: string };
-  const text = `${candidate.message || ""} ${candidate.details || ""} ${candidate.hint || ""}`.toLowerCase();
+  const text = toErrorText(error).toLowerCase();
+  if (!text) return false;
   return (
-    (candidate.name || "").toLowerCase() === "typeerror" &&
+    text.includes("networkerror when attempting to fetch resource") ||
+    text.includes("typeerror: networkerror") ||
     text.includes("networkerror") ||
     text.includes("failed to fetch") ||
     text.includes("network request failed") ||
-    text.includes("network error")
+    text.includes("network error") ||
+    text.includes("network timeout") ||
+    text.includes("connection timed out")
   );
 }
 

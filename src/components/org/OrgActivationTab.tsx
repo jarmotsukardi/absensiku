@@ -95,6 +95,40 @@ const parseNumericSettingValue = (raw: unknown, fallback: number): number => {
   return fallback;
 };
 
+const extractManualBankNames = (raw: unknown): string[] => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+  const source = raw as Record<string, unknown>;
+  const candidates: unknown[] = [
+    source.bank_name,
+    source.bankName,
+    source.bank_names,
+    source.bankNames,
+    source.supported_banks,
+    source.supportedBanks,
+  ];
+
+  const collected = candidates.flatMap((entry) => {
+    if (!entry) return [];
+    if (Array.isArray(entry)) return entry;
+    if (typeof entry === "string") {
+      return entry
+        .split(/[,\n;/|]+/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+    return [];
+  });
+
+  const normalized = collected
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter(Boolean)
+    .map((item) => item.toUpperCase());
+
+  return Array.from(new Set(normalized));
+};
+
+const isBriBankName = (bankName: string) => bankName.trim().toUpperCase() === "BRI";
+
 export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps) {
   const navigate = useNavigate();
   const ITEMS_PER_PAGE = 10;
@@ -118,13 +152,14 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
   const [xenditEnabled, setXenditEnabled] = useState(false);
   const [b2bThreshold, setB2bThreshold] = useState(2000);
   const [isCentralizedBilling, setIsCentralizedBilling] = useState(true);
+  const [manualBankNames, setManualBankNames] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [scrollFlashTarget, setScrollFlashTarget] = useState<ScrollFlashTarget>(null);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [pkgRes, subRes, invRes, empRes, xenditRes, b2bRes, tenantRes] = await Promise.all([
+      const [pkgRes, subRes, invRes, empRes, xenditRes, b2bRes, tenantRes, billingRes] = await Promise.all([
         supabase.from("subscription_packages").select("*").eq("is_active", true).order("sort_order"),
         supabase.from("subscriptions").select("*").eq("tenant_id", tenantId).maybeSingle(),
         supabase.from("invoices").select("*").eq("tenant_id", tenantId).order("created_at", { ascending: false }).limit(20),
@@ -132,6 +167,7 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
         supabase.from("system_settings").select("value").eq("key", "xendit_enabled").maybeSingle(),
         supabase.from("system_settings").select("value").eq("key", "b2b_negotiation_threshold").maybeSingle(),
         supabase.from("tenants").select("billing_mode").eq("id", tenantId).maybeSingle(),
+        supabase.from("system_settings").select("value").eq("key", "billing_settings").maybeSingle(),
       ]);
 
       setPackages(pkgRes.data || []);
@@ -147,6 +183,8 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       const b2bRaw = (b2bRes.data as SystemSetting | null)?.value;
       setB2bThreshold(Math.max(1, Math.floor(parseNumericSettingValue(b2bRaw, 2000))));
       setIsCentralizedBilling(tenantRes.data?.billing_mode !== "individual");
+      const billingRaw = (billingRes.data as SystemSetting | null)?.value;
+      setManualBankNames(extractManualBankNames(billingRaw));
 
     } catch (error) {
       const errorRef = reportError(error, "org.activation.fetch_all", { tenant_id: tenantId });
@@ -488,6 +526,22 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
         nextPaymentMethod === "xendit" ? XENDIT_CHECKOUT_SECTION_ID : MANUAL_PAYMENT_SECTION_ID;
       scrollAndFlash(targetId, nextPaymentMethod === "xendit" ? "xendit" : "manual");
     }, 120);
+  };
+
+  const handleStatusClick = (invoice: Invoice) => {
+    const invoiceNumber = (invoice.invoice_number || "").trim();
+    if (!invoiceNumber) {
+      navigate("/org/billing?menu=invoices");
+      toast.info("Nomor invoice tidak tersedia. Anda diarahkan ke daftar faktur.");
+      return;
+    }
+
+    const isPayableStatus = invoice.status === "PENDING" || invoice.status === "AWAITING_VERIFICATION";
+    const targetUrl = isPayableStatus
+      ? `/org/billing?menu=invoices&invoice=${encodeURIComponent(invoiceNumber)}&focus=payment-proof`
+      : `/org/billing?menu=invoices&invoice=${encodeURIComponent(invoiceNumber)}`;
+
+    navigate(targetUrl);
   };
 
   const handleResetCalculatorPreferences = () => {
@@ -877,7 +931,18 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
                           </Badge>
                         </TableCell>
                         <TableCell className="font-semibold">{formatCurrency(inv.gross_amount)}</TableCell>
-                        <TableCell>{getStatusBadge(inv.status)}</TableCell>
+                        <TableCell>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-auto px-0 hover:bg-transparent hover:opacity-80"
+                            onClick={() => handleStatusClick(inv)}
+                            title="Buka detail invoice"
+                          >
+                            {getStatusBadge(inv.status)}
+                          </Button>
+                        </TableCell>
                         <TableCell>
                           <Badge
                             className={
@@ -1015,10 +1080,30 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
                 </div>
               </div>
               <div className="flex flex-wrap gap-1.5 mt-3">
-                <Badge variant="outline" className="text-[10px]">BCA</Badge>
-                <Badge variant="outline" className="text-[10px]">BNI</Badge>
-                <Badge variant="outline" className="text-[10px]">BRI</Badge>
-                <Badge variant="outline" className="text-[10px]">Mandiri</Badge>
+                {manualBankNames.length > 0 ? (
+                  manualBankNames.map((bankName) => (
+                    isBriBankName(bankName) ? (
+                      <Badge
+                        key={bankName}
+                        variant="outline"
+                        className="text-[10px] gap-1.5 border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-200"
+                      >
+                        <span className="inline-flex h-4 min-w-6 items-center justify-center rounded bg-[#00529b] px-1 font-bold text-[9px] leading-none text-white">
+                          BRI
+                        </span>
+                        {bankName}
+                      </Badge>
+                    ) : (
+                      <Badge key={bankName} variant="outline" className="text-[10px]">
+                        {bankName}
+                      </Badge>
+                    )
+                  ))
+                ) : (
+                  <Badge variant="outline" className="text-[10px]">
+                    Ikuti rekening di detail invoice
+                  </Badge>
+                )}
               </div>
             </button>
 

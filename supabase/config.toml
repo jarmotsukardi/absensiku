@@ -59,3 +59,12 @@ verify_jwt = true
 
 [functions.billing-grace-notifier]
 verify_jwt = false
+
+[functions.critical-error-alert-relay]
+verify_jwt = true
+
+[functions.dispatch-billing-whatsapp]
+verify_jwt = false
+
+[functions.dispatch-billing-email]
+verify_jwt = false

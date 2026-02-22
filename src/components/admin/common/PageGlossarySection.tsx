@@ -177,6 +177,7 @@ const PRESETS: Record<PageGlossaryPreset, GlossaryPresetConfig> = {
       { term: "Non Kritis", description: "Error ringan/intermiten yang tidak menghentikan layanan utama, tetapi tetap dicatat untuk perbaikan." },
       { term: "Selesai", description: "Status insiden kritis yang sudah diperbaiki dan diverifikasi hasilnya." },
       { term: "Arsip Kritis", description: "Riwayat insiden kritis yang tidak lagi aktif, disimpan untuk audit dan referensi." },
+      { term: "Arsip Non Kritis", description: "Riwayat log non-kritis yang sudah dipindahkan dari antrian aktif agar fokus monitoring tetap ke error prioritas." },
       { term: "Copy Ref Error", description: "Tombol salin cepat nomor error agar mudah ditempel ke tiket, chat, atau catatan investigasi." },
       { term: "Retensi Otomatis", description: "Pembersihan berkala log lama agar performa query tetap ringan dan daftar tetap relevan." },
     ],

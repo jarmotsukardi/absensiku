@@ -68,6 +68,7 @@ const actionLabels: Record<string, { label: string; color: string }> = {
 };
 
 const tableLabels: Record<string, string> = {
+  system_settings: "Pengaturan Sistem",
   tenants: "Organisasi",
   employees: "Pegawai",
   subscriptions: "Langganan",
@@ -219,6 +220,21 @@ export default function AuditLogs() {
   const visiblePages = Array.from({ length: Math.min(3, totalPages) }, (_, idx) => pageStart + idx).filter(
     (page) => page <= totalPages
   );
+  const isFaqSyncQuickFilterActive = actionFilter === "UPDATE" && tableFilter === "system_settings";
+
+  const applyFaqSyncQuickFilter = () => {
+    setActionFilter("UPDATE");
+    setTableFilter("system_settings");
+    setSearchQuery("");
+    setCurrentPage(1);
+  };
+
+  const resetQuickFilter = () => {
+    setActionFilter("all");
+    setTableFilter("all");
+    setSearchQuery("");
+    setCurrentPage(1);
+  };
 
   return (
     <SuperAdminLayout title="Audit Log" subtitle="Riwayat aktivitas sistem">
@@ -272,6 +288,22 @@ export default function AuditLogs() {
               <Button variant="outline" size="icon" onClick={fetchLogs} disabled={isLoading}>
                 <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
               </Button>
+            </div>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={isFaqSyncQuickFilterActive ? "default" : "outline"}
+                onClick={applyFaqSyncQuickFilter}
+              >
+                Filter Cepat: FAQ Sync
+              </Button>
+              <Button type="button" size="sm" variant="ghost" onClick={resetQuickFilter}>
+                Reset Filter Cepat
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                Menampilkan jejak perubahan FAQ di `system_settings` (action update).
+              </span>
             </div>
           </CardContent>
         </Card>

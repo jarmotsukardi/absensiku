@@ -27,9 +27,13 @@ export function EmployeeDataTabs() {
         navigate(EMPLOYEE_TABS.find((tab) => tab.value === value)?.path || "/org/employees/active")
       }
     >
-      <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto p-1">
+      <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto rounded-lg border bg-muted/70 p-1">
         {EMPLOYEE_TABS.map((tab) => (
-          <TabsTrigger key={tab.value} value={tab.value} className="whitespace-nowrap">
+          <TabsTrigger
+            key={tab.value}
+            value={tab.value}
+            className="whitespace-nowrap border border-transparent transition-all duration-200 hover:border-primary/30 hover:bg-primary/10 hover:text-primary data-[state=active]:border-primary/30 data-[state=active]:bg-primary/15 data-[state=active]:text-primary data-[state=active]:shadow-sm"
+          >
             {tab.label}
           </TabsTrigger>
         ))}

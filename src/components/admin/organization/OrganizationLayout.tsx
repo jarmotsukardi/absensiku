@@ -299,9 +299,40 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-      </div>
+      <SidebarProvider>
+        <div className="min-h-screen flex w-full">
+          <OrganizationSidebar
+            organizationName={tenant?.name}
+            organizationType={tenant?.organization_type}
+            accessLevel={accessLevel}
+          />
+          <main className="flex-1 overflow-auto">
+            <header className="sticky top-0 z-10 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border">
+              <div className="flex items-center justify-between gap-4 px-4 py-3">
+                <div className="flex items-center gap-4 min-w-0">
+                  <SidebarTrigger />
+                  <div className="h-6 w-px bg-border" />
+                  <span className="text-sm text-muted-foreground">
+                    {accessLevel === "admin" ? "Admin Organisasi" : "Operator"}
+                  </span>
+                </div>
+                <Button variant="ghost" className="relative h-9 w-9 rounded-full" disabled>
+                  <Avatar className="h-9 w-9">
+                    <AvatarFallback className="bg-primary text-primary-foreground">
+                      <Building2 className="h-4 w-4" />
+                    </AvatarFallback>
+                  </Avatar>
+                </Button>
+              </div>
+            </header>
+            <div className="p-6">
+              <div className="min-h-[280px] flex items-center justify-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+              </div>
+            </div>
+          </main>
+        </div>
+      </SidebarProvider>
     );
   }
 

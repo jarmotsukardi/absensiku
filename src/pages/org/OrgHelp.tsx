@@ -120,6 +120,34 @@ const DUMMY_FAQS: FAQ[] = [
     answer:
       "Lihat alasan penolakan di detail faktur, perbaiki URL/file bukti pembayaran, lalu kirim ulang agar status kembali ke Menunggu Verifikasi.",
   },
+  {
+    id: "12",
+    category: "Billing & Harga",
+    question: "Kenapa rincian PPN/PPH tidak tampil di faktur klien?",
+    answer:
+      "Rincian pajak diproses sebagai komponen biaya internal sistem. Di sisi klien, yang ditampilkan hanya total akhir tagihan agar format invoice lebih ringkas.",
+  },
+  {
+    id: "13",
+    category: "Billing & Harga",
+    question: "Apakah total tagihan sudah termasuk komponen biaya pajak?",
+    answer:
+      "Ya. Total pada invoice adalah nilai final yang sudah memperhitungkan kebijakan biaya internal, sehingga tidak perlu perhitungan tambahan dari pihak klien.",
+  },
+  {
+    id: "14",
+    category: "Billing & Harga",
+    question: "Di mana admin bisa melihat pemisahan PPN dan PPH?",
+    answer:
+      "Pemisahan kolom PPN dan PPH tersedia di panel admin pada tab Paket Langganan dan Laporan Keuangan. Di sisi organisasi (/org/billing), invoice tetap tampil sebagai total akhir tagihan.",
+  },
+  {
+    id: "15",
+    category: "Billing & Harga",
+    question: "Apakah pilihan kalkulator langganan di /org/activation tersimpan otomatis?",
+    answer:
+      "Ya. Pilihan paket dan jumlah member terakhir disimpan otomatis per organisasi. Gunakan tombol 'Lanjut Buat Invoice' untuk langsung menuju bagian metode pembayaran.",
+  },
 ];
 
 const CATEGORY_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {

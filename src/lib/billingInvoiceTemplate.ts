@@ -125,7 +125,6 @@ export const DEFAULT_BILLING_INVOICE_TEMPLATE = `<!doctype html>
           <tbody>
             <tr><td class="text-right muted">Sub Total</td><td class="text-right">{{subtotal}}</td></tr>
             <tr><td class="text-right muted">Diskon</td><td class="text-right">-{{discount}}</td></tr>
-            <tr><td class="text-right muted">PPN ({{vat_percentage}}%)</td><td class="text-right">{{vat_amount}}</td></tr>
             <tr><td class="text-right muted">Biaya Layanan</td><td class="text-right">{{service_fee}}</td></tr>
             <tr class="summary-total"><td class="text-right">Total</td><td class="text-right">{{total}}</td></tr>
             <tr><td class="text-right">Net</td><td class="text-right">{{net}}</td></tr>

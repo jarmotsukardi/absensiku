@@ -101,12 +101,20 @@ export function SuperAdminLayout({ children, title, subtitle }: SuperAdminLayout
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
-          <p className="text-sm text-muted-foreground">Memuat...</p>
+      <SidebarProvider>
+        <div className="min-h-screen flex w-full">
+          <SuperAdminSidebar />
+          <SidebarInset>
+            <SuperAdminHeader title={title} subtitle={subtitle} />
+            <main className="flex-1 p-6">
+              <div className="min-h-[320px] flex flex-col items-center justify-center gap-4">
+                <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary" />
+                <p className="text-sm text-muted-foreground">Memuat...</p>
+              </div>
+            </main>
+          </SidebarInset>
         </div>
-      </div>
+      </SidebarProvider>
     );
   }
 
