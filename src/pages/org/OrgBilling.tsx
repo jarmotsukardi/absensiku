@@ -207,6 +207,19 @@ const formatCurrency = (amount: number) =>
     minimumFractionDigits: 0,
   }).format(amount);
 
+const formatFileSize = (bytes: number) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"] as const;
+  let size = bytes;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const decimals = unitIndex === 0 ? 0 : size >= 100 ? 0 : 1;
+  return `${size.toFixed(decimals)} ${units[unitIndex]}`;
+};
+
 const formatRupiahInput = (raw: string): string => {
   const value = parseIntegerAmountInput(raw);
   if (!value) return "";
@@ -477,6 +490,8 @@ export default function OrgBilling() {
   const [issueDateTo, setIssueDateTo] = useState("");
   const [manualPaidAmountInput, setManualPaidAmountInput] = useState("");
   const [manualProofFile, setManualProofFile] = useState<File | null>(null);
+  const [manualProofPreviewUrl, setManualProofPreviewUrl] = useState<string | null>(null);
+  const [isProofPreviewOpen, setIsProofPreviewOpen] = useState(false);
   const [isActualTransferDeclared, setIsActualTransferDeclared] = useState(false);
   const [isSubmittingPaymentProof, setIsSubmittingPaymentProof] = useState(false);
   const [cancelReasonCode, setCancelReasonCode] = useState<string>("");
@@ -1629,6 +1644,26 @@ export default function OrgBilling() {
     }
   }, [manualPaidAmountInput, selectedInvoice, selectedInvoiceRemaining]);
 
+  useEffect(() => {
+    if (!manualProofFile) {
+      setManualProofPreviewUrl(null);
+      setIsProofPreviewOpen(false);
+      return;
+    }
+
+    const previewable = manualProofFile.type.startsWith("image/") || manualProofFile.type === "application/pdf";
+    if (!previewable) {
+      setManualProofPreviewUrl(null);
+      return;
+    }
+
+    const objectUrl = URL.createObjectURL(manualProofFile);
+    setManualProofPreviewUrl(objectUrl);
+    return () => {
+      URL.revokeObjectURL(objectUrl);
+    };
+  }, [manualProofFile]);
+
   const handleChooseProofFileClick = () => {
     setIsProofUploadConfirmOpen(true);
   };
@@ -2383,18 +2418,6 @@ export default function OrgBilling() {
                         </div>
                       )}
                     </div>
-                    <div className="rounded-md border bg-muted/20 px-3 py-2">
-                      <label htmlFor="declare-actual-transfer" className="flex cursor-pointer items-start gap-2">
-                        <Checkbox
-                          id="declare-actual-transfer"
-                          checked={isActualTransferDeclared}
-                          onCheckedChange={(checked) => setIsActualTransferDeclared(Boolean(checked))}
-                        />
-                        <span className="text-xs text-muted-foreground">
-                          Saya menyatakan nominal di atas adalah nominal transfer aktual sesuai bukti pembayaran.
-                        </span>
-                      </label>
-                    </div>
                     <div className="space-y-1">
                       <Label htmlFor="payment-proof-file">Upload Bukti Pembayaran</Label>
                         <input
@@ -2406,6 +2429,7 @@ export default function OrgBilling() {
                           onChange={(event) => {
                             const nextFile = event.target.files?.[0] || null;
                             setManualProofFile(nextFile);
+                            setIsProofPreviewOpen(false);
                             setIsActualTransferDeclared(false);
                           }}
                         />
@@ -2427,6 +2451,7 @@ export default function OrgBilling() {
                               size="sm"
                               onClick={() => {
                                 setManualProofFile(null);
+                                setIsProofPreviewOpen(false);
                                 if (proofFileInputRef.current) proofFileInputRef.current.value = "";
                               }}
                             >
@@ -2438,12 +2463,73 @@ export default function OrgBilling() {
                           Format JPG/PNG/PDF, rekomendasi maksimal 5MB.
                         </p>
                         {manualProofFile ? (
-                          <p className="mt-1 text-xs font-medium text-slate-700">
-                            File dipilih: {manualProofFile.name}
-                          </p>
+                          <div className="mt-2 space-y-2">
+                            <p className="text-xs font-medium text-slate-700">
+                              File dipilih: {manualProofFile.name}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              Tipe: {manualProofFile.type || "Tidak diketahui"} · Ukuran: {formatFileSize(manualProofFile.size)}
+                            </p>
+                            {manualProofFile.type.startsWith("image/") && manualProofPreviewUrl ? (
+                              <div className="space-y-1">
+                                <p className="text-xs font-medium text-slate-700">Pratinjau bukti transfer</p>
+                                <button
+                                  type="button"
+                                  className="block w-fit"
+                                  onClick={() => setIsProofPreviewOpen(true)}
+                                >
+                                  <img
+                                    src={manualProofPreviewUrl}
+                                    alt="Pratinjau bukti pembayaran"
+                                    className="max-h-56 w-auto rounded-md border object-contain hover:opacity-90"
+                                  />
+                                </button>
+                                <Button
+                                  type="button"
+                                  variant="secondary"
+                                  size="sm"
+                                  className="h-8"
+                                  onClick={() => setIsProofPreviewOpen(true)}
+                                >
+                                  Perbesar Pratinjau
+                                </Button>
+                              </div>
+                            ) : null}
+                            {manualProofFile.type === "application/pdf" && manualProofPreviewUrl ? (
+                              <div className="rounded-md border bg-slate-50 p-2 text-xs text-slate-700">
+                                Bukti pembayaran PDF siap diunggah.
+                                <Button
+                                  type="button"
+                                  variant="link"
+                                  className="h-auto px-1 py-0 text-xs"
+                                  onClick={() => window.open(manualProofPreviewUrl, "_blank", "noopener,noreferrer")}
+                                >
+                                  Lihat file PDF
+                                </Button>
+                              </div>
+                            ) : null}
+                          </div>
                         ) : null}
                       </div>
                     </div>
+                    {manualProofFile ? (
+                      <div className="rounded-md border bg-muted/20 px-3 py-2">
+                        <label htmlFor="declare-actual-transfer" className="flex cursor-pointer items-start gap-2">
+                          <Checkbox
+                            id="declare-actual-transfer"
+                            checked={isActualTransferDeclared}
+                            onCheckedChange={(checked) => setIsActualTransferDeclared(Boolean(checked))}
+                          />
+                          <span className="text-xs text-muted-foreground">
+                            Saya menyatakan nominal di atas adalah nominal transfer aktual sesuai bukti pembayaran.
+                          </span>
+                        </label>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Pilih file bukti pembayaran terlebih dahulu, lalu centang deklarasi sebelum kirim konfirmasi.
+                      </p>
+                    )}
                     <Button
                       className="w-full md:w-auto"
                       onClick={() => void submitPaymentProof()}
@@ -2778,13 +2864,29 @@ export default function OrgBilling() {
             <AlertDialogCancel onClick={handleBackToNominal}>Kembali Isi Nominal</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmChooseProofFile}
-              disabled={manualPaidAmountValue <= 0 || Boolean(manualPaidAmountInlineError) || !isActualTransferDeclared}
+              disabled={manualPaidAmountValue <= 0 || Boolean(manualPaidAmountInlineError)}
             >
               Lanjut Pilih File
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <Dialog open={isProofPreviewOpen} onOpenChange={setIsProofPreviewOpen}>
+        <DialogContent className="max-h-[92vh] max-w-5xl overflow-hidden p-0">
+          <DialogHeader className="border-b px-4 py-3">
+            <DialogTitle className="text-base">Pratinjau Bukti Pembayaran</DialogTitle>
+          </DialogHeader>
+          <div className="flex max-h-[82vh] items-center justify-center overflow-auto bg-slate-50 p-3">
+            {manualProofPreviewUrl ? (
+              <img
+                src={manualProofPreviewUrl}
+                alt="Pratinjau bukti pembayaran ukuran besar"
+                className="max-h-[78vh] w-auto rounded-md border bg-white object-contain shadow-sm"
+              />
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
     </OrganizationLayout>
   );
 }
