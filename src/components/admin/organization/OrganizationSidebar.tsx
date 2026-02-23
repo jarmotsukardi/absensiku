@@ -106,6 +106,8 @@ const MENU_GROUPS: MenuGroup[] = [
           { title: "Satuan Kerja", path: "/org/master/work-units", icon: Building2 },
           { title: "Lokasi Kerja", path: "/org/master/work-locations", icon: MapPin },
           { title: "Jabatan", path: "/org/master/positions", icon: Briefcase },
+          { title: "Kategori Pegawai", path: "/org/master/employee-categories", icon: Users },
+          { title: "Golongan Pegawai", path: "/org/master/employee-golongan", icon: UserCheck },
         ]
       },
       { 

@@ -20,6 +20,19 @@ import { PageGlossarySection } from "@/components/admin/common/PageGlossarySecti
 import { EmployeeDataTabs } from "@/components/org/employees/EmployeeDataTabs";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import {
+  DEFAULT_EMPLOYEE_CATEGORY_OPTIONS,
+  fetchTenantEmployeeCategories,
+  getActiveEmployeeCategoryOptions,
+  type EmployeeCategoryOption,
+} from "@/lib/employeeCategories";
+import {
+  DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS,
+  fetchTenantEmployeeGolongan,
+  getActiveEmployeeGolonganOptions,
+  type EmployeeGolonganOption,
+} from "@/lib/employeeGolongan";
+import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 
 type Employee = Tables<"employees">;
 type OPD = Tables<"opd">;
@@ -38,31 +51,6 @@ const GENDER_OPTIONS = [
   { value: "perempuan", label: "Perempuan" },
 ];
 
-const EMPLOYEE_CATEGORIES = [
-  { value: "ASN", label: "ASN" },
-  { value: "P3K", label: "P3K" },
-];
-
-const GOLONGAN_OPTIONS = [
-  { value: "I/a", label: "I/a" },
-  { value: "I/b", label: "I/b" },
-  { value: "I/c", label: "I/c" },
-  { value: "I/d", label: "I/d" },
-  { value: "II/a", label: "II/a" },
-  { value: "II/b", label: "II/b" },
-  { value: "II/c", label: "II/c" },
-  { value: "II/d", label: "II/d" },
-  { value: "III/a", label: "III/a" },
-  { value: "III/b", label: "III/b" },
-  { value: "III/c", label: "III/c" },
-  { value: "III/d", label: "III/d" },
-  { value: "IV/a", label: "IV/a" },
-  { value: "IV/b", label: "IV/b" },
-  { value: "IV/c", label: "IV/c" },
-  { value: "IV/d", label: "IV/d" },
-  { value: "IV/e", label: "IV/e" },
-];
-
 const ITEMS_PER_PAGE = 10;
 const ORG_ACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS = 12000;
 const ORG_ACTIVE_EMPLOYEES_QUERY_RETRY_MAX = 2;
@@ -74,6 +62,12 @@ export default function OrgActiveEmployees() {
   const [offices, setOffices] = useState<Office[]>([]);
   const [workUnits, setWorkUnits] = useState<WorkUnit[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
+  const [employeeCategoryOptions, setEmployeeCategoryOptions] = useState<EmployeeCategoryOption[]>(
+    DEFAULT_EMPLOYEE_CATEGORY_OPTIONS
+  );
+  const [employeeGolonganOptions, setEmployeeGolonganOptions] = useState<EmployeeGolonganOption[]>(
+    DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS
+  );
   const [totalEmployees, setTotalEmployees] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -114,7 +108,7 @@ export default function OrgActiveEmployees() {
     setLoadError(null);
     try {
       setIsRetrying(false);
-      const [opdsRes, officesRes, workUnitsRes, positionsRes] = await withExponentialBackoff(
+      const [opdsRes, officesRes, workUnitsRes, positionsRes, resolvedTenantId] = await withExponentialBackoff(
         () =>
           withTimeout(
             Promise.all([
@@ -122,6 +116,7 @@ export default function OrgActiveEmployees() {
               supabase.from("offices").select("*").eq("is_active", true).order("name"),
               supabase.from("work_units").select("*").eq("is_active", true).order("name"),
               supabase.from("positions").select("*").eq("is_active", true).order("name"),
+              resolveOrgTenantId(),
             ]),
             ORG_ACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS,
             "org.employees.active.fetch_master_data timeout"
@@ -141,11 +136,45 @@ export default function OrgActiveEmployees() {
       setOffices(officesRes.data || []);
       setWorkUnits(workUnitsRes.data || []);
       setPositions(positionsRes.data || []);
+
+      if (!resolvedTenantId) {
+        setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
+        setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
+        return;
+      }
+
+      const [categoryMaster, golonganMaster] = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.all([
+              fetchTenantEmployeeCategories(resolvedTenantId),
+              fetchTenantEmployeeGolongan(resolvedTenantId),
+            ]),
+            ORG_ACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS,
+            "org.employees.active.fetch_employee_master_options timeout"
+          ),
+        {
+          maxRetries: ORG_ACTIVE_EMPLOYEES_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+
+      const nextCategoryOptions = getActiveEmployeeCategoryOptions(categoryMaster.categories);
+      setEmployeeCategoryOptions(
+        nextCategoryOptions.length > 0 ? nextCategoryOptions : DEFAULT_EMPLOYEE_CATEGORY_OPTIONS
+      );
+      const nextGolonganOptions = getActiveEmployeeGolonganOptions(golonganMaster.golongan);
+      setEmployeeGolonganOptions(
+        nextGolonganOptions.length > 0 ? nextGolonganOptions : DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS
+      );
     } catch (error) {
       const errorRef = reportError(error, "org.employees.active.fetch_master_data");
       const message = appendErrorReference("Gagal memuat data referensi pegawai", errorRef);
       setLoadError(message);
       toast.error(message);
+      setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
+      setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
     }
   };
 
@@ -216,16 +245,17 @@ export default function OrgActiveEmployees() {
     }
   }, [currentPage, totalEmployees]);
 
+  useEffect(() => {
+    if (filterCategory !== "all" && !employeeCategoryOptions.some((option) => option.value === filterCategory)) {
+      setFilterCategory("all");
+    }
+  }, [employeeCategoryOptions, filterCategory]);
+
   // Filtered dropdown options based on cascade selection
   const filteredWorkUnits = useMemo(() => {
     if (!formData.opd_id) return workUnits;
     return workUnits.filter(wu => wu.opd_id === formData.opd_id);
   }, [workUnits, formData.opd_id]);
-
-  const filteredPositions = useMemo(() => {
-    if (!formData.work_unit_id) return positions;
-    return positions.filter(pos => pos.work_unit_id === formData.work_unit_id);
-  }, [positions, formData.work_unit_id]);
 
   const filteredOffices = useMemo(() => {
     if (!formData.opd_id) return offices;
@@ -243,9 +273,9 @@ export default function OrgActiveEmployees() {
     [filteredWorkUnits]
   );
 
-  const positionOptions: SearchableSelectOption[] = useMemo(() => 
-    filteredPositions.map(pos => ({ value: pos.id, label: pos.name })), 
-    [filteredPositions]
+  const positionOptions: SearchableSelectOption[] = useMemo(() =>
+    positions.map(pos => ({ value: pos.id, label: pos.name })),
+    [positions]
   );
 
   const officeOptions: SearchableSelectOption[] = useMemo(() => 
@@ -253,28 +283,48 @@ export default function OrgActiveEmployees() {
     [filteredOffices]
   );
 
-  const golonganOptions: SearchableSelectOption[] = useMemo(() => 
-    GOLONGAN_OPTIONS.map(gol => ({ value: gol.value, label: gol.label })), 
-    []
+  const golonganOptions: SearchableSelectOption[] = useMemo(
+    () => employeeGolonganOptions.map((golongan) => ({ value: golongan.value, label: golongan.label })),
+    [employeeGolonganOptions]
   );
 
-  // Handle OPD change - reset dependent fields
+  const formEmployeeCategoryOptions = useMemo(() => {
+    if (!formData.employee_category) return employeeCategoryOptions;
+    if (employeeCategoryOptions.some((option) => option.value === formData.employee_category)) {
+      return employeeCategoryOptions;
+    }
+    return [
+      { value: formData.employee_category, label: `${formData.employee_category} (nonaktif)` },
+      ...employeeCategoryOptions,
+    ];
+  }, [employeeCategoryOptions, formData.employee_category]);
+
+  const formEmployeeGolonganOptions = useMemo(() => {
+    if (!formData.golongan) return golonganOptions;
+    if (golonganOptions.some((option) => option.value === formData.golongan)) {
+      return golonganOptions;
+    }
+    return [
+      { value: formData.golongan, label: `${formData.golongan} (nonaktif)` },
+      ...golonganOptions,
+    ];
+  }, [formData.golongan, golonganOptions]);
+
+  // Handle OPD change - reset dependent fields, but keep selected position
   const handleOpdChange = (opdId: string) => {
     setFormData({
       ...formData,
       opd_id: opdId,
       work_unit_id: "",
-      position_id: "",
       office_id: "",
     });
   };
 
-  // Handle Work Unit change - reset position
+  // Handle Work Unit change
   const handleWorkUnitChange = (workUnitId: string) => {
     setFormData({
       ...formData,
       work_unit_id: workUnitId,
-      position_id: "",
     });
   };
 
@@ -737,8 +787,8 @@ export default function OrgActiveEmployees() {
                 </div>
 
                 {/* Unit Kerja dan Lokasi Kerja */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="grid gap-2">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div className="grid min-w-0 gap-2">
                     <Label>Unit Kerja (Satuan Kerja)</Label>
                     <SearchableSelect
                       options={workUnitOptions}
@@ -748,9 +798,10 @@ export default function OrgActiveEmployees() {
                       searchPlaceholder="Cari Unit Kerja..."
                       emptyMessage={formData.opd_id ? "Unit Kerja tidak ditemukan" : "Pilih OPD terlebih dahulu"}
                       disabled={!formData.opd_id}
+                      className="min-w-0"
                     />
                   </div>
-                  <div className="grid gap-2">
+                  <div className="grid min-w-0 gap-2">
                     <Label>Lokasi Kerja</Label>
                     <SearchableSelect
                       options={officeOptions}
@@ -760,6 +811,7 @@ export default function OrgActiveEmployees() {
                       searchPlaceholder="Cari Lokasi Kerja..."
                       emptyMessage={formData.opd_id ? "Lokasi tidak ditemukan" : "Pilih OPD terlebih dahulu"}
                       disabled={!formData.opd_id}
+                      className="min-w-0"
                     />
                   </div>
                 </div>
@@ -773,8 +825,7 @@ export default function OrgActiveEmployees() {
                     onValueChange={(v) => setFormData({ ...formData, position_id: v })}
                     placeholder="Pilih Jabatan"
                     searchPlaceholder="Cari Jabatan..."
-                    emptyMessage={formData.work_unit_id ? "Jabatan tidak ditemukan" : "Pilih Unit Kerja terlebih dahulu"}
-                    disabled={!formData.work_unit_id}
+                    emptyMessage="Jabatan tidak ditemukan"
                   />
                 </div>
 
@@ -783,7 +834,7 @@ export default function OrgActiveEmployees() {
                   <div className="grid gap-2">
                     <Label>Golongan</Label>
                     <SearchableSelect
-                      options={golonganOptions}
+                      options={formEmployeeGolonganOptions}
                       value={formData.golongan}
                       onValueChange={(v) => setFormData({ ...formData, golongan: v })}
                       placeholder="Pilih Golongan"
@@ -798,7 +849,7 @@ export default function OrgActiveEmployees() {
                         <SelectValue placeholder="Pilih Kategori" />
                       </SelectTrigger>
                       <SelectContent>
-                        {EMPLOYEE_CATEGORIES.map(cat => (
+                        {formEmployeeCategoryOptions.map(cat => (
                           <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
                         ))}
                       </SelectContent>
@@ -933,7 +984,7 @@ export default function OrgActiveEmployees() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">Semua</SelectItem>
-                      {EMPLOYEE_CATEGORIES.map(cat => (
+                      {employeeCategoryOptions.map(cat => (
                         <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
                       ))}
                     </SelectContent>

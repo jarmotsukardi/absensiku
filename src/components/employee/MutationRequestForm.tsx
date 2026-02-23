@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,14 +24,18 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { Loader2, ArrowRight, Edit3, Building2, MapPin, User, Send } from "lucide-react";
-
-// Konstanta daftar Golongan (sama dengan halaman admin)
-const GOLONGAN_OPTIONS = [
-  "I/a", "I/b", "I/c", "I/d",
-  "II/a", "II/b", "II/c", "II/d",
-  "III/a", "III/b", "III/c", "III/d",
-  "IV/a", "IV/b", "IV/c", "IV/d", "IV/e",
-];
+import {
+  DEFAULT_EMPLOYEE_CATEGORY_OPTIONS,
+  fetchTenantEmployeeCategories,
+  getActiveEmployeeCategoryOptions,
+  type EmployeeCategoryOption,
+} from "@/lib/employeeCategories";
+import {
+  DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS,
+  fetchTenantEmployeeGolongan,
+  getActiveEmployeeGolonganOptions,
+  type EmployeeGolonganOption,
+} from "@/lib/employeeGolongan";
 
 interface EmployeeData {
   id: string;
@@ -105,6 +109,7 @@ const getErrorMessage = (error: unknown): string => {
 export function MutationRequestForm({ employee, onSuccess }: MutationRequestFormProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isMasterDataLoading, setIsMasterDataLoading] = useState(false);
   const [mutationType, setMutationType] = useState<MutationType>("profile_change");
   
   // Master data
@@ -112,6 +117,12 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
   const [workUnits, setWorkUnits] = useState<WorkUnit[]>([]);
   const [offices, setOffices] = useState<Office[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
+  const [employeeCategoryOptions, setEmployeeCategoryOptions] = useState<EmployeeCategoryOption[]>(
+    DEFAULT_EMPLOYEE_CATEGORY_OPTIONS
+  );
+  const [employeeGolonganOptions, setEmployeeGolonganOptions] = useState<EmployeeGolonganOption[]>(
+    DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS
+  );
   
   // Form state - Profile changes (phone/whatsapp gabung jadi satu field)
   const [formData, setFormData] = useState({
@@ -140,30 +151,49 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
   const [reason, setReason] = useState("");
 
   const fetchMasterData = useCallback(async () => {
-    if (!employee.tenant_id) return;
+    if (!employee.tenant_id) {
+      setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
+      setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
+      setIsMasterDataLoading(false);
+      return;
+    }
+
+    setIsMasterDataLoading(true);
     try {
-      const [opdRes, workUnitRes, officeRes, positionRes] = await Promise.all([
+      const [opdRes, workUnitRes, officeRes, positionRes, categoryMaster, golonganMaster] = await Promise.all([
         supabase.from("opd").select("id, name, code").eq("tenant_id", employee.tenant_id).eq("is_active", true),
         supabase.from("work_units").select("id, name, opd_id").eq("tenant_id", employee.tenant_id).eq("is_active", true),
         supabase.from("offices").select("id, name, opd_id").eq("tenant_id", employee.tenant_id).eq("is_active", true),
         supabase.from("positions").select("id, name").eq("tenant_id", employee.tenant_id).eq("is_active", true),
+        fetchTenantEmployeeCategories(employee.tenant_id),
+        fetchTenantEmployeeGolongan(employee.tenant_id),
       ]);
 
       if (opdRes.data) setOpdList(opdRes.data);
       if (workUnitRes.data) setWorkUnits(workUnitRes.data);
       if (officeRes.data) setOffices(officeRes.data as Office[]);
       if (positionRes.data) setPositions(positionRes.data);
+      const nextCategoryOptions = getActiveEmployeeCategoryOptions(categoryMaster.categories);
+      setEmployeeCategoryOptions(nextCategoryOptions.length > 0 ? nextCategoryOptions : DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
+      const nextGolonganOptions = getActiveEmployeeGolonganOptions(golonganMaster.golongan);
+      setEmployeeGolonganOptions(nextGolonganOptions.length > 0 ? nextGolonganOptions : DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
     } catch (error) {
       console.error("Error fetching master data:", error);
+      setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
+      setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
+    } finally {
+      setIsMasterDataLoading(false);
     }
   }, [employee.tenant_id]);
 
   // Fetch master data
   useEffect(() => {
-    if (isOpen && employee.tenant_id) {
-      fetchMasterData();
+    if (!isOpen) {
+      return;
     }
-  }, [isOpen, employee.tenant_id, fetchMasterData]);
+
+    void fetchMasterData();
+  }, [isOpen, fetchMasterData]);
 
   // Filter work units by selected OPD
   const filteredWorkUnits = transferData.opd_id
@@ -183,6 +213,28 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
   const profileFilteredOffices = formData.opd_id
     ? offices.filter((o) => o.opd_id === formData.opd_id)
     : offices;
+
+  const profileEmployeeCategoryOptions = useMemo(() => {
+    if (!formData.employee_category) return employeeCategoryOptions;
+    if (employeeCategoryOptions.some((option) => option.value === formData.employee_category)) {
+      return employeeCategoryOptions;
+    }
+    return [
+      { value: formData.employee_category, label: `${formData.employee_category} (nonaktif)` },
+      ...employeeCategoryOptions,
+    ];
+  }, [employeeCategoryOptions, formData.employee_category]);
+
+  const profileEmployeeGolonganOptions = useMemo(() => {
+    if (!formData.golongan) return employeeGolonganOptions;
+    if (employeeGolonganOptions.some((option) => option.value === formData.golongan)) {
+      return employeeGolonganOptions;
+    }
+    return [
+      { value: formData.golongan, label: `${formData.golongan} (nonaktif)` },
+      ...employeeGolonganOptions,
+    ];
+  }, [employeeGolonganOptions, formData.golongan]);
 
   const getChangedFields = () => {
     const changes: MutationPayload = {};
@@ -495,13 +547,16 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
                   <Select
                     value={formData.golongan}
                     onValueChange={(v) => setFormData({ ...formData, golongan: v })}
+                    disabled={isMasterDataLoading}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Pilih Golongan" />
+                      <SelectValue placeholder={isMasterDataLoading ? "Memuat golongan..." : "Pilih golongan"} />
                     </SelectTrigger>
                     <SelectContent>
-                      {GOLONGAN_OPTIONS.map((g) => (
-                        <SelectItem key={g} value={g}>{g}</SelectItem>
+                      {profileEmployeeGolonganOptions.map((golongan) => (
+                        <SelectItem key={golongan.value} value={golongan.value}>
+                          {golongan.label}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -532,13 +587,17 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
                   <Select
                     value={formData.employee_category}
                     onValueChange={(v) => setFormData({ ...formData, employee_category: v })}
+                    disabled={isMasterDataLoading}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Pilih kategori" />
+                      <SelectValue placeholder={isMasterDataLoading ? "Memuat kategori..." : "Pilih kategori"} />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="ASN">ASN</SelectItem>
-                      <SelectItem value="P3K">P3K</SelectItem>
+                      {profileEmployeeCategoryOptions.map((category) => (
+                        <SelectItem key={category.value} value={category.value}>
+                          {category.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>

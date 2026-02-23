@@ -61,6 +61,8 @@ const OrgInstitutionTypesManagement = lazy(() => import("./pages/org/master/OrgI
 const OrgWorkUnitsManagement = lazy(() => import("./pages/org/master/OrgWorkUnitsManagement"));
 const OrgWorkLocationsManagement = lazy(() => import("./pages/org/master/OrgWorkLocationsManagement"));
 const OrgPositionsManagement = lazy(() => import("./pages/org/master/OrgPositionsManagement"));
+const OrgEmployeeCategoriesManagement = lazy(() => import("./pages/org/master/OrgEmployeeCategoriesManagement"));
+const OrgEmployeeGolonganManagement = lazy(() => import("./pages/org/master/OrgEmployeeGolonganManagement"));
 const OrgHolidaysManagement = lazy(() => import("./pages/org/schedule/OrgHolidaysManagement"));
 const OrgNationalHolidaysManagement = lazy(() => import("./pages/org/schedule/OrgNationalHolidaysManagement"));
 const OrgWorkHoursManagement = lazy(() => import("./pages/org/schedule/OrgWorkHoursManagement"));
@@ -202,6 +204,8 @@ const App = () => (
               <Route path="/org/master/work-units" element={<OrgWorkUnitsManagement />} />
               <Route path="/org/master/work-locations" element={<OrgWorkLocationsManagement />} />
               <Route path="/org/master/positions" element={<OrgPositionsManagement />} />
+              <Route path="/org/master/employee-categories" element={<OrgEmployeeCategoriesManagement />} />
+              <Route path="/org/master/employee-golongan" element={<OrgEmployeeGolonganManagement />} />
               <Route path="/org/master/employee-import" element={<Navigate to="/org/employees/import" replace />} />
               <Route path="/org/master" element={<Navigate to="/org/master/opd" replace />} />
               <Route path="/org/master/work-hours" element={<Navigate to="/org/schedule/work-hours" replace />} />

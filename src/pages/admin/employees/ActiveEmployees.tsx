@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,18 @@ import {
   withTimeout,
 } from "@/lib/attendanceResilience";
 import {
+  DEFAULT_EMPLOYEE_CATEGORY_OPTIONS,
+  fetchTenantEmployeeCategories,
+  getActiveEmployeeCategoryOptions,
+  type EmployeeCategoryOption,
+} from "@/lib/employeeCategories";
+import {
+  DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS,
+  fetchTenantEmployeeGolongan,
+  getActiveEmployeeGolonganOptions,
+  type EmployeeGolonganOption,
+} from "@/lib/employeeGolongan";
+import {
   Pagination,
   PaginationContent,
   PaginationItem,
@@ -39,18 +51,6 @@ const GENDER_OPTIONS = [
   { value: "P", label: "Perempuan" },
 ];
 
-const EMPLOYEE_CATEGORIES = [
-  { value: "asn", label: "ASN" },
-  { value: "p3k", label: "P3K" },
-  { value: "honorer", label: "Honorer" },
-];
-
-const GOLONGAN_OPTIONS = [
-  "I/a", "I/b", "I/c", "I/d",
-  "II/a", "II/b", "II/c", "II/d",
-  "III/a", "III/b", "III/c", "III/d",
-  "IV/a", "IV/b", "IV/c", "IV/d", "IV/e",
-];
 const ITEMS_PER_PAGE = 15;
 const ADMIN_ACTIVE_EMP_READ_TIMEOUT_MS = 12000;
 const ADMIN_ACTIVE_EMP_WRITE_TIMEOUT_MS = 15000;
@@ -61,6 +61,16 @@ export default function ActiveEmployees() {
   const [employees, setEmployees] = useState<(Employee & { opd?: OPD; office?: Office })[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [officeList, setOfficeList] = useState<Office[]>([]);
+  const [employeeCategoryOptions, setEmployeeCategoryOptions] = useState<EmployeeCategoryOption[]>(
+    DEFAULT_EMPLOYEE_CATEGORY_OPTIONS
+  );
+  const [employeeGolonganOptions, setEmployeeGolonganOptions] = useState<EmployeeGolonganOption[]>(
+    DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS
+  );
+  const [employeeCategoryCache, setEmployeeCategoryCache] = useState<Record<string, EmployeeCategoryOption[]>>({});
+  const [employeeGolonganCache, setEmployeeGolonganCache] = useState<Record<string, EmployeeGolonganOption[]>>({});
+  const [isLoadingEmployeeCategories, setIsLoadingEmployeeCategories] = useState(false);
+  const [isLoadingEmployeeGolongan, setIsLoadingEmployeeGolongan] = useState(false);
   const [totalEmployees, setTotalEmployees] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -86,6 +96,143 @@ export default function ActiveEmployees() {
     kategori_pegawai: "",
     nik: "",
   });
+
+  const loadEmployeeCategoriesByTenant = useCallback(
+    async (tenantId: string | null | undefined) => {
+      if (!tenantId) {
+        setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
+        return;
+      }
+
+      const cached = employeeCategoryCache[tenantId];
+      if (cached) {
+        setEmployeeCategoryOptions(cached);
+        return;
+      }
+
+      setIsLoadingEmployeeCategories(true);
+      try {
+        const { categories } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              fetchTenantEmployeeCategories(tenantId),
+              ADMIN_ACTIVE_EMP_READ_TIMEOUT_MS,
+              "Permintaan master kategori pegawai timeout."
+            ),
+          {
+            maxRetries: ADMIN_ACTIVE_EMP_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+          }
+        );
+
+        const nextOptions = getActiveEmployeeCategoryOptions(categories);
+        const normalizedOptions = nextOptions.length > 0 ? nextOptions : DEFAULT_EMPLOYEE_CATEGORY_OPTIONS;
+        setEmployeeCategoryOptions(normalizedOptions);
+        setEmployeeCategoryCache((prev) => ({ ...prev, [tenantId]: normalizedOptions }));
+      } catch (error) {
+        const errorRef = reportError(error, "admin.active_employees.fetch_employee_categories", { tenant_id: tenantId });
+        toast.error(appendErrorReference("Gagal memuat kategori pegawai", errorRef));
+        setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
+      } finally {
+        setIsLoadingEmployeeCategories(false);
+      }
+    },
+    [employeeCategoryCache]
+  );
+
+  const loadEmployeeGolonganByTenant = useCallback(
+    async (tenantId: string | null | undefined) => {
+      if (!tenantId) {
+        setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
+        return;
+      }
+
+      const cached = employeeGolonganCache[tenantId];
+      if (cached) {
+        setEmployeeGolonganOptions(cached);
+        return;
+      }
+
+      setIsLoadingEmployeeGolongan(true);
+      try {
+        const { golongan } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              fetchTenantEmployeeGolongan(tenantId),
+              ADMIN_ACTIVE_EMP_READ_TIMEOUT_MS,
+              "Permintaan master golongan pegawai timeout."
+            ),
+          {
+            maxRetries: ADMIN_ACTIVE_EMP_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+          }
+        );
+
+        const nextOptions = getActiveEmployeeGolonganOptions(golongan);
+        const normalizedOptions = nextOptions.length > 0 ? nextOptions : DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS;
+        setEmployeeGolonganOptions(normalizedOptions);
+        setEmployeeGolonganCache((prev) => ({ ...prev, [tenantId]: normalizedOptions }));
+      } catch (error) {
+        const errorRef = reportError(error, "admin.active_employees.fetch_employee_golongan", { tenant_id: tenantId });
+        toast.error(appendErrorReference("Gagal memuat golongan pegawai", errorRef));
+        setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
+      } finally {
+        setIsLoadingEmployeeGolongan(false);
+      }
+    },
+    [employeeGolonganCache]
+  );
+
+  const handleOpdChange = useCallback(
+    (opdId: string) => {
+      setFormData((prev) => ({
+        ...prev,
+        opd_id: opdId,
+        kategori_pegawai:
+          prev.kategori_pegawai &&
+          employeeCategoryOptions.some((option) => option.value === prev.kategori_pegawai)
+            ? prev.kategori_pegawai
+            : "",
+        golongan:
+          prev.golongan &&
+          employeeGolonganOptions.some((option) => option.value === prev.golongan)
+            ? prev.golongan
+            : "",
+      }));
+      const selectedOpd = opdList.find((opd) => opd.id === opdId);
+      void loadEmployeeCategoriesByTenant(selectedOpd?.tenant_id);
+      void loadEmployeeGolonganByTenant(selectedOpd?.tenant_id);
+    },
+    [
+      employeeCategoryOptions,
+      employeeGolonganOptions,
+      loadEmployeeCategoriesByTenant,
+      loadEmployeeGolonganByTenant,
+      opdList,
+    ]
+  );
+
+  const resolvedEmployeeCategoryOptions = useMemo(() => {
+    if (!formData.kategori_pegawai) return employeeCategoryOptions;
+    if (employeeCategoryOptions.some((option) => option.value === formData.kategori_pegawai)) {
+      return employeeCategoryOptions;
+    }
+    return [
+      { value: formData.kategori_pegawai, label: `${formData.kategori_pegawai} (nonaktif)` },
+      ...employeeCategoryOptions,
+    ];
+  }, [employeeCategoryOptions, formData.kategori_pegawai]);
+
+  const resolvedEmployeeGolonganOptions = useMemo(() => {
+    if (!formData.golongan) return employeeGolonganOptions;
+    if (employeeGolonganOptions.some((option) => option.value === formData.golongan)) {
+      return employeeGolonganOptions;
+    }
+    return [
+      { value: formData.golongan, label: `${formData.golongan} (nonaktif)` },
+      ...employeeGolonganOptions,
+    ];
+  }, [employeeGolonganOptions, formData.golongan]);
 
   const fetchMasterData = async () => {
     try {
@@ -208,6 +355,8 @@ export default function ActiveEmployees() {
         position: formData.position || null,
         opd_id: formData.opd_id || null,
         office_id: formData.office_id || null,
+        golongan: formData.golongan || null,
+        employee_category: formData.kategori_pegawai || null,
         nik: formData.nik,
       };
 
@@ -302,10 +451,12 @@ export default function ActiveEmployees() {
       opd_id: employee.opd_id || "",
       office_id: employee.office_id || "",
       position: employee.position || "",
-      golongan: "",
-      kategori_pegawai: "",
+      golongan: employee.golongan || "",
+      kategori_pegawai: employee.employee_category || "",
       nik: employee.nik,
     });
+    void loadEmployeeCategoriesByTenant(employee.tenant_id);
+    void loadEmployeeGolonganByTenant(employee.tenant_id);
     setIsDialogOpen(true);
   };
 
@@ -372,7 +523,14 @@ export default function ActiveEmployees() {
           </div>
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
-              <Button onClick={() => { setEditingEmployee(null); resetForm(); }}>
+              <Button
+                onClick={() => {
+                  setEditingEmployee(null);
+                  resetForm();
+                  setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
+                  setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
+                }}
+              >
                 <Plus className="mr-2 h-4 w-4" />
                 Tambah Pegawai
               </Button>
@@ -497,10 +655,10 @@ export default function ActiveEmployees() {
                           onValueChange={(value) => setFormData({ ...formData, kategori_pegawai: value })}
                         >
                           <SelectTrigger>
-                            <SelectValue placeholder="Pilih Kategori" />
+                            <SelectValue placeholder={isLoadingEmployeeCategories ? "Memuat kategori..." : "Pilih Kategori"} />
                           </SelectTrigger>
                           <SelectContent>
-                            {EMPLOYEE_CATEGORIES.map((c) => (
+                            {resolvedEmployeeCategoryOptions.map((c) => (
                               <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
                             ))}
                           </SelectContent>
@@ -513,7 +671,7 @@ export default function ActiveEmployees() {
                         <Label htmlFor="opd_id">OPD</Label>
                         <Select
                           value={formData.opd_id}
-                          onValueChange={(value) => setFormData({ ...formData, opd_id: value })}
+                          onValueChange={handleOpdChange}
                         >
                           <SelectTrigger>
                             <SelectValue placeholder="Pilih OPD" />
@@ -562,13 +720,16 @@ export default function ActiveEmployees() {
                         <Select
                           value={formData.golongan}
                           onValueChange={(value) => setFormData({ ...formData, golongan: value })}
+                          disabled={isLoadingEmployeeGolongan}
                         >
                           <SelectTrigger>
-                            <SelectValue placeholder="Pilih Golongan" />
+                            <SelectValue placeholder={isLoadingEmployeeGolongan ? "Memuat golongan..." : "Pilih Golongan"} />
                           </SelectTrigger>
                           <SelectContent>
-                            {GOLONGAN_OPTIONS.map((g) => (
-                              <SelectItem key={g} value={g}>{g}</SelectItem>
+                            {resolvedEmployeeGolonganOptions.map((golongan) => (
+                              <SelectItem key={golongan.value} value={golongan.value}>
+                                {golongan.label}
+                              </SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
