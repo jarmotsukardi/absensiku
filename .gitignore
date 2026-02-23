@@ -34,3 +34,4 @@ ops/*.local.json
 ops/*.local.jsonl
 playwright-report/
 test-results/
+docker/postgres/migrations/supabase/
