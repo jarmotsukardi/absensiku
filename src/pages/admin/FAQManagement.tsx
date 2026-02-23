@@ -22,6 +22,7 @@ import {
   FAQ_AUDIENCE_LABEL,
   inferFaqAudience,
   isFaqAudience,
+  isFaqVisibleToPublic,
   shouldAutoCorrectLegacyAudience,
 } from "@/lib/faqAudience";
 import type { FaqAudience } from "@/lib/faqAudience";
@@ -68,6 +69,30 @@ const normalizeFaqItem = (item: FAQ): FAQ => {
     ...item,
     audience,
   };
+};
+
+const resolveAudienceForFilter = (faq: FAQ): FaqAudience => {
+  return (
+    faq.audience ??
+    inferFaqAudience({
+      category: faq.category,
+      question: faq.question,
+      answer: faq.answer,
+    })
+  );
+};
+
+const matchesAudienceFilter = (faq: FAQ, filter: "all" | FaqAudience): boolean => {
+  if (filter === "all") return true;
+  if (filter === "public") {
+    return isFaqVisibleToPublic({
+      audience: faq.audience,
+      category: faq.category,
+      question: faq.question,
+      answer: faq.answer,
+    });
+  }
+  return resolveAudienceForFilter(faq) === filter;
 };
 
 const ITEMS_PER_PAGE = 10;
@@ -829,13 +854,7 @@ export default function FAQManagement() {
           faq.answer.toLowerCase().includes(normalizedSearchQuery) ||
           faq.category.toLowerCase().includes(normalizedSearchQuery)) &&
         (categoryFilter === "all" || faq.category === categoryFilter) &&
-        (audienceFilter === "all" ||
-          (faq.audience ??
-            inferFaqAudience({
-              category: faq.category,
-              question: faq.question,
-              answer: faq.answer,
-            })) === audienceFilter)
+        matchesAudienceFilter(faq, audienceFilter)
     );
     setFilteredFaqs(filtered);
     setCurrentPage(1);
@@ -1165,14 +1184,7 @@ export default function FAQManagement() {
   // Get unique categories
   const totalCategories = [...new Set(faqs.map((f) => f.category).filter(Boolean))].length;
   const categorySourceFaqs = faqs.filter(
-    (faq) =>
-      audienceFilter === "all" ||
-      (faq.audience ??
-        inferFaqAudience({
-          category: faq.category,
-          question: faq.question,
-          answer: faq.answer,
-        })) === audienceFilter,
+    (faq) => matchesAudienceFilter(faq, audienceFilter),
   );
   const categoryCountMap = categorySourceFaqs.reduce<Record<string, number>>((accumulator, faq) => {
     const key = faq.category?.trim();
@@ -1191,12 +1203,20 @@ export default function FAQManagement() {
       setCategoryFilter("all");
     }
   }, [categoryFilter, categories]);
-  const audienceStats = {
-    public: faqs.filter((f) => f.audience === "public").length,
-    employee: faqs.filter((f) => f.audience === "employee").length,
-    org_admin: faqs.filter((f) => f.audience === "org_admin").length,
-    super_admin: faqs.filter((f) => f.audience === "super_admin").length,
-  };
+  const audienceStats = faqs.reduce(
+    (accumulator, faq) => {
+      const audience = resolveAudienceForFilter(faq);
+      accumulator[audience] += 1;
+      return accumulator;
+    },
+    {
+      public: 0,
+      employee: 0,
+      org_admin: 0,
+      super_admin: 0,
+    } as Record<FaqAudience, number>,
+  );
+  const publicVisibleCount = audienceStats.public + audienceStats.employee;
 
   return (
     <SuperAdminLayout title="Manajemen FAQ" subtitle="Kelola pertanyaan yang sering diajukan">
@@ -1227,7 +1247,7 @@ export default function FAQManagement() {
                   variant={audienceFilter === "public" ? "default" : "outline"}
                   onClick={() => setAudienceFilter("public")}
                 >
-                  Umum
+                  Umum + Employee
                 </Button>
                 <Button
                   size="sm"
@@ -1355,8 +1375,8 @@ export default function FAQManagement() {
         <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
           <Card>
             <CardContent className="pt-4">
-              <p className="text-xs text-muted-foreground">{FAQ_AUDIENCE_LABEL.public}</p>
-              <p className="text-xl font-semibold">{audienceStats.public}</p>
+              <p className="text-xs text-muted-foreground">Untuk Umum + Employee</p>
+              <p className="text-xl font-semibold">{publicVisibleCount}</p>
             </CardContent>
           </Card>
           <Card>

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { resolveFaqAudience } from "@/lib/faqAudience";
+import { isFaqVisibleToPublic } from "@/lib/faqAudience";
 import type { FaqAudience } from "@/lib/faqAudience";
 import { getHomepageSectionOrder, isHomepageSectionEnabled } from "@/lib/homepageLayout";
 import { mapSubscriptionPackagesToPricingPlans } from "@/lib/pricingPlans";
@@ -556,12 +556,10 @@ export type {
   Article,
 };
 const isPublicAudienceFaq = (faq: FAQ): boolean => {
-  return (
-    resolveFaqAudience({
-      audience: faq.audience,
-      category: faq.category,
-      question: faq.question,
-      answer: faq.answer,
-    }) === "public"
-  );
+  return isFaqVisibleToPublic({
+    audience: faq.audience,
+    category: faq.category,
+    question: faq.question,
+    answer: faq.answer,
+  });
 };

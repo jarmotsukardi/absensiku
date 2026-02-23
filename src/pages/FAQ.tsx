@@ -20,7 +20,7 @@ import {
   MessageCircle,
 } from "lucide-react";
 import type { FooterSettings } from "@/hooks/useHomepageData";
-import { resolveFaqAudience } from "@/lib/faqAudience";
+import { isFaqVisibleToPublic } from "@/lib/faqAudience";
 import type { FaqAudience } from "@/lib/faqAudience";
 
 interface FAQ {
@@ -68,14 +68,12 @@ const isFaq = (value: unknown): value is FAQ => {
 };
 
 const isPublicAudienceFaq = (faq: FAQ): boolean => {
-  return (
-    resolveFaqAudience({
-      audience: faq.audience,
-      category: faq.category,
-      question: faq.question,
-      answer: faq.answer,
-    }) === "public"
-  );
+  return isFaqVisibleToPublic({
+    audience: faq.audience,
+    category: faq.category,
+    question: faq.question,
+    answer: faq.answer,
+  });
 };
 
 const asFaqArray = (value: unknown): FAQ[] => {

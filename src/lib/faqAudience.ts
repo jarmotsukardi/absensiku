@@ -175,6 +175,17 @@ export const resolveFaqAudience = (input: {
   });
 };
 
+const PUBLIC_VISIBLE_AUDIENCES: ReadonlySet<FaqAudience> = new Set(["public", "employee"]);
+
+export const isFaqVisibleToPublic = (input: {
+  audience?: unknown;
+  category?: string | null;
+  question?: string | null;
+  answer?: string | null;
+}): boolean => {
+  return PUBLIC_VISIBLE_AUDIENCES.has(resolveFaqAudience(input));
+};
+
 export const shouldAutoCorrectLegacyAudience = (input: {
   currentAudience?: unknown;
   category?: string | null;
