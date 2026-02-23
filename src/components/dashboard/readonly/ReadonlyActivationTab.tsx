@@ -11,8 +11,8 @@ export function ReadonlyActivationTab({ panelClass, tenantId, employeeId }: Read
   return (
     <Card className={panelClass}>
       <CardHeader>
-        <CardTitle>Aktivasi</CardTitle>
-        <CardDescription>Status aktivasi akun individual</CardDescription>
+        <CardTitle>Billing</CardTitle>
+        <CardDescription>Status billing akun individual</CardDescription>
       </CardHeader>
       <CardContent>
         <EmployeeActivationPage tenantId={tenantId} employeeId={employeeId} />

@@ -34,6 +34,7 @@ interface EmployeeSidebarProps {
   open: boolean;
   onClose: () => void;
   onNavigateTab?: (tab: string) => void;
+  onNavigateBilling?: () => void;
   activeTab?: string;
   unreadNotificationCount?: number;
   tenantId?: string | null;
@@ -51,6 +52,7 @@ export function EmployeeSidebar({
   open,
   onClose,
   onNavigateTab,
+  onNavigateBilling,
   activeTab,
   unreadNotificationCount = 0,
   tenantId,
@@ -182,11 +184,15 @@ export function EmployeeSidebar({
     },
     ...(billingMode === "individual"
       ? [{
-          id: "activation",
+          id: "billing",
           icon: Zap,
-          label: "Aktivasi",
+          label: "Billing",
           onClick: () => {
-            onNavigateTab?.("activation");
+            if (onNavigateBilling) {
+              onNavigateBilling();
+            } else {
+              onNavigateTab?.("billing");
+            }
             onClose();
           },
         }]

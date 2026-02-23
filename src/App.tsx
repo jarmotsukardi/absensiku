@@ -54,6 +54,7 @@ const EmployeeDashboardNew = lazy(() => import("./pages/employee/EmployeeDashboa
 const EmployeeDashboardReadonly = lazy(() => import("./pages/dashboard/EmployeeDashboardReadonly"));
 const EmployeeProfile = lazy(() => import("./pages/employee/EmployeeProfile"));
 const EmployeeHelp = lazy(() => import("./pages/employee/EmployeeHelp"));
+const EmployeeBilling = lazy(() => import("./pages/employee/EmployeeBilling"));
 const OrgLogin = lazy(() => import("./pages/org/OrgLogin"));
 const OrganizationLanding = lazy(() => import("./pages/landing/OrganizationLanding"));
 const NewsDetail = lazy(() => import("./pages/news/NewsDetail"));
@@ -261,6 +262,7 @@ const App = () => (
               <Route path="/employee/dashboard" element={<EmployeeDashboardNew />} />
               <Route path="/employee/profile" element={<EmployeeProfile />} />
               <Route path="/employee/help" element={<EmployeeHelp />} />
+              <Route path="/employee/billing" element={<EmployeeBilling />} />
               <Route path="/employee/reset-password" element={<ResetPassword />} />
 
               {/* Organization Landing Page */}

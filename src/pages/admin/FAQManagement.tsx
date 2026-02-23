@@ -367,6 +367,27 @@ const RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
     category: "Billing & Harga",
   },
   {
+    question: "Di mana pegawai melakukan pembayaran Billing Mandiri?",
+    answer:
+      "Pegawai melakukan pembayaran di menu Billing pada dashboard pegawai, atau langsung lewat halaman /employee/billing. Di halaman ini pegawai bisa membuat invoice baru, melanjutkan pembayaran, dan melihat riwayat invoice pribadi.",
+    category: "Billing & Harga",
+    audience: "employee",
+  },
+  {
+    question: "Bagaimana cara pegawai mengirim konfirmasi transfer manual?",
+    answer:
+      "Pada riwayat invoice di /employee/billing, klik Konfirmasi Transfer pada invoice manual yang masih aktif. Isi tanggal transfer, isi nomor referensi jika ada, centang deklarasi transfer, lalu kirim. Status invoice akan berubah menjadi menunggu verifikasi admin.",
+    category: "Billing & Harga",
+    audience: "employee",
+  },
+  {
+    question: "Apa yang tampil di billing pegawai jika organisasi memakai billing terpusat?",
+    answer:
+      "Halaman /employee/billing menampilkan informasi bahwa pembayaran dikelola admin organisasi. Pegawai tidak perlu membuat invoice sendiri, dan dapat kembali ke dashboard untuk aktivitas harian.",
+    category: "Billing & Harga",
+    audience: "employee",
+  },
+  {
     question: "Apa arti status faktur terbaru seperti Verifikasi Penuh, Verifikasi Parsial, Cicilan Aktif, dan Ditolak - Revisi?",
     answer:
       "Menunggu Pembayaran berarti tagihan belum dibayar. Verifikasi Penuh berarti nominal yang diklaim user sama dengan nominal tagihan dan menunggu verifikasi admin. Verifikasi Parsial berarti user mengirim nominal kurang dari sisa tagihan. Cicilan Aktif berarti ada pembayaran parsial yang sudah diverifikasi dan invoice masih memiliki sisa tagihan. Ditolak - Revisi berarti konfirmasi ditolak admin dan user wajib kirim ulang data pembayaran yang benar.",

@@ -18,7 +18,18 @@ import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { ACTIVE_INVOICE_STATUSES, isActiveInvoiceStatus } from "@/lib/billingGuards";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   CENTRALIZED_MIN_DURATION_SETTING_KEYS,
   INDIVIDUAL_MIN_DURATION_SETTING_KEY,
@@ -51,6 +62,8 @@ interface EmployeeInvoiceRecord {
   package_name: string | null;
   package_duration_months: number | null;
   invoice_url: string | null;
+  payment_method_type: string | null;
+  rejection_reason?: string | null;
   metadata?: unknown;
 }
 
@@ -59,6 +72,9 @@ interface XenditInvoiceResponse {
   reused?: boolean;
   error?: string;
   trace_id?: string;
+  fallback_payment_method?: "MANUAL_TRANSFER" | null;
+  fallback_code?: string | null;
+  message?: string;
   active_invoice?: {
     id?: string;
     invoice_number?: string | null;
@@ -71,6 +87,7 @@ interface XenditInvoiceResponse {
     invoice_url?: string | null;
     gross_amount?: number | null;
     due_date?: string | null;
+    payment_method_type?: string | null;
   };
 }
 
@@ -99,6 +116,12 @@ const parseMetadataEmployeeId = (metadata: unknown): string | null => {
     return raw.employee_id.trim();
   }
   return null;
+};
+
+const canConfirmManualTransfer = (invoice: EmployeeInvoiceRecord) => {
+  const normalizedStatus = (invoice.status || "").toUpperCase();
+  if (invoice.payment_method_type !== "MANUAL_TRANSFER") return false;
+  return normalizedStatus === "PENDING" || normalizedStatus === "REJECTED_NEEDS_REVISION";
 };
 
 const getInvoiceStatusBadge = (status: string) => {
@@ -149,6 +172,18 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isCreatingInvoice, setIsCreatingInvoice] = useState(false);
+  const [activeManualInvoice, setActiveManualInvoice] = useState<EmployeeInvoiceRecord | null>(null);
+  const [manualReferenceNumber, setManualReferenceNumber] = useState("");
+  const [manualPaymentDate, setManualPaymentDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [manualDeclaration, setManualDeclaration] = useState(false);
+  const [confirmingManualInvoiceId, setConfirmingManualInvoiceId] = useState<string | null>(null);
+
+  const resetManualDialogForm = useCallback(() => {
+    setActiveManualInvoice(null);
+    setManualReferenceNumber("");
+    setManualPaymentDate(new Date().toISOString().slice(0, 10));
+    setManualDeclaration(false);
+  }, []);
 
   const fetchData = useCallback(
     async (options?: { silent?: boolean }) => {
@@ -168,7 +203,7 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
           supabase
             .from("invoices")
             .select(
-              "id, invoice_number, status, gross_amount, created_at, due_date, paid_at, package_name, package_duration_months, invoice_url, metadata",
+              "id, invoice_number, status, gross_amount, created_at, due_date, paid_at, package_name, package_duration_months, invoice_url, payment_method_type, rejection_reason, metadata",
             )
             .eq("tenant_id", tenantId)
             .eq("metadata->>billing_scope", "individual")
@@ -218,11 +253,11 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
           return packageRows[0]?.id || "";
         });
       } catch (error) {
-        const errorRef = reportError(error, "employee.activation.fetch_data", {
+        const errorRef = reportError(error, "employee.billing.fetch_data", {
           tenant_id: tenantId,
           employee_id: employeeId,
         });
-        toast.error(appendErrorReference("Gagal memuat data aktivasi.", errorRef));
+        toast.error(appendErrorReference("Gagal memuat data billing.", errorRef));
       } finally {
         setIsLoading(false);
         setIsRefreshing(false);
@@ -246,6 +281,84 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
     );
   }, [invoices]);
 
+  const openManualConfirmDialog = useCallback((invoice: EmployeeInvoiceRecord) => {
+    setActiveManualInvoice(invoice);
+    setManualReferenceNumber("");
+    setManualPaymentDate(new Date().toISOString().slice(0, 10));
+    setManualDeclaration(false);
+  }, []);
+
+  const handleConfirmManualTransfer = useCallback(
+    async () => {
+      const invoice = activeManualInvoice;
+      if (!invoice) return;
+      const normalizedStatus = (invoice.status || "").toUpperCase();
+      if (!canConfirmManualTransfer(invoice)) return;
+      if (!manualDeclaration) {
+        toast.warning("Centang deklarasi konfirmasi transfer terlebih dahulu.");
+        return;
+      }
+      if (!manualPaymentDate) {
+        toast.warning("Tanggal transfer wajib diisi.");
+        return;
+      }
+
+      setConfirmingManualInvoiceId(invoice.id);
+      try {
+        const { data, error } = await supabase.functions.invoke<{
+          success?: boolean;
+          error?: string;
+          trace_id?: string;
+          status?: string;
+        }>("confirm-manual-transfer", {
+          body: {
+            tenant_id: tenantId,
+            employee_id: employeeId,
+            invoice_id: invoice.id,
+            reference_number: manualReferenceNumber.trim() || null,
+            payment_date: manualPaymentDate,
+          },
+        });
+
+        if (error) throw error;
+        if (!data?.success) {
+          toast.warning(data?.error || "Konfirmasi transfer belum berhasil diproses.");
+          return;
+        }
+
+        if (["AWAITING_VERIFICATION", "AWAITING_VERIFICATION_FULL"].includes((data.status || "").toUpperCase())) {
+          toast.success("Konfirmasi transfer terkirim. Menunggu verifikasi admin.");
+        } else if (normalizedStatus === "PAID") {
+          toast.success("Invoice sudah lunas.");
+        } else {
+          toast.success("Konfirmasi transfer berhasil dikirim.");
+        }
+
+        resetManualDialogForm();
+        await fetchData({ silent: true });
+      } catch (error) {
+        const errorRef = reportError(error, "employee.billing.confirm_manual_transfer", {
+          tenant_id: tenantId,
+          employee_id: employeeId,
+          invoice_id: invoice.id,
+        });
+        toast.error(appendErrorReference("Gagal mengirim konfirmasi transfer.", errorRef));
+      } finally {
+        setConfirmingManualInvoiceId(null);
+      }
+    },
+    [
+      activeManualInvoice,
+      employeeId,
+      fetchData,
+      manualDeclaration,
+      manualPaymentDate,
+      manualReferenceNumber,
+      resetManualDialogForm,
+      tenantId,
+    ],
+  );
+
   const paidInvoices = useMemo(
     () => invoices.filter((invoice) => (invoice.status || "").toUpperCase() === "PAID"),
     [invoices],
@@ -260,8 +373,17 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
       return;
     }
 
-    if (latestActiveInvoice?.invoice_url && isActiveInvoiceStatus(latestActiveInvoice.status)) {
-      window.open(latestActiveInvoice.invoice_url, "_blank", "noopener,noreferrer");
+    if (latestActiveInvoice && isActiveInvoiceStatus(latestActiveInvoice.status)) {
+      if (latestActiveInvoice.invoice_url) {
+        window.open(latestActiveInvoice.invoice_url, "_blank", "noopener,noreferrer");
+        return;
+      }
+      if (latestActiveInvoice.payment_method_type === "MANUAL_TRANSFER") {
+        toast.info(
+          "Invoice transfer manual sudah tersedia. Lakukan transfer lalu klik 'Konfirmasi Transfer' di riwayat invoice.",
+        );
+        return;
+      }
       return;
     }
 
@@ -292,6 +414,8 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
 
       const createdInvoiceUrl = data.invoice?.invoice_url || null;
       const createdInvoiceNo = data.invoice?.invoice_number || "-";
+      const fallbackManual = data.fallback_payment_method === "MANUAL_TRANSFER";
+      const createdMethod = data.invoice?.payment_method_type || null;
 
       if (data.reused) {
         toast.info(`Invoice aktif ${createdInvoiceNo} digunakan kembali.`);
@@ -299,15 +423,17 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
         toast.success(`Invoice ${createdInvoiceNo} berhasil dibuat.`);
       }
 
-      if (createdInvoiceUrl) {
+      if (createdInvoiceUrl && createdMethod !== "MANUAL_TRANSFER") {
         window.open(createdInvoiceUrl, "_blank", "noopener,noreferrer");
+      } else if (fallbackManual || createdMethod === "MANUAL_TRANSFER") {
+        toast.info(data.message || "Pembayaran online nonaktif. Gunakan konfirmasi transfer manual.");
       } else {
         toast.info("Invoice dibuat tanpa URL pembayaran. Silakan cek riwayat invoice.");
       }
 
       await fetchData({ silent: true });
     } catch (error) {
-      const errorRef = reportError(error, "employee.activation.create_invoice", {
+      const errorRef = reportError(error, "employee.billing.create_invoice", {
         tenant_id: tenantId,
         employee_id: employeeId,
         package_id: selectedPkg.id,
@@ -336,7 +462,7 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
             </Button>
           ) : null}
           <div>
-            <h2 className="text-xl font-bold">Aktivasi Billing Mandiri</h2>
+            <h2 className="text-xl font-bold">Billing Mandiri</h2>
             <p className="text-sm text-muted-foreground">Kelola invoice dan pembayaran akun Anda.</p>
           </div>
         </div>
@@ -365,7 +491,7 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <CreditCard className="h-4 w-4 text-primary" />
-            Status Aktivasi
+            Status Billing
           </CardTitle>
           <CardDescription>Status akses Anda ditentukan dari invoice individual yang sudah lunas.</CardDescription>
         </CardHeader>
@@ -374,7 +500,7 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
             <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-800 dark:border-green-900 dark:bg-green-950/20 dark:text-green-200">
               <p className="flex items-center gap-2 font-medium">
                 <CheckCircle2 className="h-4 w-4" />
-                Aktivasi aktif
+                Billing aktif
               </p>
               <p className="mt-1">
                 Berlaku sampai{" "}
@@ -396,6 +522,12 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
                   ? `jatuh tempo ${format(new Date(latestActiveInvoice.due_date), "d MMM yyyy", { locale: idLocale })}`
                   : "sedang diproses"}.
               </p>
+              {latestActiveInvoice.payment_method_type === "MANUAL_TRANSFER" ? (
+                <p className="mt-2 text-xs">
+                  Metode pembayaran: <strong>Transfer Manual</strong>. Setelah transfer, klik tombol{" "}
+                  <strong>Konfirmasi Transfer</strong> pada riwayat invoice.
+                </p>
+              ) : null}
             </div>
           ) : (
             <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800 dark:border-red-900 dark:bg-red-950/20 dark:text-red-200">
@@ -524,6 +656,24 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
                         Bayar
                       </Button>
                     ) : null}
+                    {canConfirmManualTransfer(invoice) ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={confirmingManualInvoiceId === invoice.id}
+                        onClick={() => openManualConfirmDialog(invoice)}
+                      >
+                        {confirmingManualInvoiceId === invoice.id ? (
+                          <>
+                            <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                            Mengirim
+                          </>
+                        ) : (
+                          "Konfirmasi Transfer"
+                        )}
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
               ))}
@@ -531,6 +681,98 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
           )}
         </CardContent>
       </Card>
+
+      <Dialog
+        open={Boolean(activeManualInvoice)}
+        onOpenChange={(open) => {
+          if (!open && !confirmingManualInvoiceId) {
+            resetManualDialogForm();
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Konfirmasi Transfer Manual</DialogTitle>
+            <DialogDescription>
+              Kirim konfirmasi untuk invoice <strong>{activeManualInvoice?.invoice_number || "-"}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="rounded-lg border bg-muted/30 p-3">
+              <p className="text-xs text-muted-foreground">Nominal invoice</p>
+              <p className="text-lg font-semibold">
+                {formatCurrency(activeManualInvoice?.gross_amount || 0)}
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="manual-payment-date">Tanggal transfer</Label>
+              <Input
+                id="manual-payment-date"
+                type="date"
+                value={manualPaymentDate}
+                onChange={(event) => setManualPaymentDate(event.target.value)}
+                disabled={Boolean(confirmingManualInvoiceId)}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="manual-reference-number">Nomor referensi (opsional)</Label>
+              <Input
+                id="manual-reference-number"
+                value={manualReferenceNumber}
+                onChange={(event) => setManualReferenceNumber(event.target.value)}
+                placeholder="Contoh: TRF-BRI-123456"
+                disabled={Boolean(confirmingManualInvoiceId)}
+              />
+            </div>
+
+            <div className="flex items-start gap-2 rounded-md border p-3">
+              <Checkbox
+                id="manual-transfer-declaration"
+                checked={manualDeclaration}
+                onCheckedChange={(checked) => setManualDeclaration(Boolean(checked))}
+                disabled={Boolean(confirmingManualInvoiceId)}
+              />
+              <Label
+                htmlFor="manual-transfer-declaration"
+                className="text-sm font-normal leading-relaxed"
+              >
+                Saya menyatakan transfer sudah dilakukan sesuai nominal invoice.
+              </Label>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={resetManualDialogForm}
+              disabled={Boolean(confirmingManualInvoiceId)}
+            >
+              Batal
+            </Button>
+            <Button
+              onClick={() => void handleConfirmManualTransfer()}
+              disabled={
+                Boolean(confirmingManualInvoiceId) ||
+                !manualDeclaration ||
+                !manualPaymentDate ||
+                !activeManualInvoice
+              }
+            >
+              {confirmingManualInvoiceId ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Mengirim
+                </>
+              ) : (
+                "Kirim Konfirmasi"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -60,6 +60,31 @@ const parseNumericSetting = (raw: unknown, fallback: number): number => {
   return fallback;
 };
 
+const parseBooleanSetting = (raw: unknown, fallback: boolean): boolean => {
+  if (typeof raw === "boolean") return raw;
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    const value = raw as Record<string, unknown>;
+    if ("value" in value) return parseBooleanSetting(value.value, fallback);
+    if ("enabled" in value) return parseBooleanSetting(value.enabled, fallback);
+  }
+  return fallback;
+};
+
+const parseTextSetting = (raw: unknown): string | null => {
+  if (typeof raw === "string" && raw.trim() !== "") return raw.trim();
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    const value = raw as Record<string, unknown>;
+    const candidate = value.secret_key;
+    if (typeof candidate === "string" && candidate.trim() !== "") return candidate.trim();
+  }
+  return null;
+};
+
 const BILLING_DURATION_OPTIONS = [1, 3, 6, 12] as const;
 const INDIVIDUAL_MIN_DURATION_SETTING_KEY = "individual_min_duration_months";
 const INDIVIDUAL_MIN_DURATION_DEFAULT = 6;
@@ -107,6 +132,15 @@ const parseEmployeeIdFromMetadata = (raw: unknown): string | null => {
     : null;
 };
 
+const ACTIVE_INVOICE_STATUSES = [
+  "PENDING",
+  "AWAITING_VERIFICATION",
+  "AWAITING_VERIFICATION_FULL",
+  "PENDING_VERIFICATION_PARTIAL",
+  "PARTIALLY_PAID",
+  "REJECTED_NEEDS_REVISION",
+] as const;
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -125,7 +159,7 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const xenditSecretKey = Deno.env.get("XENDIT_SECRET_KEY");
+    const xenditSecretKeyFromEnv = Deno.env.get("XENDIT_SECRET_KEY");
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
@@ -278,7 +312,7 @@ serve(async (req) => {
       .from("invoices")
       .select("id, invoice_number, invoice_url, status, gross_amount, due_date, payment_method_type, metadata")
       .eq("tenant_id", tenant_id)
-      .in("status", ["PENDING", "AWAITING_VERIFICATION"])
+      .in("status", [...ACTIVE_INVOICE_STATUSES])
       .order("created_at", { ascending: false })
       .limit(100);
 
@@ -291,7 +325,7 @@ serve(async (req) => {
     }) || null;
 
     if (existingActive) {
-      if (existingActive.invoice_url && existingActive.status === "PENDING") {
+      if (existingActive.status === "PENDING" || existingActive.status === "AWAITING_VERIFICATION") {
         return new Response(
           JSON.stringify({
             success: true,
@@ -302,7 +336,10 @@ serve(async (req) => {
               invoice_url: existingActive.invoice_url,
               gross_amount: existingActive.gross_amount,
               due_date: existingActive.due_date,
+              payment_method_type: existingActive.payment_method_type,
             },
+            fallback_payment_method:
+              existingActive.payment_method_type === "MANUAL_TRANSFER" ? "MANUAL_TRANSFER" : null,
           }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
@@ -339,6 +376,15 @@ serve(async (req) => {
       const setting = settingsRows.find((s) => s.setting_key === key);
       return setting?.setting_value ?? null;
     };
+
+    const xenditEnabled = parseBooleanSetting(getSettingValue("xendit_enabled"), false);
+    const xenditSecretKeyFromSettings = parseTextSetting(getSettingValue("xendit_config"));
+    const xenditSecretKey = (xenditSecretKeyFromEnv || xenditSecretKeyFromSettings || "").trim();
+    const useManualTransferFallback = !xenditEnabled || !xenditSecretKey;
+    const manualFallbackCode = !xenditEnabled ? "XENDIT_DISABLED" : "XENDIT_KEY_MISSING";
+    const manualFallbackMessage = !xenditEnabled
+      ? "Pembayaran online Xendit sedang nonaktif. Invoice dialihkan ke transfer manual."
+      : "Konfigurasi Xendit belum lengkap. Invoice dialihkan ke transfer manual.";
 
     const minimumDurationMonths = (() => {
       if (isIndividualScope) {
@@ -436,13 +482,6 @@ serve(async (req) => {
       );
     }
 
-    if (!xenditSecretKey) {
-      return new Response(
-        JSON.stringify(withTrace({ error: "Xendit API key not configured" }, traceId)),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
     const effectivePricePerEmployee =
       hasNegotiatedPrice
         ? negotiatedPrice
@@ -504,7 +543,7 @@ serve(async (req) => {
       .insert({
         tenant_id,
         invoice_number: resolvedInvoiceNumber,
-        external_id: externalId,
+        external_id: useManualTransferFallback ? null : externalId,
         package_id: package_id || null,
         package_name: packageData?.name || "Custom",
         package_duration_months: requestedDurationMonths,
@@ -520,10 +559,10 @@ serve(async (req) => {
         ppn_amount: ppnAmount,
         pph_amount: pphAmount,
         gross_amount: grossAmount,
-        xendit_fee: xenditFee,
-        net_amount: netAmount,
+        xendit_fee: useManualTransferFallback ? 0 : xenditFee,
+        net_amount: useManualTransferFallback ? grossAmount : netAmount,
         status: "PENDING",
-        payment_method_type: "XENDIT",
+        payment_method_type: useManualTransferFallback ? "MANUAL_TRANSFER" : "XENDIT",
         due_date: dueDateIso,
         marketing_staff_id: marketing_staff_id || null,
         notes: description || null,
@@ -532,12 +571,24 @@ serve(async (req) => {
               billing_scope: "individual",
               employee_id: requestedEmployeeId,
               employee_user_id: scopedEmployee?.user_id || null,
+              ...(useManualTransferFallback
+                ? {
+                    fallback_payment_method: "MANUAL_TRANSFER",
+                    fallback_reason: manualFallbackCode,
+                  }
+                : {}),
             }
           : {
               billing_scope: "centralized",
+              ...(useManualTransferFallback
+                ? {
+                    fallback_payment_method: "MANUAL_TRANSFER",
+                    fallback_reason: manualFallbackCode,
+                  }
+                : {}),
             },
       })
-      .select("id, invoice_number, gross_amount, due_date")
+      .select("id, invoice_number, gross_amount, due_date, payment_method_type, invoice_url")
       .single();
 
     if (reserveError) {
@@ -550,7 +601,7 @@ serve(async (req) => {
           .from("invoices")
           .select("id, invoice_number, invoice_url, status, gross_amount, due_date, payment_method_type, metadata")
           .eq("tenant_id", tenant_id)
-          .in("status", ["PENDING", "AWAITING_VERIFICATION"])
+          .in("status", [...ACTIVE_INVOICE_STATUSES])
           .order("created_at", { ascending: false })
           .limit(100);
 
@@ -561,7 +612,7 @@ serve(async (req) => {
           }
           return scope !== "individual";
         }) || null;
-        if (reusedInvoice?.invoice_url && reusedInvoice.status === "PENDING") {
+        if (reusedInvoice?.status === "PENDING" || reusedInvoice?.status === "AWAITING_VERIFICATION") {
           return new Response(
             JSON.stringify({
               success: true,
@@ -572,7 +623,10 @@ serve(async (req) => {
                 invoice_url: reusedInvoice.invoice_url,
                 gross_amount: reusedInvoice.gross_amount,
                 due_date: reusedInvoice.due_date,
+                payment_method_type: reusedInvoice.payment_method_type,
               },
+              fallback_payment_method:
+                reusedInvoice.payment_method_type === "MANUAL_TRANSFER" ? "MANUAL_TRANSFER" : null,
             }),
             { headers: { ...corsHeaders, "Content-Type": "application/json" } },
           );
@@ -605,6 +659,32 @@ serve(async (req) => {
       return new Response(
         JSON.stringify(withTrace({ error: "Failed to reserve invoice", details: reserveError.message }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    if (useManualTransferFallback) {
+      return new Response(
+        JSON.stringify(
+          withTrace(
+            {
+              success: true,
+              reused: false,
+              fallback_payment_method: "MANUAL_TRANSFER",
+              fallback_code: manualFallbackCode,
+              message: manualFallbackMessage,
+              invoice: {
+                id: reservedInvoice.id,
+                invoice_number: reservedInvoice.invoice_number,
+                invoice_url: reservedInvoice.invoice_url,
+                gross_amount: reservedInvoice.gross_amount,
+                due_date: reservedInvoice.due_date,
+                payment_method_type: reservedInvoice.payment_method_type,
+              },
+            },
+            traceId,
+          ),
+        ),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 

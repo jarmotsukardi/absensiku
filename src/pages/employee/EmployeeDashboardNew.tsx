@@ -55,6 +55,7 @@ const LazyDeviceResetDialog = React.lazy(() =>
 );
 const EmployeeActivationPageLazy = React.lazy(() => import("@/components/employee/EmployeeActivationPage").then(m => ({ default: m.EmployeeActivationPage })));
 import { BillingActivationOverlay } from "@/components/employee/BillingActivationOverlay";
+import { hasActiveIndividualBillingCoverage } from "@/lib/employeeBillingCoverage";
 import {
   MapPin,
   LogIn,
@@ -168,7 +169,7 @@ interface DashboardLoadIssue {
   scopes: string[];
 }
 
-type EmployeeTab = "home" | "history" | "requests" | "help" | "profile" | "news" | "articles" | "announcements" | "notifications" | "activation";
+type EmployeeTab = "home" | "history" | "requests" | "help" | "profile" | "news" | "articles" | "announcements" | "notifications" | "activation" | "billing";
 
 // Pending state type untuk optimistic UI
 type PendingStatus = 'idle' | 'pending' | 'buffered' | 'jitter' | 'processing' | 'success' | 'error' | 'circuit_open';
@@ -251,6 +252,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   const [showDeviceRegistration, setShowDeviceRegistration] = useState(false);
   const [showShiftSelection, setShowShiftSelection] = useState(false);
   const [showFlexibleAttendance, setShowFlexibleAttendance] = useState(false);
+  const [showBillingActivationOverlay, setShowBillingActivationOverlay] = useState(false);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   
   // Map overlay state
@@ -285,6 +287,10 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   const attendanceActionStickyBottom = `calc(${bottomSafeAreaInset} + 4.25rem)`;
 
   const navigateToTab = useCallback((tab: EmployeeTab) => {
+    if (tab === "billing" || tab === "activation") {
+      navigate("/employee/billing");
+      return;
+    }
     setActiveTab(tab);
     const params = new URLSearchParams(location.search);
     if (tab === "home") {
@@ -440,9 +446,13 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   }, [activeTab]);
 
-  // Sinkronkan tab dari query param, contoh: /employee/dashboard?tab=activation
+  // Sinkronkan tab dari query param, contoh: /employee/dashboard?tab=billing
   useEffect(() => {
     const tab = new URLSearchParams(location.search).get("tab");
+    if (tab === "billing" || tab === "activation") {
+      navigate("/employee/billing", { replace: true });
+      return;
+    }
     const allowedTabs = new Set<EmployeeTab>([
       "home",
       "history",
@@ -454,6 +464,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       "announcements",
       "notifications",
       "activation",
+      "billing",
     ]);
 
     if (tab && allowedTabs.has(tab as EmployeeTab)) {
@@ -461,7 +472,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       return;
     }
     setActiveTab("home");
-  }, [location.search]);
+  }, [location.search, navigate]);
 
   // Sinkronisasi state absensi dari offline-first hook ke UI dashboard ini
   useEffect(() => {
@@ -1026,8 +1037,39 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
     return false;
   }, [securityCheck]);
 
+  const ensureIndividualBillingAccess = useCallback(async (): Promise<boolean> => {
+    if (!employee?.tenant_id || billingMode !== "individual") return true;
+
+    try {
+      const hasAccess = await hasActiveIndividualBillingCoverage({
+        tenantId: employee.tenant_id,
+        employeeId: employee.id,
+        billingMode,
+      });
+
+      if (!hasAccess) {
+        setShowBillingActivationOverlay(true);
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      const errorRef = reportError(error, "employee.dashboard.billing_access_check", {
+        employee_id: employee.id,
+        tenant_id: employee.tenant_id,
+      });
+      toast.error(appendErrorReference("Gagal memeriksa status billing", errorRef), {
+        description: "Silakan coba lagi beberapa saat.",
+      });
+      return false;
+    }
+  }, [billingMode, employee?.id, employee?.tenant_id]);
+
   const handleCheckIn = async () => {
     if (!employee) return;
+
+    const hasBillingAccess = await ensureIndividualBillingAccess();
+    if (!hasBillingAccess) return;
     
     // 1. Validasi hari kerja dan libur
     const validation = await attendanceValidation.validateToday();
@@ -1394,14 +1436,20 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
         billingMode={billingMode}
         picWhatsapp={tenantInfo?.pic_whatsapp || null}
         picName={tenantInfo?.pic_name || null}
+        onNavigateBilling={() => {
+          setShowSidebar(false);
+          navigate("/employee/billing");
+        }}
       />
 
-      {/* Billing Activation Overlay - blocks access if individual billing and unpaid */}
+      {/* Billing Activation Overlay - shown on check-in attempt when unpaid */}
       {employee?.tenant_id && billingMode === "individual" && (
         <BillingActivationOverlay
           tenantId={employee.tenant_id}
           employeeId={employee.id}
           billingMode={billingMode}
+          open={showBillingActivationOverlay}
+          onOpenChange={setShowBillingActivationOverlay}
         />
       )}
 

@@ -60,12 +60,16 @@ interface XenditInvoiceResponse {
   success?: boolean;
   reused?: boolean;
   error?: string;
+  fallback_payment_method?: "MANUAL_TRANSFER" | null;
+  fallback_code?: string | null;
+  message?: string;
   invoice?: {
     id?: string;
     invoice_number?: string | null;
     invoice_url?: string | null;
     gross_amount?: number | null;
     due_date?: string | null;
+    payment_method_type?: string | null;
   };
 }
 
@@ -548,15 +552,33 @@ export function OrgActivationTab({
         return;
       }
 
+      const fallbackManual =
+        data.fallback_payment_method === "MANUAL_TRANSFER" ||
+        data.invoice?.payment_method_type === "MANUAL_TRANSFER";
+
       if (data.reused) {
         toast.info("Invoice aktif sudah tersedia. Anda diarahkan ke invoice yang sama untuk dilanjutkan.");
       } else {
         toast.success("Invoice berhasil dibuat! Anda akan diarahkan ke halaman pembayaran.");
       }
-      
+
+      if (fallbackManual) {
+        setPaymentMethod("manual");
+        toast.info(data.message || "Pembayaran online tidak tersedia. Invoice dialihkan ke konfirmasi transfer manual.");
+        if (data.invoice?.invoice_number) {
+          navigate(
+            `/org/billing?menu=invoices&invoice=${encodeURIComponent(data.invoice.invoice_number)}&focus=payment-proof`,
+          );
+        }
+        void fetchAll();
+        return;
+      }
+
       // Open Xendit checkout URL
       if (data.invoice?.invoice_url) {
         window.open(data.invoice.invoice_url, "_blank");
+      } else {
+        toast.info("Invoice berhasil dibuat tanpa URL checkout. Lanjutkan dari menu invoice.");
       }
 
       // Refresh invoices
