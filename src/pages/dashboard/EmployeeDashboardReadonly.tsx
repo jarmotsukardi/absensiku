@@ -119,6 +119,12 @@ const DEFAULT_HELP_FAQS: Array<{ id: string; question: string; answer?: string |
     question: "Apa yang harus dilakukan jika lupa password?",
     answer: "Gunakan menu ganti/reset password pada halaman autentikasi, atau hubungi admin organisasi.",
   },
+  {
+    id: "default-help-4",
+    question: "Mengapa pilihan golongan di perubahan profil berbeda dengan yang saya harapkan?",
+    answer:
+      "Pilihan golongan mengikuti master data aktif organisasi. Hubungi admin organisasi agar golongan yang dibutuhkan ditambahkan atau diaktifkan.",
+  },
 ];
 
 type WfhRequestRow = Tables<"wfh_requests">;

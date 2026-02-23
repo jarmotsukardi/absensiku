@@ -258,6 +258,10 @@ export default function EmployeeHelp() {
         {
           question: "Apakah bisa mengajukan izin mendadak?",
           answer: "Ya, Anda dapat mengajukan izin kapan saja. Namun disarankan untuk mengajukan sebelumnya jika memungkinkan agar proses persetujuan lebih lancar."
+        },
+        {
+          question: "Mengapa pilihan golongan di form perubahan profil tidak muncul lengkap?",
+          answer: "Pilihan golongan mengikuti master data organisasi. Jika golongan yang Anda butuhkan belum tersedia, minta admin organisasi memperbarui menu Master Data > Golongan Pegawai."
         }
       ]
     },

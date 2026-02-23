@@ -152,6 +152,13 @@ const DUMMY_FAQS: FAQ[] = [
     answer:
       "Ya. Pilihan paket dan jumlah member terakhir disimpan otomatis per organisasi. Gunakan tombol 'Lanjut Buat Invoice' untuk langsung menuju bagian metode pembayaran.",
   },
+  {
+    id: "16",
+    category: "Umum",
+    question: "Bagaimana mengelola pilihan Golongan pegawai agar muncul di form data pegawai?",
+    answer:
+      "Buka menu Master Data > Golongan Pegawai. Tambahkan atau aktifkan golongan yang dibutuhkan. Hanya golongan berstatus aktif yang tampil di form Pegawai Aktif, mutasi pegawai, dan import pegawai.",
+  },
 ];
 
 const CATEGORY_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
