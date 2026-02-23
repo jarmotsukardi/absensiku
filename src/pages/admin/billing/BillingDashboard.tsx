@@ -3,6 +3,16 @@ import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Invoice, useFinancialLedger, useInvoices, useManualVerificationInvoices } from "@/hooks/useBilling";
 import { 
@@ -15,7 +25,8 @@ import {
   AlertCircle,
   ShieldCheck,
   ShieldAlert,
-  FolderClock
+  FolderClock,
+  Trash2,
 } from "lucide-react";
 import { format, startOfMonth, endOfMonth } from "date-fns";
 import { id } from "date-fns/locale";
@@ -33,6 +44,8 @@ import { WalletTopupVerification } from "@/components/admin/billing/WalletTopupV
 import { GlossaryPanel } from "@/components/common/GlossaryPanel";
 import { useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat("id-ID", {
@@ -43,6 +56,7 @@ const formatCurrency = (amount: number) => {
 };
 
 const INVOICE_NUMBER_PATTERN = /^INV-\d{6}-\d{4,}$/;
+const DUMMY_INVOICE_FILTER = "invoice_number.ilike.INV-IND-DUMMY-%,invoice_number.ilike.INV-DUMMY-%";
 
 const isInvoiceNumberValid = (invoiceNumber: string | null | undefined): boolean => {
   if (!invoiceNumber) return false;
@@ -67,6 +81,11 @@ const BILLING_TABS = [
 type BillingTabId = (typeof BILLING_TABS)[number]["id"];
 type BillingTabGroupId = "operasional" | "produk" | "integrasi" | "kebijakan";
 
+interface DummyInvoiceRow {
+  id: string;
+  invoice_number: string | null;
+}
+
 const BILLING_TAB_GROUPS: Array<{ id: BillingTabGroupId; label: string; tabs: BillingTabId[] }> = [
   { id: "operasional", label: "Operasional", tabs: ["overview", "invoices", "manual", "manual_archive", "wallet_topup"] },
   { id: "produk", label: "Produk & Laporan", tabs: ["packages", "report", "marketing"] },
@@ -86,13 +105,16 @@ export default function BillingDashboard() {
   const [invoiceFilterMode, setInvoiceFilterMode] = useState<"all" | "invalid_number">("all");
   const [manualArchiveCount, setManualArchiveCount] = useState(0);
   const [walletTopupPendingCount, setWalletTopupPendingCount] = useState(0);
+  const [dummyInvoiceCount, setDummyInvoiceCount] = useState(0);
+  const [showDummyCleanupDialog, setShowDummyCleanupDialog] = useState(false);
+  const [isCleaningDummyInvoices, setIsCleaningDummyInvoices] = useState(false);
   const currentMonth = {
     start: format(startOfMonth(new Date()), "yyyy-MM-dd"),
     end: format(endOfMonth(new Date()), "yyyy-MM-dd"),
   };
   
   const { summary, isLoading: isLoadingLedger } = useFinancialLedger(currentMonth);
-  const { invoices, isLoading: isLoadingInvoices } = useInvoices();
+  const { invoices, isLoading: isLoadingInvoices, refetch: refetchInvoices } = useInvoices();
   const {
     invoices: manualVerificationInvoices,
     isLoading: isLoadingManualVerification,
@@ -149,6 +171,94 @@ export default function BillingDashboard() {
     }
   }, []);
 
+  const fetchDummyInvoiceCount = useCallback(async () => {
+    const { count, error } = await supabase
+      .from("invoices")
+      .select("id", { count: "exact", head: true })
+      .or(DUMMY_INVOICE_FILTER);
+
+    if (error) {
+      reportError(error, "admin.billing.dummy_invoices.count_failed");
+      return;
+    }
+    setDummyInvoiceCount(Number(count || 0));
+  }, []);
+
+  const cleanupDummyInvoices = useCallback(async () => {
+    setIsCleaningDummyInvoices(true);
+    try {
+      const { data, error } = await supabase
+        .from("invoices")
+        .select("id, invoice_number")
+        .or(DUMMY_INVOICE_FILTER)
+        .limit(1000);
+
+      if (error) throw error;
+      const rows = (data || []) as DummyInvoiceRow[];
+      if (rows.length === 0) {
+        toast.info("Tidak ada invoice dummy yang perlu dibersihkan.");
+        setShowDummyCleanupDialog(false);
+        return;
+      }
+
+      const invoiceIds = rows.map((row) => row.id);
+      const invoiceNumbers = Array.from(new Set(rows.map((row) => row.invoice_number).filter(Boolean))) as string[];
+      const nowIso = new Date().toISOString();
+
+      const { error: subError } = await supabase
+        .from("subscriptions")
+        .update({ last_invoice_id: null, updated_at: nowIso })
+        .in("last_invoice_id", invoiceIds);
+      if (subError) throw subError;
+
+      const { error: billingLogError } = await supabase
+        .from("billing_notification_logs")
+        .delete()
+        .in("invoice_id", invoiceIds);
+      if (billingLogError) throw billingLogError;
+
+      const { error: paymentLogError } = await supabase
+        .from("payment_logs")
+        .delete()
+        .in("invoice_id", invoiceIds);
+      if (paymentLogError) throw paymentLogError;
+
+      const { error: ledgerError } = await supabase
+        .from("financial_ledger")
+        .delete()
+        .in("invoice_id", invoiceIds);
+      if (ledgerError) throw ledgerError;
+
+      if (invoiceNumbers.length > 0) {
+        const { error: manualPaymentError } = await supabase
+          .from("manual_payments")
+          .delete()
+          .in("invoice_number", invoiceNumbers);
+        if (manualPaymentError) throw manualPaymentError;
+      }
+
+      const { error: invoiceDeleteError } = await supabase
+        .from("invoices")
+        .delete()
+        .in("id", invoiceIds);
+      if (invoiceDeleteError) throw invoiceDeleteError;
+
+      toast.success(`Cleanup dummy billing selesai. ${invoiceIds.length} invoice dihapus.`);
+      setShowDummyCleanupDialog(false);
+      await Promise.all([
+        refetchInvoices(),
+        refetchManualVerification(),
+        fetchOperationalTabCounts(),
+        fetchDummyInvoiceCount(),
+      ]);
+    } catch (error) {
+      const errorRef = reportError(error, "admin.billing.cleanup_dummy_invoices.failed");
+      toast.error(appendErrorReference("Gagal cleanup data dummy billing.", errorRef));
+    } finally {
+      setIsCleaningDummyInvoices(false);
+    }
+  }, [fetchDummyInvoiceCount, fetchOperationalTabCounts, refetchInvoices, refetchManualVerification]);
+
   useEffect(() => {
     const tab = searchParams.get("tab");
     if (tab && validTabIds.has(tab)) {
@@ -163,6 +273,7 @@ export default function BillingDashboard() {
 
   useEffect(() => {
     void fetchOperationalTabCounts();
+    void fetchDummyInvoiceCount();
     const channel = supabase
       .channel(`admin-billing-tab-counts-${Date.now()}`)
       .on(
@@ -175,12 +286,17 @@ export default function BillingDashboard() {
         { event: "*", schema: "public", table: "wallet_topup_requests" },
         () => void fetchOperationalTabCounts(),
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "invoices" },
+        () => void fetchDummyInvoiceCount(),
+      )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchOperationalTabCounts]);
+  }, [fetchDummyInvoiceCount, fetchOperationalTabCounts]);
 
   const visibleTabs = useMemo(() => {
     const group = BILLING_TAB_GROUPS.find((item) => item.id === activeGroup) || BILLING_TAB_GROUPS[0];
@@ -309,6 +425,31 @@ export default function BillingDashboard() {
           </button>
         </div>
 
+        <Card className="border-dashed border-slate-300">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Utilitas Data Dummy Billing</CardTitle>
+            <Trash2 className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Bersihkan invoice dummy test dengan pola nomor <code>INV-IND-DUMMY-*</code> atau <code>INV-DUMMY-*</code>.
+            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs text-muted-foreground">
+                Terdeteksi: <strong>{dummyInvoiceCount}</strong> invoice dummy
+              </span>
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={dummyInvoiceCount === 0 || isCleaningDummyInvoices}
+                onClick={() => setShowDummyCleanupDialog(true)}
+              >
+                {isCleaningDummyInvoices ? "Memproses..." : "Cleanup Data Dummy"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Tabs */}
         <Card>
           <CardContent className="p-0">
@@ -418,6 +559,30 @@ export default function BillingDashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <AlertDialog open={showDummyCleanupDialog} onOpenChange={setShowDummyCleanupDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cleanup Dummy Billing</AlertDialogTitle>
+            <AlertDialogDescription>
+              Tindakan ini akan menghapus data dummy billing (invoice + relasi log/manual payment) untuk pola nomor
+              dummy test. Lanjutkan?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={isCleaningDummyInvoices}>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault();
+                void cleanupDummyInvoices();
+              }}
+              disabled={isCleaningDummyInvoices}
+            >
+              {isCleaningDummyInvoices ? "Memproses..." : "Ya, Cleanup"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </SuperAdminLayout>
   );
 }
