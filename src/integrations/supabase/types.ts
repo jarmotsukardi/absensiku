@@ -4295,6 +4295,15 @@ export type Database = {
           tugas_luar: number
         }[]
       }
+      log_employee_invitation_flow_audit: {
+        Args: {
+          p_event: string
+          p_invitation_id: string
+          p_payload?: Json
+          p_tenant_id: string
+        }
+        Returns: string
+      }
       get_feedback_stats_filtered: {
         Args: {
           p_feedback_type?: string | null

@@ -799,7 +799,7 @@ export default function EmployeeDashboardReadonly() {
           )}
 
           {!isLoading && activeTab === "activation" && employee?.tenant_id && (
-            <ReadonlyActivationTab panelClass={panelClass} tenantId={employee.tenant_id} />
+            <ReadonlyActivationTab panelClass={panelClass} tenantId={employee.tenant_id} employeeId={employee.id} />
           )}
           </main>
         </div>

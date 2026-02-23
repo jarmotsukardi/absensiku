@@ -38,6 +38,11 @@ import type { Json, Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { ACTIVE_INVOICE_STATUSES, isActiveInvoiceStatus } from "@/lib/billingGuards";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import {
+  CENTRALIZED_MIN_DURATION_SETTING_KEYS,
+  INDIVIDUAL_MIN_DURATION_SETTING_KEY,
+  resolveMinimumBillingDuration,
+} from "@/lib/billingMinDuration";
 
 type SubscriptionPackage = Tables<"subscription_packages">;
 
@@ -78,11 +83,26 @@ interface ActiveManualInvoiceSnapshot {
   gross_amount: number;
 }
 
+interface ActiveManualInvoiceQueryRow extends ActiveManualInvoiceSnapshot {
+  metadata?: unknown;
+}
+
+interface BillingSettingRow {
+  setting_key: string;
+  setting_value: unknown;
+}
+
 const toJsonObject = (value: Json | null | undefined): Record<string, Json> | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
   return value as Record<string, Json>;
+};
+
+const parseInvoiceBillingScope = (metadata: unknown): "individual" | "centralized" => {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return "centralized";
+  const raw = metadata as Record<string, unknown>;
+  return raw.billing_scope === "individual" ? "individual" : "centralized";
 };
 
 interface ManualPaymentFlowProps {
@@ -111,6 +131,7 @@ export function ManualPaymentFlow({
   const [flashPrefilledPackage, setFlashPrefilledPackage] = useState(false);
   const [flashPrefilledEmployeeCount, setFlashPrefilledEmployeeCount] = useState(false);
   const [negotiatedPricePerEmployee, setNegotiatedPricePerEmployee] = useState<number | null>(null);
+  const [minDurationMonths, setMinDurationMonths] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [isCheckingActiveInvoice, setIsCheckingActiveInvoice] = useState(false);
   const [activeInvoice, setActiveInvoice] = useState<ActiveManualInvoiceSnapshot | null>(null);
@@ -141,13 +162,24 @@ export function ManualPaymentFlow({
             .limit(1)
             .maybeSingle();
 
-      const [{ data, error }, subscriptionRes] = await withExponentialBackoff(
+      const [{ data, error }, subscriptionRes, tenantRes, minDurationRes] = await withExponentialBackoff(
         () =>
           withTimeout(
             () =>
               Promise.all([
                 supabase.from("subscription_packages").select("*").eq("is_active", true).order("sort_order"),
                 subscriptionPricePromise,
+                supabase.from("tenants").select("billing_mode, organization_type").eq("id", tenantId).maybeSingle(),
+                supabase
+                  .from("billing_settings")
+                  .select("setting_key, setting_value")
+                  .in("setting_key", [
+                    INDIVIDUAL_MIN_DURATION_SETTING_KEY,
+                    CENTRALIZED_MIN_DURATION_SETTING_KEYS.pemerintah_daerah,
+                    CENTRALIZED_MIN_DURATION_SETTING_KEYS.instansi_pemerintah,
+                    CENTRALIZED_MIN_DURATION_SETTING_KEYS.perusahaan,
+                    CENTRALIZED_MIN_DURATION_SETTING_KEYS.sekolah,
+                  ]),
               ]),
             MANUAL_PAYMENT_OP_TIMEOUT_MS,
             "org.activation.manual_payment.fetch_packages timeout",
@@ -159,11 +191,34 @@ export function ManualPaymentFlow({
       );
 
       if (error) throw error;
-      setPackages(data || []);
-      if (data && data.length > 0) {
-        const initialPkgIsValid = Boolean(initialPackageId) && data.some((pkg) => pkg.id === initialPackageId);
-        setSelectedPackage(initialPkgIsValid ? (initialPackageId as string) : data[0].id);
+      if (tenantRes.error) throw tenantRes.error;
+      if (minDurationRes.error) throw minDurationRes.error;
+
+      const minDurationRows = (minDurationRes.data || []) as BillingSettingRow[];
+      const minDurationMap = new Map(minDurationRows.map((row) => [row.setting_key, row.setting_value]));
+      const resolvedMinDuration = resolveMinimumBillingDuration({
+        billingMode: tenantRes.data?.billing_mode,
+        organizationType: tenantRes.data?.organization_type,
+        getSettingValue: (key) => minDurationMap.get(key),
+      });
+      setMinDurationMonths(resolvedMinDuration);
+
+      const eligiblePackages = (data || []).filter(
+        (pkg) => Number(pkg.duration_months || 0) >= resolvedMinDuration,
+      );
+      setPackages(eligiblePackages);
+      if (eligiblePackages.length > 0) {
+        const initialPkgIsValid =
+          Boolean(initialPackageId) && eligiblePackages.some((pkg) => pkg.id === initialPackageId);
+        setSelectedPackage((prev) => {
+          if (initialPkgIsValid) return initialPackageId as string;
+          if (eligiblePackages.some((pkg) => pkg.id === prev)) return prev;
+          return eligiblePackages[0].id;
+        });
         setPrefilledPackage(initialPkgIsValid);
+      } else {
+        setSelectedPackage("");
+        setPrefilledPackage(false);
       }
       if (subscriptionRes.error) {
         console.warn("Failed to load subscription negotiated price:", subscriptionRes.error);
@@ -199,12 +254,11 @@ export function ManualPaymentFlow({
             () =>
               supabase
                 .from("invoices")
-                .select("id, invoice_number, status, due_date, gross_amount")
+                .select("id, invoice_number, status, due_date, gross_amount, metadata")
                 .eq("tenant_id", tenantId)
                 .in("status", [...ACTIVE_INVOICE_STATUSES])
                 .order("created_at", { ascending: false })
-                .limit(1)
-                .maybeSingle(),
+                .limit(100),
             MANUAL_PAYMENT_OP_TIMEOUT_MS,
           ),
         {
@@ -214,7 +268,21 @@ export function ManualPaymentFlow({
       );
 
       if (error) throw error;
-      setActiveInvoice((data ?? null) as ActiveManualInvoiceSnapshot | null);
+      const latestCentralized =
+        ((data || []) as ActiveManualInvoiceQueryRow[]).find(
+          (invoice) => parseInvoiceBillingScope(invoice.metadata) !== "individual",
+        ) || null;
+      setActiveInvoice(
+        latestCentralized
+          ? {
+              id: latestCentralized.id,
+              invoice_number: latestCentralized.invoice_number,
+              status: latestCentralized.status,
+              due_date: latestCentralized.due_date,
+              gross_amount: latestCentralized.gross_amount,
+            }
+          : null,
+      );
     } catch (error) {
       const errorRef = reportError(error, "org.activation.manual_payment.fetch_active_invoice", {
         tenant_id: tenantId,
@@ -234,12 +302,11 @@ export function ManualPaymentFlow({
             () =>
               supabase
                 .from("invoices")
-                .select("id, invoice_number, status, due_date, gross_amount")
+                .select("id, invoice_number, status, due_date, gross_amount, metadata")
                 .eq("tenant_id", tenantId)
                 .in("status", [...ACTIVE_INVOICE_STATUSES])
                 .order("created_at", { ascending: false })
-                .limit(1)
-                .maybeSingle(),
+                .limit(100),
             MANUAL_PAYMENT_OP_TIMEOUT_MS,
           ),
         {
@@ -248,7 +315,20 @@ export function ManualPaymentFlow({
         },
       );
       if (error) throw error;
-      const latest = (data ?? null) as ActiveManualInvoiceSnapshot | null;
+      const latestCentralized =
+        ((data || []) as ActiveManualInvoiceQueryRow[]).find(
+          (invoice) => parseInvoiceBillingScope(invoice.metadata) !== "individual",
+        ) || null;
+      const latest =
+        latestCentralized
+          ? {
+              id: latestCentralized.id,
+              invoice_number: latestCentralized.invoice_number,
+              status: latestCentralized.status,
+              due_date: latestCentralized.due_date,
+              gross_amount: latestCentralized.gross_amount,
+            }
+          : null;
       setActiveInvoice(latest);
       return latest;
     } catch (error) {
@@ -634,6 +714,9 @@ export function ManualPaymentFlow({
               <Label>Paket Langganan</Label>
               {prefilledPackage && <Badge variant="secondary">Terisi dari kalkulator</Badge>}
             </div>
+            <p className="text-xs text-muted-foreground">
+              Minimum durasi pembayaran tenant ini: <strong>{minDurationMonths} bulan</strong>.
+            </p>
             <Select
               value={selectedPackage}
               onValueChange={(value) => {
@@ -659,6 +742,11 @@ export function ManualPaymentFlow({
                 ))}
               </SelectContent>
             </Select>
+            {packages.length === 0 && (
+              <p className="text-xs text-amber-700 dark:text-amber-300">
+                Tidak ada paket aktif yang memenuhi minimum {minDurationMonths} bulan.
+              </p>
+            )}
           </div>
 
           {/* Employee Count */}
@@ -758,7 +846,7 @@ export function ManualPaymentFlow({
             <Button variant="outline" onClick={() => setShowConfirmDialog(false)}>
               Batal
             </Button>
-            <Button onClick={handleSubmitPayment} disabled={isSubmitting}>
+            <Button onClick={handleSubmitPayment} disabled={isSubmitting || !pkg}>
               {isSubmitting ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />

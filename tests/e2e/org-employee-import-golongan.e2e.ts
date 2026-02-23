@@ -5,21 +5,23 @@ import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { getRoleCreds } from "./helpers/testAccounts";
 
-const CSV_HEADERS = [
-  "NIK",
-  "NIP",
-  "Nama Lengkap",
-  "Gelar Depan",
-  "Gelar Belakang",
-  "Email",
-  "No. Telepon",
-  "WhatsApp",
-  "Jenis Kelamin (L/P)",
-  "Jabatan",
-  "Golongan",
-  "Kode OPD",
-  "Alamat",
-];
+const DEFAULT_TEMPLATE_VALUES: Record<string, string> = {
+  NIK: "",
+  NIP: "",
+  "Nama Lengkap": "",
+  "Gelar Depan": "",
+  "Gelar Belakang": "",
+  Email: "",
+  "No. Telepon": "",
+  WhatsApp: "",
+  "Jenis Kelamin (L/P)": "",
+  Jabatan: "",
+  Golongan: "",
+  "Kategori Pegawai": "",
+  "Kode OPD": "",
+  "Lokasi Kerja": "",
+  Alamat: "",
+};
 
 const waitForStable = async (page: Page) => {
   try {
@@ -38,6 +40,33 @@ const buildCsvLine = (values: string[]): string =>
       return value;
     })
     .join(",");
+
+const getActiveTemplateHeaders = async (page: Page): Promise<string[]> => {
+  const helper = page
+    .locator("p.text-xs.text-muted-foreground")
+    .filter({ hasText: "Kolom template aktif:" })
+    .first();
+  await helper.waitFor({ state: "visible", timeout: 15_000 });
+  const text = ((await helper.textContent()) || "").replace(/\s+/g, " ").trim();
+  return text
+    .split(":")
+    .slice(1)
+    .join(":")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
+const buildRowFromHeaders = (
+  headers: string[],
+  overrides: Record<string, string>,
+): string[] => {
+  const rowValues: Record<string, string> = {
+    ...DEFAULT_TEMPLATE_VALUES,
+    ...overrides,
+  };
+  return headers.map((header) => rowValues[header] ?? "");
+};
 
 const uniqueDigits = (length: number): string => {
   const source = `${Date.now()}${Math.floor(Math.random() * 1_000_000)}`;
@@ -73,7 +102,7 @@ const openImportPage = async (page: Page) => {
 };
 
 const selectOfficeMapping = async (page: Page) => {
-  const officeSection = page.locator("div.space-y-2").filter({ hasText: "Lokasi Kerja Mapping (Wajib)" }).first();
+  const officeSection = page.locator("div.space-y-2").filter({ hasText: /Lokasi Kerja Mapping/i }).first();
   await officeSection.waitFor({ state: "visible", timeout: 15_000 });
 
   const officeTrigger = officeSection.getByRole("combobox").first();
@@ -111,7 +140,7 @@ const waitGolonganReferenceReady = async (page: Page): Promise<string[]> => {
 };
 
 const uploadCsv = async (page: Page, filePath: string) => {
-  const input = page.locator('input[type="file"][accept=".csv"]').first();
+  const input = page.locator('input[type="file"]').first();
   await expect(input).toBeEnabled();
   await input.setInputFiles(filePath);
   await page.getByRole("heading", { name: "Preview Data" }).waitFor({ state: "visible", timeout: 20_000 });
@@ -127,46 +156,40 @@ test.describe.parallel("Org Employee Import Golongan", () => {
       await loginAsOrgAdmin(page);
       await openImportPage(page);
       await selectOfficeMapping(page);
+      const activeHeaders = await getActiveTemplateHeaders(page);
+      test.skip(!activeHeaders.includes("Golongan"), "Modul golongan nonaktif, skenario ini tidak relevan.");
 
       const golonganOptions = await waitGolonganReferenceReady(page);
       const validGolongan = golonganOptions[0];
       const invalidGolongan = "X/99";
       const seed = uniqueDigits(8);
 
-      const validRow = [
-        uniqueDigits(16),
-        "",
-        `Uji Valid ${seed}`,
-        "",
-        "",
-        `e2e.valid.${seed}@example.com`,
-        "081234567890",
-        "081234567890",
-        "L",
-        "Staff Uji",
-        validGolongan,
-        "",
-        "Alamat Uji Valid",
-      ];
+      const validRow = buildRowFromHeaders(activeHeaders, {
+        NIK: uniqueDigits(16),
+        "Nama Lengkap": `Uji Valid ${seed}`,
+        Email: `e2e.valid.${seed}@example.com`,
+        "No. Telepon": "081234567890",
+        WhatsApp: "081234567890",
+        "Jenis Kelamin (L/P)": "L",
+        Jabatan: "Staff Uji",
+        Golongan: validGolongan,
+        Alamat: "Alamat Uji Valid",
+      });
 
-      const invalidRow = [
-        uniqueDigits(16),
-        "",
-        `Uji Invalid ${seed}`,
-        "",
-        "",
-        `e2e.invalid.${seed}@example.com`,
-        "081234567891",
-        "081234567891",
-        "P",
-        "Staff Uji",
-        invalidGolongan,
-        "",
-        "Alamat Uji Invalid",
-      ];
+      const invalidRow = buildRowFromHeaders(activeHeaders, {
+        NIK: uniqueDigits(16),
+        "Nama Lengkap": `Uji Invalid ${seed}`,
+        Email: `e2e.invalid.${seed}@example.com`,
+        "No. Telepon": "081234567891",
+        WhatsApp: "081234567891",
+        "Jenis Kelamin (L/P)": "P",
+        Jabatan: "Staff Uji",
+        Golongan: invalidGolongan,
+        Alamat: "Alamat Uji Invalid",
+      });
 
-      await fs.writeFile(validCsvPath, `${buildCsvLine(CSV_HEADERS)}\n${buildCsvLine(validRow)}\n`, "utf8");
-      await fs.writeFile(invalidCsvPath, `${buildCsvLine(CSV_HEADERS)}\n${buildCsvLine(invalidRow)}\n`, "utf8");
+      await fs.writeFile(validCsvPath, `${buildCsvLine(activeHeaders)}\n${buildCsvLine(validRow)}\n`, "utf8");
+      await fs.writeFile(invalidCsvPath, `${buildCsvLine(activeHeaders)}\n${buildCsvLine(invalidRow)}\n`, "utf8");
 
       await uploadCsv(page, validCsvPath);
       await expect(page.getByText("Error: 0").first()).toBeVisible();

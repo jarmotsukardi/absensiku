@@ -36,6 +36,10 @@ import {
   getActiveEmployeeGolonganOptions,
   type EmployeeGolonganOption,
 } from "@/lib/employeeGolongan";
+import {
+  DEFAULT_ORG_MASTER_DATA_MODULES,
+  fetchTenantOrgMasterDataModules,
+} from "@/lib/orgMasterDataModules";
 
 interface EmployeeData {
   id: string;
@@ -123,6 +127,7 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
   const [employeeGolonganOptions, setEmployeeGolonganOptions] = useState<EmployeeGolonganOption[]>(
     DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS
   );
+  const [masterDataModules, setMasterDataModules] = useState(DEFAULT_ORG_MASTER_DATA_MODULES);
   
   // Form state - Profile changes (phone/whatsapp gabung jadi satu field)
   const [formData, setFormData] = useState({
@@ -152,6 +157,7 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
 
   const fetchMasterData = useCallback(async () => {
     if (!employee.tenant_id) {
+      setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
       setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
       setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
       setIsMasterDataLoading(false);
@@ -160,6 +166,14 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
 
     setIsMasterDataLoading(true);
     try {
+      try {
+        const moduleSetting = await fetchTenantOrgMasterDataModules(employee.tenant_id);
+        setMasterDataModules(moduleSetting.modules);
+      } catch (moduleError) {
+        console.error("Error fetching mutation module settings:", moduleError);
+        setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
+      }
+
       const [opdRes, workUnitRes, officeRes, positionRes, categoryMaster, golonganMaster] = await Promise.all([
         supabase.from("opd").select("id, name, code").eq("tenant_id", employee.tenant_id).eq("is_active", true),
         supabase.from("work_units").select("id, name, opd_id").eq("tenant_id", employee.tenant_id).eq("is_active", true),
@@ -179,6 +193,7 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
       setEmployeeGolonganOptions(nextGolonganOptions.length > 0 ? nextGolonganOptions : DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
     } catch (error) {
       console.error("Error fetching master data:", error);
+      setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
       setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
       setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
     } finally {
@@ -236,6 +251,10 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
     ];
   }, [employeeGolonganOptions, formData.golongan]);
 
+  const showPositionField = masterDataModules.positions;
+  const showGolonganField = masterDataModules.employee_golongan;
+  const showCategoryField = masterDataModules.employee_categories;
+
   const getChangedFields = () => {
     const changes: MutationPayload = {};
     const original: MutationPayload = {};
@@ -270,11 +289,9 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
 
     // Semua perubahan dilakukan di satu form (tidak dipisah lagi)
     // Profile fields (kecuali nama & NIP)
-    const profileFields: EditableProfileField[] = [
-      "email", "address", "gender", 
-      "golongan", "employee_category",
-      "gelar_depan", "gelar_belakang", "nik"
-    ];
+    const profileFields: EditableProfileField[] = ["email", "address", "gender", "gelar_depan", "gelar_belakang", "nik"];
+    if (showGolonganField) profileFields.push("golongan");
+    if (showCategoryField) profileFields.push("employee_category");
 
     profileFields.forEach((field) => {
       const currentValue = String(employee[field] ?? "");
@@ -295,7 +312,7 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
     }
 
     // Position dari dropdown
-    if (formData.position_id) {
+    if (showPositionField && formData.position_id) {
       const selectedPosition = positions.find(p => p.id === formData.position_id);
       if (selectedPosition && selectedPosition.name !== employee.position) {
         changes.position = selectedPosition.name;
@@ -542,25 +559,27 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
                   </Select>
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="golongan">Golongan</Label>
-                  <Select
-                    value={formData.golongan}
-                    onValueChange={(v) => setFormData({ ...formData, golongan: v })}
-                    disabled={isMasterDataLoading}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder={isMasterDataLoading ? "Memuat golongan..." : "Pilih golongan"} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {profileEmployeeGolonganOptions.map((golongan) => (
-                        <SelectItem key={golongan.value} value={golongan.value}>
-                          {golongan.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                {showGolonganField && (
+                  <div className="space-y-2">
+                    <Label htmlFor="golongan">Golongan</Label>
+                    <Select
+                      value={formData.golongan}
+                      onValueChange={(v) => setFormData({ ...formData, golongan: v })}
+                      disabled={isMasterDataLoading}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={isMasterDataLoading ? "Memuat golongan..." : "Pilih golongan"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {profileEmployeeGolonganOptions.map((golongan) => (
+                          <SelectItem key={golongan.value} value={golongan.value}>
+                            {golongan.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
 
                 <div className="space-y-2">
                   <Label htmlFor="gelar_depan">Gelar Depan</Label>
@@ -582,44 +601,48 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
                   />
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="employee_category">Kategori Pegawai</Label>
-                  <Select
-                    value={formData.employee_category}
-                    onValueChange={(v) => setFormData({ ...formData, employee_category: v })}
-                    disabled={isMasterDataLoading}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder={isMasterDataLoading ? "Memuat kategori..." : "Pilih kategori"} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {profileEmployeeCategoryOptions.map((category) => (
-                        <SelectItem key={category.value} value={category.value}>
-                          {category.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                {showCategoryField && (
+                  <div className="space-y-2">
+                    <Label htmlFor="employee_category">Kategori Pegawai</Label>
+                    <Select
+                      value={formData.employee_category}
+                      onValueChange={(v) => setFormData({ ...formData, employee_category: v })}
+                      disabled={isMasterDataLoading}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={isMasterDataLoading ? "Memuat kategori..." : "Pilih kategori"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {profileEmployeeCategoryOptions.map((category) => (
+                          <SelectItem key={category.value} value={category.value}>
+                            {category.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
 
-                <div className="space-y-2">
-                  <Label htmlFor="position">Jabatan</Label>
-                  <Select
-                    value={formData.position_id}
-                    onValueChange={(v) => setFormData({ ...formData, position_id: v })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Pilih jabatan" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {positions.map((pos) => (
-                        <SelectItem key={pos.id} value={pos.id}>
-                          {pos.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                {showPositionField && (
+                  <div className="space-y-2">
+                    <Label htmlFor="position">Jabatan</Label>
+                    <Select
+                      value={formData.position_id}
+                      onValueChange={(v) => setFormData({ ...formData, position_id: v })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Pilih jabatan" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {positions.map((pos) => (
+                          <SelectItem key={pos.id} value={pos.id}>
+                            {pos.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-2">

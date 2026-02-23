@@ -7,6 +7,12 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-callback-token, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+const parseBillingScopeFromMetadata = (raw: unknown): "individual" | "centralized" => {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return "centralized";
+  const metadata = raw as Record<string, unknown>;
+  return metadata.billing_scope === "individual" ? "individual" : "centralized";
+};
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -128,51 +134,57 @@ serve(async (req) => {
       });
     }
 
-    // If paid, extend subscription
+    // If paid, extend subscription for centralized billing only.
     if (newStatus === "PAID") {
+      const billingScope = parseBillingScopeFromMetadata(invoice.metadata);
+      const isIndividualInvoice = billingScope === "individual";
+
       // Get current subscription
-      const { data: currentSub } = await supabase
-        .from("subscriptions")
-        .select("*")
-        .eq("tenant_id", invoice.tenant_id)
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      let endDate: Date | null = null;
+      if (!isIndividualInvoice) {
+        const { data: currentSub } = await supabase
+          .from("subscriptions")
+          .select("*")
+          .eq("tenant_id", invoice.tenant_id)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
 
-      // Calculate new subscription dates
-      let startDate = new Date();
-      if (currentSub && new Date(currentSub.end_date) > startDate) {
-        startDate = new Date(currentSub.end_date);
-      }
-
-      const endDate = new Date(startDate);
-      endDate.setMonth(endDate.getMonth() + (invoice.package_duration_months || 1));
-
-      // Update latest subscription row if exists, otherwise create a new one.
-      if (currentSub?.id) {
-        const { error: subError } = await supabase.from("subscriptions").update({
-          status: "active",
-          start_date: startDate.toISOString().split("T")[0],
-          end_date: endDate.toISOString().split("T")[0],
-          last_invoice_id: invoice.id,
-          grace_period_end: null,
-          updated_at: new Date().toISOString(),
-        }).eq("id", currentSub.id);
-        if (subError) {
-          logTraceError(traceId, "Failed to update subscription", subError);
+        // Calculate new subscription dates
+        let startDate = new Date();
+        if (currentSub && new Date(currentSub.end_date) > startDate) {
+          startDate = new Date(currentSub.end_date);
         }
-      } else {
-        const { error: subInsertError } = await supabase.from("subscriptions").insert({
-          tenant_id: invoice.tenant_id,
-          status: "active",
-          start_date: startDate.toISOString().split("T")[0],
-          end_date: endDate.toISOString().split("T")[0],
-          last_invoice_id: invoice.id,
-          grace_period_end: null,
-          updated_at: new Date().toISOString(),
-        });
-        if (subInsertError) {
-          logTraceError(traceId, "Failed to create subscription", subInsertError);
+
+        endDate = new Date(startDate);
+        endDate.setMonth(endDate.getMonth() + (invoice.package_duration_months || 1));
+
+        // Update latest subscription row if exists, otherwise create a new one.
+        if (currentSub?.id) {
+          const { error: subError } = await supabase.from("subscriptions").update({
+            status: "active",
+            start_date: startDate.toISOString().split("T")[0],
+            end_date: endDate.toISOString().split("T")[0],
+            last_invoice_id: invoice.id,
+            grace_period_end: null,
+            updated_at: new Date().toISOString(),
+          }).eq("id", currentSub.id);
+          if (subError) {
+            logTraceError(traceId, "Failed to update subscription", subError);
+          }
+        } else {
+          const { error: subInsertError } = await supabase.from("subscriptions").insert({
+            tenant_id: invoice.tenant_id,
+            status: "active",
+            start_date: startDate.toISOString().split("T")[0],
+            end_date: endDate.toISOString().split("T")[0],
+            last_invoice_id: invoice.id,
+            grace_period_end: null,
+            updated_at: new Date().toISOString(),
+          });
+          if (subInsertError) {
+            logTraceError(traceId, "Failed to create subscription", subInsertError);
+          }
         }
       }
 
@@ -206,24 +218,26 @@ serve(async (req) => {
         }
       }
 
-      const { error: streakSyncError } = await supabase.rpc("mark_streak_invoiced", {
-        p_tenant_id: invoice.tenant_id,
-        p_invoice_id: invoice.id,
-      });
-      if (streakSyncError) {
-        logTraceError(traceId, "Failed to sync streak invoiced state", streakSyncError);
-      }
+      if (!isIndividualInvoice) {
+        const { error: streakSyncError } = await supabase.rpc("mark_streak_invoiced", {
+          p_tenant_id: invoice.tenant_id,
+          p_invoice_id: invoice.id,
+        });
+        if (streakSyncError) {
+          logTraceError(traceId, "Failed to sync streak invoiced state", streakSyncError);
+        }
 
-      // Log subscription extension
-      await supabase.from("payment_logs").insert({
-        invoice_id: invoice.id,
-        event_type: "SUBSCRIPTION_EXTENDED",
-        payload: {
-          tenant_id: invoice.tenant_id,
-          new_end_date: endDate.toISOString(),
-          duration_months: invoice.package_duration_months,
-        },
-      });
+        // Log subscription extension
+        await supabase.from("payment_logs").insert({
+          invoice_id: invoice.id,
+          event_type: "SUBSCRIPTION_EXTENDED",
+          payload: {
+            tenant_id: invoice.tenant_id,
+            new_end_date: endDate?.toISOString() || null,
+            duration_months: invoice.package_duration_months,
+          },
+        });
+      }
     }
 
     return new Response(

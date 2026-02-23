@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, Save, DollarSign, Percent, Clock, CreditCard, Landmark } from "lucide-react";
 import { toast } from "sonner";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
@@ -15,6 +16,14 @@ import {
   BILLING_INVOICE_TEMPLATE_TOKENS,
   DEFAULT_BILLING_INVOICE_TEMPLATE,
 } from "@/lib/billingInvoiceTemplate";
+import {
+  BILLING_DURATION_OPTIONS,
+  CENTRALIZED_MIN_DURATION_DEFAULTS,
+  CENTRALIZED_MIN_DURATION_SETTING_KEYS,
+  INDIVIDUAL_MIN_DURATION_DEFAULT,
+  INDIVIDUAL_MIN_DURATION_SETTING_KEY,
+  normalizeDurationOption,
+} from "@/lib/billingMinDuration";
 import {
   isRetryableError,
   withExponentialBackoff,
@@ -35,7 +44,19 @@ export function BillingSettings() {
   const [pphPercentage, setPphPercentage] = useState(2);
   const [gracePeriodDays, setGracePeriodDays] = useState(3);
   const [paymentArchiveRetentionDays, setPaymentArchiveRetentionDays] = useState(7);
-  const [individualMinDuration, setIndividualMinDuration] = useState(6);
+  const [individualMinDuration, setIndividualMinDuration] = useState(INDIVIDUAL_MIN_DURATION_DEFAULT);
+  const [centralizedPemdaMinDuration, setCentralizedPemdaMinDuration] = useState(
+    CENTRALIZED_MIN_DURATION_DEFAULTS.pemerintah_daerah,
+  );
+  const [centralizedInstansiMinDuration, setCentralizedInstansiMinDuration] = useState(
+    CENTRALIZED_MIN_DURATION_DEFAULTS.instansi_pemerintah,
+  );
+  const [centralizedPerusahaanMinDuration, setCentralizedPerusahaanMinDuration] = useState(
+    CENTRALIZED_MIN_DURATION_DEFAULTS.perusahaan,
+  );
+  const [centralizedSekolahMinDuration, setCentralizedSekolahMinDuration] = useState(
+    CENTRALIZED_MIN_DURATION_DEFAULTS.sekolah,
+  );
   const [xenditEnabled, setXenditEnabled] = useState(false);
   const [manualPaymentEnabled, setManualPaymentEnabled] = useState(true);
   const [initialized, setInitialized] = useState(false);
@@ -55,7 +76,19 @@ export function BillingSettings() {
       const pph = getSetting("pph_percentage");
       const grace = getSetting("grace_period_days");
       const archiveRetention = getSetting("payment_archive_retention_days");
-      const minDuration = getSetting("individual_min_duration_months");
+      const minDuration = getSetting(INDIVIDUAL_MIN_DURATION_SETTING_KEY);
+      const centralizedPemdaDuration = getSetting(
+        CENTRALIZED_MIN_DURATION_SETTING_KEYS.pemerintah_daerah,
+      );
+      const centralizedInstansiDuration = getSetting(
+        CENTRALIZED_MIN_DURATION_SETTING_KEYS.instansi_pemerintah,
+      );
+      const centralizedPerusahaanDuration = getSetting(
+        CENTRALIZED_MIN_DURATION_SETTING_KEYS.perusahaan,
+      );
+      const centralizedSekolahDuration = getSetting(
+        CENTRALIZED_MIN_DURATION_SETTING_KEYS.sekolah,
+      );
       const xendit = getSetting("xendit_enabled");
       const manual = getSetting("manual_payment_enabled");
 
@@ -67,7 +100,33 @@ export function BillingSettings() {
         const raw = Number(archiveRetention.value || 7);
         setPaymentArchiveRetentionDays(Math.min(365, Math.max(1, Number.isFinite(raw) ? raw : 7)));
       }
-      if (minDuration) setIndividualMinDuration(minDuration.value || 6);
+      setIndividualMinDuration(
+        normalizeDurationOption(minDuration, INDIVIDUAL_MIN_DURATION_DEFAULT),
+      );
+      setCentralizedPemdaMinDuration(
+        normalizeDurationOption(
+          centralizedPemdaDuration,
+          CENTRALIZED_MIN_DURATION_DEFAULTS.pemerintah_daerah,
+        ),
+      );
+      setCentralizedInstansiMinDuration(
+        normalizeDurationOption(
+          centralizedInstansiDuration,
+          CENTRALIZED_MIN_DURATION_DEFAULTS.instansi_pemerintah,
+        ),
+      );
+      setCentralizedPerusahaanMinDuration(
+        normalizeDurationOption(
+          centralizedPerusahaanDuration,
+          CENTRALIZED_MIN_DURATION_DEFAULTS.perusahaan,
+        ),
+      );
+      setCentralizedSekolahMinDuration(
+        normalizeDurationOption(
+          centralizedSekolahDuration,
+          CENTRALIZED_MIN_DURATION_DEFAULTS.sekolah,
+        ),
+      );
       if (xendit) setXenditEnabled(xendit.value || false);
       if (manual) setManualPaymentEnabled(manual.value !== false);
       setInitialized(true);
@@ -154,7 +213,19 @@ export function BillingSettings() {
         updateSetting("payment_archive_retention_days", {
           value: Math.min(365, Math.max(1, Number.isFinite(paymentArchiveRetentionDays) ? paymentArchiveRetentionDays : 7)),
         }),
-        updateSetting("individual_min_duration_months", { value: individualMinDuration }),
+        updateSetting(INDIVIDUAL_MIN_DURATION_SETTING_KEY, { value: individualMinDuration }),
+        updateSetting(CENTRALIZED_MIN_DURATION_SETTING_KEYS.pemerintah_daerah, {
+          value: centralizedPemdaMinDuration,
+        }),
+        updateSetting(CENTRALIZED_MIN_DURATION_SETTING_KEYS.instansi_pemerintah, {
+          value: centralizedInstansiMinDuration,
+        }),
+        updateSetting(CENTRALIZED_MIN_DURATION_SETTING_KEYS.perusahaan, {
+          value: centralizedPerusahaanMinDuration,
+        }),
+        updateSetting(CENTRALIZED_MIN_DURATION_SETTING_KEYS.sekolah, {
+          value: centralizedSekolahMinDuration,
+        }),
         updateSetting("xendit_enabled", { value: xenditEnabled }),
         updateSetting("manual_payment_enabled", { value: manualPaymentEnabled }),
       ]);
@@ -436,7 +507,7 @@ export function BillingSettings() {
             <Clock className="h-4 w-4" />
             Pengaturan Langganan
           </CardTitle>
-          <CardDescription>Aturan durasi dan grace period</CardDescription>
+          <CardDescription>Aturan durasi, grace period, dan minimum pembayaran</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-3">
@@ -470,19 +541,139 @@ export function BillingSettings() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="individualMinDuration">Min. Durasi Perorangan (bulan)</Label>
-              <Input
-                id="individualMinDuration"
-                type="number"
-                value={individualMinDuration}
-                onChange={(e) => setIndividualMinDuration(Number(e.target.value))}
-                min={1}
-                max={12}
-              />
+              <Select
+                value={String(individualMinDuration)}
+                onValueChange={(value) =>
+                  setIndividualMinDuration(
+                    normalizeDurationOption(Number(value), INDIVIDUAL_MIN_DURATION_DEFAULT),
+                  )
+                }
+              >
+                <SelectTrigger id="individualMinDuration">
+                  <SelectValue placeholder="Pilih durasi" />
+                </SelectTrigger>
+                <SelectContent>
+                  {BILLING_DURATION_OPTIONS.map((duration) => (
+                    <SelectItem key={`individual-${duration}`} value={String(duration)}>
+                      {duration} bulan
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <p className="text-xs text-muted-foreground">
-                Durasi minimum untuk langganan perorangan
+                Berlaku untuk semua tenant dengan billing mandiri.
               </p>
             </div>
           </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Min. Durasi Terpusat - Pemerintah Daerah</Label>
+              <Select
+                value={String(centralizedPemdaMinDuration)}
+                onValueChange={(value) =>
+                  setCentralizedPemdaMinDuration(
+                    normalizeDurationOption(
+                      Number(value),
+                      CENTRALIZED_MIN_DURATION_DEFAULTS.pemerintah_daerah,
+                    ),
+                  )
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Pilih durasi" />
+                </SelectTrigger>
+                <SelectContent>
+                  {BILLING_DURATION_OPTIONS.map((duration) => (
+                    <SelectItem key={`pemda-${duration}`} value={String(duration)}>
+                      {duration} bulan
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Min. Durasi Terpusat - Instansi</Label>
+              <Select
+                value={String(centralizedInstansiMinDuration)}
+                onValueChange={(value) =>
+                  setCentralizedInstansiMinDuration(
+                    normalizeDurationOption(
+                      Number(value),
+                      CENTRALIZED_MIN_DURATION_DEFAULTS.instansi_pemerintah,
+                    ),
+                  )
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Pilih durasi" />
+                </SelectTrigger>
+                <SelectContent>
+                  {BILLING_DURATION_OPTIONS.map((duration) => (
+                    <SelectItem key={`instansi-${duration}`} value={String(duration)}>
+                      {duration} bulan
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Min. Durasi Terpusat - Perusahaan</Label>
+              <Select
+                value={String(centralizedPerusahaanMinDuration)}
+                onValueChange={(value) =>
+                  setCentralizedPerusahaanMinDuration(
+                    normalizeDurationOption(
+                      Number(value),
+                      CENTRALIZED_MIN_DURATION_DEFAULTS.perusahaan,
+                    ),
+                  )
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Pilih durasi" />
+                </SelectTrigger>
+                <SelectContent>
+                  {BILLING_DURATION_OPTIONS.map((duration) => (
+                    <SelectItem key={`perusahaan-${duration}`} value={String(duration)}>
+                      {duration} bulan
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Min. Durasi Terpusat - Sekolah</Label>
+              <Select
+                value={String(centralizedSekolahMinDuration)}
+                onValueChange={(value) =>
+                  setCentralizedSekolahMinDuration(
+                    normalizeDurationOption(
+                      Number(value),
+                      CENTRALIZED_MIN_DURATION_DEFAULTS.sekolah,
+                    ),
+                  )
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Pilih durasi" />
+                </SelectTrigger>
+                <SelectContent>
+                  {BILLING_DURATION_OPTIONS.map((duration) => (
+                    <SelectItem key={`sekolah-${duration}`} value={String(duration)}>
+                      {duration} bulan
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Opsi minimum pembayaran dibatasi ke 1, 3, 6, atau 12 bulan.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Validasi minimum diterapkan di server (invoice online/manual) dan paket di bawah minimum
+            otomatis disembunyikan pada flow aktivasi.
+          </p>
         </CardContent>
       </Card>
 

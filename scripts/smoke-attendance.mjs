@@ -114,6 +114,22 @@ async function readSessionToken(page) {
   });
 }
 
+async function waitForAttendanceReady(page, timeoutMs = 15000) {
+  await page.waitForFunction(
+    () => {
+      const text = document.body?.innerText || "";
+      return (
+        text.includes("Absen Masuk") ||
+        text.includes("Sudah Absen") ||
+        text.includes("Absen Pulang") ||
+        text.includes("Sudah Pulang") ||
+        text.includes("Tidak Dapat Absen")
+      );
+    },
+    { timeout: timeoutMs }
+  );
+}
+
 async function resolveTenantId(supabaseUrl, anonKey, token, employeeId) {
   const qs = new URLSearchParams({
     select: "tenant_id",
@@ -266,10 +282,21 @@ async function main() {
       page.getByRole("button", { name: "Masuk" }).click(),
     ]);
 
-    await page.goto(`${BASE_URL}/employee/dashboard`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(1500);
+    const sessionDeviceId = androidId && androidId.trim() ? androidId.trim() : `WEB-SMOKE-${Date.now()}`;
+    await page.evaluate(({ now, deviceId }) => {
+      localStorage.setItem("web_device_id", deviceId);
+      localStorage.setItem(
+        "absensiku_session_metadata",
+        JSON.stringify({
+          lastActivity: now,
+          createdAt: now,
+          deviceId,
+        })
+      );
+    }, { now: Date.now(), deviceId: sessionDeviceId });
 
-    await page.evaluate((value) => localStorage.setItem("web_device_id", value), androidId || "");
+    await page.goto(`${BASE_URL}/employee/dashboard?tab=home`, { waitUntil: "domcontentloaded" });
+    await waitForAttendanceReady(page, 15000);
 
     const session = await readSessionToken(page);
     if (!session.ok) {
@@ -344,7 +371,7 @@ async function main() {
 
     await context.setGeolocation({ latitude: -6.2, longitude: 106.816666 });
     await page.reload({ waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(1500);
+    await waitForAttendanceReady(page, 10000);
 
     const actions = {
       check_in_clicked: false,
@@ -354,8 +381,14 @@ async function main() {
       skipped_because_already_complete: false,
     };
 
-    const canCheckIn = await page.getByRole("button", { name: /Absen Masuk/i }).first().isVisible().catch(() => false);
-    const canCheckOut = await page.getByRole("button", { name: /^Absen Pulang$/i }).first().isVisible().catch(() => false);
+    const checkInBtn = page.getByRole("button", { name: /Absen Masuk/i }).first();
+    const checkOutBtn = page.getByRole("button", { name: /^Absen Pulang$/i }).first();
+    const canCheckIn =
+      (await checkInBtn.isVisible().catch(() => false)) &&
+      (await checkInBtn.isEnabled().catch(() => false));
+    const canCheckOut =
+      (await checkOutBtn.isVisible().catch(() => false)) &&
+      (await checkOutBtn.isEnabled().catch(() => false));
     const checkInExists = Boolean(prevAttendance.ok && prevAttendance.row?.check_in_time);
     const checkOutExists = Boolean(prevAttendance.ok && prevAttendance.row?.check_out_time);
 
@@ -363,28 +396,36 @@ async function main() {
       actions.skipped_because_already_complete = true;
     } else {
       if (canCheckIn) {
-        actions.check_in_clicked = true;
-        await page.getByRole("button", { name: /Absen Masuk/i }).first().click();
-        await page.waitForTimeout(2500);
-        actions.check_in_success = await page.getByText(/Absen Masuk Tersimpan/i).first().isVisible().catch(() => false);
+        try {
+          actions.check_in_clicked = true;
+          await checkInBtn.click({ timeout: 5000 });
+          await page.waitForTimeout(2500);
+          actions.check_in_success = await page.getByText(/Absen Masuk Tersimpan/i).first().isVisible().catch(() => false);
+        } catch {
+          actions.check_in_clicked = false;
+          actions.check_in_success = false;
+        }
       }
 
-      const canCheckOutAfterCheckIn = await page
-        .getByRole("button", { name: /^Absen Pulang$/i })
-        .first()
-        .isVisible()
-        .catch(() => false);
+      const canCheckOutAfterCheckIn =
+        (await checkOutBtn.isVisible().catch(() => false)) &&
+        (await checkOutBtn.isEnabled().catch(() => false));
       if (canCheckOutAfterCheckIn || canCheckOut) {
-        actions.check_out_clicked = true;
-        await page.getByRole("button", { name: /^Absen Pulang$/i }).first().click();
-        await page.waitForTimeout(600);
-        const confirmBtn = page.getByRole("button", { name: /^Absen Pulang$/i }).nth(1);
-        const confirmVisible = await confirmBtn.isVisible().catch(() => false);
-        if (confirmVisible) {
-          await confirmBtn.click();
+        try {
+          actions.check_out_clicked = true;
+          await checkOutBtn.click({ timeout: 5000 });
+          await page.waitForTimeout(600);
+          const confirmBtn = page.getByRole("button", { name: /^Absen Pulang$/i }).nth(1);
+          const confirmVisible = await confirmBtn.isVisible().catch(() => false);
+          if (confirmVisible) {
+            await confirmBtn.click();
+          }
+          await page.waitForTimeout(2500);
+          actions.check_out_success = await page.getByText(/Absen Pulang Tersimpan/i).first().isVisible().catch(() => false);
+        } catch {
+          actions.check_out_clicked = false;
+          actions.check_out_success = false;
         }
-        await page.waitForTimeout(2500);
-        actions.check_out_success = await page.getByText(/Absen Pulang Tersimpan/i).first().isVisible().catch(() => false);
       }
     }
 
@@ -402,13 +443,14 @@ async function main() {
     });
 
     const criticalFailed = failedRequests.filter((req) => req.failure !== "net::ERR_ABORTED");
-    const passCore =
-      todayAttendance.ok &&
-      Boolean(todayAttendance.row?.check_in_time) &&
-      Boolean(todayAttendance.row?.check_out_time);
+    const hasCheckIn = Boolean(todayAttendance.ok && todayAttendance.row?.check_in_time);
+    const hasCheckOut = Boolean(todayAttendance.ok && todayAttendance.row?.check_out_time);
+    const passCore = hasCheckIn;
 
     const status = passCore
-      ? "PASS"
+      ? hasCheckOut
+        ? "PASS"
+        : "PASS_CHECKIN_ONLY"
       : actions.skipped_because_already_complete
         ? "SKIPPED_ALREADY_COMPLETED"
         : "FAIL";

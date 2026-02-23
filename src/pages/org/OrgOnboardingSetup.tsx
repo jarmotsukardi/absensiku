@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
 import { format } from "date-fns";
@@ -22,6 +23,14 @@ import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { CheckCircle2, Loader2, RefreshCcw, Sparkles, Wand2 } from "lucide-react";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import {
+  DEFAULT_ORG_MASTER_DATA_MODULES,
+  emitOrgMasterDataModulesUpdated,
+  fetchTenantOrgMasterDataModules,
+  ORG_MASTER_DATA_MODULE_OPTIONS,
+  saveTenantOrgMasterDataModules,
+  type OrgMasterDataModuleKey,
+} from "@/lib/orgMasterDataModules";
 
 const EMPTY_COUNTS: OrgOnboardingCounts = {
   opd: 0,
@@ -40,11 +49,9 @@ const MODULE_LINKS: Array<{
 }> = [
   { key: "opd", label: "Data OPD", path: "/org/master/opd" },
   { key: "work_units", label: "Satuan Kerja", path: "/org/master/work-units" },
-  { key: "positions", label: "Jabatan", path: "/org/master/positions" },
   { key: "offices", label: "Lokasi Kerja", path: "/org/master/work-locations" },
   { key: "work_hours", label: "Jam Kerja", path: "/org/schedule/work-hours" },
   { key: "absence_limits", label: "Batas Absen", path: "/org/schedule/absence-limits" },
-  { key: "announcements", label: "Pengumuman", path: "/org/news" },
 ];
 
 export default function OrgOnboardingSetup() {
@@ -60,10 +67,18 @@ export default function OrgOnboardingSetup() {
   const [templateLabel, setTemplateLabel] = useState<string>("Template Setup Awal");
   const [templateUpdatedAt, setTemplateUpdatedAt] = useState<string | null>(null);
   const [applyResult, setApplyResult] = useState<OrgOnboardingApplyResult | null>(null);
+  const [masterDataModules, setMasterDataModules] = useState(DEFAULT_ORG_MASTER_DATA_MODULES);
+  const [isSavingMasterDataModules, setIsSavingMasterDataModules] = useState(false);
+
+  const activeChecklistModules = MODULE_LINKS;
 
   const configuredModules = useMemo(
-    () => MODULE_LINKS.filter((item) => counts[item.key] > 0).length,
-    [counts]
+    () => activeChecklistModules.filter((item) => counts[item.key] > 0).length,
+    [activeChecklistModules, counts]
+  );
+  const activeMasterDataModuleCount = useMemo(
+    () => ORG_MASTER_DATA_MODULE_OPTIONS.filter((item) => masterDataModules[item.key]).length,
+    [masterDataModules]
   );
 
   const refreshData = useCallback(async () => {
@@ -91,7 +106,7 @@ export default function OrgOnboardingSetup() {
       }
       setTenantId(resolvedTenantId);
 
-      const [{ template, updatedAt }, tenantCounts] = await withExponentialBackoff(
+      const [{ template, updatedAt }, tenantCounts, moduleSetting] = await withExponentialBackoff(
         () =>
           Promise.all([
             withTimeout(
@@ -104,6 +119,11 @@ export default function OrgOnboardingSetup() {
               ORG_ONBOARDING_QUERY_TIMEOUT_MS,
               "org.onboarding.refresh.fetch_counts timeout",
             ),
+            withTimeout(
+              fetchTenantOrgMasterDataModules(resolvedTenantId),
+              ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+              "org.onboarding.refresh.fetch_master_data_modules timeout",
+            ),
           ]),
         {
           maxRetries: ORG_ONBOARDING_QUERY_RETRY_MAX,
@@ -115,6 +135,7 @@ export default function OrgOnboardingSetup() {
       setTemplateLabel(template.label);
       setTemplateUpdatedAt(updatedAt);
       setCounts(tenantCounts);
+      setMasterDataModules(moduleSetting.modules);
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.onboarding.fetch_data");
       const message = appendErrorReference("Gagal memuat data onboarding organisasi", errorRef);
@@ -129,6 +150,46 @@ export default function OrgOnboardingSetup() {
   useEffect(() => {
     void refreshData();
   }, [refreshData]);
+
+  const handleToggleMasterDataModule = (key: OrgMasterDataModuleKey, checked: boolean) => {
+    setMasterDataModules((prev) => ({ ...prev, [key]: checked }));
+  };
+
+  const handleSaveMasterDataModules = async () => {
+    if (!tenantId) {
+      toast.error("Tenant organisasi belum tersedia. Muat ulang halaman.");
+      return;
+    }
+
+    try {
+      setIsSavingMasterDataModules(true);
+      setIsRetrying(false);
+      const savedModules = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            saveTenantOrgMasterDataModules(tenantId, masterDataModules),
+            ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+            "org.onboarding.save_master_data_modules timeout",
+          ),
+        {
+          maxRetries: ORG_ONBOARDING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
+      setMasterDataModules(savedModules);
+      emitOrgMasterDataModulesUpdated(savedModules);
+      toast.success("Preferensi modul master data berhasil disimpan.");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.onboarding.save_master_data_modules", {
+        tenant_id: tenantId,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan preferensi modul master data", errorRef));
+    } finally {
+      setIsSavingMasterDataModules(false);
+      setIsRetrying(false);
+    }
+  };
 
   const handleApplyTemplate = async () => {
     if (!tenantId) {
@@ -153,35 +214,12 @@ export default function OrgOnboardingSetup() {
         },
       );
       if (userError) throw userError;
-      const userId = userData.user?.id || null;
-
-      let actorEmployeeId: string | null = null;
-      if (userId) {
-        const { data: employeeData } = await withExponentialBackoff(
-          () =>
-            withTimeout(
-              supabase
-                .from("employees")
-                .select("id")
-                .eq("tenant_id", tenantId)
-                .eq("user_id", userId)
-                .maybeSingle(),
-              ORG_ONBOARDING_QUERY_TIMEOUT_MS,
-              "org.onboarding.apply.actor_employee timeout",
-            ),
-          {
-            maxRetries: ORG_ONBOARDING_QUERY_RETRY_MAX,
-            shouldRetry: isRetryableError,
-            onRetry: () => setIsRetrying(true),
-          },
-        );
-        actorEmployeeId = employeeData?.id || null;
-      }
+      if (!userData.user) throw new Error("Sesi user tidak ditemukan.");
 
       const result = await withExponentialBackoff(
         () =>
           withTimeout(
-            applyOrgOnboardingTemplateToTenant(tenantId, { actorEmployeeId }),
+            applyOrgOnboardingTemplateToTenant(tenantId),
             ORG_ONBOARDING_QUERY_TIMEOUT_MS,
             "org.onboarding.apply.template timeout",
           ),
@@ -235,8 +273,8 @@ export default function OrgOnboardingSetup() {
           <CardContent className="space-y-4">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline">{templateLabel}</Badge>
-              <Badge variant={configuredModules === MODULE_LINKS.length ? "default" : "secondary"}>
-                Modul Siap: {configuredModules}/{MODULE_LINKS.length}
+              <Badge variant={configuredModules === activeChecklistModules.length ? "default" : "secondary"}>
+                Modul Siap: {configuredModules}/{activeChecklistModules.length}
               </Badge>
             </div>
             {templateUpdatedAt && (
@@ -261,6 +299,76 @@ export default function OrgOnboardingSetup() {
             </div>
           </CardContent>
         </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Pilihan Modul Master Data</CardTitle>
+            <CardDescription>
+              Pilih modul yang ingin digunakan. Jika modul dimatikan, submenu terkait akan disembunyikan dari sidebar.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant={activeMasterDataModuleCount === ORG_MASTER_DATA_MODULE_OPTIONS.length ? "default" : "secondary"}>
+                Modul Aktif: {activeMasterDataModuleCount}/{ORG_MASTER_DATA_MODULE_OPTIONS.length}
+              </Badge>
+              <Badge variant="outline">Bisa diubah kapan saja</Badge>
+            </div>
+
+            <div className="space-y-3">
+              {ORG_MASTER_DATA_MODULE_OPTIONS.map((item) => (
+                <div key={item.key} className="flex items-start justify-between gap-4 rounded-md border p-3">
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold">{item.label}</p>
+                    <p className="text-xs text-muted-foreground">{item.description}</p>
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="h-auto p-0 text-xs"
+                      onClick={() => navigate(item.path)}
+                      disabled={!masterDataModules[item.key]}
+                    >
+                      Buka modul
+                    </Button>
+                  </div>
+                  <Switch
+                    checked={masterDataModules[item.key]}
+                    onCheckedChange={(checked) => handleToggleMasterDataModule(item.key, checked)}
+                    aria-label={`Aktifkan modul ${item.label}`}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => void refreshData()}
+                disabled={isLoading || isApplying || isSavingMasterDataModules}
+              >
+                {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
+                Muat Ulang
+              </Button>
+              <Button
+                onClick={() => void handleSaveMasterDataModules()}
+                disabled={isLoading || isApplying || isSavingMasterDataModules}
+              >
+                {isSavingMasterDataModules ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="mr-2 h-4 w-4" />
+                )}
+                Simpan Preferensi Modul
+              </Button>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Jika nanti butuh modul yang sempat dimatikan, aktifkan kembali di halaman ini lalu submenu akan muncul lagi.
+            </p>
+            <p className="text-xs text-muted-foreground">Checklist setup fokus ke 5 modul inti operasional.</p>
+          </CardContent>
+        </Card>
+
         {loadError && (
           <Card className="border-destructive/40">
             <CardContent className="pt-6">

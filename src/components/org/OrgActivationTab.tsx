@@ -30,6 +30,11 @@ import { useNavigate } from "react-router-dom";
 import { ManualPaymentFlow } from "@/components/org/ManualPaymentFlow";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import type { Tables } from "@/integrations/supabase/types";
+import {
+  CENTRALIZED_MIN_DURATION_SETTING_KEYS,
+  INDIVIDUAL_MIN_DURATION_SETTING_KEY,
+  resolveMinimumBillingDuration,
+} from "@/lib/billingMinDuration";
 
 interface OrgActivationTabProps {
   tenantId: string;
@@ -44,6 +49,11 @@ type SystemSetting = Tables<"system_settings">;
 
 interface XenditSettingValue {
   enabled?: boolean;
+}
+
+interface BillingSettingRow {
+  setting_key: string;
+  setting_value: unknown;
 }
 
 interface XenditInvoiceResponse {
@@ -130,6 +140,12 @@ const extractManualBankNames = (raw: unknown): string[] => {
 
 const isBriBankName = (bankName: string) => bankName.trim().toUpperCase() === "BRI";
 
+const parseInvoiceBillingScope = (metadata: unknown): "individual" | "centralized" => {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return "centralized";
+  const raw = metadata as Record<string, unknown>;
+  return raw.billing_scope === "individual" ? "individual" : "centralized";
+};
+
 export function OrgActivationTab({
   tenantId,
   tenantName,
@@ -157,6 +173,7 @@ export function OrgActivationTab({
   const [xenditEnabled, setXenditEnabled] = useState(false);
   const [b2bThreshold, setB2bThreshold] = useState(2000);
   const [isCentralizedBilling, setIsCentralizedBilling] = useState(true);
+  const [minDurationMonths, setMinDurationMonths] = useState(1);
   const [manualBankNames, setManualBankNames] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -168,7 +185,7 @@ export function OrgActivationTab({
     setIsLoading(true);
     setIsSlowLoading(false);
     try {
-      const [pkgRes, subRes, invRes, empRes, xenditRes, b2bRes, tenantRes, billingRes] = await Promise.all([
+      const [pkgRes, subRes, invRes, empRes, xenditRes, b2bRes, tenantRes, billingRes, minDurationRes] = await Promise.all([
         supabase.from("subscription_packages").select("*").eq("is_active", true).order("sort_order"),
         supabase.from("subscriptions").select("*").eq("tenant_id", tenantId).maybeSingle(),
         supabase.from("invoices").select("*").eq("tenant_id", tenantId).order("created_at", { ascending: false }).limit(20),
@@ -180,13 +197,26 @@ export function OrgActivationTab({
           .limit(1),
         supabase.from("system_settings").select("value").eq("key", "xendit_enabled").maybeSingle(),
         supabase.from("system_settings").select("value").eq("key", "b2b_negotiation_threshold").maybeSingle(),
-        supabase.from("tenants").select("billing_mode").eq("id", tenantId).maybeSingle(),
+        supabase.from("tenants").select("billing_mode, organization_type").eq("id", tenantId).maybeSingle(),
         supabase.from("system_settings").select("value").eq("key", "billing_settings").maybeSingle(),
+        supabase
+          .from("billing_settings")
+          .select("setting_key, setting_value")
+          .in("setting_key", [
+            INDIVIDUAL_MIN_DURATION_SETTING_KEY,
+            CENTRALIZED_MIN_DURATION_SETTING_KEYS.pemerintah_daerah,
+            CENTRALIZED_MIN_DURATION_SETTING_KEYS.instansi_pemerintah,
+            CENTRALIZED_MIN_DURATION_SETTING_KEYS.perusahaan,
+            CENTRALIZED_MIN_DURATION_SETTING_KEYS.sekolah,
+          ]),
       ]);
 
       setPackages(pkgRes.data || []);
       setSubscription(subRes.data);
-      setInvoices(invRes.data || []);
+      const centralizedInvoices = ((invRes.data || []) as Invoice[]).filter(
+        (invoice) => parseInvoiceBillingScope(invoice.metadata) !== "individual",
+      );
+      setInvoices(centralizedInvoices);
       setEmployeeCount(empRes.count || 0);
       const xenditSetting = xenditRes.data as SystemSetting | null;
       const settingValue = xenditSetting?.value;
@@ -199,6 +229,15 @@ export function OrgActivationTab({
       setIsCentralizedBilling(tenantRes.data?.billing_mode !== "individual");
       const billingRaw = (billingRes.data as SystemSetting | null)?.value;
       setManualBankNames(extractManualBankNames(billingRaw));
+      const minDurationRows = (minDurationRes.data || []) as BillingSettingRow[];
+      const minDurationMap = new Map(minDurationRows.map((row) => [row.setting_key, row.setting_value]));
+      setMinDurationMonths(
+        resolveMinimumBillingDuration({
+          billingMode: tenantRes.data?.billing_mode,
+          organizationType: tenantRes.data?.organization_type,
+          getSettingValue: (key) => minDurationMap.get(key),
+        }),
+      );
 
     } catch (error) {
       const errorRef = reportError(error, "org.activation.fetch_all", { tenant_id: tenantId });
@@ -225,9 +264,19 @@ export function OrgActivationTab({
     setHasHydratedCalculatorState(false);
   }, [tenantId]);
 
+  const eligiblePackages = useMemo(
+    () => packages.filter((pkg) => Number(pkg.duration_months || 0) >= minDurationMonths),
+    [packages, minDurationMonths],
+  );
+
   useEffect(() => {
-    if (hasHydratedCalculatorState || packages.length === 0) return;
-    const defaultPkgId = packages[0]?.id ?? "";
+    if (hasHydratedCalculatorState) return;
+    if (eligiblePackages.length === 0) {
+      setSelectedPkgId("");
+      setHasHydratedCalculatorState(true);
+      return;
+    }
+    const defaultPkgId = eligiblePackages[0]?.id ?? "";
     const defaultMemberCount = employeeCount > 0 ? employeeCount : 10;
     if (typeof window === "undefined") {
       setSelectedPkgId(defaultPkgId);
@@ -248,7 +297,7 @@ export function OrgActivationTab({
       const memberCount = Number.isFinite(persistedMemberCount)
         ? Math.min(1000, Math.max(1, Math.floor(persistedMemberCount)))
         : defaultMemberCount;
-      const packageId = packages.some((pkg) => pkg.id === persisted?.packageId)
+      const packageId = eligiblePackages.some((pkg) => pkg.id === persisted?.packageId)
         ? (persisted?.packageId as string)
         : defaultPkgId;
       setSelectedPkgId(packageId);
@@ -259,7 +308,7 @@ export function OrgActivationTab({
     } finally {
       setHasHydratedCalculatorState(true);
     }
-  }, [CALCULATOR_PREFS_KEY, employeeCount, hasHydratedCalculatorState, packages]);
+  }, [CALCULATOR_PREFS_KEY, eligiblePackages, employeeCount, hasHydratedCalculatorState]);
 
   useEffect(() => {
     if (!hasHydratedCalculatorState || typeof window === "undefined") return;
@@ -283,13 +332,25 @@ export function OrgActivationTab({
     window.localStorage.setItem(PAYMENT_METHOD_PREFS_KEY, paymentMethod);
   }, [PAYMENT_METHOD_PREFS_KEY, paymentMethod]);
 
-  const selectedPkg = packages.find((p) => p.id === selectedPkgId);
+  useEffect(() => {
+    if (!selectedPkgId) {
+      if (eligiblePackages[0]?.id) {
+        setSelectedPkgId(eligiblePackages[0].id);
+      }
+      return;
+    }
+    if (!eligiblePackages.some((pkg) => pkg.id === selectedPkgId)) {
+      setSelectedPkgId(eligiblePackages[0]?.id || "");
+    }
+  }, [eligiblePackages, selectedPkgId]);
+
+  const selectedPkg = eligiblePackages.find((p) => p.id === selectedPkgId);
   const hasNegotiatedB2BPrice =
     typeof subscription?.price_per_employee === "number" &&
     Number.isFinite(subscription.price_per_employee) &&
     subscription.price_per_employee > 0;
   const isB2BManualOnly = isCentralizedBilling && (hasNegotiatedB2BPrice || employeeCount >= b2bThreshold);
-  const isXenditAllowed = xenditEnabled && !isB2BManualOnly;
+  const isXenditAllowed = isCentralizedBilling && xenditEnabled && !isB2BManualOnly;
 
   const getEffectiveUnitPrice = (basePrice: number) => {
     const overridePrice = subscription?.price_per_employee;
@@ -580,7 +641,7 @@ export function OrgActivationTab({
       window.localStorage.removeItem(CALCULATOR_PREFS_KEY);
       window.localStorage.removeItem(PAYMENT_METHOD_PREFS_KEY);
     }
-    const defaultPkgId = packages[0]?.id ?? "";
+    const defaultPkgId = eligiblePackages[0]?.id ?? "";
     const defaultMemberCount = employeeCount > 0 ? employeeCount : 10;
     setSelectedPkgId(defaultPkgId);
     setMemberSlider([defaultMemberCount]);
@@ -700,18 +761,21 @@ export function OrgActivationTab({
 
         <Dialog open={isCalculatorOpen} onOpenChange={setIsCalculatorOpen}>
           <DialogContent className="w-[100vw] max-w-none h-[100dvh] rounded-none p-0 sm:h-auto sm:max-w-4xl sm:rounded-lg sm:p-6">
-            <DialogHeader className="px-4 pt-4 sm:px-0 sm:pt-0">
+	            <DialogHeader className="px-4 pt-4 sm:px-0 sm:pt-0">
               <DialogTitle className="flex items-center gap-2">
                 <Calculator className="h-5 w-5 text-primary" />
                 Kalkulator Langganan
               </DialogTitle>
-              <DialogDescription>
-                Pilih paket dan jumlah member untuk menghitung estimasi biaya langganan.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="px-4 pb-4 sm:px-0 sm:pb-0 max-h-[calc(100dvh-6rem)] sm:max-h-[70vh] overflow-y-auto space-y-5">
-              {typeof subscription?.price_per_employee === "number" &&
-                Number.isFinite(subscription.price_per_employee) &&
+	              <DialogDescription>
+	                Pilih paket dan jumlah member untuk menghitung estimasi biaya langganan.
+	              </DialogDescription>
+	            </DialogHeader>
+	            <div className="px-4 pb-4 sm:px-0 sm:pb-0 max-h-[calc(100dvh-6rem)] sm:max-h-[70vh] overflow-y-auto space-y-5">
+              <p className="text-xs text-muted-foreground">
+                Minimum durasi pembayaran untuk tenant ini: <strong>{minDurationMonths} bulan</strong>.
+              </p>
+	              {typeof subscription?.price_per_employee === "number" &&
+	                Number.isFinite(subscription.price_per_employee) &&
                 subscription.price_per_employee > 0 && (
                   <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-100">
                     Harga negosiasi B2B aktif: <strong>{formatCurrency(subscription.price_per_employee)}</strong> per
@@ -745,9 +809,9 @@ export function OrgActivationTab({
                 </div>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-                {packages.map((pkg) => (
-                  <button
+	              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+	                {eligiblePackages.map((pkg) => (
+	                  <button
                     key={pkg.id}
                     onClick={() => !hasOpenInvoice && setSelectedPkgId(pkg.id)}
                     disabled={hasOpenInvoice}
@@ -761,9 +825,14 @@ export function OrgActivationTab({
                     {pkg.discount_percentage > 0 && (
                       <Badge variant="secondary" className="mt-2 text-xs">Hemat {pkg.discount_percentage}%</Badge>
                     )}
-                  </button>
-                ))}
-              </div>
+	                  </button>
+	                ))}
+	              </div>
+              {eligiblePackages.length === 0 && (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+                  Tidak ada paket aktif yang memenuhi minimum {minDurationMonths} bulan.
+                </div>
+              )}
 
               <div className="space-y-3">
                 <div className="flex justify-between items-center">
@@ -828,9 +897,9 @@ export function OrgActivationTab({
                     <Button variant="outline" onClick={() => setIsCalculatorOpen(false)}>
                       Tutup
                     </Button>
-                    <Button onClick={handleContinueToInvoice} disabled={!selectedPkg}>
-                      {hasOpenInvoice ? "Lihat Invoice Aktif" : "Lanjut Buat Invoice"}
-                    </Button>
+	                    <Button onClick={handleContinueToInvoice} disabled={!selectedPkg || eligiblePackages.length === 0}>
+	                      {hasOpenInvoice ? "Lihat Invoice Aktif" : "Lanjut Buat Invoice"}
+	                    </Button>
                   </div>
                 </div>
               </div>
@@ -1129,7 +1198,11 @@ export function OrgActivationTab({
             <Wallet className="h-5 w-5 text-primary" />
             Metode Pembayaran
           </CardTitle>
-          <CardDescription>Pilih cara pembayaran yang Anda inginkan</CardDescription>
+          <CardDescription>
+            {isCentralizedBilling
+              ? "Pilih cara pembayaran yang Anda inginkan"
+              : "Billing Mandiri aktif: pembayaran dilakukan langsung oleh masing-masing pegawai di dashboard employee."}
+          </CardDescription>
           {isB2BManualOnly && (
             <p className="text-xs font-medium text-amber-700 dark:text-amber-300">
               Mode otomatis: tenant B2B menggunakan transfer manual.
@@ -1137,13 +1210,22 @@ export function OrgActivationTab({
           )}
         </CardHeader>
         <CardContent className="space-y-5">
+          {!isCentralizedBilling && (
+            <div className="rounded-lg border border-blue-300 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-100">
+              Tenant ini menggunakan <strong>Billing Mandiri</strong>. Halaman aktivasi organisasi hanya menampilkan
+              ringkasan, sedangkan pembuatan dan pembayaran invoice dilakukan dari akun pegawai.
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Manual Transfer */}
             <button
               type="button"
-              onClick={() => setPaymentMethod("manual")}
+              onClick={() => isCentralizedBilling && setPaymentMethod("manual")}
+              disabled={!isCentralizedBilling}
               className={`group p-4 rounded-2xl border text-left transition-all ${
-                paymentMethod === "manual"
+                !isCentralizedBilling
+                  ? "opacity-55 cursor-not-allowed border-slate-200 bg-slate-50/20 dark:border-slate-800 dark:bg-slate-900/10"
+                  : paymentMethod === "manual"
                   ? "border-primary/60 bg-primary/[0.06] ring-1 ring-primary/30 shadow-sm"
                   : "border-slate-200 bg-slate-50/30 hover:border-primary/35 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900/20"
               }`}
@@ -1213,7 +1295,9 @@ export function OrgActivationTab({
                 <div>
                   <p className="font-semibold text-sm">Pembayaran Online</p>
                   <p className="text-xs text-muted-foreground">
-                    {!xenditEnabled
+                    {!isCentralizedBilling
+                      ? "Billing Mandiri: checkout di dashboard employee"
+                      : !xenditEnabled
                       ? "Belum dikonfigurasi admin"
                       : isB2BManualOnly
                         ? "Skema B2B: wajib transfer manual"
@@ -1239,7 +1323,9 @@ export function OrgActivationTab({
               )}
               {!isXenditAllowed && (
                 <p className="text-[10px] text-muted-foreground mt-2">
-                  {!xenditEnabled
+                  {!isCentralizedBilling
+                    ? "Tenant billing mandiri: pembayaran hanya tersedia di dashboard employee"
+                    : !xenditEnabled
                     ? "Hubungi admin untuk mengaktifkan pembayaran online"
                     : `Tenant B2B billing terpusat (≥ ${b2bThreshold.toLocaleString()} pegawai / harga negosiasi) wajib manual transfer`}
                 </p>
@@ -1302,7 +1388,7 @@ export function OrgActivationTab({
         </CardContent>
       </Card>
 
-      {paymentMethod === "manual" ? (
+      {isCentralizedBilling && paymentMethod === "manual" ? (
         <div
           id={MANUAL_PAYMENT_SECTION_ID}
           className={`grid gap-7 xl:grid-cols-[minmax(320px,400px),minmax(0,1fr)] items-start rounded-md ${

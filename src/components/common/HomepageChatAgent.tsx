@@ -7,12 +7,14 @@ import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import type { Article, FAQ, Feature, PricingPlan } from "@/hooks/useHomepageData";
 
 type ChatRole = "assistant" | "user";
+type ChatAnswerEngine = "gemini" | "local";
 
 interface ChatMessage {
   id: string;
   role: ChatRole;
   text: string;
   sources?: string[];
+  engine?: ChatAnswerEngine;
 }
 
 interface HomepageChatAgentSettings {
@@ -29,6 +31,8 @@ interface HomepageChatAgentSettings {
   max_history: number;
   show_sources: boolean;
   auto_open_seconds: number;
+  answer_mode: "local" | "gemini_hybrid" | "gemini";
+  gemini_model: string;
   enable_whatsapp_fallback: boolean;
   whatsapp_number: string;
   whatsapp_message: string;
@@ -45,9 +49,57 @@ interface HomepageChatAgentProps {
 interface ResolvedAnswer {
   text: string;
   sources: string[];
+  engine: ChatAnswerEngine;
+}
+
+interface GeminiFeaturePayload {
+  title: string;
+  description: string;
+}
+
+interface GeminiPricingPayload {
+  name: string;
+  price: number;
+  period: string;
+}
+
+interface GeminiFaqPayload {
+  question: string;
+  answer: string;
+  category: string;
+}
+
+interface GeminiArticlePayload {
+  title: string;
+  excerpt: string;
+}
+
+interface GeminiContextPayload {
+  features: GeminiFeaturePayload[];
+  pricingPlans: GeminiPricingPayload[];
+  faqs: GeminiFaqPayload[];
+  articles: GeminiArticlePayload[];
+}
+
+interface GeminiFunctionResponse {
+  success?: boolean;
+  text?: string;
+  sources?: string[];
+  error?: string;
+  trace_id?: string;
+  provider?: string;
+  model?: string;
 }
 
 const STORAGE_KEY = "homepage_chat_agent_dismissed";
+const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
+const looksLikeGeminiApiKey = (value: string) => /^AIza[0-9A-Za-z_-]{20,}$/.test(value.trim());
+const normalizeGeminiModel = (value: unknown) => {
+  if (typeof value !== "string") return DEFAULT_GEMINI_MODEL;
+  const trimmed = value.trim();
+  if (!trimmed || looksLikeGeminiApiKey(trimmed)) return DEFAULT_GEMINI_MODEL;
+  return trimmed;
+};
 
 const defaultSettings: HomepageChatAgentSettings = {
   enabled: false,
@@ -63,6 +115,8 @@ const defaultSettings: HomepageChatAgentSettings = {
   max_history: 12,
   show_sources: true,
   auto_open_seconds: 0,
+  answer_mode: "local",
+  gemini_model: DEFAULT_GEMINI_MODEL,
   enable_whatsapp_fallback: false,
   whatsapp_number: "",
   whatsapp_message: "Halo, saya ingin konsultasi mengenai AbsensiKu.",
@@ -79,6 +133,10 @@ const normalizeSettings = (value: unknown): HomepageChatAgentSettings => {
   const raw = value as Record<string, unknown>;
   const maxHistoryCandidate = Number(raw.max_history);
   const autoOpenCandidate = Number(raw.auto_open_seconds);
+  const answerMode =
+    raw.answer_mode === "gemini_hybrid" || raw.answer_mode === "gemini"
+      ? raw.answer_mode
+      : defaultSettings.answer_mode;
 
   return {
     enabled: raw.enabled === true,
@@ -100,6 +158,8 @@ const normalizeSettings = (value: unknown): HomepageChatAgentSettings => {
     max_history: Number.isFinite(maxHistoryCandidate) && maxHistoryCandidate > 0 ? Math.min(30, Math.floor(maxHistoryCandidate)) : defaultSettings.max_history,
     show_sources: raw.show_sources !== false,
     auto_open_seconds: Number.isFinite(autoOpenCandidate) && autoOpenCandidate >= 0 ? Math.min(30, Math.floor(autoOpenCandidate)) : defaultSettings.auto_open_seconds,
+    answer_mode: answerMode,
+    gemini_model: normalizeGeminiModel(raw.gemini_model),
     enable_whatsapp_fallback: raw.enable_whatsapp_fallback === true,
     whatsapp_number: typeof raw.whatsapp_number === "string" ? raw.whatsapp_number.trim() : defaultSettings.whatsapp_number,
     whatsapp_message:
@@ -123,6 +183,12 @@ const includesKeyword = (query: string, keywords: string[]) => keywords.some((ke
 
 const CHAT_PREVIEW_MAX_GENERIC = 360;
 const CHAT_PREVIEW_MAX_FAQ = 1200;
+const GEMINI_CONTEXT_LIMITS = {
+  features: 8,
+  pricingPlans: 6,
+  faqs: 12,
+  articles: 6,
+};
 
 const shortText = (text: string, max = CHAT_PREVIEW_MAX_GENERIC) =>
   text.length > max ? `${text.slice(0, max).trim()}...` : text;
@@ -194,6 +260,7 @@ export function HomepageChatAgent({ features, pricingPlans, faqs, articles, hide
         return {
           text: `Berikut paket utama yang tersedia:\n${planLines}\n\nSilakan pilih paket yang paling sesuai kebutuhan organisasi Anda.`,
           sources: pricingPlans.length > 0 ? ["pricing_settings"] : ["pricing_default_fallback"],
+          engine: "local",
         };
       }
 
@@ -212,6 +279,7 @@ export function HomepageChatAgent({ features, pricingPlans, faqs, articles, hide
             .map((feature) => `- ${feature.title}: ${shortText(feature.description || "")}`)
             .join("\n")}`,
           sources: features.length > 0 ? ["features_settings"] : ["features_default_fallback"],
+          engine: "local",
         };
       }
 
@@ -220,6 +288,7 @@ export function HomepageChatAgent({ features, pricingPlans, faqs, articles, hide
           return {
             text: "Saat ini belum ada artikel/berita yang bisa ditampilkan.",
             sources: ["articles"],
+            engine: "local",
           };
         }
 
@@ -229,6 +298,7 @@ export function HomepageChatAgent({ features, pricingPlans, faqs, articles, hide
             .map((article) => `- ${article.title}`)
             .join("\n")}\n\nAnda bisa buka menu Berita/Artikel untuk detail lengkap.`,
           sources: ["articles"],
+          engine: "local",
         };
       }
 
@@ -236,6 +306,7 @@ export function HomepageChatAgent({ features, pricingPlans, faqs, articles, hide
         return {
           text: "Untuk mulai menggunakan AbsensiKu, Anda bisa daftar akun organisasi dari halaman utama lalu login sesuai peran (Admin Organisasi/Pegawai). Jika ingin demo, gunakan tombol WhatsApp pada halaman ini.",
           sources: ["faq_settings", "hero_settings"],
+          engine: "local",
         };
       }
 
@@ -251,6 +322,7 @@ export function HomepageChatAgent({ features, pricingPlans, faqs, articles, hide
             .map((faq, idx) => `${idx + 1}. ${faq.question}\n${shortText(faq.answer || "", CHAT_PREVIEW_MAX_FAQ)}`)
             .join("\n\n"),
           sources: ["faq_settings"],
+          engine: "local",
         };
       }
 
@@ -258,12 +330,13 @@ export function HomepageChatAgent({ features, pricingPlans, faqs, articles, hide
       return {
         text: "Saya belum menemukan jawaban spesifik untuk pertanyaan itu. Coba tanya tentang fitur, harga, trial, atau berita terbaru. Anda juga bisa lanjut ke WhatsApp agar tim kami bantu langsung.",
         sources,
+        engine: "local",
       };
     },
     [articles, faqs, features, pricingPlans],
   );
 
-  const appendAssistantMessage = useCallback((text: string, sources?: string[]) => {
+  const appendAssistantMessage = useCallback((text: string, sources?: string[], engine?: ChatAnswerEngine) => {
     setMessages((prev) => {
       const next = [
         ...prev,
@@ -272,12 +345,64 @@ export function HomepageChatAgent({ features, pricingPlans, faqs, articles, hide
           role: "assistant" as const,
           text,
           sources,
+          engine,
         },
       ];
       const maxMessages = Math.max(4, settings.max_history * 2);
       return next.slice(-maxMessages);
     });
   }, [settings.max_history]);
+
+  const buildGeminiContext = useCallback((): GeminiContextPayload => {
+    return {
+      features: features.slice(0, GEMINI_CONTEXT_LIMITS.features).map((feature) => ({
+        title: shortText(feature.title || "", 120),
+        description: shortText(feature.description || "", 260),
+      })),
+      pricingPlans: pricingPlans.slice(0, GEMINI_CONTEXT_LIMITS.pricingPlans).map((plan) => ({
+        name: shortText(plan.name || "", 80),
+        price: Number(plan.price || 0),
+        period: shortText(plan.period || "", 60),
+      })),
+      faqs: faqs.slice(0, GEMINI_CONTEXT_LIMITS.faqs).map((faq) => ({
+        question: shortText(faq.question || "", 240),
+        answer: shortText(faq.answer || "", 600),
+        category: shortText(faq.category || "Umum", 80),
+      })),
+      articles: articles.slice(0, GEMINI_CONTEXT_LIMITS.articles).map((article) => ({
+        title: shortText(article.title || "", 180),
+        excerpt: shortText(article.excerpt || "", 320),
+      })),
+    };
+  }, [articles, faqs, features, pricingPlans]);
+
+  const askGemini = useCallback(
+    async (question: string): Promise<ResolvedAnswer> => {
+      const resolvedModel = normalizeGeminiModel(settings.gemini_model);
+      const payload = {
+        question,
+        model: resolvedModel,
+        context: buildGeminiContext(),
+      };
+
+      const { data, error } = await supabase.functions.invoke<GeminiFunctionResponse>("homepage-chat-agent", {
+        body: payload,
+      });
+
+      if (error) throw error;
+      if (!data?.success || typeof data.text !== "string" || !data.text.trim()) {
+        const traceSuffix = data?.trace_id ? ` [trace_id=${data.trace_id}]` : "";
+        throw new Error((data?.error || "Gemini tidak mengembalikan jawaban valid") + traceSuffix);
+      }
+
+      return {
+        text: data.text.trim(),
+        sources: data.sources && data.sources.length > 0 ? data.sources : ["gemini"],
+        engine: "gemini",
+      };
+    },
+    [buildGeminiContext, settings.gemini_model],
+  );
 
   const handleSubmit = useCallback(async () => {
     const question = input.trim();
@@ -292,9 +417,30 @@ export function HomepageChatAgent({ features, pricingPlans, faqs, articles, hide
 
     setIsResponding(true);
     try {
-      const answer = buildAnswer(question);
+      const shouldUseGemini = settings.answer_mode === "gemini" || settings.answer_mode === "gemini_hybrid";
+      let answer: ResolvedAnswer | null = null;
+
+      if (shouldUseGemini) {
+        try {
+          answer = await askGemini(question);
+        } catch (error) {
+          const fallbackRef = reportError(error, "homepage.chat_agent.gemini_answer_failed", {
+            question,
+            answer_mode: settings.answer_mode,
+          });
+
+          if (settings.answer_mode === "gemini") {
+            throw new Error(appendErrorReference("Gemini tidak dapat menjawab saat ini.", fallbackRef));
+          }
+        }
+      }
+
+      if (!answer) {
+        answer = buildAnswer(question);
+      }
+
       window.setTimeout(() => {
-        appendAssistantMessage(answer.text, answer.sources);
+        appendAssistantMessage(answer.text, answer.sources, answer.engine);
         setIsResponding(false);
       }, 250);
     } catch (error) {
@@ -302,7 +448,7 @@ export function HomepageChatAgent({ features, pricingPlans, faqs, articles, hide
       appendAssistantMessage(appendErrorReference("Terjadi kendala saat memproses pertanyaan.", ref));
       setIsResponding(false);
     }
-  }, [appendAssistantMessage, buildAnswer, input, isResponding, settings.max_history]);
+  }, [appendAssistantMessage, askGemini, buildAnswer, input, isResponding, settings.answer_mode, settings.max_history]);
 
   useEffect(() => {
     const fetchSettings = async () => {
@@ -434,8 +580,13 @@ export function HomepageChatAgent({ features, pricingPlans, faqs, articles, hide
                     }`}
                   >
                     {message.text}
+                    {message.role === "assistant" && message.engine && (
+                      <p className="mt-2 text-[11px] opacity-70">
+                        Mode Jawaban: {message.engine === "gemini" ? "Gemini" : "Fallback Lokal"}
+                      </p>
+                    )}
                     {settings.show_sources && message.role === "assistant" && message.sources && message.sources.length > 0 && (
-                      <p className="mt-2 text-[11px] opacity-70">Sumber: {Array.from(new Set(message.sources)).join(", ")}</p>
+                      <p className="mt-1 text-[11px] opacity-70">Sumber: {Array.from(new Set(message.sources)).join(", ")}</p>
                     )}
                   </div>
                 </div>

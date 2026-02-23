@@ -240,7 +240,7 @@ const PUBLIC_RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
   {
     question: "Apakah ada wizard setup awal organisasi?",
     answer:
-      "Ya. Tersedia wizard onboarding untuk membantu pengisian data dasar seperti OPD, unit kerja, jabatan, jam kerja, batas absen, dan konten awal.",
+      "Ya. Tersedia wizard onboarding untuk membantu pengisian data dasar seperti OPD, unit kerja, jabatan (global tenant), jam kerja, batas absen, dan konten awal.",
     category: "Implementasi & Onboarding",
     audience: "public",
   },
@@ -453,8 +453,20 @@ const RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
   {
     question: "Apa fungsi menu /admin/templates (Template Onboarding Org)?",
     answer:
-      "Menu ini adalah pusat template setup awal tenant organisasi: OPD, unit kerja, jabatan, kantor, jam kerja, batas absen, pengumuman awal, dan feature flag agar organisasi baru tidak mulai dari nol.",
+      "Menu ini adalah pusat template setup awal tenant organisasi: OPD, unit kerja, jabatan global tenant, kantor, jam kerja, batas absen, pengumuman awal, dan feature flag agar organisasi baru tidak mulai dari nol.",
     category: "Onboarding Org",
+  },
+  {
+    question: "Apakah jabatan harus diikat ke OPD atau satuan kerja?",
+    answer:
+      "Tidak wajib. Jabatan dapat dikelola sebagai daftar global per tenant agar pemilihan jabatan pegawai lebih cepat dan konsisten. OPD/satuan kerja tetap bisa dipakai untuk struktur organisasi pegawai.",
+    category: "Master Data",
+  },
+  {
+    question: "Bagaimana alur pilih jabatan saat input data pegawai?",
+    answer:
+      "Admin cukup memilih jabatan langsung dari daftar aktif tanpa menunggu pilihan OPD/satuan kerja. Ini mengurangi langkah input dan mencegah kebingungan saat struktur unit berubah.",
+    category: "Master Data",
   },
   {
     question: "Bagaimana alur setup awal organisasi setelah profil organisasi selesai?",
@@ -539,6 +551,48 @@ const RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
     answer:
       "Gunakan validasi CSV sebelum import, pastikan mapping kolom benar, dan pastikan referensi kantor/lokasi kerja valid dengan koordinat real.",
     category: "Master Data",
+  },
+  {
+    question: "Bagaimana konsep Import Pegawai dan Undangan Pegawai agar tidak bentrok?",
+    answer:
+      "Gunakan alur 2 tahap: (1) Import Pegawai untuk membentuk master data pegawai, (2) Undangan Pegawai untuk aktivasi akun login. Sistem akan memprioritaskan data pegawai existing agar tidak membuat duplikasi akun/data.",
+    category: "Master Data",
+    audience: "org_admin",
+  },
+  {
+    question: "Kenapa upload import pegawai meminta Lokasi Kerja Mapping?",
+    answer:
+      "Mapping lokasi kerja dipakai sebagai fallback aman saat baris import belum mengisi referensi lokasi valid. Tujuannya menjaga seluruh data pegawai tetap terhubung ke lokasi kerja yang sah dan mencegah relasi kosong.",
+    category: "Master Data",
+    audience: "org_admin",
+  },
+  {
+    question: "Apakah template import pegawai mendukung format XLS?",
+    answer:
+      "Ya. Template dapat diunduh dalam format CSV maupun XLS (Excel-compatible). Isi data sesuai header template terbaru agar validasi kolom berjalan otomatis saat upload.",
+    category: "Master Data",
+    audience: "org_admin",
+  },
+  {
+    question: "Apa dampak jika modul Admin OPD/Jabatan/Kategori Pegawai/Golongan Pegawai dimatikan di Setup Awal?",
+    answer:
+      "Saat modul dimatikan, submenu terkait disembunyikan dan field terkait tidak ditampilkan pada form pegawai/import. Data operasional lain tetap berjalan; modul bisa diaktifkan kembali kapan saja dari Setup Awal.",
+    category: "Onboarding Org",
+    audience: "org_admin",
+  },
+  {
+    question: "Bagaimana cara mengaktifkan kembali modul master data setelah sebelumnya dinonaktifkan?",
+    answer:
+      "Buka /org/onboarding, aktifkan toggle modul yang dibutuhkan, lalu simpan. Setelah aktif, submenu master data dan field terkait otomatis muncul kembali pada halaman pegawai/import sesuai konfigurasi terbaru.",
+    category: "Onboarding Org",
+    audience: "org_admin",
+  },
+  {
+    question: "Apa arti status undangan 'reused' dan 'new' saat aktivasi akun pegawai?",
+    answer:
+      "'Reused' berarti sistem menemukan undangan pending yang masih aktif sehingga link/kode lama dipakai ulang. 'New' berarti sistem membuat kode undangan baru karena undangan sebelumnya tidak bisa dipakai (mis. kadaluarsa/terpakai).",
+    category: "Master Data",
+    audience: "org_admin",
   },
   {
     question: "Kenapa muncul label [AUTO-FIX] pada nama kantor?",
@@ -1217,6 +1271,15 @@ export default function FAQManagement() {
     } as Record<FaqAudience, number>,
   );
   const publicVisibleCount = audienceStats.public + audienceStats.employee;
+  const statsCards = [
+    { key: "total", label: "Total FAQ", value: faqs.length },
+    { key: "categories", label: "Kategori", value: totalCategories },
+    { key: "results", label: "Hasil Pencarian", value: filteredFaqs.length },
+    { key: "public-visible", label: "Umum + Employee", value: publicVisibleCount },
+    { key: "employee", label: FAQ_AUDIENCE_LABEL.employee, value: audienceStats.employee },
+    { key: "org-admin", label: FAQ_AUDIENCE_LABEL.org_admin, value: audienceStats.org_admin },
+    { key: "super-admin", label: FAQ_AUDIENCE_LABEL.super_admin, value: audienceStats.super_admin },
+  ] as const;
 
   return (
     <SuperAdminLayout title="Manajemen FAQ" subtitle="Kelola pertanyaan yang sering diajukan">
@@ -1346,57 +1409,20 @@ export default function FAQManagement() {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Total FAQ</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{faqs.length}</div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Kategori</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{totalCategories}</div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">Hasil Pencarian</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{filteredFaqs.length}</div>
-            </CardContent>
-          </Card>
-        </div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-          <Card>
-            <CardContent className="pt-4">
-              <p className="text-xs text-muted-foreground">Untuk Umum + Employee</p>
-              <p className="text-xl font-semibold">{publicVisibleCount}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-4">
-              <p className="text-xs text-muted-foreground">{FAQ_AUDIENCE_LABEL.employee}</p>
-              <p className="text-xl font-semibold">{audienceStats.employee}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-4">
-              <p className="text-xs text-muted-foreground">{FAQ_AUDIENCE_LABEL.org_admin}</p>
-              <p className="text-xl font-semibold">{audienceStats.org_admin}</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="pt-4">
-              <p className="text-xs text-muted-foreground">{FAQ_AUDIENCE_LABEL.super_admin}</p>
-              <p className="text-xl font-semibold">{audienceStats.super_admin}</p>
-            </CardContent>
-          </Card>
+        <div className="rounded-xl border border-slate-200/80 bg-slate-50/45 p-2">
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-7">
+            {statsCards.map((item) => (
+              <div
+                key={item.key}
+                className="flex items-center justify-between gap-2 rounded-lg border border-slate-200/80 bg-background px-2.5 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.05)]"
+              >
+                <p className="truncate pr-1 text-[10.5px] font-medium uppercase tracking-[0.02em] text-slate-500">
+                  {item.label}
+                </p>
+                <p className="text-lg font-semibold leading-none text-slate-900">{item.value}</p>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* FAQ Table */}

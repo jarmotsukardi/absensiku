@@ -68,3 +68,6 @@ verify_jwt = false
 
 [functions.dispatch-billing-email]
 verify_jwt = false
+
+[functions.homepage-chat-agent]
+verify_jwt = false

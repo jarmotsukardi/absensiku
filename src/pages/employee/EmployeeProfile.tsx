@@ -24,9 +24,14 @@ import {
   Save,
   Loader2,
 } from "lucide-react";
+import {
+  DEFAULT_ORG_MASTER_DATA_MODULES,
+  fetchTenantOrgMasterDataModules,
+} from "@/lib/orgMasterDataModules";
 
 interface EmployeeData {
   id: string;
+  tenant_id?: string;
   name: string;
   email: string;
   nik: string;
@@ -49,6 +54,7 @@ export default function EmployeeProfile() {
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [employee, setEmployee] = useState<EmployeeData | null>(null);
+  const [masterDataModules, setMasterDataModules] = useState(DEFAULT_ORG_MASTER_DATA_MODULES);
   
   // Password change state
   const [showPasswordForm, setShowPasswordForm] = useState(false);
@@ -84,9 +90,24 @@ export default function EmployeeProfile() {
         .maybeSingle();
 
       if (error) throw error;
-      setEmployee((data as EmployeeData | null) ?? null);
+      const employeeData = (data as EmployeeData | null) ?? null;
+      setEmployee(employeeData);
+
+      if (!employeeData?.tenant_id) {
+        setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
+        return;
+      }
+
+      try {
+        const moduleSetting = await fetchTenantOrgMasterDataModules(employeeData.tenant_id);
+        setMasterDataModules(moduleSetting.modules);
+      } catch (moduleError) {
+        console.error("Error fetching employee module settings:", moduleError);
+        setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
+      }
     } catch (error) {
       console.error("Error fetching employee:", error);
+      setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
     } finally {
       setIsLoading(false);
     }
@@ -140,6 +161,10 @@ export default function EmployeeProfile() {
     );
   }
 
+  const showPositionField = masterDataModules.positions;
+  const showGolonganField = masterDataModules.employee_golongan;
+  const showCategoryField = masterDataModules.employee_categories;
+
   const primaryIdentity = employee?.nip
     ? { label: "NIP", value: employee.nip }
     : { label: "NIK", value: employee?.nik };
@@ -183,8 +208,10 @@ export default function EmployeeProfile() {
               </div>
               <div className="flex-1">
                 <h2 className="text-xl font-bold">{employee?.name || "Pengguna"}</h2>
-                <p className="text-muted-foreground">{employee?.position || "Pegawai"}</p>
-                {employee?.employee_category && (
+                <p className="text-muted-foreground">
+                  {showPositionField ? (employee?.position || employee?.opd?.name || "Pegawai") : (employee?.opd?.name || "Pegawai")}
+                </p>
+                {showCategoryField && employee?.employee_category && (
                   <Badge variant="secondary" className="mt-2">
                     {employee.employee_category === "pns" ? "PNS" : 
                      employee.employee_category === "pppk" ? "PPPK" : 
@@ -223,15 +250,21 @@ export default function EmployeeProfile() {
             <CardDescription>Data pekerjaan dan penempatan</CardDescription>
           </CardHeader>
           <CardContent className="space-y-1">
-            <InfoRow icon={Building2} label="OPD / Instansi" value={employee?.opd?.name} />
-            <Separator />
-            <InfoRow icon={Building2} label="Unit Kerja" value={employee?.work_unit?.name} />
-            <Separator />
-            <InfoRow icon={Briefcase} label="Jabatan" value={employee?.position} />
-            <Separator />
-            <InfoRow icon={Briefcase} label="Golongan" value={employee?.golongan} />
-            <Separator />
-            <InfoRow icon={MapPin} label="Lokasi Kerja" value={employee?.offices?.name} />
+            {[
+              { icon: Building2, label: "OPD / Instansi", value: employee?.opd?.name },
+              { icon: Building2, label: "Unit Kerja", value: employee?.work_unit?.name },
+              ...(showPositionField ? [{ icon: Briefcase, label: "Jabatan", value: employee?.position }] : []),
+              ...(showGolonganField ? [{ icon: Briefcase, label: "Golongan", value: employee?.golongan }] : []),
+              ...(showCategoryField
+                ? [{ icon: Briefcase, label: "Kategori Pegawai", value: employee?.employee_category }]
+                : []),
+              { icon: MapPin, label: "Lokasi Kerja", value: employee?.offices?.name },
+            ].map((row, index, rows) => (
+              <div key={row.label}>
+                <InfoRow icon={row.icon} label={row.label} value={row.value} />
+                {index < rows.length - 1 && <Separator />}
+              </div>
+            ))}
           </CardContent>
         </Card>
 

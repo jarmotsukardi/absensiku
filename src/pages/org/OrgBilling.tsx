@@ -387,6 +387,12 @@ const parseBillingSettings = (value: unknown): BillingBankInfo => {
   };
 };
 
+const parseInvoiceBillingScope = (metadata: unknown): "individual" | "centralized" => {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return "centralized";
+  const raw = metadata as Record<string, unknown>;
+  return raw.billing_scope === "individual" ? "individual" : "centralized";
+};
+
 const getDueStatusMeta = (invoice: Pick<InvoiceRow, "due_date" | "status">) => {
   if (isInvoicePaid(invoice.status)) {
     return { label: "Lunas", className: "text-green-700" };
@@ -709,7 +715,10 @@ export default function OrgBilling() {
         console.warn("Failed to load billing invoice template:", invoiceTemplateRes.error);
       }
 
-      setInvoices((invoicesRes.data as InvoiceRow[]) || []);
+      const centralizedInvoices = ((invoicesRes.data as InvoiceRow[]) || []).filter(
+        (invoice) => parseInvoiceBillingScope(invoice.metadata) !== "individual",
+      );
+      setInvoices(centralizedInvoices);
       setTenantProfile(tenantRes.data || null);
       setSubscriptionSnapshot((subscriptionRes.data as SubscriptionSnapshot | null) || null);
       setBankInfo(parseBillingSettings(billingSettingsRes.data?.value));
@@ -1471,17 +1480,16 @@ export default function OrgBilling() {
 
     setIsDuplicatingInvoice(true);
     try {
-      const { data: activeInvoice, error: activeInvoiceError } = await withExponentialBackoff(
+      const { data: activeInvoiceRows, error: activeInvoiceError } = await withExponentialBackoff(
         () =>
           withTimeout(
             supabase
               .from("invoices")
-              .select("id, invoice_number")
+              .select("id, invoice_number, metadata")
               .eq("tenant_id", tenantId)
               .in("status", [...ACTIVE_INVOICE_STATUSES])
               .order("created_at", { ascending: false })
-              .limit(1)
-              .maybeSingle(),
+              .limit(100),
             BILLING_QUERY_TIMEOUT_MS,
             "org.billing.duplicate_invoice.check_active timeout",
           ),
@@ -1492,6 +1500,11 @@ export default function OrgBilling() {
       );
 
       if (activeInvoiceError) throw activeInvoiceError;
+      const activeInvoice = ((activeInvoiceRows || []) as Array<{
+        id: string;
+        invoice_number: string | null;
+        metadata?: unknown;
+      }>).find((invoice) => parseInvoiceBillingScope(invoice.metadata) !== "individual");
       if (activeInvoice?.id) {
         toast.warning(
           `Masih ada faktur aktif ${activeInvoice.invoice_number || activeInvoice.id}. Selesaikan atau batalkan dulu sebelum membuat faktur baru.`,

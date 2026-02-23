@@ -62,6 +62,7 @@ export interface Invoice {
   marketing_name: string | null;
   marketing_incentive_amount: number;
   notes: string | null;
+  metadata?: Record<string, unknown> | null;
   created_at: string;
   tenant?: {
     id: string;
@@ -96,6 +97,12 @@ const MANUAL_VERIFICATION_STATUSES = [
   "AWAITING_VERIFICATION_FULL",
   "PENDING_VERIFICATION_PARTIAL",
 ] as const;
+
+const parseInvoiceBillingScope = (metadata: unknown): "individual" | "centralized" => {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return "centralized";
+  const value = metadata as Record<string, unknown>;
+  return value.billing_scope === "individual" ? "individual" : "centralized";
+};
 
 export function useBillingSettings() {
   const [settings, setSettings] = useState<BillingSetting[]>([]);
@@ -287,7 +294,8 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
           pph_amount,
           net_amount,
           xendit_fee,
-          payment_method_type
+          payment_method_type,
+          metadata
         `)
         .eq("id", invoiceId)
         .single();
@@ -317,6 +325,7 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
       if (error) throw error;
 
       if (approved) {
+        const isIndividualInvoice = parseInvoiceBillingScope(invoice.metadata) === "individual";
         const { data: currentSub, error: currentSubError } = await supabase
           .from("subscriptions")
           .select("*")
@@ -324,60 +333,62 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
           .order("updated_at", { ascending: false })
           .limit(1)
           .maybeSingle();
-        if (currentSubError) {
-          reportError(currentSubError, "admin.billing.verify_payment.subscription.fetch_failed", {
-            invoice_id: invoice.id,
-            tenant_id: invoice.tenant_id,
-          });
-          console.error("Failed to fetch current subscription:", currentSubError);
-        }
-
-        let startDate = new Date();
-        if (currentSub?.end_date && new Date(currentSub.end_date) > startDate) {
-          startDate = new Date(currentSub.end_date);
-        }
-
-        const endDate = new Date(startDate);
-        endDate.setMonth(endDate.getMonth() + (invoice.package_duration_months || 1));
-
-        if (currentSub?.id) {
-          const { error: subError } = await supabase
-            .from("subscriptions")
-            .update({
-              status: "active",
-              start_date: startDate.toISOString().split("T")[0],
-              end_date: endDate.toISOString().split("T")[0],
-              last_invoice_id: invoice.id,
-              grace_period_end: null,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", currentSub.id);
-          if (subError) {
-            reportError(subError, "admin.billing.verify_payment.subscription.update_failed", {
+        if (!isIndividualInvoice) {
+          if (currentSubError) {
+            reportError(currentSubError, "admin.billing.verify_payment.subscription.fetch_failed", {
               invoice_id: invoice.id,
               tenant_id: invoice.tenant_id,
-              subscription_id: currentSub.id,
             });
-            console.error("Failed to update subscription:", subError);
+            console.error("Failed to fetch current subscription:", currentSubError);
           }
-        } else {
-          const { error: subInsertError } = await supabase
-            .from("subscriptions")
-            .insert({
-              tenant_id: invoice.tenant_id,
-              status: "active",
-              start_date: startDate.toISOString().split("T")[0],
-              end_date: endDate.toISOString().split("T")[0],
-              last_invoice_id: invoice.id,
-              grace_period_end: null,
-              updated_at: new Date().toISOString(),
-            });
-          if (subInsertError) {
-            reportError(subInsertError, "admin.billing.verify_payment.subscription.insert_failed", {
-              invoice_id: invoice.id,
-              tenant_id: invoice.tenant_id,
-            });
-            console.error("Failed to create subscription:", subInsertError);
+
+          let startDate = new Date();
+          if (currentSub?.end_date && new Date(currentSub.end_date) > startDate) {
+            startDate = new Date(currentSub.end_date);
+          }
+
+          const endDate = new Date(startDate);
+          endDate.setMonth(endDate.getMonth() + (invoice.package_duration_months || 1));
+
+          if (currentSub?.id) {
+            const { error: subError } = await supabase
+              .from("subscriptions")
+              .update({
+                status: "active",
+                start_date: startDate.toISOString().split("T")[0],
+                end_date: endDate.toISOString().split("T")[0],
+                last_invoice_id: invoice.id,
+                grace_period_end: null,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", currentSub.id);
+            if (subError) {
+              reportError(subError, "admin.billing.verify_payment.subscription.update_failed", {
+                invoice_id: invoice.id,
+                tenant_id: invoice.tenant_id,
+                subscription_id: currentSub.id,
+              });
+              console.error("Failed to update subscription:", subError);
+            }
+          } else {
+            const { error: subInsertError } = await supabase
+              .from("subscriptions")
+              .insert({
+                tenant_id: invoice.tenant_id,
+                status: "active",
+                start_date: startDate.toISOString().split("T")[0],
+                end_date: endDate.toISOString().split("T")[0],
+                last_invoice_id: invoice.id,
+                grace_period_end: null,
+                updated_at: new Date().toISOString(),
+              });
+            if (subInsertError) {
+              reportError(subInsertError, "admin.billing.verify_payment.subscription.insert_failed", {
+                invoice_id: invoice.id,
+                tenant_id: invoice.tenant_id,
+              });
+              console.error("Failed to create subscription:", subInsertError);
+            }
           }
         }
 
@@ -420,16 +431,18 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
           }
         }
 
-        const { error: streakSyncError } = await supabase.rpc("mark_streak_invoiced", {
-          p_tenant_id: invoice.tenant_id,
-          p_invoice_id: invoice.id,
-        });
-        if (streakSyncError) {
-          reportError(streakSyncError, "admin.billing.verify_payment.streak_sync_failed", {
-            invoice_id: invoice.id,
-            tenant_id: invoice.tenant_id,
+        if (!isIndividualInvoice) {
+          const { error: streakSyncError } = await supabase.rpc("mark_streak_invoiced", {
+            p_tenant_id: invoice.tenant_id,
+            p_invoice_id: invoice.id,
           });
-          console.error("Failed to sync streak invoiced state:", streakSyncError);
+          if (streakSyncError) {
+            reportError(streakSyncError, "admin.billing.verify_payment.streak_sync_failed", {
+              invoice_id: invoice.id,
+              tenant_id: invoice.tenant_id,
+            });
+            console.error("Failed to sync streak invoiced state:", streakSyncError);
+          }
         }
 
         const [waDispatch, emailDispatch] = await Promise.all([

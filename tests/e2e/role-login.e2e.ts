@@ -49,8 +49,8 @@ test.describe.parallel("Role Login Smoke", () => {
     await page.fill("#captcha-input", captchaText);
 
     await page.getByRole("button", { name: "Masuk" }).click();
-    await page.waitForURL(/\/org/, { timeout: 20_000 });
-    expect(page.url()).toContain("/org");
+    await expect(page).not.toHaveURL(/\/org\/login(?:\?|$)/, { timeout: 20_000 });
+    await expect(page).toHaveURL(/\/org(?!\/login)/, { timeout: 20_000 });
   });
 
   test("superadmin login valid (dashboard atau verifikasi 2FA)", async ({ page }) => {
@@ -73,6 +73,7 @@ test.describe.parallel("Role Login Smoke", () => {
 
     const currentPath = new URL(page.url()).pathname;
     const onTwoFactor = await page.getByText("Verifikasi 2FA", { exact: false }).first().isVisible().catch(() => false);
-    expect(currentPath.startsWith("/admin") || onTwoFactor).toBeTruthy();
+    const leftLoginPage = currentPath !== "/admin/login";
+    expect((leftLoginPage && currentPath.startsWith("/admin")) || onTwoFactor).toBeTruthy();
   });
 });

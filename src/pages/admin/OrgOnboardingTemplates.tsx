@@ -217,8 +217,6 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
         .filter(Boolean)
         .map((name) => ({
           name,
-          work_unit_code: form.workUnitCode.trim().toUpperCase(),
-          opd_code: form.opdCode.trim().toUpperCase(),
           is_active: true,
         })),
       office_defaults: [
@@ -375,6 +373,9 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
                 onChange={(e) => handleChange("positionCsv", e.target.value)}
                 placeholder="Staf, Operator Absensi, Supervisor"
               />
+              <p className="text-xs text-muted-foreground">
+                Jabatan disiapkan sebagai daftar global tenant, tidak terikat OPD/satuan kerja.
+              </p>
             </div>
             <Separator />
             <div className="grid gap-4 md:grid-cols-2">

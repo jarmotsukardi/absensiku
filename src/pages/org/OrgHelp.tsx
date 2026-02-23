@@ -159,6 +159,34 @@ const DUMMY_FAQS: FAQ[] = [
     answer:
       "Buka menu Master Data > Golongan Pegawai. Tambahkan atau aktifkan golongan yang dibutuhkan. Hanya golongan berstatus aktif yang tampil di form Pegawai Aktif, mutasi pegawai, dan import pegawai.",
   },
+  {
+    id: "17",
+    category: "Umum",
+    question: "Kenapa submenu Admin OPD/Jabatan/Kategori Pegawai/Golongan Pegawai tidak terlihat?",
+    answer:
+      "Periksa Setup Awal Organisasi di /org/onboarding pada bagian Pilihan Modul Master Data. Jika modul dimatikan, submenu disembunyikan. Aktifkan kembali modul yang dibutuhkan lalu simpan preferensi.",
+  },
+  {
+    id: "18",
+    category: "Umum",
+    question: "Bagaimana alur yang benar antara Import Pegawai dan Undangan Pegawai?",
+    answer:
+      "Gunakan alur dua tahap: import dulu data pegawai ke master, lalu kirim undangan aktivasi akun. Dengan cara ini data tetap rapi dan akun login tidak duplikat.",
+  },
+  {
+    id: "19",
+    category: "Umum",
+    question: "Kenapa saat import pegawai diminta Lokasi Kerja Mapping?",
+    answer:
+      "Lokasi Kerja Mapping dipakai sebagai fallback untuk menjaga setiap data pegawai tetap punya relasi lokasi kerja yang valid saat data pada file belum lengkap.",
+  },
+  {
+    id: "20",
+    category: "Umum",
+    question: "Apakah template import pegawai bisa dalam format XLS?",
+    answer:
+      "Bisa. Gunakan template resmi CSV atau XLS dari halaman import pegawai, lalu isi header kolom persis seperti template agar lolos validasi.",
+  },
 ];
 
 const CATEGORY_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {

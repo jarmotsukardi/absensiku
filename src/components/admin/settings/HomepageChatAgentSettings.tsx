@@ -12,6 +12,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { withTimeout } from "@/lib/attendanceResilience";
 
+type ChatAnswerMode = "local" | "gemini_hybrid" | "gemini";
+
 interface HomepageChatAgentSettingValue {
   enabled: boolean;
   bot_name: string;
@@ -26,12 +28,34 @@ interface HomepageChatAgentSettingValue {
   max_history: number;
   show_sources: boolean;
   auto_open_seconds: number;
+  answer_mode: ChatAnswerMode;
+  gemini_model: string;
   enable_whatsapp_fallback: boolean;
   whatsapp_number: string;
   whatsapp_message: string;
 }
 
+interface GeminiKeyStatusResponse {
+  configured?: boolean;
+  last4?: string | null;
+  updated_at?: string | null;
+}
+
+interface GeminiKeyStatus {
+  configured: boolean;
+  last4: string | null;
+  updatedAt: string | null;
+}
+
 const settingKey = "homepage_chat_agent_settings";
+const DEFAULT_GEMINI_MODEL = "gemini-2.0-flash";
+const looksLikeGeminiApiKey = (value: string) => /^AIza[0-9A-Za-z_-]{20,}$/.test(value.trim());
+const normalizeGeminiModel = (value: unknown) => {
+  if (typeof value !== "string") return DEFAULT_GEMINI_MODEL;
+  const trimmed = value.trim();
+  if (!trimmed || looksLikeGeminiApiKey(trimmed)) return DEFAULT_GEMINI_MODEL;
+  return trimmed;
+};
 
 const defaultSetting: HomepageChatAgentSettingValue = {
   enabled: false,
@@ -47,9 +71,17 @@ const defaultSetting: HomepageChatAgentSettingValue = {
   max_history: 12,
   show_sources: true,
   auto_open_seconds: 0,
+  answer_mode: "local",
+  gemini_model: DEFAULT_GEMINI_MODEL,
   enable_whatsapp_fallback: false,
   whatsapp_number: "",
   whatsapp_message: "Halo, saya ingin konsultasi mengenai AbsensiKu.",
+};
+
+const defaultGeminiKeyStatus: GeminiKeyStatus = {
+  configured: false,
+  last4: null,
+  updatedAt: null,
 };
 
 const normalizeSetting = (value: unknown): HomepageChatAgentSettingValue => {
@@ -57,6 +89,10 @@ const normalizeSetting = (value: unknown): HomepageChatAgentSettingValue => {
   const raw = value as Record<string, unknown>;
   const maxHistoryCandidate = Number(raw.max_history);
   const autoOpenCandidate = Number(raw.auto_open_seconds);
+  const answerMode: ChatAnswerMode =
+    raw.answer_mode === "gemini_hybrid" || raw.answer_mode === "gemini"
+      ? raw.answer_mode
+      : defaultSetting.answer_mode;
 
   const allowedPaths = Array.isArray(raw.allowed_paths)
     ? raw.allowed_paths.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean)
@@ -95,6 +131,8 @@ const normalizeSetting = (value: unknown): HomepageChatAgentSettingValue => {
       Number.isFinite(autoOpenCandidate) && autoOpenCandidate >= 0
         ? Math.min(30, Math.floor(autoOpenCandidate))
         : defaultSetting.auto_open_seconds,
+    answer_mode: answerMode,
+    gemini_model: normalizeGeminiModel(raw.gemini_model),
     enable_whatsapp_fallback: raw.enable_whatsapp_fallback === true,
     whatsapp_number: typeof raw.whatsapp_number === "string" ? raw.whatsapp_number.trim() : defaultSetting.whatsapp_number,
     whatsapp_message:
@@ -107,7 +145,31 @@ const normalizeSetting = (value: unknown): HomepageChatAgentSettingValue => {
 export function HomepageChatAgentSettings() {
   const [isFetching, setIsFetching] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingGeminiKey, setIsSavingGeminiKey] = useState(false);
   const [setting, setSetting] = useState<HomepageChatAgentSettingValue>(defaultSetting);
+  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState("");
+  const [geminiKeyStatus, setGeminiKeyStatus] = useState<GeminiKeyStatus>(defaultGeminiKeyStatus);
+
+  const fetchGeminiKeyStatus = useCallback(async () => {
+    try {
+      const { data, error } = await withTimeout(
+        () => supabase.rpc("get_homepage_chat_agent_gemini_key_status"),
+        10000,
+        "Load gemini key status timeout"
+      );
+      if (error) throw error;
+
+      const raw = (data as GeminiKeyStatusResponse | null) || {};
+      setGeminiKeyStatus({
+        configured: raw.configured === true,
+        last4: typeof raw.last4 === "string" ? raw.last4 : null,
+        updatedAt: typeof raw.updated_at === "string" ? raw.updated_at : null,
+      });
+    } catch (error) {
+      reportError(error, "admin.homepage_layout.chat_agent.fetch_gemini_key_status");
+      setGeminiKeyStatus(defaultGeminiKeyStatus);
+    }
+  }, []);
 
   const fetchSetting = useCallback(async () => {
     try {
@@ -135,9 +197,15 @@ export function HomepageChatAgentSettings() {
 
   useEffect(() => {
     void fetchSetting();
-  }, [fetchSetting]);
+    void fetchGeminiKeyStatus();
+  }, [fetchGeminiKeyStatus, fetchSetting]);
 
   const handleSave = async () => {
+    if (setting.answer_mode !== "local" && looksLikeGeminiApiKey(setting.gemini_model)) {
+      toast.error("Field Model Gemini berisi format API key. Isi nama model (contoh: gemini-2.0-flash).");
+      return;
+    }
+
     setIsSaving(true);
     try {
       const payload = {
@@ -168,6 +236,39 @@ export function HomepageChatAgentSettings() {
     }
   };
 
+  const handleSaveGeminiApiKey = async () => {
+    const nextKey = geminiApiKeyInput.trim();
+    if (!nextKey) {
+      toast.error("API key Gemini wajib diisi.");
+      return;
+    }
+
+    setIsSavingGeminiKey(true);
+    try {
+      const { data, error } = await withTimeout(
+        () =>
+          supabase.rpc("set_homepage_chat_agent_gemini_api_key", {
+            p_api_key: nextKey,
+          }),
+        10000,
+        "Save gemini api key timeout"
+      );
+
+      if (error) throw error;
+
+      const raw = (data as GeminiKeyStatusResponse | null) || {};
+      const last4 = typeof raw.last4 === "string" ? raw.last4 : null;
+      toast.success(last4 ? `API key Gemini berhasil diperbarui (...${last4}).` : "API key Gemini berhasil diperbarui.");
+      setGeminiApiKeyInput("");
+      await fetchGeminiKeyStatus();
+    } catch (error) {
+      const ref = reportError(error, "admin.homepage_layout.chat_agent.save_gemini_api_key");
+      toast.error(appendErrorReference("Gagal menyimpan API key Gemini.", ref));
+    } finally {
+      setIsSavingGeminiKey(false);
+    }
+  };
+
   if (isFetching) {
     return (
       <div className="flex h-24 items-center justify-center">
@@ -175,6 +276,11 @@ export function HomepageChatAgentSettings() {
       </div>
     );
   }
+
+  const geminiModelLooksLikeKey = looksLikeGeminiApiKey(setting.gemini_model);
+  const geminiKeyUpdatedAtLabel = geminiKeyStatus.updatedAt
+    ? new Date(geminiKeyStatus.updatedAt).toLocaleString("id-ID")
+    : null;
 
   return (
     <div className="space-y-6">
@@ -322,6 +428,78 @@ export function HomepageChatAgentSettings() {
               checked={setting.show_sources}
               onCheckedChange={(checked) => setSetting((prev) => ({ ...prev, show_sources: checked }))}
             />
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Mode Jawaban</Label>
+              <Select
+                value={setting.answer_mode}
+                onValueChange={(value: ChatAnswerMode) => setSetting((prev) => ({ ...prev, answer_mode: value }))}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="local">Lokal Saja</SelectItem>
+                  <SelectItem value="gemini_hybrid">Gemini + Fallback Lokal</SelectItem>
+                  <SelectItem value="gemini">Gemini Saja</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Rekomendasi: <code>Gemini + Fallback Lokal</code> agar tetap responsif saat API eksternal gagal.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label>Model Gemini</Label>
+              <Input
+                value={setting.gemini_model}
+                onChange={(event) => setSetting((prev) => ({ ...prev, gemini_model: event.target.value }))}
+                placeholder="gemini-2.0-flash"
+                disabled={setting.answer_mode === "local"}
+              />
+              {geminiModelLooksLikeKey ? (
+                <p className="text-xs text-destructive">
+                  Ini terlihat seperti API key. Field ini hanya untuk nama model, misalnya <code>gemini-2.0-flash</code>.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Isi nama model Gemini, contoh <code>gemini-2.0-flash</code>.
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-3 rounded-lg border p-4">
+            <div>
+              <Label className="font-medium">API Key Gemini (Rahasia)</Label>
+              <p className="text-xs text-muted-foreground">
+                Masukkan API key baru untuk rotasi. Nilai tidak ditampilkan ulang dan disimpan terenkripsi di Vault.
+              </p>
+            </div>
+            <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+              <Input
+                type="password"
+                value={geminiApiKeyInput}
+                onChange={(event) => setGeminiApiKeyInput(event.target.value)}
+                placeholder="AIza..."
+                autoComplete="off"
+              />
+              <Button
+                type="button"
+                onClick={() => void handleSaveGeminiApiKey()}
+                disabled={isSavingGeminiKey || !geminiApiKeyInput.trim()}
+              >
+                {isSavingGeminiKey ? "Menyimpan Key..." : "Simpan API Key"}
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Status:{" "}
+              {geminiKeyStatus.configured
+                ? `Tersimpan${geminiKeyStatus.last4 ? ` (...${geminiKeyStatus.last4})` : ""}`
+                : "Belum tersimpan"}
+              {geminiKeyUpdatedAtLabel ? ` • Diperbarui: ${geminiKeyUpdatedAtLabel}` : ""}
+            </p>
           </div>
 
           <div className="space-y-2">

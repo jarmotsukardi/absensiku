@@ -22,8 +22,6 @@ export interface OrgTemplateWorkUnitItem {
 
 export interface OrgTemplatePositionItem {
   name: string;
-  work_unit_code?: string | null;
-  opd_code?: string | null;
   is_active: boolean;
 }
 
@@ -124,20 +122,14 @@ export const DEFAULT_ORG_ONBOARDING_TEMPLATE: OrgOnboardingTemplate = {
   position_defaults: [
     {
       name: "Staf",
-      work_unit_code: "ADM-UMUM",
-      opd_code: "SEKRETARIAT",
       is_active: true,
     },
     {
       name: "Operator Absensi",
-      work_unit_code: "ADM-UMUM",
-      opd_code: "SEKRETARIAT",
       is_active: true,
     },
     {
       name: "Supervisor",
-      work_unit_code: "ADM-UMUM",
-      opd_code: "SEKRETARIAT",
       is_active: true,
     },
   ],
@@ -307,13 +299,11 @@ export const normalizeOrgOnboardingTemplate = (value: unknown): OrgOnboardingTem
             if (!name) return null;
             return {
               name,
-              work_unit_code: normalizeCode(toStringValue(row.work_unit_code, "")) || null,
-              opd_code: normalizeCode(toStringValue(row.opd_code, "")) || null,
               is_active: toBoolean(row.is_active, true),
             } satisfies OrgTemplatePositionItem;
           })
           .filter((item): item is OrgTemplatePositionItem => Boolean(item)),
-        (item) => `${item.name.toLowerCase()}::${normalizeCode(item.work_unit_code)}`
+        (item) => item.name.toLowerCase()
       )
     : defaults.position_defaults;
 
@@ -547,7 +537,6 @@ export async function applyOrgOnboardingTemplateToTenant(
   tenantId: string,
   options?: {
     template?: OrgOnboardingTemplate;
-    actorEmployeeId?: string | null;
   }
 ): Promise<OrgOnboardingApplyResult> {
   const template = options?.template || (await loadOrgOnboardingTemplate()).template;
@@ -604,35 +593,6 @@ export async function applyOrgOnboardingTemplateToTenant(
       inserted: 0,
       skipped: true,
       note: "Data satuan kerja sudah ada, template tidak menimpa data.",
-    });
-  }
-
-  const workUnitMap = await loadWorkUnitMap(tenantId);
-  const firstWorkUnitId = Array.from(workUnitMap.values())[0] || null;
-
-  if (countsBefore.positions === 0) {
-    const payload = template.position_defaults.map((item) => ({
-      tenant_id: tenantId,
-      name: item.name,
-      work_unit_id:
-        (item.work_unit_code && workUnitMap.get(normalizeCode(item.work_unit_code))) || firstWorkUnitId,
-      opd_id: (item.opd_code && opdMap.get(normalizeCode(item.opd_code))) || firstOpdId,
-      is_active: item.is_active,
-    }));
-    const { data, error } = await supabase.from("positions").insert(payload).select("id");
-    if (error) throw error;
-    reports.push({
-      module: "Jabatan",
-      inserted: data?.length || payload.length,
-      skipped: false,
-      note: "Template jabatan ditambahkan.",
-    });
-  } else {
-    reports.push({
-      module: "Jabatan",
-      inserted: 0,
-      skipped: true,
-      note: "Data jabatan sudah ada, template tidak menimpa data.",
     });
   }
 
@@ -768,34 +728,6 @@ export async function applyOrgOnboardingTemplateToTenant(
         ? "Setting default fitur onboarding berhasil ditambahkan."
         : "Setting fitur sudah ada sebelumnya.",
   });
-
-  if (template.feature_flags.seed_sample_announcements && countsBefore.announcements === 0) {
-    const payload = template.announcement_defaults.map((item) => ({
-      tenant_id: tenantId,
-      title: item.title,
-      content: item.content,
-      is_published: item.is_published,
-      is_pinned: item.is_pinned,
-      created_by: options?.actorEmployeeId || null,
-    }));
-    const { data, error } = await supabase.from("announcements").insert(payload).select("id");
-    if (error) throw error;
-    reports.push({
-      module: "Pengumuman Awal",
-      inserted: data?.length || payload.length,
-      skipped: false,
-      note: "Pengumuman default onboarding berhasil ditambahkan.",
-    });
-  } else {
-    reports.push({
-      module: "Pengumuman Awal",
-      inserted: 0,
-      skipped: true,
-      note: template.feature_flags.seed_sample_announcements
-        ? "Data pengumuman sudah ada, template tidak menimpa data."
-        : "Seed pengumuman default dinonaktifkan pada template.",
-    });
-  }
 
   const countsAfter = await fetchOrgOnboardingCounts(tenantId);
   return {

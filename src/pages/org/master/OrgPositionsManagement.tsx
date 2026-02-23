@@ -5,7 +5,6 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -27,26 +26,10 @@ interface Position {
   id: string;
   name: string;
   is_active: boolean;
-  work_unit_id: string | null;
-  work_units: {
-    id: string;
-    name: string;
-    opd: {
-      id: string;
-      name: string;
-    } | null;
-  } | null;
-}
-
-interface WorkUnit {
-  id: string;
-  name: string;
-  opd_id: string | null;
 }
 
 interface FormData {
   name: string;
-  work_unit_id: string;
   is_active: boolean;
 }
 
@@ -57,10 +40,8 @@ const POSITIONS_MAX_RETRIES = 2;
 
 export default function OrgPositionsManagement() {
   const [positions, setPositions] = useState<Position[]>([]);
-  const [workUnits, setWorkUnits] = useState<WorkUnit[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
-  const [selectedWorkUnit, setSelectedWorkUnit] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   
@@ -74,7 +55,6 @@ export default function OrgPositionsManagement() {
   const [isRetrying, setIsRetrying] = useState(false);
   const [formData, setFormData] = useState<FormData>({
     name: "",
-    work_unit_id: "",
     is_active: true,
   });
 
@@ -85,16 +65,10 @@ export default function OrgPositionsManagement() {
       setIsRetrying(false);
       let query = supabase
         .from('positions')
-        .select(`
-          id, name, is_active, work_unit_id,
-          work_units (id, name, opd:opd_id (id, name))
-        `, { count: 'exact' });
+        .select('id, name, is_active', { count: 'exact' });
 
       if (searchTerm) {
         query = query.ilike('name', `%${searchTerm}%`);
-      }
-      if (selectedWorkUnit !== "all") {
-        query = query.eq('work_unit_id', selectedWorkUnit);
       }
 
       const from = (currentPage - 1) * ITEMS_PER_PAGE;
@@ -123,7 +97,6 @@ export default function OrgPositionsManagement() {
       const errorRef = reportError(error, "org.positions.fetch", {
         page: currentPage,
         search: searchTerm,
-        work_unit_id: selectedWorkUnit,
       });
       const message = appendErrorReference("Gagal memuat data jabatan", errorRef);
       setLoadError(message);
@@ -132,42 +105,7 @@ export default function OrgPositionsManagement() {
       setIsRetrying(false);
       setIsLoading(false);
     }
-  }, [currentPage, searchTerm, selectedWorkUnit]);
-
-  const fetchWorkUnits = useCallback(async () => {
-    try {
-      setIsRetrying(false);
-      const { data, error } = await withExponentialBackoff(
-        () =>
-          withTimeout(
-            supabase
-              .from('work_units')
-              .select('id, name, opd_id')
-              .eq('is_active', true)
-              .order('name'),
-            POSITIONS_READ_TIMEOUT_MS,
-            "Permintaan daftar satuan kerja timeout."
-          ),
-        {
-          maxRetries: POSITIONS_MAX_RETRIES,
-          shouldRetry: isRetryableError,
-          onRetry: () => setIsRetrying(true),
-        }
-      );
-
-      if (error) throw error;
-      setWorkUnits(data || []);
-    } catch (error) {
-      const errorRef = reportError(error, "org.positions.fetch_work_units");
-      setLoadError(appendErrorReference("Gagal memuat daftar satuan kerja", errorRef));
-    } finally {
-      setIsRetrying(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void fetchWorkUnits();
-  }, [fetchWorkUnits]);
+  }, [currentPage, searchTerm]);
 
   useEffect(() => {
     void fetchPositions();
@@ -177,13 +115,12 @@ export default function OrgPositionsManagement() {
 
   const handleReset = () => {
     setSearchTerm("");
-    setSelectedWorkUnit("all");
     setCurrentPage(1);
   };
 
   const openAddDialog = () => {
     setEditingPosition(null);
-    setFormData({ name: "", work_unit_id: "", is_active: true });
+    setFormData({ name: "", is_active: true });
     setIsDialogOpen(true);
   };
 
@@ -191,7 +128,6 @@ export default function OrgPositionsManagement() {
     setEditingPosition(position);
     setFormData({
       name: position.name,
-      work_unit_id: position.work_unit_id || "",
       is_active: position.is_active,
     });
     setIsDialogOpen(true);
@@ -203,21 +139,48 @@ export default function OrgPositionsManagement() {
   };
 
   const handleSubmit = async () => {
-    if (!formData.name.trim()) {
+    const normalizedName = formData.name.trim();
+    if (!normalizedName) {
       toast({ title: "Error", description: "Nama jabatan harus diisi", variant: "destructive" });
       return;
     }
 
     setIsSubmitting(true);
     try {
+      let duplicateQuery = supabase
+        .from("positions")
+        .select("id", { count: "exact", head: true })
+        .ilike("name", normalizedName);
+
+      if (editingPosition) {
+        duplicateQuery = duplicateQuery.neq("id", editingPosition.id);
+      }
+
+      const { count: duplicateCount, error: duplicateError } = await withTimeout(
+        duplicateQuery,
+        POSITIONS_READ_TIMEOUT_MS,
+        "Validasi duplikasi jabatan timeout."
+      );
+
+      if (duplicateError) throw duplicateError;
+      if ((duplicateCount || 0) > 0) {
+        toast({
+          title: "Error",
+          description: "Nama jabatan sudah digunakan. Gunakan nama lain.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       if (editingPosition) {
         // Update
         const { error } = await withTimeout(
           supabase
             .from('positions')
             .update({
-              name: formData.name.trim(),
-              work_unit_id: formData.work_unit_id || null,
+              name: normalizedName,
+              work_unit_id: null,
+              opd_id: null,
               is_active: formData.is_active,
             })
             .eq('id', editingPosition.id),
@@ -254,8 +217,9 @@ export default function OrgPositionsManagement() {
           supabase
             .from('positions')
             .insert({
-              name: formData.name.trim(),
-              work_unit_id: formData.work_unit_id || null,
+              name: normalizedName,
+              work_unit_id: null,
+              opd_id: null,
               is_active: formData.is_active,
               tenant_id: employee.tenant_id,
             }),
@@ -357,34 +321,21 @@ export default function OrgPositionsManagement() {
             <div className="rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
                 <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Cari jabatan..."
-                  value={searchTerm}
-                  onChange={(e) => {
-                    setSearchTerm(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                  className="pl-10"
-                />
-              </div>
-              <Select value={selectedWorkUnit} onValueChange={(v) => { setSelectedWorkUnit(v); setCurrentPage(1); }}>
-                <SelectTrigger className="w-full sm:w-[250px]">
-                  <SelectValue placeholder="Filter Satuan Kerja" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Semua Satuan Kerja</SelectItem>
-                  {workUnits.map((unit) => (
-                    <SelectItem key={unit.id} value={unit.id}>
-                      {unit.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button variant="outline" onClick={handleReset}>
-                <RotateCcw className="h-4 w-4 mr-2" />
-                Reset
-              </Button>
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="Cari jabatan..."
+                    value={searchTerm}
+                    onChange={(e) => {
+                      setSearchTerm(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    className="pl-10"
+                  />
+                </div>
+                <Button variant="outline" onClick={handleReset}>
+                  <RotateCcw className="h-4 w-4 mr-2" />
+                  Reset
+                </Button>
               </div>
             </div>
 
@@ -394,8 +345,6 @@ export default function OrgPositionsManagement() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-12">No</TableHead>
-                    <TableHead>OPD</TableHead>
-                    <TableHead>Satuan Kerja</TableHead>
                     <TableHead>Jabatan</TableHead>
                     <TableHead className="w-24">Status</TableHead>
                     <TableHead className="w-24 text-right">Aksi</TableHead>
@@ -406,8 +355,6 @@ export default function OrgPositionsManagement() {
                     Array.from({ length: 5 }).map((_, i) => (
                       <TableRow key={i}>
                         <TableCell><Skeleton className="h-4 w-8" /></TableCell>
-                        <TableCell><Skeleton className="h-4 w-32" /></TableCell>
-                        <TableCell><Skeleton className="h-4 w-40" /></TableCell>
                         <TableCell><Skeleton className="h-4 w-48" /></TableCell>
                         <TableCell><Skeleton className="h-4 w-16" /></TableCell>
                         <TableCell><Skeleton className="h-4 w-16" /></TableCell>
@@ -415,7 +362,7 @@ export default function OrgPositionsManagement() {
                     ))
                   ) : positions.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
                         Tidak ada data jabatan
                       </TableCell>
                     </TableRow>
@@ -423,8 +370,6 @@ export default function OrgPositionsManagement() {
                     positions.map((position, index) => (
                       <TableRow key={position.id}>
                         <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
-                        <TableCell>{position.work_units?.opd?.name || '-'}</TableCell>
-                        <TableCell>{position.work_units?.name || '-'}</TableCell>
                         <TableCell className="font-medium">{position.name}</TableCell>
                         <TableCell>
                           <Badge variant={position.is_active ? "default" : "secondary"}>
@@ -497,25 +442,6 @@ export default function OrgPositionsManagement() {
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
               />
             </div>
-            <div className="space-y-2">
-              <Label htmlFor="work_unit">Satuan Kerja</Label>
-              <Select
-                value={formData.work_unit_id || "_none_"}
-                onValueChange={(v) => setFormData({ ...formData, work_unit_id: v === "_none_" ? "" : v })}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Pilih satuan kerja (opsional)" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="_none_">Tidak ada</SelectItem>
-                  {workUnits.map((unit) => (
-                    <SelectItem key={unit.id} value={unit.id}>
-                      {unit.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
             <div className="flex items-center justify-between">
               <Label htmlFor="is_active">Status Aktif</Label>
               <Switch
@@ -526,7 +452,7 @@ export default function OrgPositionsManagement() {
             </div>
           </div>
           <DialogFooter className={dialogActionBarClassName}>
-            <DialogActionHint>Pastikan relasi OPD/unit kerja jabatan sudah sesuai.</DialogActionHint>
+            <DialogActionHint>Pastikan nama jabatan sudah sesuai sebelum disimpan.</DialogActionHint>
             <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
               <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
                 Batal

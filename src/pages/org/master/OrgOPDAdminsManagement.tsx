@@ -58,6 +58,7 @@ import {
   withExponentialBackoff,
   withTimeout,
 } from "@/lib/attendanceResilience";
+import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 
 interface OPDAdmin {
   id: string;
@@ -226,12 +227,12 @@ export default function OrgOPDAdminsManagement() {
     try {
       setLoadError(null);
       setIsRetrying(false);
-      const { data: { user } } = await withExponentialBackoff(
+      const resolvedTenantId = await withExponentialBackoff(
         () =>
           withTimeout(
-            supabase.auth.getUser(),
+            resolveOrgTenantId(),
             OPD_ADMINS_READ_TIMEOUT_MS,
-            "Permintaan user auth timeout."
+            "Permintaan tenant organisasi timeout."
           ),
         {
           maxRetries: OPD_ADMINS_MAX_RETRIES,
@@ -239,34 +240,13 @@ export default function OrgOPDAdminsManagement() {
           onRetry: () => setIsRetrying(true),
         }
       );
-      if (!user) return;
-
-      const { data: roleData, error: roleError } = await withExponentialBackoff(
-        () =>
-          withTimeout(
-            supabase
-              .from("user_roles")
-              .select("tenant_id")
-              .eq("user_id", user.id)
-              .maybeSingle(),
-            OPD_ADMINS_READ_TIMEOUT_MS,
-            "Permintaan tenant role timeout."
-          ),
-        {
-          maxRetries: OPD_ADMINS_MAX_RETRIES,
-          shouldRetry: isRetryableError,
-          onRetry: () => setIsRetrying(true),
-        }
-      );
-      if (roleError) throw roleError;
-
-      if (!roleData?.tenant_id) return;
-      setTenantId(roleData.tenant_id);
+      if (!resolvedTenantId) return;
+      setTenantId(resolvedTenantId);
 
       await Promise.all([
-        fetchAdmins(roleData.tenant_id),
-        fetchOpdList(roleData.tenant_id),
-        fetchEmployees(roleData.tenant_id),
+        fetchAdmins(resolvedTenantId),
+        fetchOpdList(resolvedTenantId),
+        fetchEmployees(resolvedTenantId),
       ]);
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.master.opd_admins.fetch_data");

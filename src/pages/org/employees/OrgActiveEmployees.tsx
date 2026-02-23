@@ -33,6 +33,18 @@ import {
   type EmployeeGolonganOption,
 } from "@/lib/employeeGolongan";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import {
+  DEFAULT_ORG_MASTER_DATA_MODULES,
+  fetchTenantOrgMasterDataModules,
+} from "@/lib/orgMasterDataModules";
+import {
+  buildInvitationLink,
+  deriveEmployeeInvitationDeliveryStatus,
+  ensureIndividualEmployeeInvitation,
+  logEmployeeInvitationFlowAudit,
+  type EmployeeInvitationDeliveryStatus,
+  type EmployeeInvitationRow,
+} from "@/lib/employeeInvitations";
 
 type Employee = Tables<"employees">;
 type OPD = Tables<"opd">;
@@ -67,6 +79,11 @@ export default function OrgActiveEmployees() {
   );
   const [employeeGolonganOptions, setEmployeeGolonganOptions] = useState<EmployeeGolonganOption[]>(
     DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS
+  );
+  const [masterDataModules, setMasterDataModules] = useState(DEFAULT_ORG_MASTER_DATA_MODULES);
+  const [tenantId, setTenantId] = useState<string | null>(null);
+  const [latestInvitationsByEmail, setLatestInvitationsByEmail] = useState<Record<string, EmployeeInvitationRow>>(
+    {}
   );
   const [totalEmployees, setTotalEmployees] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
@@ -138,9 +155,32 @@ export default function OrgActiveEmployees() {
       setPositions(positionsRes.data || []);
 
       if (!resolvedTenantId) {
+        setTenantId(null);
+        setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
         setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
         setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
         return;
+      }
+      setTenantId(resolvedTenantId);
+
+      try {
+        const moduleSetting = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              fetchTenantOrgMasterDataModules(resolvedTenantId),
+              ORG_ACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS,
+              "org.employees.active.fetch_master_data_modules timeout"
+            ),
+          {
+            maxRetries: ORG_ACTIVE_EMPLOYEES_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
+        setMasterDataModules(moduleSetting.modules);
+      } catch (moduleError) {
+        reportError(moduleError, "org.employees.active.fetch_master_data_modules");
+        setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
       }
 
       const [categoryMaster, golonganMaster] = await withExponentialBackoff(
@@ -173,6 +213,7 @@ export default function OrgActiveEmployees() {
       const message = appendErrorReference("Gagal memuat data referensi pegawai", errorRef);
       setLoadError(message);
       toast.error(message);
+      setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
       setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
       setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
     }
@@ -189,7 +230,9 @@ export default function OrgActiveEmployees() {
         .eq("is_active", true);
 
       if (filterOpd !== "all") query = query.eq("opd_id", filterOpd);
-      if (filterCategory !== "all") query = query.eq("employee_category", filterCategory);
+      if (masterDataModules.employee_categories && filterCategory !== "all") {
+        query = query.eq("employee_category", filterCategory);
+      }
       if (filterWorkUnit !== "all") query = query.eq("work_unit_id", filterWorkUnit);
       if (filterAccountStatus === "active") query = query.not("user_id", "is", null);
       if (filterAccountStatus === "inactive") query = query.is("user_id", null);
@@ -217,6 +260,53 @@ export default function OrgActiveEmployees() {
 
       setEmployees((data || []) as EmployeeWithRelations[]);
       setTotalEmployees(count || 0);
+      const pageEmployees = (data || []) as EmployeeWithRelations[];
+      const inactiveEmailMap = new Map<string, string>();
+      for (const employee of pageEmployees) {
+        if (employee.user_id || !employee.email) continue;
+        const trimmedEmail = employee.email.trim();
+        if (!trimmedEmail) continue;
+        const normalized = trimmedEmail.toLowerCase();
+        if (!inactiveEmailMap.has(normalized)) {
+          inactiveEmailMap.set(normalized, trimmedEmail);
+        }
+      }
+
+      if (tenantId && inactiveEmailMap.size > 0) {
+        const { data: invitationRows, error: invitationError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("employee_invitations")
+                .select("id, email, status, is_used, expires_at, invitation_code, created_at")
+                .eq("tenant_id", tenantId)
+                .eq("invitation_type", "individual")
+                .order("created_at", { ascending: false })
+                .limit(500),
+              ORG_ACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS,
+              "org.employees.active.fetch_latest_invitations timeout"
+            ),
+          {
+            maxRetries: ORG_ACTIVE_EMPLOYEES_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
+        if (invitationError) throw invitationError;
+
+        const nextInvitationsByEmail: Record<string, EmployeeInvitationRow> = {};
+        for (const invitation of (invitationRows || []) as EmployeeInvitationRow[]) {
+          const normalized = invitation.email.trim().toLowerCase();
+          if (!inactiveEmailMap.has(normalized)) continue;
+          if (!nextInvitationsByEmail[normalized]) {
+            nextInvitationsByEmail[normalized] = invitation;
+          }
+        }
+        setLatestInvitationsByEmail(nextInvitationsByEmail);
+      } else {
+        setLatestInvitationsByEmail({});
+      }
+
       setLoadError(null);
     } catch (error) {
       const errorRef = reportError(error, "org.employees.active.fetch");
@@ -225,10 +315,20 @@ export default function OrgActiveEmployees() {
       toast.error(message);
       setEmployees([]);
       setTotalEmployees(0);
+      setLatestInvitationsByEmail({});
     } finally {
       setIsLoading(false);
     }
-  }, [currentPage, filterAccountStatus, filterCategory, filterOpd, filterWorkUnit, searchTerm]);
+  }, [
+    currentPage,
+    filterAccountStatus,
+    filterCategory,
+    filterOpd,
+    filterWorkUnit,
+    masterDataModules.employee_categories,
+    searchTerm,
+    tenantId,
+  ]);
 
   useEffect(() => {
     void fetchMasterData();
@@ -250,6 +350,12 @@ export default function OrgActiveEmployees() {
       setFilterCategory("all");
     }
   }, [employeeCategoryOptions, filterCategory]);
+
+  useEffect(() => {
+    if (!masterDataModules.employee_categories && filterCategory !== "all") {
+      setFilterCategory("all");
+    }
+  }, [filterCategory, masterDataModules.employee_categories]);
 
   // Filtered dropdown options based on cascade selection
   const filteredWorkUnits = useMemo(() => {
@@ -567,26 +673,47 @@ export default function OrgActiveEmployees() {
         return;
       }
 
-      // Jika gagal (user belum registrasi), buat undangan seperti sebelumnya
-      const inviteCode = `INV-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-
-      const { error } = await supabase.from("employee_invitations").insert({
-        tenant_id: employeeData.tenant_id,
+      const invitationResult = await ensureIndividualEmployeeInvitation({
+        tenantId: employeeData.tenant_id,
         email: emp.email,
         name: emp.name,
         nik: emp.nik || emp.nip || `NIK-${Date.now()}`,
-        invitation_code: inviteCode,
-        office_id: emp.office_id,
-        opd_id: emp.opd_id,
-        invited_by: employeeData.id,
-        status: "pending",
-        expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        officeId: emp.office_id,
+        opdId: emp.opd_id,
+        invitedByEmployeeId: employeeData.id,
+        expiresInDays: 7,
       });
 
-      if (error) throw error;
+      try {
+        await logEmployeeInvitationFlowAudit({
+          tenantId: employeeData.tenant_id,
+          invitationId: invitationResult.invitation.id,
+          event: invitationResult.reused ? "INVITATION_REUSE_EXISTING" : "INVITATION_CREATE_NEW",
+          payload: {
+            source: "org_active_employees_activation",
+            employee_id: emp.id,
+            employee_email: emp.email,
+            invited_by_employee_id: employeeData.id,
+          },
+        });
+      } catch (auditError) {
+        reportError(auditError, "org.active_employees.create_invitation.audit", {
+          employee_id: emp.id,
+          invitation_id: invitationResult.invitation.id,
+        });
+      }
 
-      setActivationDialog({ open: true, employee: emp, inviteCode });
-      toast.success("Kode undangan berhasil dibuat");
+      setActivationDialog({
+        open: true,
+        employee: emp,
+        inviteCode: invitationResult.invitation.invitation_code,
+      });
+      if (invitationResult.reused) {
+        toast.info("Undangan aktif sudah ada. Gunakan link yang sama.");
+      } else {
+        toast.success("Kode undangan berhasil dibuat");
+      }
+      void fetchData();
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.active_employees.create_invitation", {
         employee_id: emp.id,
@@ -601,7 +728,7 @@ export default function OrgActiveEmployees() {
 
   const copyInviteLink = async () => {
     if (activationDialog.inviteCode) {
-      const link = `${window.location.origin}/employee/login?invite=${activationDialog.inviteCode}`;
+      const link = buildInvitationLink(activationDialog.inviteCode);
       try {
         await withTimeout(() => navigator.clipboard.writeText(link), 5000);
         setCopied(true);
@@ -658,10 +785,50 @@ export default function OrgActiveEmployees() {
   };
 
   const totalPages = Math.max(1, Math.ceil(totalEmployees / ITEMS_PER_PAGE));
+  const showPositionField = masterDataModules.positions;
+  const showGolonganField = masterDataModules.employee_golongan;
+  const showCategoryField = masterDataModules.employee_categories;
+  const tableColumnCount =
+    8 + Number(showPositionField) + Number(showGolonganField) + Number(showCategoryField);
+  const hasActiveFilters =
+    Boolean(searchTerm) ||
+    filterOpd !== "all" ||
+    filterWorkUnit !== "all" ||
+    filterAccountStatus !== "all" ||
+    (showCategoryField && filterCategory !== "all");
 
   const getFullName = (emp: EmployeeWithRelations) => {
     const parts = [emp.gelar_depan, emp.name, emp.gelar_belakang].filter(Boolean);
     return parts.join(" ");
+  };
+
+  const getLatestInvitationForEmployee = (email: string | null): EmployeeInvitationRow | null => {
+    if (!email) return null;
+    const normalized = email.trim().toLowerCase();
+    if (!normalized) return null;
+    return latestInvitationsByEmail[normalized] ?? null;
+  };
+
+  const getInvitationStatusBadge = (status: EmployeeInvitationDeliveryStatus) => {
+    switch (status) {
+      case "pending_active":
+        return <Badge className="bg-amber-500 text-white">Undangan Terkirim</Badge>;
+      case "pending_expired":
+        return (
+          <Badge variant="outline" className="border-amber-500 text-amber-700">
+            Undangan Kedaluwarsa
+          </Badge>
+        );
+      case "rejected":
+        return <Badge variant="destructive">Undangan Ditolak</Badge>;
+      case "verified":
+        return <Badge className="bg-sky-600 text-white">Terverifikasi</Badge>;
+      case "used":
+        return <Badge className="bg-emerald-600 text-white">Sudah Digunakan</Badge>;
+      case "not_invited":
+      default:
+        return <Badge variant="secondary">Belum Diundang</Badge>;
+    }
   };
 
   return (
@@ -816,46 +983,58 @@ export default function OrgActiveEmployees() {
                   </div>
                 </div>
 
-                {/* Jabatan */}
-                <div className="grid gap-2">
-                  <Label>Jabatan</Label>
-                  <SearchableSelect
-                    options={positionOptions}
-                    value={formData.position_id}
-                    onValueChange={(v) => setFormData({ ...formData, position_id: v })}
-                    placeholder="Pilih Jabatan"
-                    searchPlaceholder="Cari Jabatan..."
-                    emptyMessage="Jabatan tidak ditemukan"
-                  />
-                </div>
-
-                {/* Golongan dan Kategori */}
-                <div className="grid grid-cols-2 gap-4">
+                {showPositionField && (
                   <div className="grid gap-2">
-                    <Label>Golongan</Label>
+                    <Label>Jabatan</Label>
                     <SearchableSelect
-                      options={formEmployeeGolonganOptions}
-                      value={formData.golongan}
-                      onValueChange={(v) => setFormData({ ...formData, golongan: v })}
-                      placeholder="Pilih Golongan"
-                      searchPlaceholder="Cari Golongan..."
-                      emptyMessage="Golongan tidak ditemukan"
+                      options={positionOptions}
+                      value={formData.position_id}
+                      onValueChange={(v) => setFormData({ ...formData, position_id: v })}
+                      placeholder="Pilih Jabatan"
+                      searchPlaceholder="Cari Jabatan..."
+                      emptyMessage="Jabatan tidak ditemukan"
                     />
                   </div>
-                  <div className="grid gap-2">
-                    <Label>Kategori Pegawai</Label>
-                    <Select value={formData.employee_category} onValueChange={(v) => setFormData({ ...formData, employee_category: v })}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Pilih Kategori" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {formEmployeeCategoryOptions.map(cat => (
-                          <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                )}
+
+                {/* Golongan dan Kategori */}
+                {(showGolonganField || showCategoryField) && (
+                  <div className={`grid gap-4 ${showGolonganField && showCategoryField ? "grid-cols-2" : "grid-cols-1"}`}>
+                    {showGolonganField && (
+                      <div className="grid gap-2">
+                        <Label>Golongan</Label>
+                        <SearchableSelect
+                          options={formEmployeeGolonganOptions}
+                          value={formData.golongan}
+                          onValueChange={(v) => setFormData({ ...formData, golongan: v })}
+                          placeholder="Pilih Golongan"
+                          searchPlaceholder="Cari Golongan..."
+                          emptyMessage="Golongan tidak ditemukan"
+                        />
+                      </div>
+                    )}
+                    {showCategoryField && (
+                      <div className="grid gap-2">
+                        <Label>Kategori Pegawai</Label>
+                        <Select
+                          value={formData.employee_category}
+                          onValueChange={(v) => setFormData({ ...formData, employee_category: v })}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Pilih Kategori" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {formEmployeeCategoryOptions.map((cat) => (
+                              <SelectItem key={cat.value} value={cat.value}>
+                                {cat.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
                   </div>
-                </div>
+                )}
 
                 {/* Absensi Khusus Section */}
                 <div className="border rounded-lg p-4 mt-4 space-y-4 bg-muted/30">
@@ -978,17 +1157,21 @@ export default function OrgActiveEmployees() {
                       ))}
                     </SelectContent>
                   </Select>
-                  <Select value={filterCategory} onValueChange={setFilterCategory}>
-                    <SelectTrigger className="w-full sm:w-[140px]">
-                      <SelectValue placeholder="Kategori" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Semua</SelectItem>
-                      {employeeCategoryOptions.map(cat => (
-                        <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  {showCategoryField && (
+                    <Select value={filterCategory} onValueChange={setFilterCategory}>
+                      <SelectTrigger className="w-full sm:w-[140px]">
+                        <SelectValue placeholder="Kategori" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Semua</SelectItem>
+                        {employeeCategoryOptions.map((cat) => (
+                          <SelectItem key={cat.value} value={cat.value}>
+                            {cat.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
                   <Select value={filterAccountStatus} onValueChange={setFilterAccountStatus}>
                     <SelectTrigger className="w-full sm:w-[150px]">
                       <SelectValue placeholder="Status Akun" />
@@ -999,7 +1182,7 @@ export default function OrgActiveEmployees() {
                       <SelectItem value="inactive">Belum Aktif</SelectItem>
                     </SelectContent>
                   </Select>
-                  {(searchTerm || filterOpd !== "all" || filterCategory !== "all" || filterWorkUnit !== "all" || filterAccountStatus !== "all") && (
+                  {hasActiveFilters && (
                     <Button variant="ghost" size="sm" onClick={handleResetFilters}>
                       <RotateCcw className="h-4 w-4 mr-1" />
                       Reset
@@ -1018,9 +1201,9 @@ export default function OrgActiveEmployees() {
                   <TableHead>OPD</TableHead>
                   <TableHead>Unit Kerja</TableHead>
                   <TableHead>Lokasi Kerja</TableHead>
-                  <TableHead>Jabatan</TableHead>
-                  <TableHead>Golongan</TableHead>
-                  <TableHead>Kategori</TableHead>
+                  {showPositionField && <TableHead>Jabatan</TableHead>}
+                  {showGolonganField && <TableHead>Golongan</TableHead>}
+                  {showCategoryField && <TableHead>Kategori</TableHead>}
                   <TableHead>Status Akun</TableHead>
                   <TableHead className="text-right">Aksi</TableHead>
                 </TableRow>
@@ -1028,102 +1211,116 @@ export default function OrgActiveEmployees() {
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={11} className="text-center py-8">
+                    <TableCell colSpan={tableColumnCount} className="text-center py-8">
                       <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto"></div>
                     </TableCell>
                   </TableRow>
                 ) : employees.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
-                      {totalEmployees === 0 && (searchTerm || filterOpd !== "all" || filterCategory !== "all" || filterWorkUnit !== "all" || filterAccountStatus !== "all")
+                    <TableCell colSpan={tableColumnCount} className="text-center py-8 text-muted-foreground">
+                      {totalEmployees === 0 && hasActiveFilters
                         ? "Tidak ada data yang sesuai filter"
                         : "Belum ada data pegawai"}
                     </TableCell>
                   </TableRow>
                 ) : (
-                  employees.map((emp, index) => (
-                    <TableRow key={emp.id}>
-                      <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
-                      <TableCell className="font-mono text-xs">{emp.nip}</TableCell>
-                      <TableCell className="font-medium">
-                        <div className="flex items-center gap-2">
-                          {getFullName(emp)}
-                          {emp.allow_flexible_attendance && (
-                            <Badge variant="outline" className="text-xs bg-amber-500/10 text-amber-600 border-amber-300">
-                              <MapPinOff className="h-3 w-3 mr-1" />
-                              Absensi Khusus
-                            </Badge>
+                  employees.map((emp, index) => {
+                    const latestInvitation = getLatestInvitationForEmployee(emp.email);
+                    const invitationStatus = deriveEmployeeInvitationDeliveryStatus(latestInvitation);
+
+                    return (
+                      <TableRow key={emp.id}>
+                        <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
+                        <TableCell className="font-mono text-xs">{emp.nip}</TableCell>
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-2">
+                            {getFullName(emp)}
+                            {emp.allow_flexible_attendance && (
+                              <Badge variant="outline" className="text-xs bg-amber-500/10 text-amber-600 border-amber-300">
+                                <MapPinOff className="h-3 w-3 mr-1" />
+                                Absensi Khusus
+                              </Badge>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {(emp.opd as OPD)?.code ? (
+                            <Badge variant="outline">{(emp.opd as OPD).code}</Badge>
+                          ) : "-"}
+                        </TableCell>
+                        <TableCell className="text-sm">{(emp.work_unit as WorkUnit)?.name || "-"}</TableCell>
+                        <TableCell className="text-sm">{(emp.office as Office)?.name || "-"}</TableCell>
+                        {showPositionField && (
+                          <TableCell className="text-sm">{(emp.position_rel as Position)?.name || "-"}</TableCell>
+                        )}
+                        {showGolonganField && (
+                          <TableCell>
+                            {emp.golongan ? <Badge variant="secondary">{emp.golongan}</Badge> : "-"}
+                          </TableCell>
+                        )}
+                        {showCategoryField && (
+                          <TableCell>
+                            {emp.employee_category ? (
+                              <Badge variant={emp.employee_category === "ASN" ? "default" : "outline"}>
+                                {emp.employee_category}
+                              </Badge>
+                            ) : "-"}
+                          </TableCell>
+                        )}
+                        <TableCell>
+                          {emp.user_id ? (
+                            <Badge className="bg-success text-success-foreground">Aktif</Badge>
+                          ) : (
+                            <div className="flex flex-col items-start gap-1">
+                              <Badge variant="destructive">Belum Aktif</Badge>
+                              {getInvitationStatusBadge(invitationStatus)}
+                            </div>
                           )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {(emp.opd as OPD)?.code ? (
-                          <Badge variant="outline">{(emp.opd as OPD).code}</Badge>
-                        ) : "-"}
-                      </TableCell>
-                      <TableCell className="text-sm">{(emp.work_unit as WorkUnit)?.name || "-"}</TableCell>
-                      <TableCell className="text-sm">{(emp.office as Office)?.name || "-"}</TableCell>
-                      <TableCell className="text-sm">{(emp.position_rel as Position)?.name || "-"}</TableCell>
-                      <TableCell>
-                        {emp.golongan ? (
-                          <Badge variant="secondary">{emp.golongan}</Badge>
-                        ) : "-"}
-                      </TableCell>
-                      <TableCell>
-                        {emp.employee_category ? (
-                          <Badge variant={emp.employee_category === "ASN" ? "default" : "outline"}>
-                            {emp.employee_category}
-                          </Badge>
-                        ) : "-"}
-                      </TableCell>
-                      <TableCell>
-                        {emp.user_id ? (
-                          <Badge className="bg-success text-success-foreground">Aktif</Badge>
-                        ) : (
-                          <Badge variant="destructive">Belum Aktif</Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right space-x-1">
-                        {!emp.user_id && (
-                          <Button 
-                            variant="ghost" 
-                            size="icon" 
-                            onClick={() => handleActivateAccount(emp)}
-                            title="Aktifkan Akun"
-                            disabled={isActivating}
-                          >
-                            <UserPlus className="h-4 w-4 text-success" />
+                        </TableCell>
+                        <TableCell className="text-right space-x-1">
+                          {!emp.user_id && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleActivateAccount(emp)}
+                              title={invitationStatus === "pending_active" ? "Buka Undangan Aktif" : "Aktifkan Akun"}
+                              disabled={isActivating}
+                            >
+                              <UserPlus
+                                className={`h-4 w-4 ${invitationStatus === "pending_active" ? "text-primary" : "text-success"}`}
+                              />
+                            </Button>
+                          )}
+                          {emp.user_id && (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleResetPassword(emp.email, emp.name)}
+                                title="Reset Password"
+                              >
+                                <KeyRound className="h-4 w-4 text-warning" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleResetDeviceId(emp)}
+                                title="Reset Device ID"
+                              >
+                                <Smartphone className="h-4 w-4 text-info" />
+                              </Button>
+                            </>
+                          )}
+                          <Button variant="ghost" size="icon" onClick={() => handleEdit(emp)} title="Edit">
+                            <Pencil className="h-4 w-4" />
                           </Button>
-                        )}
-                        {emp.user_id && (
-                          <>
-                            <Button 
-                              variant="ghost" 
-                              size="icon" 
-                              onClick={() => handleResetPassword(emp.email, emp.name)}
-                              title="Reset Password"
-                            >
-                              <KeyRound className="h-4 w-4 text-warning" />
-                            </Button>
-                            <Button 
-                              variant="ghost" 
-                              size="icon" 
-                              onClick={() => handleResetDeviceId(emp)}
-                              title="Reset Device ID"
-                            >
-                              <Smartphone className="h-4 w-4 text-info" />
-                            </Button>
-                          </>
-                        )}
-                        <Button variant="ghost" size="icon" onClick={() => handleEdit(emp)} title="Edit">
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => handleDeactivate(emp.id)} title="Nonaktifkan">
-                          <EyeOff className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))
+                          <Button variant="ghost" size="icon" onClick={() => handleDeactivate(emp.id)} title="Nonaktifkan">
+                            <EyeOff className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
                 )}
               </TableBody>
             </Table>

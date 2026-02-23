@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   Sidebar,
@@ -57,10 +57,18 @@ import {
 } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { fetchOrgOnboardingCounts } from "@/lib/orgOnboardingTemplates";
+import { fetchOrgOnboardingCounts, type OrgOnboardingCounts } from "@/lib/orgOnboardingTemplates";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { reportError } from "@/lib/errorLogger";
 import { withTimeout } from "@/lib/attendanceResilience";
+import {
+  DEFAULT_ORG_MASTER_DATA_MODULES,
+  fetchTenantOrgMasterDataModules,
+  ORG_MASTER_DATA_MODULES_UPDATED_EVENT,
+  ORG_MASTER_DATA_MODULE_PATH_MAP,
+  parseOrgMasterDataModulesSetting,
+  type OrgMasterDataModules,
+} from "@/lib/orgMasterDataModules";
 
 interface SubMenuItem {
   title: string;
@@ -82,8 +90,19 @@ interface MenuGroup {
 
 type OrgSidebarAccessLevel = "admin" | "operator";
 
-const ORG_ONBOARDING_MODULE_TOTAL = 7;
 const SIDEBAR_ONBOARDING_TIMEOUT_MS = 10000;
+const ORG_ONBOARDING_CHECKLIST_KEYS: Array<keyof OrgOnboardingCounts> = [
+  "opd",
+  "work_units",
+  "offices",
+  "work_hours",
+  "absence_limits",
+];
+
+const getOnboardingModuleTotal = () => ORG_ONBOARDING_CHECKLIST_KEYS.length;
+
+const getOnboardingReadyModules = (counts: OrgOnboardingCounts) =>
+  ORG_ONBOARDING_CHECKLIST_KEYS.filter((key) => counts[key] > 0).length;
 
 const MENU_GROUPS: MenuGroup[] = [
   {
@@ -197,7 +216,12 @@ export function OrganizationSidebar({
   const isCollapsed = state === "collapsed";
   const [openMenus, setOpenMenus] = useState<Record<string, boolean>>({});
   const [onboardingReadyModules, setOnboardingReadyModules] = useState<number | null>(null);
+  const [onboardingModuleTotal, setOnboardingModuleTotal] = useState<number>(
+    getOnboardingModuleTotal()
+  );
+  const [onboardingCounts, setOnboardingCounts] = useState<OrgOnboardingCounts | null>(null);
   const [isOnboardingStatusLoading, setIsOnboardingStatusLoading] = useState(false);
+  const [masterDataModules, setMasterDataModules] = useState(DEFAULT_ORG_MASTER_DATA_MODULES);
 
   const isActive = (path: string) => {
     if (path === "/org") {
@@ -244,9 +268,31 @@ export function OrganizationSidebar({
     navigate("/org/login");
   };
 
+  const baseMenuGroups = useMemo<MenuGroup[]>(
+    () =>
+      MENU_GROUPS.map((group) => {
+        if (group.label !== "Master Data") return group;
+        return {
+          ...group,
+          items: group.items
+            .map((item) => {
+              if (!item.subItems) return item;
+              const filteredSubItems = item.subItems.filter((subItem) => {
+                const moduleKey = ORG_MASTER_DATA_MODULE_PATH_MAP[subItem.path];
+                return moduleKey ? masterDataModules[moduleKey] : true;
+              });
+              if (filteredSubItems.length === 0) return null;
+              return { ...item, subItems: filteredSubItems };
+            })
+            .filter((item): item is MenuItem => Boolean(item)),
+        };
+      }),
+    [masterDataModules]
+  );
+
   const menuGroups = accessLevel === "admin"
-    ? MENU_GROUPS
-    : MENU_GROUPS
+    ? baseMenuGroups
+    : baseMenuGroups
         .map((group) => {
           if (group.label === "Utama") {
             return {
@@ -286,22 +332,40 @@ export function OrganizationSidebar({
           "Timeout menentukan tenant onboarding sidebar",
         );
         if (!tenantId) {
-          if (!cancelled) setOnboardingReadyModules(0);
+          if (!cancelled) {
+            setOnboardingReadyModules(0);
+            setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
+            setOnboardingCounts(null);
+            setOnboardingModuleTotal(getOnboardingModuleTotal());
+          }
           return;
         }
-        const counts = await withTimeout(
-          Promise.resolve(fetchOrgOnboardingCounts(tenantId)),
-          SIDEBAR_ONBOARDING_TIMEOUT_MS,
-          "Timeout membaca status onboarding sidebar",
-        );
-        const readyCount = Object.values(counts).filter((value) => value > 0).length;
+        const [counts, moduleSetting] = await Promise.all([
+          withTimeout(
+            Promise.resolve(fetchOrgOnboardingCounts(tenantId)),
+            SIDEBAR_ONBOARDING_TIMEOUT_MS,
+            "Timeout membaca status onboarding sidebar",
+          ),
+          withTimeout(
+            Promise.resolve(fetchTenantOrgMasterDataModules(tenantId)),
+            SIDEBAR_ONBOARDING_TIMEOUT_MS,
+            "Timeout membaca pengaturan modul master data sidebar",
+          ),
+        ]);
+        const readyCount = getOnboardingReadyModules(counts);
         if (!cancelled) {
           setOnboardingReadyModules(readyCount);
+          setOnboardingCounts(counts);
+          setOnboardingModuleTotal(getOnboardingModuleTotal());
+          setMasterDataModules(moduleSetting.modules);
         }
       } catch (error) {
         reportError(error, "org.sidebar.fetch_onboarding_status");
         if (!cancelled) {
           setOnboardingReadyModules(0);
+          setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
+          setOnboardingCounts(null);
+          setOnboardingModuleTotal(getOnboardingModuleTotal());
         }
       } finally {
         if (!cancelled) {
@@ -316,8 +380,22 @@ export function OrganizationSidebar({
     };
   }, [accessLevel]);
 
+  useEffect(() => {
+    const handleModuleVisibilityEvent = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      const parsedModules = parseOrgMasterDataModulesSetting(detail);
+      setMasterDataModules(parsedModules);
+      setOnboardingModuleTotal(getOnboardingModuleTotal());
+      if (onboardingCounts) {
+        setOnboardingReadyModules(getOnboardingReadyModules(onboardingCounts));
+      }
+    };
+    window.addEventListener(ORG_MASTER_DATA_MODULES_UPDATED_EVENT, handleModuleVisibilityEvent);
+    return () => window.removeEventListener(ORG_MASTER_DATA_MODULES_UPDATED_EVENT, handleModuleVisibilityEvent);
+  }, [onboardingCounts]);
+
   const hasOnboardingIncomplete =
-    onboardingReadyModules !== null && onboardingReadyModules < ORG_ONBOARDING_MODULE_TOTAL;
+    onboardingReadyModules !== null && onboardingReadyModules < onboardingModuleTotal;
   const onboardingStatusLabel =
     onboardingReadyModules === null || isOnboardingStatusLoading
       ? "MEMUAT"
@@ -419,7 +497,7 @@ export function OrganizationSidebar({
               </button>
             </TooltipTrigger>
             <TooltipContent side="right">
-              {onboardingReadyModules ?? 0}/{ORG_ONBOARDING_MODULE_TOTAL} modul siap. Klik untuk buka Setup Awal.
+              {onboardingReadyModules ?? 0}/{onboardingModuleTotal} modul siap. Klik untuk buka Setup Awal.
             </TooltipContent>
           </Tooltip>
         )}

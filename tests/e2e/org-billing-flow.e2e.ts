@@ -17,12 +17,9 @@ const loginAsOrgAdmin = async (page: Page) => {
   await page.goto("/org/login", { waitUntil: "domcontentloaded" });
   await waitForStable(page);
 
-  await page.getByRole("textbox", { name: "Email" }).fill(creds!.email);
-  await page.getByRole("textbox", { name: "Password" }).fill(creds!.password);
+  await page.fill("#email", creds!.email);
+  await page.fill("#password", creds!.password);
 
-  const captchaText = await page.$$eval("div.font-mono.text-xl.tracking-widest span", (spans) =>
-    spans.map((span) => (span.textContent || "").trim()).join(""),
-  );
   const fallbackMathLabel =
     (await page
       .locator("label")
@@ -31,13 +28,17 @@ const loginAsOrgAdmin = async (page: Page) => {
       .textContent()
       .catch(() => "")) || "";
   const answerFromMath = solveMathExpression(fallbackMathLabel);
-  const captchaAnswer = answerFromMath || captchaText;
-  expect(captchaAnswer.length).toBeGreaterThan(0);
-  await page.getByRole("textbox", { name: /Masukkan kode captcha|Captcha|Jawaban/i }).fill(captchaAnswer);
+  const captchaText = await page.$$eval("div.font-mono.text-xl.tracking-widest span", (spans) =>
+    spans.map((span) => (span.textContent || "").trim()).join(""),
+  );
+  const captchaAnswer = (answerFromMath || captchaText).trim();
+  expect(captchaAnswer.length).toBeGreaterThanOrEqual(1);
+  await page.fill("#captcha-input", captchaAnswer);
 
   await expect(page.getByRole("button", { name: "Masuk" })).toBeEnabled();
   await page.getByRole("button", { name: "Masuk" }).click();
-  await page.waitForURL(/\/org/, { timeout: 20_000 });
+  await expect(page).not.toHaveURL(/\/org\/login(?:\?|$)/, { timeout: 20_000 });
+  await expect(page).toHaveURL(/\/org(?!\/login)/, { timeout: 20_000 });
 };
 
 test.describe.parallel("Org Billing Flow", () => {

@@ -47,6 +47,12 @@ const formatCurrency = (amount: number) => {
   }).format(amount);
 };
 
+const parseInvoiceBillingScope = (metadata: unknown): "individual" | "centralized" => {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return "centralized";
+  const value = metadata as Record<string, unknown>;
+  return value.billing_scope === "individual" ? "individual" : "centralized";
+};
+
 interface ManualPaymentVerificationProps {
   invoices?: Invoice[];
   isLoading?: boolean;
@@ -479,61 +485,64 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
       // If approved & fully paid, extend subscription and run downstream workflow.
       const isFullyPaid = updates.status === "PAID";
       if (approved && isFullyPaid) {
-        // Get current subscription
-        const { data: currentSub } = await supabase
-          .from("subscriptions")
-          .select("*")
-          .eq("tenant_id", selectedInvoice.tenant_id)
-          .order("updated_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
-        // Calculate new subscription dates
-        let startDate = new Date();
-        if (currentSub && new Date(currentSub.end_date) > startDate) {
-          startDate = new Date(currentSub.end_date);
-        }
-
-        const endDate = new Date(startDate);
-        endDate.setMonth(endDate.getMonth() + (selectedInvoice.package_duration_months || 1));
-
-        // Update latest subscription row if exists, otherwise create a new one.
-        if (currentSub?.id) {
-          const { error: subUpdateError } = await supabase
+        const isIndividualInvoice = parseInvoiceBillingScope(selectedInvoice.metadata) === "individual";
+        if (!isIndividualInvoice) {
+          // Get current subscription
+          const { data: currentSub } = await supabase
             .from("subscriptions")
-            .update({
-              status: "active",
-              start_date: startDate.toISOString().split("T")[0],
-              end_date: endDate.toISOString().split("T")[0],
-              last_invoice_id: selectedInvoice.id,
-              grace_period_end: null,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", currentSub.id);
-          if (subUpdateError) {
-            reportError(subUpdateError, "admin.billing.manual_payment.subscription.update_failed", {
-              invoice_id: selectedInvoice.id,
-              tenant_id: selectedInvoice.tenant_id,
-              subscription_id: currentSub.id,
-            });
+            .select("*")
+            .eq("tenant_id", selectedInvoice.tenant_id)
+            .order("updated_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          // Calculate new subscription dates
+          let startDate = new Date();
+          if (currentSub && new Date(currentSub.end_date) > startDate) {
+            startDate = new Date(currentSub.end_date);
           }
-        } else {
-          const { error: subInsertError } = await supabase
-            .from("subscriptions")
-            .insert({
-              tenant_id: selectedInvoice.tenant_id,
-              status: "active",
-              start_date: startDate.toISOString().split("T")[0],
-              end_date: endDate.toISOString().split("T")[0],
-              last_invoice_id: selectedInvoice.id,
-              grace_period_end: null,
-              updated_at: new Date().toISOString(),
-            });
-          if (subInsertError) {
-            reportError(subInsertError, "admin.billing.manual_payment.subscription.insert_failed", {
-              invoice_id: selectedInvoice.id,
-              tenant_id: selectedInvoice.tenant_id,
-            });
+
+          const endDate = new Date(startDate);
+          endDate.setMonth(endDate.getMonth() + (selectedInvoice.package_duration_months || 1));
+
+          // Update latest subscription row if exists, otherwise create a new one.
+          if (currentSub?.id) {
+            const { error: subUpdateError } = await supabase
+              .from("subscriptions")
+              .update({
+                status: "active",
+                start_date: startDate.toISOString().split("T")[0],
+                end_date: endDate.toISOString().split("T")[0],
+                last_invoice_id: selectedInvoice.id,
+                grace_period_end: null,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", currentSub.id);
+            if (subUpdateError) {
+              reportError(subUpdateError, "admin.billing.manual_payment.subscription.update_failed", {
+                invoice_id: selectedInvoice.id,
+                tenant_id: selectedInvoice.tenant_id,
+                subscription_id: currentSub.id,
+              });
+            }
+          } else {
+            const { error: subInsertError } = await supabase
+              .from("subscriptions")
+              .insert({
+                tenant_id: selectedInvoice.tenant_id,
+                status: "active",
+                start_date: startDate.toISOString().split("T")[0],
+                end_date: endDate.toISOString().split("T")[0],
+                last_invoice_id: selectedInvoice.id,
+                grace_period_end: null,
+                updated_at: new Date().toISOString(),
+              });
+            if (subInsertError) {
+              reportError(subInsertError, "admin.billing.manual_payment.subscription.insert_failed", {
+                invoice_id: selectedInvoice.id,
+                tenant_id: selectedInvoice.tenant_id,
+              });
+            }
           }
         }
 
@@ -571,19 +580,21 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
           }
         }
 
-        const { error: streakSyncError } = await withTimeout(
-          supabase.rpc("mark_streak_invoiced", {
-            p_tenant_id: selectedInvoice.tenant_id,
-            p_invoice_id: selectedInvoice.id,
-          }),
-          OP_TIMEOUT_MS,
-          "Sinkron status streak terlalu lama",
-        );
-        if (streakSyncError) {
-          reportError(streakSyncError, "admin.billing.manual_payment.streak_sync_failed", {
-            invoice_id: selectedInvoice.id,
-            tenant_id: selectedInvoice.tenant_id,
-          });
+        if (parseInvoiceBillingScope(selectedInvoice.metadata) !== "individual") {
+          const { error: streakSyncError } = await withTimeout(
+            supabase.rpc("mark_streak_invoiced", {
+              p_tenant_id: selectedInvoice.tenant_id,
+              p_invoice_id: selectedInvoice.id,
+            }),
+            OP_TIMEOUT_MS,
+            "Sinkron status streak terlalu lama",
+          );
+          if (streakSyncError) {
+            reportError(streakSyncError, "admin.billing.manual_payment.streak_sync_failed", {
+              invoice_id: selectedInvoice.id,
+              tenant_id: selectedInvoice.tenant_id,
+            });
+          }
         }
 
         const [waDispatch, emailDispatch] = await Promise.all([
