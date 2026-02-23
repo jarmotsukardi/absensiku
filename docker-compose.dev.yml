@@ -1,0 +1,45 @@
+name: absensiku-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: absensiku-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DOCKER_DEV_POSTGRES_DB:-absensiku_dev}
+      POSTGRES_USER: ${DOCKER_DEV_POSTGRES_USER:-absensiku}
+      POSTGRES_PASSWORD: ${DOCKER_DEV_POSTGRES_PASSWORD:-absensiku_dev}
+      TZ: ${TZ:-Asia/Jakarta}
+    ports:
+      - "${DOCKER_DEV_POSTGRES_PORT:-54329}:5432"
+    volumes:
+      - absensiku-postgres-dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DOCKER_DEV_POSTGRES_USER:-absensiku} -d ${DOCKER_DEV_POSTGRES_DB:-absensiku_dev}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    container_name: absensiku-redis-dev
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - exec redis-server --appendonly yes --save 60 1000 --requirepass "${DOCKER_DEV_REDIS_PASSWORD:-absensiku_redis_dev}"
+    ports:
+      - "${DOCKER_DEV_REDIS_PORT:-6380}:6379"
+    volumes:
+      - absensiku-redis-dev:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${DOCKER_DEV_REDIS_PASSWORD:-absensiku_redis_dev} ping | grep PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  absensiku-postgres-dev:
+  absensiku-redis-dev:
