@@ -36,6 +36,12 @@ import { isRealOfficeCoordinate } from "@/lib/officeCoordinates";
 import { EmployeeDataTabs } from "@/components/org/employees/EmployeeDataTabs";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import {
+  DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS,
+  fetchTenantEmployeeGolongan,
+  getActiveEmployeeGolonganOptions,
+  type EmployeeGolonganOption,
+} from "@/lib/employeeGolongan";
 
 interface ImportRow {
   rowNum: number;
@@ -93,6 +99,10 @@ export default function OrgEmployeeImport() {
   const [offices, setOffices] = useState<OfficeOption[]>([]);
   const [selectedOfficeId, setSelectedOfficeId] = useState("");
   const [isLoadingOffices, setIsLoadingOffices] = useState(false);
+  const [employeeGolonganOptions, setEmployeeGolonganOptions] = useState<EmployeeGolonganOption[]>(
+    DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS
+  );
+  const [isLoadingGolongan, setIsLoadingGolongan] = useState(false);
 
   const normalizeHeader = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();
 
@@ -212,10 +222,49 @@ export default function OrgEmployeeImport() {
     }
   }, []);
 
+  const fetchEmployeeGolongan = useCallback(async (currentTenantId: string) => {
+    setIsLoadingGolongan(true);
+    try {
+      const { golongan } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            fetchTenantEmployeeGolongan(currentTenantId),
+            ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+            "org.employee_import.employee_golongan.fetch timeout"
+          ),
+        {
+          maxRetries: ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+      const activeOptions = getActiveEmployeeGolonganOptions(golongan);
+      setEmployeeGolonganOptions(
+        activeOptions.length > 0 ? activeOptions : DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS
+      );
+    } catch (error) {
+      const errorRef = reportError(error, "org.employee_import.employee_golongan.fetch", {
+        tenant_id: currentTenantId,
+      });
+      const message = appendErrorReference("Gagal memuat master golongan pegawai", errorRef);
+      setLoadError((prev) => prev ?? message);
+      setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
+      toast.error(message);
+    } finally {
+      setIsLoadingGolongan(false);
+      setIsRetrying(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!tenantId) return;
     void fetchValidOffices(tenantId);
   }, [fetchValidOffices, tenantId]);
+
+  useEffect(() => {
+    if (!tenantId) return;
+    void fetchEmployeeGolongan(tenantId);
+  }, [fetchEmployeeGolongan, tenantId]);
 
   const downloadTemplate = () => {
     // Create CSV template with comprehensive headers
@@ -284,6 +333,11 @@ export default function OrgEmployeeImport() {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
 
+    if (isLoadingGolongan) {
+      toast.info("Master golongan masih dimuat. Coba upload lagi beberapa saat.");
+      return;
+    }
+
     if (!selectedFile.name.endsWith(".csv")) {
       toast.error("Hanya file CSV yang diperbolehkan");
       return;
@@ -340,6 +394,9 @@ export default function OrgEmployeeImport() {
       const parsedRows: ImportRow[] = [];
       const seenNiksInFile = new Set<string>();
       const seenEmailsInFile = new Set<string>();
+      const activeGolonganSet = new Set(
+        employeeGolonganOptions.map((option) => option.value.trim().toLowerCase())
+      );
 
       // Get existing NIKs and emails for validation
       const { data: existingEmployees } = await withExponentialBackoff(
@@ -456,6 +513,10 @@ export default function OrgEmployeeImport() {
 
         if (row.opd_code && !opdCodes.has(row.opd_code.toUpperCase())) {
           row.errors.push(`Kode OPD "${row.opd_code}" tidak ditemukan`);
+        }
+
+        if (row.golongan && !activeGolonganSet.has(row.golongan.trim().toLowerCase())) {
+          row.errors.push(`Golongan "${row.golongan}" tidak ada di master golongan aktif`);
         }
 
         row.status = row.errors.length > 0 ? "error" : "valid";
@@ -592,7 +653,7 @@ export default function OrgEmployeeImport() {
 
   const validCount = previewData.filter(r => r.status === "valid").length;
   const errorCount = previewData.filter(r => r.status === "error").length;
-  const importDisabled = validCount === 0 || errorCount > 0 || isImporting || !selectedOfficeId;
+  const importDisabled = validCount === 0 || errorCount > 0 || isImporting || !selectedOfficeId || isLoadingGolongan;
   const previewTotalPages = Math.max(1, Math.ceil(previewData.length / PREVIEW_PAGE_SIZE));
   const paginatedPreviewRows = previewData.slice(
     (previewPage - 1) * PREVIEW_PAGE_SIZE,
@@ -704,6 +765,10 @@ export default function OrgEmployeeImport() {
                         <span className="text-muted-foreground">L = Laki-laki, P = Perempuan</span>
                       </div>
                       <div className="flex justify-between border-b pb-1">
+                        <span className="font-medium">Golongan</span>
+                        <span className="text-muted-foreground">Opsional, harus sesuai master golongan aktif</span>
+                      </div>
+                      <div className="flex justify-between border-b pb-1">
                         <span className="font-medium">Kode OPD</span>
                         <span className="text-muted-foreground">Sesuai dengan kode OPD yang sudah dibuat</span>
                       </div>
@@ -788,7 +853,16 @@ export default function OrgEmployeeImport() {
                 accept=".csv"
                 onChange={handleFileChange}
                 className="max-w-md"
+                disabled={isLoadingGolongan}
               />
+              {isLoadingGolongan ? (
+                <p className="text-xs text-muted-foreground">Memuat referensi golongan aktif...</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Golongan valid mengikuti master data aktif:{" "}
+                  {employeeGolonganOptions.map((option) => option.label).join(", ")}
+                </p>
+              )}
               {file && (
                 <p className="text-sm text-muted-foreground">
                   File: {file.name} ({(file.size / 1024).toFixed(2)} KB)
