@@ -183,7 +183,11 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
           return;
         }
 
-        const hasTransferProof = Boolean(selectedInvoice.payment_proof_url || pendingManualPayment.transfer_proof_url);
+        const isIndividualBilling = parseInvoiceBillingScope(selectedInvoice.metadata) === "individual";
+        const hasReferenceFallback = isIndividualBilling && Boolean((pendingManualPayment.reference_number || "").trim());
+        const hasTransferProof = Boolean(
+          selectedInvoice.payment_proof_url || pendingManualPayment.transfer_proof_url || hasReferenceFallback,
+        );
         if (!hasTransferProof) {
           const errorRef = reportError(
             new Error("MANUAL_PAYMENT_PROOF_MISSING"),

@@ -305,12 +305,23 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
 
       setConfirmingManualInvoiceId(invoice.id);
       try {
+        const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) throw sessionError;
+        const accessToken = sessionData.session?.access_token;
+        if (!accessToken) {
+          toast.error("Sesi login tidak valid. Silakan login ulang.");
+          return;
+        }
+
         const { data, error } = await supabase.functions.invoke<{
           success?: boolean;
           error?: string;
           trace_id?: string;
           status?: string;
         }>("confirm-manual-transfer", {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
           body: {
             tenant_id: tenantId,
             employee_id: employeeId,
