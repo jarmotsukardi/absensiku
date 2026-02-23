@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -23,6 +23,8 @@ import {
 } from "@/components/ui/select";
 import { Tables } from "@/integrations/supabase/types";
 import { useToast } from "@/hooks/use-toast";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import {
   Users,
   Plus,
@@ -38,6 +40,8 @@ type Employee = Tables<"employees">;
 type Office = Tables<"offices">;
 
 export default function MasterEmployees() {
+  const ADMIN_MASTER_EMPLOYEES_QUERY_TIMEOUT_MS = 15000;
+  const ADMIN_MASTER_EMPLOYEES_QUERY_RETRY_MAX = 1;
   const { toast } = useToast();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [offices, setOffices] = useState<Office[]>([]);
@@ -46,6 +50,8 @@ export default function MasterEmployees() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -59,27 +65,67 @@ export default function MasterEmployees() {
     is_active: true,
   });
 
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setIsLoading(true);
-    const [employeesRes, officesRes] = await Promise.all([
-      supabase.from("employees").select("*").order("name"),
-      supabase.from("offices").select("*").order("name"),
-    ]);
+    setIsRetrying(false);
+    setLoadError(null);
+    try {
+      const [employeesRes, officesRes] = await Promise.all([
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("employees").select("*").order("name"),
+              ADMIN_MASTER_EMPLOYEES_QUERY_TIMEOUT_MS,
+              "admin.master_employees.fetch.employees timeout",
+            ),
+          {
+            maxRetries: ADMIN_MASTER_EMPLOYEES_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("offices").select("*").order("name"),
+              ADMIN_MASTER_EMPLOYEES_QUERY_TIMEOUT_MS,
+              "admin.master_employees.fetch.offices timeout",
+            ),
+          {
+            maxRetries: ADMIN_MASTER_EMPLOYEES_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        ),
+      ]);
 
-    if (!employeesRes.error) setEmployees(employeesRes.data || []);
-    if (!officesRes.error) setOffices(officesRes.data || []);
-    setIsLoading(false);
-  };
+      if (employeesRes.error) throw employeesRes.error;
+      if (officesRes.error) throw officesRes.error;
+      setEmployees(employeesRes.data || []);
+      setOffices(officesRes.data || []);
+    } catch (error) {
+      const errorRef = reportError(error, "admin.master_employees.fetch");
+      const message = appendErrorReference("Gagal memuat data pegawai", errorRef);
+      setLoadError(message);
+      setEmployees([]);
+      toast({ variant: "destructive", title: "Gagal", description: message });
+    } finally {
+      setIsLoading(false);
+      setIsRetrying(false);
+    }
+  }, [toast]);
+
+  useEffect(() => {
+    void fetchData();
+  }, [fetchData]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
 
     try {
+      setIsRetrying(false);
+      setLoadError(null);
       const employeeData = {
         name: formData.name,
         email: formData.email,
@@ -94,14 +140,38 @@ export default function MasterEmployees() {
       };
 
       if (editingEmployee) {
-        const { error } = await supabase
-          .from("employees")
-          .update(employeeData)
-          .eq("id", editingEmployee.id);
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("employees")
+                .update(employeeData)
+                .eq("id", editingEmployee.id),
+              ADMIN_MASTER_EMPLOYEES_QUERY_TIMEOUT_MS,
+              "admin.master_employees.submit.update timeout",
+            ),
+          {
+            maxRetries: ADMIN_MASTER_EMPLOYEES_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
         if (error) throw error;
         toast({ title: "Berhasil", description: "Pegawai berhasil diperbarui" });
       } else {
-        const { error } = await supabase.from("employees").insert(employeeData);
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("employees").insert(employeeData),
+              ADMIN_MASTER_EMPLOYEES_QUERY_TIMEOUT_MS,
+              "admin.master_employees.submit.insert timeout",
+            ),
+          {
+            maxRetries: ADMIN_MASTER_EMPLOYEES_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
         if (error) throw error;
         toast({ title: "Berhasil", description: "Pegawai berhasil ditambahkan" });
       }
@@ -110,9 +180,16 @@ export default function MasterEmployees() {
       resetForm();
       fetchData();
     } catch (error) {
-      toast({ variant: "destructive", title: "Gagal", description: "Terjadi kesalahan" });
+      const errorRef = reportError(error, "admin.master_employees.submit", {
+        is_edit: Boolean(editingEmployee),
+        employee_id: editingEmployee?.id || null,
+      });
+      const message = appendErrorReference("Terjadi kesalahan saat menyimpan data pegawai", errorRef);
+      setLoadError(message);
+      toast({ variant: "destructive", title: "Gagal", description: message });
     } finally {
       setIsSubmitting(false);
+      setIsRetrying(false);
     }
   };
 
@@ -159,16 +236,37 @@ export default function MasterEmployees() {
       subtitle="Kelola data pegawai semua organisasi"
     >
       <div className="space-y-6">
+        {isRetrying && (
+          <Card className="border-amber-300/60 bg-amber-50">
+            <CardContent className="pt-4">
+              <p className="text-sm text-amber-800">Sedang mencoba ulang koneksi data pegawai...</p>
+            </CardContent>
+          </Card>
+        )}
+        {loadError && (
+          <Card className="border-destructive/40">
+            <CardContent className="pt-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-destructive">{loadError}</p>
+                <Button type="button" variant="outline" size="sm" onClick={() => void fetchData()}>
+                  Coba Lagi
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
         {/* Header Actions */}
-        <div className="flex flex-col sm:flex-row gap-4 justify-between">
-          <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              placeholder="Cari pegawai..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10"
-            />
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="w-full rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm sm:flex-1">
+            <div className="relative max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                placeholder="Cari pegawai..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-10"
+              />
+            </div>
           </div>
           <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) resetForm(); }}>
             <DialogTrigger asChild>

@@ -7,28 +7,136 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Save, Timer, Clock, Calendar, Percent } from "lucide-react";
+import { Loader2, Save, Timer, Clock, Calendar, Percent, RotateCcw } from "lucide-react";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
+import { toast } from "sonner";
+
+const TENANT_RESOLVE_TIMEOUT_MS = 12000;
+const SAVE_SETTINGS_TIMEOUT_MS = 15000;
+const READ_MAX_RETRIES = 2;
  
 export default function OrgOvertimeSettings() {
   const [tenantId, setTenantId] = useState<string | undefined>(undefined);
+  const [tenantReady, setTenantReady] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
-  useEffect(() => {
-    const fetchTenantId = async () => {
+  const fetchTenantId = async () => {
+    try {
+      setLoadError(null);
+      setIsRetrying(false);
+
       const {
         data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) return;
+      } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            TENANT_RESOLVE_TIMEOUT_MS,
+            "Permintaan user auth timeout."
+          ),
+        {
+          maxRetries: READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+      if (!user) {
+        setTenantId(undefined);
+        return;
+      }
 
-      const { data } = await supabase
-        .from("employees")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .single();
+      const { data: roleRows, error: roleError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("user_roles")
+              .select("tenant_id, role")
+              .eq("user_id", user.id)
+              .in("role", ["admin_instansi", "atasan"])
+              .not("tenant_id", "is", null)
+              .limit(5),
+            TENANT_RESOLVE_TIMEOUT_MS,
+            "Permintaan tenant organisasi timeout."
+          ),
+        {
+          maxRetries: READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
-      if (data) setTenantId(data.tenant_id);
-    };
+      if (roleError) throw roleError;
+
+      const roleTenantIds = Array.from(
+        new Set((roleRows || []).map((row) => row.tenant_id).filter((value): value is string => Boolean(value))),
+      );
+
+      if (roleTenantIds.length > 1) {
+        reportError(new Error("Multiple tenant_id detected in user_roles"), "org.overtime_settings.resolve_tenant.multiple_role_tenants", {
+          user_id: user.id,
+          tenant_ids: roleTenantIds,
+        });
+      }
+
+      if (roleTenantIds.length > 0) {
+        setTenantId(roleTenantIds[0]);
+        return;
+      }
+
+      const { data: employeeRows, error: employeeError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("tenant_id")
+              .eq("user_id", user.id)
+              .not("tenant_id", "is", null)
+              .limit(5),
+            TENANT_RESOLVE_TIMEOUT_MS,
+            "Permintaan tenant pegawai timeout."
+          ),
+        {
+          maxRetries: READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+
+      if (employeeError) throw employeeError;
+
+      const employeeTenantIds = Array.from(
+        new Set((employeeRows || []).map((row) => row.tenant_id).filter((value): value is string => Boolean(value))),
+      );
+
+      if (employeeTenantIds.length > 1) {
+        reportError(new Error("Multiple tenant_id detected in employees"), "org.overtime_settings.resolve_tenant.multiple_employee_tenants", {
+          user_id: user.id,
+          tenant_ids: employeeTenantIds,
+        });
+      }
+
+      setTenantId(employeeTenantIds[0]);
+    } catch (error) {
+      const errorRef = reportError(error, "org.overtime_settings.resolve_tenant");
+      const message = appendErrorReference("Gagal menentukan tenant organisasi", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setTenantId(undefined);
+    } finally {
+      setIsRetrying(false);
+      setTenantReady(true);
+    }
+  };
+
+  useEffect(() => {
     void fetchTenantId();
   }, []);
 
@@ -71,12 +179,22 @@ export default function OrgOvertimeSettings() {
   }, [settings]);
 
   const handleSave = async () => {
-    setIsSaving(true);
-    await saveSettings(formData);
-    setIsSaving(false);
+    try {
+      setIsSaving(true);
+      await withTimeout(
+        saveSettings(formData),
+        SAVE_SETTINGS_TIMEOUT_MS,
+        "Penyimpanan pengaturan lembur timeout."
+      );
+    } catch (error) {
+      const errorRef = reportError(error, "org.overtime_settings.save");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan lembur", errorRef));
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  if (isLoading) {
+  if (!tenantReady || isLoading) {
     return (
       <OrganizationLayout>
         <div className="space-y-4">
@@ -95,6 +213,22 @@ export default function OrgOvertimeSettings() {
   return (
     <OrganizationLayout>
       <div className="space-y-6 max-w-3xl">
+        {isRetrying && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+            Mencoba ulang memuat data pengaturan lembur...
+          </div>
+        )}
+
+        {loadError && (
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchTenantId()}>
+              <RotateCcw className="mr-2 h-4 w-4" />
+              Coba Lagi
+            </Button>
+          </div>
+        )}
+
         <div>
           <h1 className="text-2xl font-bold text-foreground">Pengaturan Lembur</h1>
           <p className="text-sm text-muted-foreground">Konfigurasi aturan dan kebijakan lembur</p>

@@ -9,12 +9,44 @@ import SingleOTPInput, { SingleOTPInputRef } from "@/components/common/SingleOTP
 import { useToast } from "@/hooks/use-toast";
 import { Shield, Mail, Lock, ArrowLeft, Loader2, MapPin, RefreshCw, KeyRound, Key, Eye, EyeOff } from "lucide-react";
 import { ForgotPasswordDialog } from "@/components/auth/ForgotPasswordDialog";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { z } from "zod";
 
 const loginSchema = z.object({
   email: z.string().trim().email("Email tidak valid").max(255, "Email terlalu panjang"),
   password: z.string().min(6, "Password minimal 6 karakter").max(128, "Password terlalu panjang"),
 });
+
+const getReadableNetworkErrorMessage = (error: unknown): string => {
+  const raw =
+    error instanceof Error
+      ? `${error.name || ""} ${error.message || ""}`.trim()
+      : typeof error === "string"
+        ? error
+        : "Unknown error";
+  const message = raw.toLowerCase();
+
+  if (message.includes("timeout")) {
+    return "Koneksi ke server timeout. Coba lagi dalam beberapa detik.";
+  }
+  if (message.includes("failed to fetch") || message.includes("networkerror")) {
+    return "Koneksi jaringan ke server gagal (network error). Periksa internet/VPN/firewall lalu coba lagi.";
+  }
+  if (message.includes("cors")) {
+    return "Koneksi ditolak oleh konfigurasi keamanan server (CORS).";
+  }
+  if (message.includes("503") || message.includes("502") || message.includes("500")) {
+    return "Server sedang bermasalah (5xx). Silakan coba lagi beberapa saat.";
+  }
+  if (message.includes("dns") || message.includes("enotfound")) {
+    return "Domain server tidak dapat dijangkau (DNS error).";
+  }
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message.trim();
+  }
+  return "Terjadi kesalahan tak terduga. Silakan coba lagi.";
+};
 
 // Captcha generator
 const generateCaptcha = () => {
@@ -48,6 +80,10 @@ const generateCaptcha = () => {
 };
 
 export default function SuperAdminLogin() {
+  const ADMIN_LOGIN_RETRY_MAX = 1;
+  const ADMIN_LOGIN_TIMEOUT_MS = 12000;
+  const ADMIN_ROLE_CHECK_RETRY_MAX = 0;
+  const ADMIN_ROLE_CHECK_TIMEOUT_MS = 6000;
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -61,6 +97,8 @@ export default function SuperAdminLogin() {
   // Captcha state
   const [captcha, setCaptcha] = useState(generateCaptcha());
   const [captchaAnswer, setCaptchaAnswer] = useState("");
+  const isCaptchaBypassEnabled =
+    import.meta.env.DEV && import.meta.env.VITE_E2E_BYPASS_CAPTCHA === "true";
 
   // 2FA state
   const [show2FA, setShow2FA] = useState(false);
@@ -77,6 +115,56 @@ export default function SuperAdminLogin() {
     setOtpValid(value.length === 6);
   }, []);
 
+  const checkSuperAdminRole = useCallback(
+    async (userId: string): Promise<boolean> => {
+      try {
+        const { data: isSuperAdminByRpc } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              () =>
+                supabase.rpc("is_super_admin", {
+                  _user_id: userId,
+                }),
+              ADMIN_ROLE_CHECK_TIMEOUT_MS,
+            ),
+          {
+            maxRetries: ADMIN_ROLE_CHECK_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
+        );
+
+        if (isSuperAdminByRpc) return true;
+      } catch (rpcError) {
+        reportError(rpcError, "admin.super_login.role_check.rpc_timeout", { user_id: userId });
+      }
+
+      const { data: roleRows, error: roleError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase
+                .from("user_roles")
+                .select("role")
+                .eq("user_id", userId)
+                .eq("role", "super_admin")
+                .limit(1),
+            ADMIN_ROLE_CHECK_TIMEOUT_MS,
+          ),
+        {
+          maxRetries: ADMIN_ROLE_CHECK_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
+
+      if (roleError) {
+        throw roleError;
+      }
+
+      return Boolean(roleRows?.length);
+    },
+    [ADMIN_ROLE_CHECK_RETRY_MAX, ADMIN_ROLE_CHECK_TIMEOUT_MS],
+  );
+
   const refreshCaptcha = () => {
     setCaptcha(generateCaptcha());
     setCaptchaAnswer("");
@@ -85,18 +173,26 @@ export default function SuperAdminLogin() {
   useEffect(() => {
     // Check if already logged in as super admin
     const checkExistingSession = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      try {
+        const {
+          data: { session },
+        } = await withExponentialBackoff(
+          () => withTimeout(() => supabase.auth.getSession(), ADMIN_LOGIN_TIMEOUT_MS),
+          {
+            maxRetries: ADMIN_LOGIN_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
+        );
 
-      if (session?.user) {
-        const { data: isSuperAdmin } = await supabase.rpc("is_super_admin", {
-          _user_id: session.user.id,
-        });
+        if (session?.user) {
+          const isSuperAdmin = await checkSuperAdminRole(session.user.id);
 
-        if (isSuperAdmin) {
-          navigate("/admin");
+          if (isSuperAdmin) {
+            navigate("/admin");
+          }
         }
+      } catch (error) {
+        reportError(error, "admin.super_login.check_existing_session");
       }
     };
 
@@ -108,49 +204,62 @@ export default function SuperAdminLogin() {
       if (session?.user && !show2FA) {
         // Check super admin role after login
         setTimeout(async () => {
-          const { data: isSuperAdmin } = await supabase.rpc("is_super_admin", {
-            _user_id: session.user.id,
-          });
+          try {
+            const isSuperAdmin = await checkSuperAdminRole(session.user.id);
 
-          if (isSuperAdmin) {
-            navigate("/admin", { replace: true });
-          } else {
-            if (!nonSuperAdminSessionNotifiedRef.current) {
-              nonSuperAdminSessionNotifiedRef.current = true;
-              toast({
-                variant: "destructive",
-                title: "Akses Ditolak",
-                description:
-                  "Akun ini bukan Super Admin. Gunakan halaman login sesuai role Anda.",
-              });
+            if (isSuperAdmin) {
+              navigate("/admin", { replace: true });
+            } else {
+              if (!nonSuperAdminSessionNotifiedRef.current) {
+                nonSuperAdminSessionNotifiedRef.current = true;
+                toast({
+                  variant: "destructive",
+                  title: "Akses Ditolak",
+                  description:
+                    "Akun ini bukan Super Admin. Gunakan halaman login sesuai role Anda.",
+                });
+              }
+              return;
             }
-            return;
+          } catch (error) {
+            reportError(error, "admin.super_login.auth_state_change_role_check", {
+              event,
+              user_id: session.user.id,
+            });
           }
         }, 0);
       }
     });
 
     return () => subscription.unsubscribe();
-  }, [navigate, toast, show2FA]);
+  }, [checkSuperAdminRole, navigate, toast, show2FA]);
 
   const handleSendOtp = async (userEmail: string) => {
     setIsSendingOtp(true);
     try {
-      const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-password-otp`,
+      const responseSafe = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-password-otp`, {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+                },
+                body: JSON.stringify({ email: userEmail, purpose: "2fa_login" }),
+              }),
+            ADMIN_LOGIN_TIMEOUT_MS,
+          ),
         {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
-          },
-          body: JSON.stringify({ email: userEmail, purpose: "2fa_login" }),
-        }
+          maxRetries: ADMIN_LOGIN_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
       );
 
-      const result = await response.json();
+      const result = await responseSafe.json();
 
-      if (!response.ok) {
+      if (!responseSafe.ok) {
         throw new Error(result.error || "Gagal mengirim OTP");
       }
 
@@ -159,12 +268,12 @@ export default function SuperAdminLogin() {
         description: "Silakan periksa email Anda untuk kode 2FA.",
       });
     } catch (error) {
+      const errorRef = reportError(error, "admin.super_login.send_otp", { email: userEmail });
       const message = error instanceof Error ? error.message : "Tidak dapat mengirim kode 2FA.";
-      console.error("Error sending 2FA OTP:", error);
       toast({
         variant: "destructive",
         title: "Gagal Mengirim OTP",
-        description: message,
+        description: appendErrorReference(message, errorRef),
       });
     } finally {
       setIsSendingOtp(false);
@@ -176,7 +285,7 @@ export default function SuperAdminLogin() {
     setErrors({});
 
     // Validate captcha first
-    if (parseInt(captchaAnswer) !== captcha.answer) {
+    if (!isCaptchaBypassEnabled && parseInt(captchaAnswer) !== captcha.answer) {
       toast({
         variant: "destructive",
         title: "Captcha Salah",
@@ -202,10 +311,21 @@ export default function SuperAdminLogin() {
     setIsLoading(true);
 
     try {
-      const { data: authData, error } = await supabase.auth.signInWithPassword({
-        email: validation.data.email,
-        password: validation.data.password,
-      });
+      const { data: authData, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase.auth.signInWithPassword({
+                email: validation.data.email,
+                password: validation.data.password,
+              }),
+            ADMIN_LOGIN_TIMEOUT_MS,
+          ),
+        {
+          maxRetries: ADMIN_LOGIN_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
       if (error) {
         if (error.message.includes("Invalid login credentials")) {
@@ -225,14 +345,25 @@ export default function SuperAdminLogin() {
         return;
       }
 
+      const signedInUser = authData?.user;
+      if (!signedInUser) {
+        throw new Error(
+          "Respons login tidak lengkap. Sesi pengguna tidak ditemukan, silakan coba lagi.",
+        );
+      }
+
       // Check if user is super admin
-      if (authData.user) {
-        const { data: isSuperAdmin } = await supabase.rpc("is_super_admin", {
-          _user_id: authData.user.id,
-        });
+      if (signedInUser) {
+        const isSuperAdmin = await checkSuperAdminRole(signedInUser.id);
 
         if (!isSuperAdmin) {
-          await supabase.auth.signOut();
+          await withExponentialBackoff(
+            () => withTimeout(() => supabase.auth.signOut(), ADMIN_LOGIN_TIMEOUT_MS),
+            {
+              maxRetries: ADMIN_LOGIN_RETRY_MAX,
+              shouldRetry: isRetryableError,
+            },
+          );
           nonSuperAdminSessionNotifiedRef.current = true;
           toast({
             variant: "destructive",
@@ -246,10 +377,21 @@ export default function SuperAdminLogin() {
 
         // Check if 2FA is enabled in system settings
         // Prioritas key baru: super_admin_2fa_enabled, fallback legacy: admin_2fa_enabled
-        const { data: settingsRows } = await supabase
-          .from("system_settings")
-          .select("key, value")
-          .in("key", ["super_admin_2fa_enabled", "admin_2fa_enabled"]);
+        const { data: settingsRows } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              () =>
+                supabase
+                  .from("system_settings")
+                  .select("key, value")
+                  .in("key", ["super_admin_2fa_enabled", "admin_2fa_enabled"]),
+              ADMIN_LOGIN_TIMEOUT_MS,
+            ),
+          {
+            maxRetries: ADMIN_LOGIN_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
+        );
 
         const raw2FAValue =
           settingsRows?.find((row) => row.key === "super_admin_2fa_enabled")?.value ??
@@ -262,18 +404,28 @@ export default function SuperAdminLogin() {
 
         if (is2FAEnabled) {
           // Sign out temporarily while waiting for 2FA
-          await supabase.auth.signOut();
-          setPendingUserId(authData.user.id);
+          await withExponentialBackoff(
+            () => withTimeout(() => supabase.auth.signOut(), ADMIN_LOGIN_TIMEOUT_MS),
+            {
+              maxRetries: ADMIN_LOGIN_RETRY_MAX,
+              shouldRetry: isRetryableError,
+            },
+          );
+          setPendingUserId(signedInUser.id);
           setShow2FA(true);
           await handleSendOtp(validation.data.email);
         }
         // If 2FA not enabled, auth state change will handle redirect
       }
     } catch (error) {
+      const errorRef = reportError(error, "admin.super_login.handle_login", { email });
       toast({
         variant: "destructive",
         title: "Terjadi Kesalahan",
-        description: "Tidak dapat menghubungi server. Silakan coba lagi.",
+        description: appendErrorReference(
+          getReadableNetworkErrorMessage(error),
+          errorRef,
+        ),
       });
       refreshCaptcha();
     } finally {
@@ -296,12 +448,23 @@ export default function SuperAdminLogin() {
 
     try {
       // Verify OTP via edge function (secure hash comparison)
-      const { data, error: verifyError } = await supabase.functions.invoke("verify-device-otp", {
-        body: {
-          email: email,
-          otp: otpCode,
+      const { data, error: verifyError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase.functions.invoke("verify-device-otp", {
+                body: {
+                  email: email,
+                  otp: otpCode,
+                },
+              }),
+            ADMIN_LOGIN_TIMEOUT_MS,
+          ),
+        {
+          maxRetries: ADMIN_LOGIN_RETRY_MAX,
+          shouldRetry: isRetryableError,
         },
-      });
+      );
 
       if (verifyError || !data?.success) {
         toast({
@@ -314,10 +477,21 @@ export default function SuperAdminLogin() {
       }
 
       // Re-login
-      const { error: loginError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      const { error: loginError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase.auth.signInWithPassword({
+                email,
+                password,
+              }),
+            ADMIN_LOGIN_TIMEOUT_MS,
+          ),
+        {
+          maxRetries: ADMIN_LOGIN_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
       if (loginError) {
         throw loginError;
@@ -328,11 +502,14 @@ export default function SuperAdminLogin() {
         description: "Anda akan dialihkan ke dashboard.",
       });
     } catch (error) {
+      const errorRef = reportError(error, "admin.super_login.verify_2fa", {
+        has_pending_user: Boolean(pendingUserId),
+      });
       const message = error instanceof Error ? error.message : "Terjadi kesalahan saat verifikasi.";
       toast({
         variant: "destructive",
         title: "Verifikasi Gagal",
-        description: message,
+        description: appendErrorReference(message, errorRef),
       });
     } finally {
       setIsLoading(false);

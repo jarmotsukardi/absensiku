@@ -24,6 +24,9 @@ import {
 } from "lucide-react";
 import { format, startOfMonth, endOfMonth, subMonths } from "date-fns";
 import { id } from "date-fns/locale";
+import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat("id-ID", {
@@ -85,33 +88,43 @@ export function FinancialReport() {
     });
   };
 
-  const handleExport = () => {
-    const headers = ["Tanggal", "Tipe", "Gross", "Fee", "PPN", "PPH", "Net", "Sumber", "Referensi"];
-    const rows = transactions.map((tx) => {
-      const tax = {
-        ppnAmount: Number(tx.ppn_amount ?? splitTaxAmount(Number(tx.vat_amount || 0)).ppnAmount),
-        pphAmount: Number(tx.pph_amount ?? splitTaxAmount(Number(tx.vat_amount || 0)).pphAmount),
-      };
-      return [
-        tx.transaction_date,
-        tx.transaction_type,
-        tx.gross_amount,
-        tx.xendit_fee,
-        tax.ppnAmount,
-        tax.pphAmount,
-        tx.net_amount,
-        tx.payment_source,
-        tx.reference_number || "",
-      ];
-    });
-
-    const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `laporan-keuangan-${dateRange.start}-${dateRange.end}.csv`;
-    a.click();
+  const handleExport = async () => {
+    try {
+      const csv = await withTimeout(
+        Promise.resolve().then(() => {
+          const headers = ["Tanggal", "Tipe", "Gross", "Fee", "PPN", "PPH", "Net", "Sumber", "Referensi"];
+          const rows = transactions.map((tx) => {
+            const tax = {
+              ppnAmount: Number(tx.ppn_amount ?? splitTaxAmount(Number(tx.vat_amount || 0)).ppnAmount),
+              pphAmount: Number(tx.pph_amount ?? splitTaxAmount(Number(tx.vat_amount || 0)).pphAmount),
+            };
+            return [
+              tx.transaction_date,
+              tx.transaction_type,
+              tx.gross_amount,
+              tx.xendit_fee,
+              tax.ppnAmount,
+              tax.pphAmount,
+              tx.net_amount,
+              tx.payment_source,
+              tx.reference_number || "",
+            ];
+          });
+          return [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+        }),
+        10000,
+        "Menyiapkan export laporan terlalu lama",
+      );
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `laporan-keuangan-${dateRange.start}-${dateRange.end}.csv`;
+      a.click();
+    } catch (error) {
+      const errorRef = reportError(error, "admin.billing.financial_report.export");
+      toast.error(appendErrorReference("Gagal mengekspor laporan keuangan.", errorRef));
+    }
   };
 
   const totalPages = Math.max(1, Math.ceil(transactions.length / ITEMS_PER_PAGE));
@@ -123,8 +136,14 @@ export function FinancialReport() {
 
   if (isLoading || isLoadingBillingSettings) {
     return (
-      <div className="flex items-center justify-center h-32">
-        <Loader2 className="h-6 w-6 animate-spin" />
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-10 text-center">
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+        </div>
+        <p className="text-base font-medium text-slate-900">Memuat laporan keuangan</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Data ringkasan transaksi dan pajak sedang disiapkan.
+        </p>
       </div>
     );
   }
@@ -250,8 +269,16 @@ export function FinancialReport() {
             <TableBody>
               {transactions.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
-                    Tidak ada transaksi pada periode ini
+                  <TableCell colSpan={8} className="py-10">
+                    <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
+                      <div className="rounded-full bg-slate-100 p-3">
+                        <Calendar className="h-5 w-5 text-slate-500" />
+                      </div>
+                      <p className="text-base font-medium text-slate-800">Tidak ada transaksi pada periode ini</p>
+                      <p className="text-sm text-muted-foreground">
+                        Coba ubah rentang tanggal atau gunakan filter cepat Bulan Ini/Bulan Lalu.
+                      </p>
+                    </div>
                   </TableCell>
                 </TableRow>
               ) : (

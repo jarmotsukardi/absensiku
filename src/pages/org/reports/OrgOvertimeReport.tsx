@@ -17,6 +17,7 @@ import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { RequestReportsTabs } from "@/components/org/reports/RequestReportsTabs";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 type OvertimeRequestRow = Tables<"overtime_requests">;
 type OPD = Tables<"opd">;
@@ -51,6 +52,8 @@ interface OvertimeRecord extends OvertimeRequestRow {
 
 const ITEMS_PER_PAGE = 20;
 const FETCH_CHUNK = 500;
+const OVERTIME_REPORT_QUERY_TIMEOUT_MS = 15000;
+const OVERTIME_REPORT_QUERY_RETRY_MAX = 1;
 
 const STATUS_OPTIONS = [
   { value: "pending", label: "Menunggu" },
@@ -107,34 +110,49 @@ export default function OrgOvertimeReport() {
   const [opdFilter, setOpdFilter] = useState("all");
   const [workUnitFilter, setWorkUnitFilter] = useState("all");
 
-  useEffect(() => {
-    const init = async () => {
-      try {
-        setLoadError(null);
-        const resolvedTenant = await resolveOrgTenantId();
-        setTenantId(resolvedTenant);
-        if (!resolvedTenant) return;
+  const initializePage = useCallback(async () => {
+    try {
+      setLoadError(null);
+      const resolvedTenant = await withTimeout(
+        resolveOrgTenantId(),
+        OVERTIME_REPORT_QUERY_TIMEOUT_MS,
+        "org.reports.overtime.init.resolve_tenant timeout",
+      );
+      setTenantId(resolvedTenant);
+      if (!resolvedTenant) return;
 
-        const [opdRes, workUnitRes] = await Promise.all([
-          supabase.from("opd").select("*").eq("tenant_id", resolvedTenant).order("name"),
-          supabase.from("work_units").select("*").eq("tenant_id", resolvedTenant).order("name"),
-        ]);
+      const [opdRes, workUnitRes] = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.all([
+              supabase.from("opd").select("*").eq("tenant_id", resolvedTenant).order("name"),
+              supabase.from("work_units").select("*").eq("tenant_id", resolvedTenant).order("name"),
+            ]),
+            OVERTIME_REPORT_QUERY_TIMEOUT_MS,
+            "org.reports.overtime.init.query timeout",
+          ),
+        {
+          maxRetries: OVERTIME_REPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
-        if (opdRes.error) throw opdRes.error;
-        if (workUnitRes.error) throw workUnitRes.error;
+      if (opdRes.error) throw opdRes.error;
+      if (workUnitRes.error) throw workUnitRes.error;
 
-        setOpds(opdRes.data || []);
-        setWorkUnits(workUnitRes.data || []);
-      } catch (error) {
-        const errorRef = reportError(error, "org.reports.overtime.init");
-        const message = appendErrorReference("Gagal memuat data awal laporan lembur", errorRef);
-        setLoadError(message);
-        toast.error(message);
-      }
-    };
-
-    void init();
+      setOpds(opdRes.data || []);
+      setWorkUnits(workUnitRes.data || []);
+    } catch (error) {
+      const errorRef = reportError(error, "org.reports.overtime.init");
+      const message = appendErrorReference("Gagal memuat data awal laporan lembur", errorRef);
+      setLoadError(message);
+      toast.error(message);
+    }
   }, []);
+
+  useEffect(() => {
+    void initializePage();
+  }, [initializePage]);
 
   const opdMap = useMemo(() => {
     const map = new Map<string, OPD>();
@@ -157,7 +175,18 @@ export default function OrgOvertimeReport() {
     setIsLoading(true);
     try {
       setLoadError(null);
-      const employeeIds = await getTenantEmployeeIds(tenantId);
+      const employeeIds = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            getTenantEmployeeIds(tenantId),
+            OVERTIME_REPORT_QUERY_TIMEOUT_MS,
+            "org.reports.overtime.fetch.employee_ids timeout",
+          ),
+        {
+          maxRetries: OVERTIME_REPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (employeeIds.length === 0) {
         setRecords([]);
         return;
@@ -184,7 +213,18 @@ export default function OrgOvertimeReport() {
           query = query.lte("created_at", `${endDate}T23:59:59.999`);
         }
 
-        const { data, error } = await query;
+        const { data, error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              query,
+              OVERTIME_REPORT_QUERY_TIMEOUT_MS,
+              "org.reports.overtime.fetch.chunk timeout",
+            ),
+          {
+            maxRetries: OVERTIME_REPORT_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
+        );
         if (error) throw error;
 
         const chunk = ((data || []) as OvertimeQueryRow[]).map((row) => ({
@@ -264,6 +304,13 @@ export default function OrgOvertimeReport() {
     setHasQueried(true);
     setCurrentPage(1);
     await fetchReport();
+  };
+
+  const handleRetryLoad = async () => {
+    await initializePage();
+    if (tenantId && hasQueried) {
+      await fetchReport();
+    }
   };
 
   const handleExport = async () => {
@@ -445,8 +492,11 @@ export default function OrgOvertimeReport() {
         <RequestReportsTabs />
 
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button size="sm" variant="outline" onClick={handleRetryLoad} className="border-destructive/30 text-destructive hover:bg-destructive/10">
+              Coba Lagi
+            </Button>
           </div>
         )}
 
@@ -455,7 +505,8 @@ export default function OrgOvertimeReport() {
             <CardTitle>Filter Laporan</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
               <div className="grid gap-2">
                 <Label>Tanggal Mulai</Label>
                 <Input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
@@ -516,6 +567,7 @@ export default function OrgOvertimeReport() {
                 <Button onClick={handleShow} className="w-full" disabled={isLoading}>
                   {isLoading ? "Memuat..." : "Tampilkan"}
                 </Button>
+              </div>
               </div>
             </div>
           </CardContent>

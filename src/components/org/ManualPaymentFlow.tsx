@@ -37,6 +37,7 @@ import { useNavigate } from "react-router-dom";
 import type { Json, Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { ACTIVE_INVOICE_STATUSES, isActiveInvoiceStatus } from "@/lib/billingGuards";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 type SubscriptionPackage = Tables<"subscription_packages">;
 
@@ -66,6 +67,8 @@ interface CreateOrGetManualInvoiceResult {
 const PPN_PERCENTAGE = 11;
 const PPH_PERCENTAGE = 2;
 const INTERNAL_TAX_PERCENTAGE = PPN_PERCENTAGE + PPH_PERCENTAGE;
+const MANUAL_PAYMENT_OP_TIMEOUT_MS = 15000;
+const MANUAL_PAYMENT_OP_RETRY_MAX = 1;
 
 interface ActiveManualInvoiceSnapshot {
   id: string;
@@ -138,14 +141,22 @@ export function ManualPaymentFlow({
             .limit(1)
             .maybeSingle();
 
-      const [{ data, error }, subscriptionRes] = await Promise.all([
-        supabase
-          .from("subscription_packages")
-          .select("*")
-          .eq("is_active", true)
-          .order("sort_order"),
-        subscriptionPricePromise,
-      ]);
+      const [{ data, error }, subscriptionRes] = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              Promise.all([
+                supabase.from("subscription_packages").select("*").eq("is_active", true).order("sort_order"),
+                subscriptionPricePromise,
+              ]),
+            MANUAL_PAYMENT_OP_TIMEOUT_MS,
+            "org.activation.manual_payment.fetch_packages timeout",
+          ),
+        {
+          maxRetries: MANUAL_PAYMENT_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
       if (error) throw error;
       setPackages(data || []);
@@ -165,11 +176,11 @@ export function ManualPaymentFlow({
         setNegotiatedPricePerEmployee(parsedPrice);
       }
     } catch (error) {
-      reportError(error, "org.activation.manual_payment.fetch_packages", {
+      const errorRef = reportError(error, "org.activation.manual_payment.fetch_packages", {
         tenant_id: tenantId,
         subscription_id: subscriptionId || null,
       });
-      console.error("Error fetching packages:", error);
+      toast.error(appendErrorReference("Gagal memuat paket langganan", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -182,20 +193,33 @@ export function ManualPaymentFlow({
   const fetchActiveInvoice = useCallback(async () => {
     setIsCheckingActiveInvoice(true);
     try {
-      const { data, error } = await supabase
-        .from("invoices")
-        .select("id, invoice_number, status, due_date, gross_amount")
-        .eq("tenant_id", tenantId)
-        .in("status", [...ACTIVE_INVOICE_STATUSES])
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase
+                .from("invoices")
+                .select("id, invoice_number, status, due_date, gross_amount")
+                .eq("tenant_id", tenantId)
+                .in("status", [...ACTIVE_INVOICE_STATUSES])
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle(),
+            MANUAL_PAYMENT_OP_TIMEOUT_MS,
+          ),
+        {
+          maxRetries: MANUAL_PAYMENT_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
       if (error) throw error;
       setActiveInvoice((data ?? null) as ActiveManualInvoiceSnapshot | null);
     } catch (error) {
-      reportError(error, "org.activation.manual_payment.fetch_active_invoice", { tenant_id: tenantId });
-      console.error("Error checking active manual invoice:", error);
+      const errorRef = reportError(error, "org.activation.manual_payment.fetch_active_invoice", {
+        tenant_id: tenantId,
+      });
+      toast.error(appendErrorReference("Gagal memeriksa invoice aktif", errorRef));
       setActiveInvoice(null);
     } finally {
       setIsCheckingActiveInvoice(false);
@@ -204,14 +228,25 @@ export function ManualPaymentFlow({
 
   const checkLatestActiveInvoice = useCallback(async (): Promise<ActiveManualInvoiceSnapshot | null> => {
     try {
-      const { data, error } = await supabase
-        .from("invoices")
-        .select("id, invoice_number, status, due_date, gross_amount")
-        .eq("tenant_id", tenantId)
-        .in("status", [...ACTIVE_INVOICE_STATUSES])
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase
+                .from("invoices")
+                .select("id, invoice_number, status, due_date, gross_amount")
+                .eq("tenant_id", tenantId)
+                .in("status", [...ACTIVE_INVOICE_STATUSES])
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle(),
+            MANUAL_PAYMENT_OP_TIMEOUT_MS,
+          ),
+        {
+          maxRetries: MANUAL_PAYMENT_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (error) throw error;
       const latest = (data ?? null) as ActiveManualInvoiceSnapshot | null;
       setActiveInvoice(latest);
@@ -309,28 +344,36 @@ export function ManualPaymentFlow({
       const proposedUniqueCode = generateUniqueCode();
       const proposedFinalAmount = total + proposedUniqueCode;
 
-      const { data: invoiceResult, error: invoiceError } = (await supabase.rpc(
-        "create_or_get_manual_invoice" as never,
+      const { data: invoiceResult, error: invoiceError } = (await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase.rpc("create_or_get_manual_invoice" as never, {
+                p_tenant_id: tenantId,
+                p_subscription_id: subscriptionId || null,
+                p_package_id: pkg.id,
+                p_package_name: pkg.name,
+                p_package_duration_months: pkg.duration_months,
+                p_package_discount_percentage: pkg.discount_percentage,
+                p_employee_count: employeeCount,
+                p_price_per_employee: unitPrice,
+                p_subtotal: subtotal,
+                p_discount_amount: discount,
+                p_vat_percentage: INTERNAL_TAX_PERCENTAGE,
+                p_vat_amount: internalTaxAmount,
+                p_gross_amount: proposedFinalAmount,
+                p_xendit_fee: 0,
+                p_net_amount: proposedFinalAmount,
+                p_due_date: format(addMonths(new Date(), 0), "yyyy-MM-dd"),
+                p_unique_code: proposedUniqueCode,
+                p_notes: `Angka unik: ${proposedUniqueCode}`,
+              } as never),
+            MANUAL_PAYMENT_OP_TIMEOUT_MS,
+          ),
         {
-          p_tenant_id: tenantId,
-          p_subscription_id: subscriptionId || null,
-          p_package_id: pkg.id,
-          p_package_name: pkg.name,
-          p_package_duration_months: pkg.duration_months,
-          p_package_discount_percentage: pkg.discount_percentage,
-          p_employee_count: employeeCount,
-          p_price_per_employee: unitPrice,
-          p_subtotal: subtotal,
-          p_discount_amount: discount,
-          p_vat_percentage: INTERNAL_TAX_PERCENTAGE,
-          p_vat_amount: internalTaxAmount,
-          p_gross_amount: proposedFinalAmount,
-          p_xendit_fee: 0,
-          p_net_amount: proposedFinalAmount,
-          p_due_date: format(addMonths(new Date(), 0), "yyyy-MM-dd"),
-          p_unique_code: proposedUniqueCode,
-          p_notes: `Angka unik: ${proposedUniqueCode}`,
-        } as never,
+          maxRetries: MANUAL_PAYMENT_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
       )) as { data: CreateOrGetManualInvoiceResult | null; error: Error | null };
 
       if (invoiceError) throw invoiceError;
@@ -348,11 +391,19 @@ export function ManualPaymentFlow({
           : proposedFinalAmount;
       const resolvedBaseAmount = Math.max(0, resolvedFinalAmount - resolvedUniqueCode);
 
-      const { data: billingSettings } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "billing_settings")
-        .maybeSingle();
+      const { data: billingSettings, error: billingSettingsError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () => supabase.from("system_settings").select("value").eq("key", "billing_settings").maybeSingle(),
+            MANUAL_PAYMENT_OP_TIMEOUT_MS,
+            "org.activation.manual_payment.fetch_billing_settings timeout",
+          ),
+        {
+          maxRetries: MANUAL_PAYMENT_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
+      if (billingSettingsError) throw billingSettingsError;
 
       const billingValue = toJsonObject(billingSettings?.value);
       const settings = billingValue as BillingSettingsValue | null;
@@ -391,7 +442,6 @@ export function ManualPaymentFlow({
       navigate(targetUrl);
       void fetchActiveInvoice();
     } catch (error: unknown) {
-      console.error("Error creating payment:", error);
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
       const errorRef = reportError(error, "org.activation.manual_payment.create", {
         tenant_id: tenantId,
@@ -406,15 +456,26 @@ export function ManualPaymentFlow({
     }
   };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success("Disalin ke clipboard");
+  const copyToClipboard = async (text: string) => {
+    try {
+      await withTimeout(() => navigator.clipboard.writeText(text), 5000);
+      toast.success("Disalin ke clipboard");
+    } catch (error) {
+      const errorRef = reportError(error, "org.activation.manual_payment.copy_clipboard");
+      toast.error(appendErrorReference("Gagal menyalin ke clipboard", errorRef));
+    }
   };
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center py-8">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-10 text-center">
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+        </div>
+        <p className="text-base font-medium text-slate-900">Memuat formulir pembayaran manual</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Paket langganan, invoice aktif, dan konfigurasi rekening sedang disiapkan.
+        </p>
       </div>
     );
   }

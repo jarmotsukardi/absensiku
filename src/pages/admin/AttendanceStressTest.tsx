@@ -328,11 +328,11 @@ export default function AttendanceStressTest() {
 
             {/* Tabs: Charts / Latency / Users / Logs */}
             <Tabs defaultValue="charts" className="w-full">
-              <TabsList className="grid w-full grid-cols-4">
-                <TabsTrigger value="charts">📊 Throughput</TabsTrigger>
-                <TabsTrigger value="latency">⏱️ Latensi</TabsTrigger>
-                <TabsTrigger value="users">👥 Users</TabsTrigger>
-                <TabsTrigger value="logs">📝 Log</TabsTrigger>
+              <TabsList className="h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+                <TabsTrigger value="charts" className="whitespace-nowrap">📊 Throughput</TabsTrigger>
+                <TabsTrigger value="latency" className="whitespace-nowrap">⏱️ Latensi</TabsTrigger>
+                <TabsTrigger value="users" className="whitespace-nowrap">👥 Users</TabsTrigger>
+                <TabsTrigger value="logs" className="whitespace-nowrap">📝 Log</TabsTrigger>
               </TabsList>
 
               {/* Throughput Chart */}

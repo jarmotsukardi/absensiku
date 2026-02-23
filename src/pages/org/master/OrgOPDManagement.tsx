@@ -16,10 +16,19 @@ import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { buildOpdCodeFromName, normalizeOpdCode } from "@/lib/opdCode";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 type OPD = Tables<"opd">;
 
 const ITEMS_PER_PAGE = 10;
+const OPD_READ_TIMEOUT_MS = 12000;
+const OPD_WRITE_TIMEOUT_MS = 15000;
+const OPD_MAX_RETRIES = 2;
 
 export default function OrgOPDManagement() {
   const confirmDialog = useConfirmDialog();
@@ -32,14 +41,28 @@ export default function OrgOPDManagement() {
   const [isCodeManuallyEdited, setIsCodeManuallyEdited] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoadError(null);
     try {
-      const { data, error } = await supabase
-        .from("opd")
-        .select("*")
-        .order("name");
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("opd")
+              .select("*")
+              .order("name"),
+            OPD_READ_TIMEOUT_MS,
+            "Permintaan data OPD timeout."
+          ),
+        {
+          maxRetries: OPD_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setOpds(data || []);
@@ -49,6 +72,7 @@ export default function OrgOPDManagement() {
       setLoadError(message);
       toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, []);
@@ -81,14 +105,23 @@ export default function OrgOPDManagement() {
     }
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user } } = await withTimeout(
+        supabase.auth.getUser(),
+        OPD_WRITE_TIMEOUT_MS,
+        "Permintaan user auth timeout."
+      );
       if (!user) return;
 
-      const { data: roleData } = await supabase
-        .from("user_roles")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      const { data: roleData, error: roleError } = await withTimeout(
+        supabase
+          .from("user_roles")
+          .select("tenant_id")
+          .eq("user_id", user.id)
+          .maybeSingle(),
+        OPD_WRITE_TIMEOUT_MS,
+        "Permintaan tenant role timeout."
+      );
+      if (roleError) throw roleError;
 
       if (!roleData?.tenant_id) {
         toast.error("Tenant tidak ditemukan");
@@ -96,16 +129,24 @@ export default function OrgOPDManagement() {
       }
 
       if (isEditing) {
-        const { error } = await supabase
-          .from("opd")
-          .update({ code: normalizedCode, name: normalizedName, is_active: formData.is_active })
-          .eq("id", formData.id);
+        const { error } = await withTimeout(
+          supabase
+            .from("opd")
+            .update({ code: normalizedCode, name: normalizedName, is_active: formData.is_active })
+            .eq("id", formData.id),
+          OPD_WRITE_TIMEOUT_MS,
+          "Update OPD timeout."
+        );
         if (error) throw error;
         toast.success("OPD berhasil diperbarui");
       } else {
-        const { error } = await supabase
-          .from("opd")
-          .insert({ code: normalizedCode, name: normalizedName, tenant_id: roleData.tenant_id, is_active: formData.is_active });
+        const { error } = await withTimeout(
+          supabase
+            .from("opd")
+            .insert({ code: normalizedCode, name: normalizedName, tenant_id: roleData.tenant_id, is_active: formData.is_active }),
+          OPD_WRITE_TIMEOUT_MS,
+          "Tambah OPD timeout."
+        );
         if (error) throw error;
         toast.success("OPD berhasil ditambahkan");
       }
@@ -136,10 +177,14 @@ export default function OrgOPDManagement() {
 
   const handleToggleStatus = async (opd: OPD) => {
     try {
-      const { error } = await supabase
-        .from("opd")
-        .update({ is_active: !opd.is_active })
-        .eq("id", opd.id);
+      const { error } = await withTimeout(
+        supabase
+          .from("opd")
+          .update({ is_active: !opd.is_active })
+          .eq("id", opd.id),
+        OPD_WRITE_TIMEOUT_MS,
+        "Ubah status OPD timeout."
+      );
       if (error) throw error;
       toast.success(`OPD berhasil ${opd.is_active ? "dinonaktifkan" : "diaktifkan"}`);
       void fetchData();
@@ -162,7 +207,11 @@ export default function OrgOPDManagement() {
     }
 
     try {
-      const { error } = await supabase.from("opd").delete().eq("id", id);
+      const { error } = await withTimeout(
+        supabase.from("opd").delete().eq("id", id),
+        OPD_WRITE_TIMEOUT_MS,
+        "Hapus OPD timeout."
+      );
       if (error) throw error;
       toast.success("OPD berhasil dihapus");
       void fetchData();
@@ -190,6 +239,12 @@ export default function OrgOPDManagement() {
   return (
     <OrganizationLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+            Mencoba ulang memuat data OPD...
+          </div>
+        )}
+
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -252,9 +307,12 @@ export default function OrgOPDManagement() {
                   />
                 </div>
               </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
-                <Button onClick={handleSubmit}>{isEditing ? "Simpan" : "Tambah"}</Button>
+              <DialogFooter className={dialogActionBarClassName}>
+                <DialogActionHint>Kode OPD harus unik dan akan divalidasi saat simpan.</DialogActionHint>
+                <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                  <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
+                  <Button onClick={handleSubmit}>{isEditing ? "Simpan" : "Tambah"}</Button>
+                </div>
               </DialogFooter>
             </DialogContent>
           </Dialog>
@@ -262,8 +320,11 @@ export default function OrgOPDManagement() {
 
         {loadError && (
           <Card className="border-destructive/40">
-            <CardContent className="pt-6">
+            <CardContent className="flex flex-col gap-2 pt-6 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-destructive">{loadError}</p>
+              <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+                Coba Lagi
+              </Button>
             </CardContent>
           </Card>
         )}

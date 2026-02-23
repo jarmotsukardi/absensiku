@@ -8,6 +8,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from "@/components/ui/progress";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { supabase } from "@/integrations/supabase/client";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 import { toast } from "sonner";
 import {
   Download,
@@ -444,10 +446,11 @@ CREATE POLICY "Users can insert own attendance" ON public.attendance_records FOR
         setExportProgress(Math.round(((i + 0.5) / ALL_TABLES.length) * 100));
 
         try {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const { data, error } = await (supabase.from(tableName as any) as any)
-            .select("*")
-            .limit(50000);
+          const { data, error } = await withTimeout(
+            () => supabase.from(tableName).select("*").limit(50000),
+            15000,
+            `Export tabel ${tableName} timeout`
+          );
 
           if (!error && data) {
             allData[tableName] = data;
@@ -501,8 +504,8 @@ CREATE POLICY "Users can insert own attendance" ON public.attendance_records FOR
 
       toast.success(`Backup lengkap berhasil: ${successTables} tabel, ${totalRecords} records`);
     } catch (error) {
-      console.error("Full backup error:", error);
-      toast.error("Gagal membuat backup lengkap");
+      const errorRef = reportError(error, "admin.settings.full_backup.export");
+      toast.error(appendErrorReference("Gagal membuat backup lengkap", errorRef));
     } finally {
       setIsExporting(false);
       setCurrentTable("");

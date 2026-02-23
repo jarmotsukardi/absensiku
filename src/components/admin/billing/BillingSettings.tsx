@@ -15,10 +15,20 @@ import {
   BILLING_INVOICE_TEMPLATE_TOKENS,
   DEFAULT_BILLING_INVOICE_TEMPLATE,
 } from "@/lib/billingInvoiceTemplate";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
+const BILLING_SETTINGS_READ_TIMEOUT_MS = 12000;
+const BILLING_SETTINGS_WRITE_TIMEOUT_MS = 15000;
+const BILLING_SETTINGS_MAX_RETRIES = 2;
 
 export function BillingSettings() {
   const { settings, isLoading, getSetting, updateSetting } = useBillingSettings();
   const [isSaving, setIsSaving] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   
   const [pricePerEmployee, setPricePerEmployee] = useState(15000);
   const [vatPercentage, setVatPercentage] = useState(11);
@@ -67,34 +77,69 @@ export function BillingSettings() {
   // Fetch billing_settings (bank account info) from system_settings
   useEffect(() => {
     const fetchBankSettings = async () => {
-      const [bankRes, templateRes] = await Promise.all([
-        supabase.from("system_settings").select("value").eq("key", "billing_settings").maybeSingle(),
-        supabase.from("system_settings").select("value").eq("key", "billing_invoice_template").maybeSingle(),
-      ]);
+      setIsRetrying(false);
+      setLoadError(null);
+      try {
+        const [bankRes, templateRes] = await Promise.all([
+          withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase.from("system_settings").select("value").eq("key", "billing_settings").maybeSingle(),
+                BILLING_SETTINGS_READ_TIMEOUT_MS,
+                "Permintaan pengaturan rekening billing timeout."
+              ),
+            {
+              maxRetries: BILLING_SETTINGS_MAX_RETRIES,
+              shouldRetry: isRetryableError,
+              onRetry: () => setIsRetrying(true),
+            }
+          ),
+          withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase.from("system_settings").select("value").eq("key", "billing_invoice_template").maybeSingle(),
+                BILLING_SETTINGS_READ_TIMEOUT_MS,
+                "Permintaan template invoice timeout."
+              ),
+            {
+              maxRetries: BILLING_SETTINGS_MAX_RETRIES,
+              shouldRetry: isRetryableError,
+              onRetry: () => setIsRetrying(true),
+            }
+          ),
+        ]);
 
-      if (bankRes.error) {
-        reportError(bankRes.error, "admin.billing.settings.fetch_bank_settings");
-      }
-      if (templateRes.error) {
-        reportError(templateRes.error, "admin.billing.settings.fetch_invoice_template");
-      }
-
-      if (bankRes.data?.value && typeof bankRes.data.value === "object" && !Array.isArray(bankRes.data.value)) {
-        const value = bankRes.data.value as Record<string, unknown>;
-        setBankName(typeof value.bank_name === "string" ? value.bank_name : "");
-        setBankAccount(typeof value.bank_account === "string" ? value.bank_account : "");
-        setBankAccountName(typeof value.bank_account_name === "string" ? value.bank_account_name : "");
-        setPaymentInstructions(typeof value.payment_instructions === "string" ? value.payment_instructions : "");
-      }
-
-      if (templateRes.data?.value && typeof templateRes.data.value === "object" && !Array.isArray(templateRes.data.value)) {
-        const value = templateRes.data.value as Record<string, unknown>;
-        if (typeof value.html_template === "string" && value.html_template.trim()) {
-          setInvoiceTemplateHtml(value.html_template);
+        if (bankRes.error) {
+          const errorRef = reportError(bankRes.error, "admin.billing.settings.fetch_bank_settings");
+          setLoadError(appendErrorReference("Gagal memuat pengaturan rekening billing", errorRef));
         }
+        if (templateRes.error) {
+          const errorRef = reportError(templateRes.error, "admin.billing.settings.fetch_invoice_template");
+          setLoadError((prev) => prev ?? appendErrorReference("Gagal memuat template invoice", errorRef));
+        }
+
+        if (bankRes.data?.value && typeof bankRes.data.value === "object" && !Array.isArray(bankRes.data.value)) {
+          const value = bankRes.data.value as Record<string, unknown>;
+          setBankName(typeof value.bank_name === "string" ? value.bank_name : "");
+          setBankAccount(typeof value.bank_account === "string" ? value.bank_account : "");
+          setBankAccountName(typeof value.bank_account_name === "string" ? value.bank_account_name : "");
+          setPaymentInstructions(typeof value.payment_instructions === "string" ? value.payment_instructions : "");
+        }
+
+        if (templateRes.data?.value && typeof templateRes.data.value === "object" && !Array.isArray(templateRes.data.value)) {
+          const value = templateRes.data.value as Record<string, unknown>;
+          if (typeof value.html_template === "string" && value.html_template.trim()) {
+            setInvoiceTemplateHtml(value.html_template);
+          }
+        }
+      } catch (error) {
+        const errorRef = reportError(error, "admin.billing.settings.fetch");
+        setLoadError((prev) => prev ?? appendErrorReference("Gagal memuat pengaturan billing", errorRef));
+      } finally {
+        setIsRetrying(false);
       }
     };
-    fetchBankSettings();
+    void fetchBankSettings();
   }, []);
 
   const handleSave = async () => {
@@ -122,49 +167,73 @@ export function BillingSettings() {
         payment_instructions: paymentInstructions,
       };
 
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "billing_settings")
-        .maybeSingle();
+      const { data: existing } = await withTimeout(
+        supabase
+          .from("system_settings")
+          .select("id")
+          .eq("key", "billing_settings")
+          .maybeSingle(),
+        BILLING_SETTINGS_WRITE_TIMEOUT_MS,
+        "Permintaan cek billing settings timeout."
+      );
 
       if (existing) {
-        await supabase
-          .from("system_settings")
-          .update({ value: bankPayload, updated_at: new Date().toISOString() })
-          .eq("key", "billing_settings");
+        await withTimeout(
+          supabase
+            .from("system_settings")
+            .update({ value: bankPayload, updated_at: new Date().toISOString() })
+            .eq("key", "billing_settings"),
+          BILLING_SETTINGS_WRITE_TIMEOUT_MS,
+          "Simpan billing settings timeout."
+        );
       } else {
-        await supabase
-          .from("system_settings")
-          .insert({
-            key: "billing_settings",
-            value: bankPayload,
-            description: "Pengaturan rekening bank pemilik aplikasi",
-          });
+        await withTimeout(
+          supabase
+            .from("system_settings")
+            .insert({
+              key: "billing_settings",
+              value: bankPayload,
+              description: "Pengaturan rekening bank pemilik aplikasi",
+            }),
+          BILLING_SETTINGS_WRITE_TIMEOUT_MS,
+          "Simpan billing settings timeout."
+        );
       }
 
       const templatePayload: Json = {
         html_template: invoiceTemplateHtml.trim() || DEFAULT_BILLING_INVOICE_TEMPLATE,
       };
-      const { data: existingTemplate } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "billing_invoice_template")
-        .maybeSingle();
+      const { data: existingTemplate } = await withTimeout(
+        supabase
+          .from("system_settings")
+          .select("id")
+          .eq("key", "billing_invoice_template")
+          .maybeSingle(),
+        BILLING_SETTINGS_WRITE_TIMEOUT_MS,
+        "Permintaan cek template invoice timeout."
+      );
 
       if (existingTemplate) {
-        await supabase
-          .from("system_settings")
-          .update({ value: templatePayload, updated_at: new Date().toISOString() })
-          .eq("key", "billing_invoice_template");
+        await withTimeout(
+          supabase
+            .from("system_settings")
+            .update({ value: templatePayload, updated_at: new Date().toISOString() })
+            .eq("key", "billing_invoice_template"),
+          BILLING_SETTINGS_WRITE_TIMEOUT_MS,
+          "Simpan template invoice timeout."
+        );
       } else {
-        await supabase
-          .from("system_settings")
-          .insert({
-            key: "billing_invoice_template",
-            value: templatePayload,
-            description: "Template HTML lembar faktur yang digunakan saat print/download invoice organisasi.",
-          });
+        await withTimeout(
+          supabase
+            .from("system_settings")
+            .insert({
+              key: "billing_invoice_template",
+              value: templatePayload,
+              description: "Template HTML lembar faktur yang digunakan saat print/download invoice organisasi.",
+            }),
+          BILLING_SETTINGS_WRITE_TIMEOUT_MS,
+          "Simpan template invoice timeout."
+        );
       }
 
       toast.success("Pengaturan billing berhasil disimpan");
@@ -178,14 +247,30 @@ export function BillingSettings() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-32">
-        <Loader2 className="h-6 w-6 animate-spin" />
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-10 text-center">
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+        </div>
+        <p className="text-base font-medium text-slate-900">Memuat pengaturan billing</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Konfigurasi rekening, biaya, dan template invoice sedang diproses.
+        </p>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
+      {isRetrying && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+          Sedang mencoba ulang memuat pengaturan billing...
+        </div>
+      )}
+      {loadError && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {loadError}
+        </div>
+      )}
       {/* Bank Account Settings */}
       <Card className="border-primary/30">
         <CardHeader className="pb-3">

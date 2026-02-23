@@ -26,6 +26,8 @@ import { OrganizationOffices } from "@/components/admin/organization/Organizatio
 import { OrganizationSubscription } from "@/components/admin/organization/OrganizationSubscription";
 import { OrganizationSettings } from "@/components/admin/organization/OrganizationSettings";
 import { OrganizationAuditLog } from "@/components/admin/organization/OrganizationAuditLog";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 interface Organization {
   id: string;
@@ -48,10 +50,14 @@ const orgTypeLabels: Record<string, string> = {
 };
 
 export default function OrganizationDetail() {
+  const ADMIN_ORG_DETAIL_QUERY_TIMEOUT_MS = 15000;
+  const ADMIN_ORG_DETAIL_QUERY_RETRY_MAX = 1;
   const navigate = useNavigate();
   const { id: orgId } = useParams();
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("overview");
   const [stats, setStats] = useState({
     employeesCount: 0,
@@ -61,20 +67,37 @@ export default function OrganizationDetail() {
 
   const fetchOrganization = useCallback(async (id: string) => {
     try {
-      const { data, error } = await supabase
-        .from("tenants")
-        .select("*")
-        .eq("id", id)
-        .single();
+      setIsRetrying(false);
+      setLoadError(null);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("tenants")
+              .select("*")
+              .eq("id", id)
+              .single(),
+            ADMIN_ORG_DETAIL_QUERY_TIMEOUT_MS,
+            "admin.organization_detail.fetch_organization timeout",
+          ),
+        {
+          maxRetries: ADMIN_ORG_DETAIL_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
       setOrganization(data);
     } catch (error) {
-      console.error("Error fetching organization:", error);
-      toast.error("Gagal memuat data organisasi");
+      const errorRef = reportError(error, "admin.organization_detail.fetch_organization", { tenant_id: id });
+      const message = appendErrorReference("Gagal memuat data organisasi", errorRef);
+      setLoadError(message);
+      toast.error(message);
       navigate("/admin");
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   }, [navigate]);
 
@@ -87,11 +110,52 @@ export default function OrganizationDetail() {
 
   const fetchStats = async (tenantId: string) => {
     try {
+      setIsRetrying(false);
       const [employeesRes, officesRes, opdRes] = await Promise.all([
-        supabase.from("employees").select("*", { count: "exact", head: true }).eq("tenant_id", tenantId),
-        supabase.from("offices").select("*", { count: "exact", head: true }).eq("tenant_id", tenantId),
-        supabase.from("opd").select("*", { count: "exact", head: true }).eq("tenant_id", tenantId),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("employees").select("*", { count: "exact", head: true }).eq("tenant_id", tenantId),
+              ADMIN_ORG_DETAIL_QUERY_TIMEOUT_MS,
+              "admin.organization_detail.fetch_stats.employees timeout",
+            ),
+          {
+            maxRetries: ADMIN_ORG_DETAIL_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("offices").select("*", { count: "exact", head: true }).eq("tenant_id", tenantId),
+              ADMIN_ORG_DETAIL_QUERY_TIMEOUT_MS,
+              "admin.organization_detail.fetch_stats.offices timeout",
+            ),
+          {
+            maxRetries: ADMIN_ORG_DETAIL_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("opd").select("*", { count: "exact", head: true }).eq("tenant_id", tenantId),
+              ADMIN_ORG_DETAIL_QUERY_TIMEOUT_MS,
+              "admin.organization_detail.fetch_stats.opd timeout",
+            ),
+          {
+            maxRetries: ADMIN_ORG_DETAIL_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        ),
       ]);
+
+      if (employeesRes.error) throw employeesRes.error;
+      if (officesRes.error) throw officesRes.error;
+      if (opdRes.error) throw opdRes.error;
 
       setStats({
         employeesCount: employeesRes.count || 0,
@@ -99,7 +163,12 @@ export default function OrganizationDetail() {
         opdCount: opdRes.count || 0,
       });
     } catch (error) {
-      console.error("Error fetching stats:", error);
+      const errorRef = reportError(error, "admin.organization_detail.fetch_stats", { tenant_id: tenantId });
+      const message = appendErrorReference("Gagal memuat statistik organisasi", errorRef);
+      setLoadError((prev) => prev ?? message);
+      toast.error(message);
+    } finally {
+      setIsRetrying(false);
     }
   };
 
@@ -152,15 +221,31 @@ export default function OrganizationDetail() {
       </header>
 
       <main className="container mx-auto px-4 py-8">
+        {isRetrying && (
+          <Card className="mb-4 border-amber-300/60 bg-amber-50">
+            <CardContent className="pt-4">
+              <p className="text-sm text-amber-800">Sedang mencoba ulang koneksi data detail organisasi...</p>
+            </CardContent>
+          </Card>
+        )}
+        {loadError && (
+          <Card className="mb-4 border-destructive/40">
+            <CardContent className="pt-4">
+              <p className="text-sm text-destructive">{loadError}</p>
+            </CardContent>
+          </Card>
+        )}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="mb-6">
-            {tabs.map((tab) => (
-              <TabsTrigger key={tab.id} value={tab.id} className="flex items-center gap-2">
-                <tab.icon className="h-4 w-4" />
-                {tab.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
+          <div className="mb-6 overflow-x-auto pb-1">
+            <TabsList className="min-w-max h-auto gap-1.5 rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+              {tabs.map((tab) => (
+                <TabsTrigger key={tab.id} value={tab.id} className="flex items-center gap-2 whitespace-nowrap">
+                  <tab.icon className="h-4 w-4" />
+                  {tab.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </div>
 
           <TabsContent value="overview">
             <div className="grid gap-6 md:grid-cols-3">

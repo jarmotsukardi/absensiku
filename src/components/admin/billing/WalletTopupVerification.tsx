@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   AlertDialog,
@@ -77,9 +79,15 @@ export function WalletTopupVerification({
   focusRequestId = null,
   sourceErrorRef = null,
 }: WalletTopupVerificationProps) {
+  const FETCH_TIMEOUT_MS = 12000;
+  const FETCH_RETRY_MAX = 2;
+  const REVIEW_TIMEOUT_MS = 12000;
+  const REVIEW_RETRY_MAX = 1;
   const navigate = useNavigate();
   const [rows, setRows] = useState<WalletTopupAdminRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("PENDING");
   const [query, setQuery] = useState("");
 
@@ -95,12 +103,27 @@ export function WalletTopupVerification({
 
   const fetchRows = useCallback(async () => {
     setIsLoading(true);
+    setIsRetrying(false);
+    setLoadError(null);
     try {
-      const { data, error } = await supabase.rpc("get_wallet_topup_requests_admin" as never, {
-        p_status: statusFilter === "ALL" ? null : statusFilter,
-        p_limit: 200,
-        p_offset: 0,
-      } as never);
+      const { data, error } = await withExponentialBackoff(
+        async () =>
+          withTimeout(
+            supabase.rpc("get_wallet_topup_requests_admin" as never, {
+              p_status: statusFilter === "ALL" ? null : statusFilter,
+              p_limit: 200,
+              p_offset: 0,
+            } as never),
+            FETCH_TIMEOUT_MS,
+            "Memuat data topup saldo terlalu lama",
+          ),
+        {
+          maxRetries: FETCH_RETRY_MAX,
+          baseDelay: 450,
+          shouldRetry: (err) => isRetryableError(err),
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (error) throw error;
 
       const payload = data as { rows?: WalletTopupAdminRow[] } | null;
@@ -113,8 +136,10 @@ export function WalletTopupVerification({
     } catch (error) {
       const errorRef = reportError(error, "admin.billing.wallet_topup.fetch");
       toast.error(appendErrorReference("Gagal memuat data topup saldo.", errorRef));
+      setLoadError(appendErrorReference("Gagal memuat data topup saldo.", errorRef));
       setRows([]);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [statusFilter]);
@@ -164,29 +189,53 @@ export function WalletTopupVerification({
         return;
       }
 
-      const { error } = await supabase.rpc("review_wallet_topup_request" as never, {
-        p_request_id: selectedRow.id,
-        p_action: reviewAction,
-        p_approved_amount: reviewAction === "APPROVE" ? approvedAmount : null,
-        p_rejection_reason: reviewAction === "REJECT" ? rejectionReason.trim() : null,
-        p_notes: reviewNotes.trim() || null,
-      } as never);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("review_wallet_topup_request" as never, {
+              p_request_id: selectedRow.id,
+              p_action: reviewAction,
+              p_approved_amount: reviewAction === "APPROVE" ? approvedAmount : null,
+              p_rejection_reason: reviewAction === "REJECT" ? rejectionReason.trim() : null,
+              p_notes: reviewNotes.trim() || null,
+            } as never),
+            REVIEW_TIMEOUT_MS,
+            "Memproses review topup terlalu lama",
+          ),
+        {
+          maxRetries: REVIEW_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (error) throw error;
 
-      const dispatchRes = await supabase.functions.invoke<{
-        success?: boolean;
-        trace_id?: string;
-        channels?: {
-          whatsapp?: { ok?: boolean; skipped?: boolean; reason?: string; error?: string };
-          email?: { ok?: boolean; skipped?: boolean; reason?: string; error?: string };
-        };
-        error?: string;
-      }>("dispatch-wallet-topup-notification", {
-        body: {
-          topup_request_id: selectedRow.id,
-          trigger: "ADMIN_REVIEW_TOPUP",
+      const dispatchRes = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.functions.invoke<{
+              success?: boolean;
+              trace_id?: string;
+              channels?: {
+                whatsapp?: { ok?: boolean; skipped?: boolean; reason?: string; error?: string };
+                email?: { ok?: boolean; skipped?: boolean; reason?: string; error?: string };
+              };
+              error?: string;
+            }>("dispatch-wallet-topup-notification", {
+              body: {
+                topup_request_id: selectedRow.id,
+                trigger: "ADMIN_REVIEW_TOPUP",
+              },
+            }),
+            REVIEW_TIMEOUT_MS,
+            "Mengirim notifikasi topup terlalu lama",
+          ),
+        {
+          maxRetries: REVIEW_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
         },
-      });
+      );
 
       if (dispatchRes.error || dispatchRes.data?.success === false) {
         const errorRef = reportError(dispatchRes.error || dispatchRes.data || "topup notification dispatch failed", "admin.billing.wallet_topup.dispatch_failed", {
@@ -252,33 +301,57 @@ export function WalletTopupVerification({
     setIsResolvingSourceError(true);
     try {
       const nowIso = new Date().toISOString();
-      const { data: resolvedRows, error: resolveError } = await supabase
-        .from("client_error_logs")
-        .update({
-          is_resolved: true,
-          resolved_at: nowIso,
-          resolution_note: "Diselesaikan dari review topup saldo",
-        } as never)
-        .eq("error_ref", sourceErrorRef)
-        .eq("is_resolved", false)
-        .select("id, tenant_id");
+      const { data: resolvedRows, error: resolveError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("client_error_logs")
+              .update({
+                is_resolved: true,
+                resolved_at: nowIso,
+                resolution_note: "Diselesaikan dari review topup saldo",
+              } as never)
+              .eq("error_ref", sourceErrorRef)
+              .eq("is_resolved", false)
+              .select("id, tenant_id"),
+            REVIEW_TIMEOUT_MS,
+            "Menandai log selesai terlalu lama",
+          ),
+        {
+          maxRetries: REVIEW_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (resolveError) throw resolveError;
 
       const resolvedCount = Array.isArray(resolvedRows) ? resolvedRows.length : 0;
 
-      const { data: archivedRows, error: archiveError } = await supabase
-        .from("client_error_logs")
-        .update({
-          is_archived: true,
-          archived_at: nowIso,
-          archive_note: "Auto-arsip dari review topup saldo",
-        } as never)
-        .eq("error_ref", sourceErrorRef)
-        .eq("is_non_critical", false)
-        .eq("is_resolved", true)
-        .eq("is_archived", false)
-        .select("id, tenant_id");
+      const { data: archivedRows, error: archiveError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("client_error_logs")
+              .update({
+                is_archived: true,
+                archived_at: nowIso,
+                archive_note: "Auto-arsip dari review topup saldo",
+              } as never)
+              .eq("error_ref", sourceErrorRef)
+              .eq("is_non_critical", false)
+              .eq("is_resolved", true)
+              .eq("is_archived", false)
+              .select("id, tenant_id"),
+            REVIEW_TIMEOUT_MS,
+            "Mengarsipkan log kritis terlalu lama",
+          ),
+        {
+          maxRetries: REVIEW_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (archiveError) throw archiveError;
 
@@ -288,13 +361,25 @@ export function WalletTopupVerification({
         (Array.isArray(archivedRows) && archivedRows.find((row) => row.tenant_id)?.tenant_id) ||
         null;
 
-      const { error: auditError } = await supabase.rpc("log_wallet_topup_error_resolution_audit" as never, {
-        p_error_ref: sourceErrorRef,
-        p_topup_request_id: focusRequestId || null,
-        p_tenant_id: tenantIdFromRows,
-        p_resolved_count: resolvedCount,
-        p_archived_count: archivedCount,
-      } as never);
+      const { error: auditError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("log_wallet_topup_error_resolution_audit" as never, {
+              p_error_ref: sourceErrorRef,
+              p_topup_request_id: focusRequestId || null,
+              p_tenant_id: tenantIdFromRows,
+              p_resolved_count: resolvedCount,
+              p_archived_count: archivedCount,
+            } as never),
+            REVIEW_TIMEOUT_MS,
+            "Mencatat audit penyelesaian log terlalu lama",
+          ),
+        {
+          maxRetries: REVIEW_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (auditError) {
         reportError(auditError, "admin.billing.wallet_topup.audit_log_failed", {
           source_error_ref: sourceErrorRef,
@@ -318,6 +403,7 @@ export function WalletTopupVerification({
       toast.error(appendErrorReference("Gagal menandai log error sebagai selesai.", errorRef));
     } finally {
       setIsResolvingSourceError(false);
+      setIsRetrying(false);
     }
   };
 
@@ -364,7 +450,7 @@ export function WalletTopupVerification({
                 <SelectItem value="ALL">Semua</SelectItem>
               </SelectContent>
             </Select>
-            <Button variant="outline" onClick={() => void fetchRows()} disabled={isLoading}>
+            <Button variant="outline" onClick={() => void fetchRows()} disabled={isLoading || isRetrying}>
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Refresh"}
             </Button>
           </div>
@@ -378,6 +464,22 @@ export function WalletTopupVerification({
             />
           </div>
         </div>
+        {isRetrying ? (
+          <div className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Mencoba memuat ulang otomatis...
+          </div>
+        ) : null}
+        {loadError ? (
+          <Alert variant="destructive">
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+              <span>{loadError}</span>
+              <Button variant="outline" size="sm" onClick={() => void fetchRows()} disabled={isLoading || isRetrying}>
+                Coba Lagi
+              </Button>
+            </AlertDescription>
+          </Alert>
+        ) : null}
 
         <div className="overflow-x-auto rounded-md border">
           <Table>
@@ -395,16 +497,29 @@ export function WalletTopupVerification({
               {isLoading ? (
                 <TableRow>
                   <TableCell colSpan={6} className="py-8 text-center">
-                    <div className="inline-flex items-center gap-2 text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Memuat request topup...
+                    <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
+                      <div className="rounded-full bg-slate-100 p-3">
+                        <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+                      </div>
+                      <p className="text-base font-medium text-slate-800">Memuat request topup</p>
+                      <p className="text-sm text-muted-foreground">
+                        Data pengajuan topup sedang disiapkan. Mohon tunggu sebentar.
+                      </p>
                     </div>
                   </TableCell>
                 </TableRow>
               ) : filteredRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                    Tidak ada request topup.
+                  <TableCell colSpan={6} className="py-8">
+                    <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
+                      <div className="rounded-full bg-slate-100 p-3">
+                        <Search className="h-5 w-5 text-slate-500" />
+                      </div>
+                      <p className="text-base font-medium text-slate-800">Tidak ada request topup</p>
+                      <p className="text-sm text-muted-foreground">
+                        Ubah filter status atau kata kunci jika Anda mencari pengajuan tertentu.
+                      </p>
+                    </div>
                   </TableCell>
                 </TableRow>
               ) : (

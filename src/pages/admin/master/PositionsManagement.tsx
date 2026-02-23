@@ -22,6 +22,12 @@ import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 type OPD = Tables<"opd">;
 
@@ -36,9 +42,12 @@ interface Position {
 export default function PositionsManagement() {
   const confirmDialog = useConfirmDialog();
   const ITEMS_PER_PAGE = 15;
+  const READ_TIMEOUT_MS = 12000;
+  const MAX_RETRIES = 2;
   const [positions, setPositions] = useState<Position[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
@@ -50,11 +59,24 @@ export default function PositionsManagement() {
     try {
       setIsLoading(true);
       setLoadError(null);
+      setIsRetrying(false);
       
-      const { data: opdData, error: opdError } = await supabase
-        .from("opd")
-        .select("*")
-        .order("name");
+      const { data: opdData, error: opdError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("opd")
+              .select("*")
+              .order("name"),
+            READ_TIMEOUT_MS,
+            "Permintaan data OPD timeout."
+          ),
+        {
+          maxRetries: MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (opdError) throw opdError;
       setOpdList(opdData || []);
@@ -68,6 +90,7 @@ export default function PositionsManagement() {
       setPositions([]);
       toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, []);
@@ -123,6 +146,12 @@ export default function PositionsManagement() {
   return (
     <SuperAdminLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+            Mencoba ulang memuat data jabatan...
+          </div>
+        )}
+
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Data Jabatan</h1>
@@ -175,11 +204,14 @@ export default function PositionsManagement() {
                     />
                   </div>
                 </div>
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                    Batal
-                  </Button>
-                  <Button type="submit">Simpan</Button>
+                <DialogFooter className={dialogActionBarClassName}>
+                  <DialogActionHint>Periksa OPD dan nama jabatan sebelum menyimpan.</DialogActionHint>
+                  <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                    <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                      Batal
+                    </Button>
+                    <Button type="submit">Simpan</Button>
+                  </div>
                 </DialogFooter>
               </form>
             </DialogContent>
@@ -187,8 +219,11 @@ export default function PositionsManagement() {
         </div>
 
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 

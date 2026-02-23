@@ -18,6 +18,11 @@ import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { toast } from "sonner";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 interface Organization {
   id: string;
@@ -42,12 +47,15 @@ const orgTypeLabels: Record<string, string> = {
   perusahaan: "Perusahaan",
   sekolah: "Sekolah",
 };
+const RECENT_ORG_READ_TIMEOUT_MS = 12000;
+const RECENT_ORG_MAX_RETRIES = 2;
 
 export function RecentOrganizations() {
   const navigate = useNavigate();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   useEffect(() => {
     fetchOrganizations();
@@ -55,12 +63,25 @@ export function RecentOrganizations() {
 
   const fetchOrganizations = async () => {
     try {
+      setIsRetrying(false);
       setLoadError(null);
-      const { data, error } = await supabase
-        .from("tenants")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(5);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("tenants")
+              .select("*")
+              .order("created_at", { ascending: false })
+              .limit(5),
+            RECENT_ORG_READ_TIMEOUT_MS,
+            "Permintaan organisasi terbaru timeout."
+          ),
+        {
+          maxRetries: RECENT_ORG_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setOrganizations(data || []);
@@ -71,6 +92,7 @@ export function RecentOrganizations() {
       toast.error(message);
       setOrganizations([]);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   };
@@ -112,8 +134,16 @@ export function RecentOrganizations() {
       </CardHeader>
       <CardContent>
         {loadError && (
-          <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-            {loadError}
+          <div className="mb-3 flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchOrganizations()}>
+              Coba Lagi
+            </Button>
+          </div>
+        )}
+        {isRetrying && (
+          <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700">
+            Sedang mencoba ulang memuat organisasi terbaru...
           </div>
         )}
         {organizations.length === 0 ? (

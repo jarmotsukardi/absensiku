@@ -21,6 +21,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 interface SecuritySettings {
   // GPS Validation
@@ -40,11 +41,14 @@ interface SecuritySettings {
   // APK Compatibility
   min_android_version: number;
 }
+const ATTENDANCE_SECURITY_QUERY_TIMEOUT_MS = 12000;
+const ATTENDANCE_SECURITY_QUERY_RETRY_MAX = 2;
 
 export default function AttendanceSecuritySettings() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [settings, setSettings] = useState<SecuritySettings>({
     // GPS Validation
     require_realtime_location: true,
@@ -71,11 +75,24 @@ export default function AttendanceSecuritySettings() {
   const fetchSettings = async () => {
     try {
       setLoadError(null);
-      const { data, error } = await supabase
-        .from("system_settings")
-        .select("*")
-        .eq("key", "attendance_security")
-        .maybeSingle();
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("*")
+              .eq("key", "attendance_security")
+              .maybeSingle(),
+            ATTENDANCE_SECURITY_QUERY_TIMEOUT_MS,
+            "admin.attendance_security.fetch_settings timeout"
+          ),
+        {
+          maxRetries: ATTENDANCE_SECURITY_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
 
@@ -115,28 +132,65 @@ export default function AttendanceSecuritySettings() {
     setIsSaving(true);
     try {
       setLoadError(null);
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "attendance_security")
-        .maybeSingle();
+      setIsRetrying(false);
+      const { data: existing } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("id")
+              .eq("key", "attendance_security")
+              .maybeSingle(),
+            ATTENDANCE_SECURITY_QUERY_TIMEOUT_MS,
+            "admin.attendance_security.save_settings.lookup timeout"
+          ),
+        {
+          maxRetries: ATTENDANCE_SECURITY_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       const settingsValue = JSON.parse(JSON.stringify(settings)) as Json;
 
       if (existing) {
-        const { error } = await supabase
-          .from("system_settings")
-          .update({ value: settingsValue, updated_at: new Date().toISOString() })
-          .eq("key", "attendance_security");
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("system_settings")
+                .update({ value: settingsValue, updated_at: new Date().toISOString() })
+                .eq("key", "attendance_security"),
+              ATTENDANCE_SECURITY_QUERY_TIMEOUT_MS,
+              "admin.attendance_security.save_settings.update timeout"
+            ),
+          {
+            maxRetries: ATTENDANCE_SECURITY_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (error) throw error;
       } else {
-        const { error } = await supabase
-          .from("system_settings")
-          .insert({
-            key: "attendance_security",
-            value: settingsValue,
-            description: "Pengaturan keamanan absensi GPS",
-          });
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("system_settings")
+                .insert({
+                  key: "attendance_security",
+                  value: settingsValue,
+                  description: "Pengaturan keamanan absensi GPS",
+                }),
+              ATTENDANCE_SECURITY_QUERY_TIMEOUT_MS,
+              "admin.attendance_security.save_settings.insert timeout"
+            ),
+          {
+            maxRetries: ATTENDANCE_SECURITY_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (error) throw error;
       }
 
@@ -198,18 +252,34 @@ export default function AttendanceSecuritySettings() {
           </Button>
         </div>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang memuat pengaturan keamanan...
+          </div>
+        )}
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void fetchSettings()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 
         <Tabs defaultValue="gps" className="space-y-4">
-          <TabsList className="grid w-full grid-cols-4">
-            <TabsTrigger value="gps">Validasi GPS</TabsTrigger>
-            <TabsTrigger value="device">Validasi Perangkat</TabsTrigger>
-            <TabsTrigger value="binding">Device Binding</TabsTrigger>
-            <TabsTrigger value="apk">Kompatibilitas Aplikasi</TabsTrigger>
+          <TabsList className="h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+            <TabsTrigger value="gps" className="whitespace-nowrap">
+              Validasi GPS
+            </TabsTrigger>
+            <TabsTrigger value="device" className="whitespace-nowrap">
+              Validasi Perangkat
+            </TabsTrigger>
+            <TabsTrigger value="binding" className="whitespace-nowrap">
+              Device Binding
+            </TabsTrigger>
+            <TabsTrigger value="apk" className="whitespace-nowrap">
+              Kompatibilitas Aplikasi
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="gps" className="space-y-4">

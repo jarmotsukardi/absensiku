@@ -41,6 +41,7 @@ import { NewsThumbnailPreview } from "@/components/common/NewsThumbnailPreview";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 interface NewsItem {
   id: string;
@@ -66,9 +67,12 @@ const htmlToPlainText = (value: string): string => {
 };
 
 export default function OrgNewsManagement() {
+  const ORG_NEWS_QUERY_TIMEOUT_MS = 15000;
+  const ORG_NEWS_QUERY_RETRY_MAX = 1;
   const [news, setNews] = useState<NewsItem[]>([]);
   const [totalNews, setTotalNews] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<"all" | "published" | "draft">("all");
@@ -98,21 +102,45 @@ export default function OrgNewsManagement() {
     const batchSize = 100;
 
     while (true) {
-      const { data: overflowRows, error: overflowError } = await supabase
-        .from("announcements")
-        .select("id")
-        .eq("tenant_id", tid)
-        .order("created_at", { ascending: false })
-        .range(MAX_ANNOUNCEMENTS, MAX_ANNOUNCEMENTS + batchSize - 1);
+      const { data: overflowRows, error: overflowError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("announcements")
+              .select("id")
+              .eq("tenant_id", tid)
+              .order("created_at", { ascending: false })
+              .range(MAX_ANNOUNCEMENTS, MAX_ANNOUNCEMENTS + batchSize - 1),
+            ORG_NEWS_QUERY_TIMEOUT_MS,
+            "org.news.enforce_limit.select_overflow timeout",
+          ),
+        {
+          maxRetries: ORG_NEWS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (overflowError) throw overflowError;
 
       const idsToDelete = (overflowRows || []).map((row) => row.id);
       if (idsToDelete.length === 0) break;
 
-      const { error: deleteError } = await supabase
-        .from("announcements")
-        .delete()
-        .in("id", idsToDelete);
+      const { error: deleteError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("announcements")
+              .delete()
+              .in("id", idsToDelete),
+            ORG_NEWS_QUERY_TIMEOUT_MS,
+            "org.news.enforce_limit.delete_overflow timeout",
+          ),
+        {
+          maxRetries: ORG_NEWS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (deleteError) throw deleteError;
 
       totalDeleted += idsToDelete.length;
@@ -126,6 +154,7 @@ export default function OrgNewsManagement() {
     setIsLoading(true);
     setLoadError(null);
     try {
+      setIsRetrying(false);
       let query = supabase
         .from("announcements")
         .select("*", { count: "exact" })
@@ -143,10 +172,22 @@ export default function OrgNewsManagement() {
 
       const from = (currentPage - 1) * itemsPerPage;
       const to = from + itemsPerPage - 1;
-      const { data, error, count } = await query
-        .order("is_pinned", { ascending: false })
-        .order("created_at", { ascending: false })
-        .range(from, to);
+      const { data, error, count } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query
+              .order("is_pinned", { ascending: false })
+              .order("created_at", { ascending: false })
+              .range(from, to),
+            ORG_NEWS_QUERY_TIMEOUT_MS,
+            "org.news.fetch timeout",
+          ),
+        {
+          maxRetries: ORG_NEWS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
       setNews(data || []);
@@ -160,13 +201,27 @@ export default function OrgNewsManagement() {
       setTotalNews(0);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   }, [currentPage, filterStatus, itemsPerPage, searchQuery]);
 
   const fetchTenantAndNews = useCallback(async () => {
     let shouldStopLoading = true;
     try {
-      const resolvedTenantId = await resolveOrgTenantId();
+      setIsRetrying(false);
+      const resolvedTenantId = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            resolveOrgTenantId(),
+            ORG_NEWS_QUERY_TIMEOUT_MS,
+            "org.news.fetch_tenant_and_news timeout",
+          ),
+        {
+          maxRetries: ORG_NEWS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (resolvedTenantId) {
         shouldStopLoading = false;
@@ -180,6 +235,7 @@ export default function OrgNewsManagement() {
       setLoadError(message);
       toast.error(message);
     } finally {
+      setIsRetrying(false);
       if (shouldStopLoading) {
         setIsLoading(false);
       }
@@ -212,30 +268,55 @@ export default function OrgNewsManagement() {
     }
 
     try {
+      setIsRetrying(false);
       if (isEditing && editingId) {
-        const { error } = await supabase
-          .from("announcements")
-          .update({
-            title: formData.title,
-            content: normalizedContent,
-            is_published: formData.is_published,
-            is_pinned: formData.is_pinned,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", editingId);
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("announcements")
+                .update({
+                  title: formData.title,
+                  content: normalizedContent,
+                  is_published: formData.is_published,
+                  is_pinned: formData.is_pinned,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", editingId),
+              ORG_NEWS_QUERY_TIMEOUT_MS,
+              "org.news.submit.update timeout",
+            ),
+          {
+            maxRetries: ORG_NEWS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
 
         if (error) throw error;
         toast.success("Pengumuman berhasil diperbarui");
       } else {
-        const { error } = await supabase
-          .from("announcements")
-          .insert({
-            title: formData.title,
-            content: normalizedContent,
-            is_published: formData.is_published,
-            is_pinned: formData.is_pinned,
-            tenant_id: tenantId,
-          });
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("announcements")
+                .insert({
+                  title: formData.title,
+                  content: normalizedContent,
+                  is_published: formData.is_published,
+                  is_pinned: formData.is_pinned,
+                  tenant_id: tenantId,
+                }),
+              ORG_NEWS_QUERY_TIMEOUT_MS,
+              "org.news.submit.insert timeout",
+            ),
+          {
+            maxRetries: ORG_NEWS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
 
         if (error) throw error;
         const deletedCount = tenantId ? await enforceAnnouncementLimit(tenantId) : 0;
@@ -249,8 +330,13 @@ export default function OrgNewsManagement() {
       resetForm();
       if (tenantId) void fetchNews(tenantId);
     } catch (error) {
-      console.error("Error saving news:", error);
-      toast.error("Gagal menyimpan pengumuman");
+      const errorRef = reportError(error, "org.news.submit", {
+        is_editing: isEditing,
+        announcement_id: editingId,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan pengumuman", errorRef));
+    } finally {
+      setIsRetrying(false);
     }
   };
 
@@ -270,10 +356,23 @@ export default function OrgNewsManagement() {
     if (!deletingId) return;
 
     try {
-      const { error } = await supabase
-        .from("announcements")
-        .delete()
-        .eq("id", deletingId);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("announcements")
+              .delete()
+              .eq("id", deletingId),
+            ORG_NEWS_QUERY_TIMEOUT_MS,
+            "org.news.delete timeout",
+          ),
+        {
+          maxRetries: ORG_NEWS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
       toast.success("Pengumuman berhasil dihapus");
@@ -281,23 +380,44 @@ export default function OrgNewsManagement() {
       setDeletingId(null);
       if (tenantId) void fetchNews(tenantId);
     } catch (error) {
-      console.error("Error deleting news:", error);
-      toast.error("Gagal menghapus pengumuman");
+      const errorRef = reportError(error, "org.news.delete", { announcement_id: deletingId });
+      toast.error(appendErrorReference("Gagal menghapus pengumuman", errorRef));
+    } finally {
+      setIsRetrying(false);
     }
   };
 
   const togglePublish = async (id: string, currentStatus: boolean) => {
     try {
-      const { error } = await supabase
-        .from("announcements")
-        .update({ is_published: !currentStatus })
-        .eq("id", id);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("announcements")
+              .update({ is_published: !currentStatus })
+              .eq("id", id),
+            ORG_NEWS_QUERY_TIMEOUT_MS,
+            "org.news.toggle_publish timeout",
+          ),
+        {
+          maxRetries: ORG_NEWS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
       toast.success(currentStatus ? "Pengumuman disembunyikan" : "Pengumuman dipublikasikan");
       if (tenantId) void fetchNews(tenantId);
     } catch (error) {
-      toast.error("Gagal mengubah status");
+      const errorRef = reportError(error, "org.news.toggle_publish", {
+        announcement_id: id,
+        current_status: currentStatus,
+      });
+      toast.error(appendErrorReference("Gagal mengubah status", errorRef));
+    } finally {
+      setIsRetrying(false);
     }
   };
 
@@ -418,7 +538,30 @@ export default function OrgNewsManagement() {
         {loadError && (
           <Card className="border-destructive/40">
             <CardContent className="pt-6">
-              <p className="text-sm text-destructive">{loadError}</p>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-destructive">{loadError}</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (tenantId) {
+                      void fetchNews(tenantId);
+                    } else {
+                      void fetchTenantAndNews();
+                    }
+                  }}
+                >
+                  Coba Lagi
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        {isRetrying && (
+          <Card className="border-amber-300/60 bg-amber-50">
+            <CardContent className="pt-4">
+              <p className="text-sm text-amber-800">Sedang mencoba ulang koneksi data pengumuman...</p>
             </CardContent>
           </Card>
         )}
@@ -426,7 +569,7 @@ export default function OrgNewsManagement() {
         {/* Filters */}
         <Card>
           <CardContent className="p-4">
-            <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-white/80 p-3 shadow-sm sm:flex-row sm:items-center">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -439,7 +582,7 @@ export default function OrgNewsManagement() {
                   }}
                 />
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <Button
                   variant={filterStatus === "all" ? "default" : "outline"}
                   size="sm"

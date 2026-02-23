@@ -5,10 +5,12 @@ import { ExternalLink, Loader2, Search } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 interface ArchivedManualPayment {
@@ -58,31 +60,50 @@ const getDaysRemaining = (expiresAt: string | null): number | null => {
 };
 
 export function ManualPaymentArchive() {
+  const ARCHIVE_TIMEOUT_MS = 12000;
+  const ARCHIVE_RETRIES = 2;
   const [rows, setRows] = useState<ArchivedManualPayment[]>([]);
   const [tenantsMap, setTenantsMap] = useState<Map<string, TenantLite>>(new Map());
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [retentionDays, setRetentionDays] = useState<number>(7);
 
   const fetchArchiveRows = useCallback(async () => {
     setIsLoading(true);
+    setIsRetrying(false);
+    setLoadError(null);
     try {
-      const [archiveRes, retentionRes] = await Promise.all([
-        supabase
-          .from("manual_payments")
-          .select(
-            "id, tenant_id, invoice_number, amount, confirmed_amount, verified_amount, payment_date, reference_number, transfer_proof_url, archived_at, archive_expires_at, status, verification_method",
-          )
-          .eq("is_archived", true)
-          .order("archived_at", { ascending: false })
-          .limit(500),
-        supabase
-          .from("system_settings")
-          .select("value")
-          .eq("key", "payment_archive_retention_days")
-          .maybeSingle(),
-      ]);
+      const [archiveRes, retentionRes] = await withExponentialBackoff(
+        async () =>
+          withTimeout(
+            Promise.all([
+              supabase
+                .from("manual_payments")
+                .select(
+                  "id, tenant_id, invoice_number, amount, confirmed_amount, verified_amount, payment_date, reference_number, transfer_proof_url, archived_at, archive_expires_at, status, verification_method",
+                )
+                .eq("is_archived", true)
+                .order("archived_at", { ascending: false })
+                .limit(500),
+              supabase
+                .from("system_settings")
+                .select("value")
+                .eq("key", "payment_archive_retention_days")
+                .maybeSingle(),
+            ]),
+            ARCHIVE_TIMEOUT_MS,
+            "Memuat arsip pembayaran terlalu lama",
+          ),
+        {
+          maxRetries: ARCHIVE_RETRIES,
+          baseDelay: 500,
+          shouldRetry: (err) => isRetryableError(err),
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (archiveRes.error) throw archiveRes.error;
 
       const retentionRaw = (retentionRes.data?.value as { value?: unknown } | number | string | null) ?? 7;
@@ -103,10 +124,14 @@ export function ManualPaymentArchive() {
         return;
       }
 
-      const { data: tenantRows, error: tenantError } = await supabase
-        .from("tenants")
-        .select("id, name, code")
-        .in("id", tenantIds);
+      const { data: tenantRows, error: tenantError } = await withTimeout(
+        supabase
+          .from("tenants")
+          .select("id, name, code")
+          .in("id", tenantIds),
+        ARCHIVE_TIMEOUT_MS,
+        "Memuat data tenant arsip terlalu lama",
+      );
       if (tenantError) throw tenantError;
 
       const nextMap = new Map<string, TenantLite>();
@@ -117,9 +142,11 @@ export function ManualPaymentArchive() {
     } catch (error) {
       const errorRef = reportError(error, "admin.billing.manual_payment_archive.fetch");
       toast.error(appendErrorReference("Gagal memuat arsip validasi pembayaran", errorRef));
+      setLoadError(appendErrorReference("Gagal memuat arsip validasi pembayaran.", errorRef));
       setRows([]);
       setTenantsMap(new Map());
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, []);
@@ -162,10 +189,26 @@ export function ManualPaymentArchive() {
           <div className="text-sm text-muted-foreground">
             Menampilkan arsip pembayaran manual yang sudah diverifikasi. Retensi aktif: <strong>{retentionDays} hari</strong>.
           </div>
-          <Button variant="outline" size="sm" onClick={() => void fetchArchiveRows()} disabled={isLoading}>
+          <Button variant="outline" size="sm" onClick={() => void fetchArchiveRows()} disabled={isLoading || isRetrying}>
             {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Refresh"}
           </Button>
         </div>
+        {isRetrying ? (
+          <div className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            Mencoba memuat ulang otomatis...
+          </div>
+        ) : null}
+        {loadError ? (
+          <Alert variant="destructive">
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+              <span>{loadError}</span>
+              <Button variant="outline" size="sm" onClick={() => void fetchArchiveRows()} disabled={isLoading || isRetrying}>
+                Coba Lagi
+              </Button>
+            </AlertDescription>
+          </Alert>
+        ) : null}
 
         <div className="relative w-full sm:max-w-sm">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -194,16 +237,29 @@ export function ManualPaymentArchive() {
               {isLoading ? (
                 <TableRow>
                   <TableCell colSpan={7} className="py-8 text-center">
-                    <div className="inline-flex items-center gap-2 text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Memuat arsip...
+                    <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
+                      <div className="rounded-full bg-slate-100 p-3">
+                        <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+                      </div>
+                      <p className="text-base font-medium text-slate-800">Memuat arsip pembayaran</p>
+                      <p className="text-sm text-muted-foreground">
+                        Riwayat validasi arsip sedang disiapkan. Mohon tunggu sebentar.
+                      </p>
                     </div>
                   </TableCell>
                 </TableRow>
               ) : pageRows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="py-8 text-center text-muted-foreground">
-                    Tidak ada data arsip.
+                  <TableCell colSpan={7} className="py-8">
+                    <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
+                      <div className="rounded-full bg-slate-100 p-3">
+                        <Search className="h-5 w-5 text-slate-500" />
+                      </div>
+                      <p className="text-base font-medium text-slate-800">Tidak ada data arsip</p>
+                      <p className="text-sm text-muted-foreground">
+                        Coba ubah kata kunci pencarian atau refresh untuk memuat data terbaru.
+                      </p>
+                    </div>
                   </TableCell>
                 </TableRow>
               ) : (

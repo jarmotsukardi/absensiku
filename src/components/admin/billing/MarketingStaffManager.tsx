@@ -25,6 +25,11 @@ import { Plus, Pencil, Trash2, Loader2, Users, TrendingUp } from "lucide-react";
 import { toast } from "sonner";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 interface MarketingStaff {
   id: string;
@@ -57,6 +62,9 @@ const emptyStaff: Partial<MarketingStaff> = {
   is_active: true,
   notes: "",
 };
+const MARKETING_STAFF_READ_TIMEOUT_MS = 12000;
+const MARKETING_STAFF_WRITE_TIMEOUT_MS = 15000;
+const MARKETING_STAFF_MAX_RETRIES = 2;
 
 export function MarketingStaffManager() {
   const confirmDialog = useConfirmDialog();
@@ -66,23 +74,43 @@ export function MarketingStaffManager() {
   const [showDialog, setShowDialog] = useState(false);
   const [editingStaff, setEditingStaff] = useState<Partial<MarketingStaff> | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const getErrorMessage = (error: unknown) =>
     error instanceof Error ? error.message : "Unknown error";
 
   const fetchStaff = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("marketing_staff")
-        .select("*")
-        .order("name");
+      setLoadError(null);
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("marketing_staff")
+              .select("*")
+              .order("name"),
+            MARKETING_STAFF_READ_TIMEOUT_MS,
+            "Permintaan data tim marketing timeout."
+          ),
+        {
+          maxRetries: MARKETING_STAFF_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setStaff(data || []);
     } catch (error) {
-      reportError(error, "admin.billing.marketing_staff.fetch");
-      console.error("Error:", error);
+      const errorRef = reportError(error, "admin.billing.marketing_staff.fetch");
+      const message = appendErrorReference("Gagal memuat tim marketing", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setStaff([]);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, []);
@@ -107,39 +135,47 @@ export function MarketingStaffManager() {
     setIsSaving(true);
     try {
       if (editingStaff.id) {
-        const { error } = await supabase
-          .from("marketing_staff")
-          .update({
-            name: editingStaff.name,
-            email: editingStaff.email,
-            phone: editingStaff.phone,
-            whatsapp: editingStaff.whatsapp,
-            incentive_percentage: editingStaff.incentive_percentage,
-            is_active: editingStaff.is_active,
-            notes: editingStaff.notes,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", editingStaff.id);
+        const { error } = await withTimeout(
+          supabase
+            .from("marketing_staff")
+            .update({
+              name: editingStaff.name,
+              email: editingStaff.email,
+              phone: editingStaff.phone,
+              whatsapp: editingStaff.whatsapp,
+              incentive_percentage: editingStaff.incentive_percentage,
+              is_active: editingStaff.is_active,
+              notes: editingStaff.notes,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", editingStaff.id),
+          MARKETING_STAFF_WRITE_TIMEOUT_MS,
+          "Perbarui data marketing timeout."
+        );
         if (error) throw error;
         toast.success("Data marketing diperbarui");
       } else {
-        const { error } = await supabase.from("marketing_staff").insert([
-          {
-            name: editingStaff.name,
-            email: editingStaff.email,
-            phone: editingStaff.phone,
-            whatsapp: editingStaff.whatsapp,
-            incentive_percentage: editingStaff.incentive_percentage,
-            is_active: editingStaff.is_active,
-            notes: editingStaff.notes,
-          },
-        ]);
+        const { error } = await withTimeout(
+          supabase.from("marketing_staff").insert([
+            {
+              name: editingStaff.name,
+              email: editingStaff.email,
+              phone: editingStaff.phone,
+              whatsapp: editingStaff.whatsapp,
+              incentive_percentage: editingStaff.incentive_percentage,
+              is_active: editingStaff.is_active,
+              notes: editingStaff.notes,
+            },
+          ]),
+          MARKETING_STAFF_WRITE_TIMEOUT_MS,
+          "Tambah staff marketing timeout."
+        );
         if (error) throw error;
         toast.success("Marketing berhasil ditambahkan");
       }
       setShowDialog(false);
       setEditingStaff(null);
-      fetchStaff();
+      void fetchStaff();
     } catch (error) {
       const errorRef = reportError(error, "admin.billing.marketing_staff.save", {
         staff_id: editingStaff?.id || null,
@@ -162,10 +198,14 @@ export function MarketingStaffManager() {
       return;
     }
     try {
-      const { error } = await supabase.from("marketing_staff").delete().eq("id", id);
+      const { error } = await withTimeout(
+        supabase.from("marketing_staff").delete().eq("id", id),
+        MARKETING_STAFF_WRITE_TIMEOUT_MS,
+        "Hapus staff marketing timeout."
+      );
       if (error) throw error;
       toast.success("Marketing dihapus");
-      fetchStaff();
+      void fetchStaff();
     } catch (error) {
       const errorRef = reportError(error, "admin.billing.marketing_staff.delete", { staff_id: id });
       toast.error(appendErrorReference("Gagal menghapus: " + getErrorMessage(error), errorRef));
@@ -183,14 +223,33 @@ export function MarketingStaffManager() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-32">
-        <Loader2 className="h-6 w-6 animate-spin" />
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-10 text-center">
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+        </div>
+        <p className="text-base font-medium text-slate-900">Memuat tim marketing</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Data staff dan statistik penjualan sedang disiapkan.
+        </p>
       </div>
     );
   }
 
   return (
     <div className="space-y-4">
+      {isRetrying && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+          Sedang mencoba ulang memuat tim marketing...
+        </div>
+      )}
+      {loadError && (
+        <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+          <span>{loadError}</span>
+          <Button variant="outline" size="sm" onClick={() => void fetchStaff()}>
+            Coba Lagi
+          </Button>
+        </div>
+      )}
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-semibold">Tim Marketing</h3>
@@ -256,8 +315,16 @@ export function MarketingStaffManager() {
           <TableBody>
             {staff.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center text-muted-foreground">
-                  Belum ada tim marketing
+                <TableCell colSpan={7} className="py-10">
+                  <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
+                    <div className="rounded-full bg-slate-100 p-3">
+                      <Users className="h-5 w-5 text-slate-500" />
+                    </div>
+                    <p className="text-base font-medium text-slate-800">Belum ada tim marketing</p>
+                    <p className="text-sm text-muted-foreground">
+                      Tambahkan staff marketing agar insentif per invoice bisa dipantau.
+                    </p>
+                  </div>
                 </TableCell>
               </TableRow>
             ) : (

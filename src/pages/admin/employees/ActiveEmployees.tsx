@@ -15,6 +15,12 @@ import { Tables } from "@/integrations/supabase/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 import {
   Pagination,
   PaginationContent,
@@ -46,6 +52,9 @@ const GOLONGAN_OPTIONS = [
   "IV/a", "IV/b", "IV/c", "IV/d", "IV/e",
 ];
 const ITEMS_PER_PAGE = 15;
+const ADMIN_ACTIVE_EMP_READ_TIMEOUT_MS = 12000;
+const ADMIN_ACTIVE_EMP_WRITE_TIMEOUT_MS = 15000;
+const ADMIN_ACTIVE_EMP_MAX_RETRIES = 2;
 
 export default function ActiveEmployees() {
   const confirmDialog = useConfirmDialog();
@@ -58,6 +67,7 @@ export default function ActiveEmployees() {
   const [filterOpd, setFilterOpd] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [formData, setFormData] = useState({
@@ -79,9 +89,34 @@ export default function ActiveEmployees() {
 
   const fetchMasterData = async () => {
     try {
+      setIsRetrying(false);
       const [opdResult, officeResult] = await Promise.all([
-        supabase.from("opd").select("*").order("name"),
-        supabase.from("offices").select("*").order("name"),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("opd").select("*").order("name"),
+              ADMIN_ACTIVE_EMP_READ_TIMEOUT_MS,
+              "Permintaan daftar OPD timeout."
+            ),
+          {
+            maxRetries: ADMIN_ACTIVE_EMP_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("offices").select("*").order("name"),
+              ADMIN_ACTIVE_EMP_READ_TIMEOUT_MS,
+              "Permintaan daftar lokasi kerja timeout."
+            ),
+          {
+            maxRetries: ADMIN_ACTIVE_EMP_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
       ]);
 
       if (opdResult.error) throw opdResult.error;
@@ -94,12 +129,15 @@ export default function ActiveEmployees() {
       const message = appendErrorReference("Gagal memuat data referensi pegawai", errorRef);
       toast.error(message);
       setLoadError(message);
+    } finally {
+      setIsRetrying(false);
     }
   };
 
   const fetchEmployees = useCallback(async () => {
     try {
       setIsLoading(true);
+      setIsRetrying(false);
       setLoadError(null);
       const page = Math.max(1, currentPage);
       const from = (page - 1) * ITEMS_PER_PAGE;
@@ -118,9 +156,21 @@ export default function ActiveEmployees() {
         query = query.or(`name.ilike.%${escaped}%,nip.ilike.%${escaped}%,email.ilike.%${escaped}%`);
       }
 
-      const { data, error, count } = await query
-        .order("name")
-        .range(from, to);
+      const { data, error, count } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query
+              .order("name")
+              .range(from, to),
+            ADMIN_ACTIVE_EMP_READ_TIMEOUT_MS,
+            "Permintaan daftar pegawai aktif timeout."
+          ),
+        {
+          maxRetries: ADMIN_ACTIVE_EMP_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setEmployees(data || []);
@@ -133,6 +183,7 @@ export default function ActiveEmployees() {
       setEmployees([]);
       setTotalEmployees(0);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [currentPage, filterOpd, searchTerm]);
@@ -161,28 +212,44 @@ export default function ActiveEmployees() {
       };
 
       if (editingEmployee) {
-        const { error } = await supabase
-          .from("employees")
-          .update(employeeData)
-          .eq("id", editingEmployee.id);
+        const { error } = await withTimeout(
+          supabase
+            .from("employees")
+            .update(employeeData)
+            .eq("id", editingEmployee.id),
+          ADMIN_ACTIVE_EMP_WRITE_TIMEOUT_MS,
+          "Perbarui data pegawai timeout."
+        );
 
         if (error) throw error;
         toast.success("Pegawai berhasil diperbarui");
       } else {
-        const { data: { user } } = await supabase.auth.getUser();
+        const { data: { user } } = await withTimeout(
+          supabase.auth.getUser(),
+          ADMIN_ACTIVE_EMP_WRITE_TIMEOUT_MS,
+          "Permintaan user auth timeout."
+        );
         if (!user) throw new Error("User not authenticated");
 
-        const { data: currentEmployee } = await supabase
-          .from("employees")
-          .select("tenant_id")
-          .eq("user_id", user.id)
-          .single();
+        const { data: currentEmployee } = await withTimeout(
+          supabase
+            .from("employees")
+            .select("tenant_id")
+            .eq("user_id", user.id)
+            .single(),
+          ADMIN_ACTIVE_EMP_WRITE_TIMEOUT_MS,
+          "Permintaan tenant employee timeout."
+        );
 
         if (!currentEmployee?.tenant_id) throw new Error("Tenant not found");
 
-        const { error } = await supabase
-          .from("employees")
-          .insert({ ...employeeData, tenant_id: currentEmployee.tenant_id, is_active: true });
+        const { error } = await withTimeout(
+          supabase
+            .from("employees")
+            .insert({ ...employeeData, tenant_id: currentEmployee.tenant_id, is_active: true }),
+          ADMIN_ACTIVE_EMP_WRITE_TIMEOUT_MS,
+          "Tambah pegawai baru timeout."
+        );
 
         if (error) throw error;
         toast.success("Pegawai berhasil ditambahkan");
@@ -256,10 +323,14 @@ export default function ActiveEmployees() {
 
     try {
       setLoadError(null);
-      const { error } = await supabase
-        .from("employees")
-        .update({ is_active: false })
-        .eq("id", id);
+      const { error } = await withTimeout(
+        supabase
+          .from("employees")
+          .update({ is_active: false })
+          .eq("id", id),
+        ADMIN_ACTIVE_EMP_WRITE_TIMEOUT_MS,
+        "Nonaktifkan pegawai timeout."
+      );
 
       if (error) throw error;
       toast.success("Pegawai berhasil dinonaktifkan");
@@ -504,11 +575,14 @@ export default function ActiveEmployees() {
                       </div>
                     </div>
                   </div>
-                  <DialogFooter>
-                    <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                      Batal
-                    </Button>
-                    <Button type="submit">Simpan</Button>
+                  <DialogFooter className={dialogActionBarClassName}>
+                    <DialogActionHint>Perubahan data pegawai akan memengaruhi data master dan laporan.</DialogActionHint>
+                    <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                      <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                        Batal
+                      </Button>
+                      <Button type="submit">Simpan</Button>
+                    </div>
                   </DialogFooter>
                 </form>
               </ScrollArea>
@@ -516,9 +590,18 @@ export default function ActiveEmployees() {
           </Dialog>
         </div>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+            Sedang mencoba ulang memuat data pegawai aktif...
+          </div>
+        )}
+
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchEmployees()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 

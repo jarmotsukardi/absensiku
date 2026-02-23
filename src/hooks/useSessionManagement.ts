@@ -2,12 +2,15 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Session, User } from "@supabase/supabase-js";
 import { getAndroidId } from "@/lib/deviceId";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 // Konstanta untuk session management
 const SESSION_KEY = "absensiku_session_metadata";
 const SESSION_MAX_AGE_DAYS = 7;
 const SESSION_MAX_AGE_MS = SESSION_MAX_AGE_DAYS * 24 * 60 * 60 * 1000; // 7 hari dalam ms
 const SESSION_REFRESH_THRESHOLD_MS = 24 * 60 * 60 * 1000; // Refresh jika kurang dari 1 hari
+const SESSION_CHECK_TIMEOUT_MS = 8000;
+const SESSION_CHECK_RETRY_MAX = 0;
 
 interface SessionMetadata {
   lastActivity: number;
@@ -101,7 +104,13 @@ export function useSessionManagement() {
   // Hapus sesi (logout)
   const clearSession = useCallback(async () => {
     localStorage.removeItem(SESSION_KEY);
-    await supabase.auth.signOut();
+    await withExponentialBackoff(
+      () => withTimeout(() => supabase.auth.signOut(), SESSION_CHECK_TIMEOUT_MS),
+      {
+        maxRetries: SESSION_CHECK_RETRY_MAX,
+        shouldRetry: isRetryableError,
+      },
+    );
     setState({
       isChecking: false,
       isValid: false,
@@ -137,7 +146,13 @@ export function useSessionManagement() {
       }
 
       // Cek session Supabase
-      const { data: { session }, error } = await supabase.auth.getSession();
+      const { data: { session }, error } = await withExponentialBackoff(
+        () => withTimeout(() => supabase.auth.getSession(), SESSION_CHECK_TIMEOUT_MS),
+        {
+          maxRetries: SESSION_CHECK_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
       if (error || !session) {
         // Tidak ada session, tandai invalid tanpa signOut
@@ -151,7 +166,13 @@ export function useSessionManagement() {
 
       // Refresh token jika hampir expired
       if (shouldRefreshSession()) {
-        const { data: refreshData } = await supabase.auth.refreshSession();
+        const { data: refreshData } = await withExponentialBackoff(
+          () => withTimeout(() => supabase.auth.refreshSession(), SESSION_CHECK_TIMEOUT_MS),
+          {
+            maxRetries: SESSION_CHECK_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
+        );
         if (refreshData.session) {
           saveSessionMetadata(deviceId);
         }

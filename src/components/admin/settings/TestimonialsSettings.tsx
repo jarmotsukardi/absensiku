@@ -8,6 +8,8 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { Loader2, Save, Plus, Trash2, Edit, Star, Quote } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface Testimonial {
   id: string;
@@ -25,6 +27,7 @@ const defaultTestimonials: Testimonial[] = [
 ];
 
 export function TestimonialsSettings() {
+  const REQUEST_TIMEOUT_MS = 12000;
   const [testimonials, setTestimonials] = useState<Testimonial[]>(defaultTestimonials);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -38,12 +41,17 @@ export function TestimonialsSettings() {
 
   const fetchSettings = async () => {
     try {
-      const { data } = await supabase.from("system_settings").select("value").eq("key", "testimonials_settings").maybeSingle();
+      const { data } = await withTimeout(
+        supabase.from("system_settings").select("value").eq("key", "testimonials_settings").maybeSingle(),
+        REQUEST_TIMEOUT_MS,
+        "Memuat pengaturan testimoni terlalu lama",
+      );
       if (data?.value && Array.isArray(data.value)) {
         setTestimonials(data.value as unknown as Testimonial[]);
       }
     } catch (error) {
-      console.error("Error:", error);
+      const errorRef = reportError(error, "admin.settings.testimonials.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan testimoni.", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -52,16 +60,29 @@ export function TestimonialsSettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const { data: existing } = await supabase.from("system_settings").select("id").eq("key", "testimonials_settings").maybeSingle();
+      const { data: existing } = await withTimeout(
+        supabase.from("system_settings").select("id").eq("key", "testimonials_settings").maybeSingle(),
+        REQUEST_TIMEOUT_MS,
+        "Membaca konfigurasi testimoni terlalu lama",
+      );
       const jsonValue = JSON.parse(JSON.stringify(testimonials));
       if (existing) {
-        await supabase.from("system_settings").update({ value: jsonValue, updated_at: new Date().toISOString() }).eq("key", "testimonials_settings");
+        await withTimeout(
+          supabase.from("system_settings").update({ value: jsonValue, updated_at: new Date().toISOString() }).eq("key", "testimonials_settings"),
+          REQUEST_TIMEOUT_MS,
+          "Menyimpan konfigurasi testimoni terlalu lama",
+        );
       } else {
-        await supabase.from("system_settings").insert({ key: "testimonials_settings", value: jsonValue });
+        await withTimeout(
+          supabase.from("system_settings").insert({ key: "testimonials_settings", value: jsonValue }),
+          REQUEST_TIMEOUT_MS,
+          "Menyimpan konfigurasi testimoni terlalu lama",
+        );
       }
       toast.success("Testimoni berhasil disimpan");
-    } catch (err) {
-      toast.error("Gagal menyimpan");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.testimonials.save");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan testimoni.", errorRef));
     } finally {
       setIsSaving(false);
     }

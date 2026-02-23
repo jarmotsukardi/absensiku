@@ -20,6 +20,8 @@ import {
   MessageCircle,
 } from "lucide-react";
 import type { FooterSettings } from "@/hooks/useHomepageData";
+import { resolveFaqAudience } from "@/lib/faqAudience";
+import type { FaqAudience } from "@/lib/faqAudience";
 
 interface FAQ {
   id: string;
@@ -27,6 +29,7 @@ interface FAQ {
   answer: string;
   category: string;
   sort_order: number;
+  audience?: FaqAudience;
 }
 
 interface FAQSettingsObject {
@@ -64,9 +67,20 @@ const isFaq = (value: unknown): value is FAQ => {
   );
 };
 
+const isPublicAudienceFaq = (faq: FAQ): boolean => {
+  return (
+    resolveFaqAudience({
+      audience: faq.audience,
+      category: faq.category,
+      question: faq.question,
+      answer: faq.answer,
+    }) === "public"
+  );
+};
+
 const asFaqArray = (value: unknown): FAQ[] => {
   if (!Array.isArray(value)) return [];
-  return value.filter(isFaq).sort((a, b) => a.sort_order - b.sort_order);
+  return value.filter(isFaq).filter(isPublicAudienceFaq).sort((a, b) => a.sort_order - b.sort_order);
 };
 
 export default function FAQPage() {

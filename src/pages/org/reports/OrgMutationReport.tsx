@@ -17,6 +17,7 @@ import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { RequestReportsTabs } from "@/components/org/reports/RequestReportsTabs";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 type MutationRequestRow = Tables<"mutation_requests">;
 type OPD = Tables<"opd">;
@@ -45,6 +46,8 @@ interface MutationRecord extends MutationRequestRow {
 
 const ITEMS_PER_PAGE = 20;
 const FETCH_CHUNK = 500;
+const MUTATION_REPORT_QUERY_TIMEOUT_MS = 15000;
+const MUTATION_REPORT_QUERY_RETRY_MAX = 1;
 
 const toJsonRecord = (value: Json | null): Record<string, Json | undefined> => {
   if (value && typeof value === "object" && !Array.isArray(value)) {
@@ -121,34 +124,49 @@ export default function OrgMutationReport() {
   const [opdFilter, setOpdFilter] = useState<string>("all");
   const [workUnitFilter, setWorkUnitFilter] = useState<string>("all");
 
-  useEffect(() => {
-    const init = async () => {
-      try {
-        setLoadError(null);
-        const resolvedTenantId = await resolveOrgTenantId();
-        setTenantId(resolvedTenantId);
-        if (!resolvedTenantId) return;
+  const initializePage = useCallback(async () => {
+    try {
+      setLoadError(null);
+      const resolvedTenantId = await withTimeout(
+        resolveOrgTenantId(),
+        MUTATION_REPORT_QUERY_TIMEOUT_MS,
+        "org.reports.mutations.init.resolve_tenant timeout",
+      );
+      setTenantId(resolvedTenantId);
+      if (!resolvedTenantId) return;
 
-        const [opdRes, workUnitRes] = await Promise.all([
-          supabase.from("opd").select("*").eq("tenant_id", resolvedTenantId).order("name"),
-          supabase.from("work_units").select("*").eq("tenant_id", resolvedTenantId).order("name"),
-        ]);
+      const [opdRes, workUnitRes] = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.all([
+              supabase.from("opd").select("*").eq("tenant_id", resolvedTenantId).order("name"),
+              supabase.from("work_units").select("*").eq("tenant_id", resolvedTenantId).order("name"),
+            ]),
+            MUTATION_REPORT_QUERY_TIMEOUT_MS,
+            "org.reports.mutations.init.query timeout",
+          ),
+        {
+          maxRetries: MUTATION_REPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
-        if (opdRes.error) throw opdRes.error;
-        if (workUnitRes.error) throw workUnitRes.error;
+      if (opdRes.error) throw opdRes.error;
+      if (workUnitRes.error) throw workUnitRes.error;
 
-        setOpds(opdRes.data || []);
-        setWorkUnits(workUnitRes.data || []);
-      } catch (error) {
-        const errorRef = reportError(error, "org.reports.mutations.init");
-        const message = appendErrorReference("Gagal memuat data awal laporan mutasi", errorRef);
-        setLoadError(message);
-        toast.error(message);
-      }
-    };
-
-    void init();
+      setOpds(opdRes.data || []);
+      setWorkUnits(workUnitRes.data || []);
+    } catch (error) {
+      const errorRef = reportError(error, "org.reports.mutations.init");
+      const message = appendErrorReference("Gagal memuat data awal laporan mutasi", errorRef);
+      setLoadError(message);
+      toast.error(message);
+    }
   }, []);
+
+  useEffect(() => {
+    void initializePage();
+  }, [initializePage]);
 
   const opdMap = useMemo(() => {
     const map = new Map<string, OPD>();
@@ -247,7 +265,18 @@ export default function OrgMutationReport() {
           query = query.lte("created_at", `${endDate}T23:59:59.999`);
         }
 
-        const { data, error } = await query;
+        const { data, error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              query,
+              MUTATION_REPORT_QUERY_TIMEOUT_MS,
+              "org.reports.mutations.fetch.chunk timeout",
+            ),
+          {
+            maxRetries: MUTATION_REPORT_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
+        );
         if (error) throw error;
 
         const chunk = ((data || []) as MutationQueryRow[]).map((row) => ({
@@ -346,6 +375,13 @@ export default function OrgMutationReport() {
     setHasQueried(true);
     setCurrentPage(1);
     await fetchMutations();
+  };
+
+  const handleRetryLoad = async () => {
+    await initializePage();
+    if (tenantId && hasQueried) {
+      await fetchMutations();
+    }
   };
 
   const handleExport = async () => {
@@ -521,8 +557,11 @@ export default function OrgMutationReport() {
         <RequestReportsTabs />
 
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button size="sm" variant="outline" onClick={handleRetryLoad} className="border-destructive/30 text-destructive hover:bg-destructive/10">
+              Coba Lagi
+            </Button>
           </div>
         )}
 
@@ -531,7 +570,8 @@ export default function OrgMutationReport() {
             <CardTitle>Filter Laporan</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
               <div className="grid gap-2">
                 <Label>Tanggal Mulai</Label>
                 <Input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
@@ -607,6 +647,7 @@ export default function OrgMutationReport() {
                 <Button onClick={handleShow} className="w-full" disabled={isLoading}>
                   {isLoading ? "Memuat..." : "Tampilkan"}
                 </Button>
+              </div>
               </div>
             </div>
           </CardContent>

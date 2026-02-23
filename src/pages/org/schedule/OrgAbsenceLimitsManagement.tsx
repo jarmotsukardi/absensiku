@@ -17,9 +17,15 @@ import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
+import {
   ABSENCE_LIMIT_TEMPLATE_SETTING_KEY,
   normalizeAbsenceLimitTemplate,
 } from "@/lib/absenceLimitTemplates";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 
 interface AbsenceLimit {
   id: string;
@@ -34,6 +40,9 @@ interface AbsenceLimit {
 
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
 const ABSENCE_LIMIT_NOTIFICATIONS_SETTING_KEY = "absence_limit_notifications_enabled";
+const ABSENCE_LIMIT_READ_TIMEOUT_MS = 12000;
+const ABSENCE_LIMIT_WRITE_TIMEOUT_MS = 15000;
+const ABSENCE_LIMIT_READ_MAX_RETRIES = 2;
 
 const parseNotificationSetting = (value: unknown, fallback: boolean): boolean => {
   if (typeof value === "boolean") return value;
@@ -57,6 +66,7 @@ export default function OrgAbsenceLimitsManagement() {
   const [limits, setLimits] = useState<AbsenceLimit[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -81,10 +91,23 @@ export default function OrgAbsenceLimitsManagement() {
   const fetchData = useCallback(async () => {
     try {
       setLoadError(null);
-      const { data, error } = await supabase
-        .from("absence_limits")
-        .select("*")
-        .order("max_days", { ascending: true });
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("absence_limits")
+              .select("*")
+              .order("max_days", { ascending: true }),
+            ABSENCE_LIMIT_READ_TIMEOUT_MS,
+            "Permintaan data batas absen timeout."
+          ),
+        {
+          maxRetries: ABSENCE_LIMIT_READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setLimits((data as AbsenceLimit[]) || []);
@@ -95,20 +118,45 @@ export default function OrgAbsenceLimitsManagement() {
       toast.error(message);
       setLimits([]);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, []);
 
   const getTenantId = useCallback(async (): Promise<string | null> => {
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { user } } = await withExponentialBackoff(
+      () =>
+        withTimeout(
+          supabase.auth.getUser(),
+          ABSENCE_LIMIT_READ_TIMEOUT_MS,
+          "Permintaan user auth timeout."
+        ),
+      {
+        maxRetries: ABSENCE_LIMIT_READ_MAX_RETRIES,
+        shouldRetry: isRetryableError,
+        onRetry: () => setIsRetrying(true),
+      }
+    );
     if (!user) return null;
 
-    const { data: roleData, error: roleError } = await supabase
-      .from("user_roles")
-      .select("tenant_id")
-      .eq("user_id", user.id)
-      .eq("role", "admin_instansi")
-      .maybeSingle();
+    const { data: roleData, error: roleError } = await withExponentialBackoff(
+      () =>
+        withTimeout(
+          supabase
+            .from("user_roles")
+            .select("tenant_id")
+            .eq("user_id", user.id)
+            .eq("role", "admin_instansi")
+            .maybeSingle(),
+          ABSENCE_LIMIT_READ_TIMEOUT_MS,
+          "Permintaan tenant role timeout."
+        ),
+      {
+        maxRetries: ABSENCE_LIMIT_READ_MAX_RETRIES,
+        shouldRetry: isRetryableError,
+        onRetry: () => setIsRetrying(true),
+      }
+    );
 
     if (roleError) throw roleError;
     return roleData?.tenant_id || null;
@@ -124,12 +172,24 @@ export default function OrgAbsenceLimitsManagement() {
         return;
       }
 
-      const { data, error } = await supabase
-        .from("organization_settings")
-        .select("setting_value")
-        .eq("tenant_id", resolvedTenantId)
-        .eq("setting_key", ABSENCE_LIMIT_NOTIFICATIONS_SETTING_KEY)
-        .maybeSingle();
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("organization_settings")
+              .select("setting_value")
+              .eq("tenant_id", resolvedTenantId)
+              .eq("setting_key", ABSENCE_LIMIT_NOTIFICATIONS_SETTING_KEY)
+              .maybeSingle(),
+            ABSENCE_LIMIT_READ_TIMEOUT_MS,
+            "Permintaan pengaturan notifikasi timeout."
+          ),
+        {
+          maxRetries: ABSENCE_LIMIT_READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error && error.code !== "PGRST116") throw error;
       setIsNotificationSettingEnabled(parseNotificationSetting(data?.setting_value, true));
@@ -161,10 +221,22 @@ export default function OrgAbsenceLimitsManagement() {
           return false;
         }
 
-        const { count, error: countError } = await supabase
-          .from("absence_limits")
-          .select("id", { count: "exact", head: true })
-          .eq("tenant_id", resolvedTenantId);
+        const { count, error: countError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("absence_limits")
+                .select("id", { count: "exact", head: true })
+                .eq("tenant_id", resolvedTenantId),
+              ABSENCE_LIMIT_READ_TIMEOUT_MS,
+              "Permintaan hitung data batas absen timeout."
+            ),
+          {
+            maxRetries: ABSENCE_LIMIT_READ_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (countError) throw countError;
 
         if ((count || 0) > 0) {
@@ -174,11 +246,23 @@ export default function OrgAbsenceLimitsManagement() {
           return false;
         }
 
-        const { data: templateData, error: templateError } = await supabase
-          .from("system_settings")
-          .select("value")
-          .eq("key", ABSENCE_LIMIT_TEMPLATE_SETTING_KEY)
-          .maybeSingle();
+        const { data: templateData, error: templateError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("system_settings")
+                .select("value")
+                .eq("key", ABSENCE_LIMIT_TEMPLATE_SETTING_KEY)
+                .maybeSingle(),
+              ABSENCE_LIMIT_READ_TIMEOUT_MS,
+              "Permintaan template batas absen timeout."
+            ),
+          {
+            maxRetries: ABSENCE_LIMIT_READ_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (templateError) throw templateError;
 
         const templateRules = normalizeAbsenceLimitTemplate(templateData?.value);
@@ -195,7 +279,11 @@ export default function OrgAbsenceLimitsManagement() {
           is_active: rule.is_active,
         }));
 
-        const { error: insertError } = await supabase.from("absence_limits").insert(payload);
+        const { error: insertError } = await withTimeout(
+          supabase.from("absence_limits").insert(payload),
+          ABSENCE_LIMIT_WRITE_TIMEOUT_MS,
+          "Simpan template batas absen timeout."
+        );
         if (insertError) throw insertError;
 
         await fetchData();
@@ -212,6 +300,7 @@ export default function OrgAbsenceLimitsManagement() {
         }
         return false;
       } finally {
+        setIsRetrying(false);
         setIsApplyingTemplate(false);
       }
     },
@@ -237,31 +326,43 @@ export default function OrgAbsenceLimitsManagement() {
 
     setIsNotificationSettingLoading(true);
     try {
-      const { data: existing, error: existingError } = await supabase
-        .from("organization_settings")
-        .select("id")
-        .eq("tenant_id", tenantId)
-        .eq("setting_key", ABSENCE_LIMIT_NOTIFICATIONS_SETTING_KEY)
-        .maybeSingle();
+      const { data: existing, error: existingError } = await withTimeout(
+        supabase
+          .from("organization_settings")
+          .select("id")
+          .eq("tenant_id", tenantId)
+          .eq("setting_key", ABSENCE_LIMIT_NOTIFICATIONS_SETTING_KEY)
+          .maybeSingle(),
+        ABSENCE_LIMIT_WRITE_TIMEOUT_MS,
+        "Permintaan status setting notifikasi timeout."
+      );
 
       if (existingError && existingError.code !== "PGRST116") throw existingError;
 
       if (existing?.id) {
-        const { error: updateError } = await supabase
-          .from("organization_settings")
-          .update({
-            setting_value: nextValue,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", existing.id);
+        const { error: updateError } = await withTimeout(
+          supabase
+            .from("organization_settings")
+            .update({
+              setting_value: nextValue,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", existing.id),
+          ABSENCE_LIMIT_WRITE_TIMEOUT_MS,
+          "Update setting notifikasi timeout."
+        );
         if (updateError) throw updateError;
       } else {
-        const { error: insertError } = await supabase.from("organization_settings").insert({
-          tenant_id: tenantId,
-          setting_key: ABSENCE_LIMIT_NOTIFICATIONS_SETTING_KEY,
-          setting_value: nextValue,
-          description: "Aktif/nonaktifkan notifikasi otomatis batas absen ke pegawai.",
-        });
+        const { error: insertError } = await withTimeout(
+          supabase.from("organization_settings").insert({
+            tenant_id: tenantId,
+            setting_key: ABSENCE_LIMIT_NOTIFICATIONS_SETTING_KEY,
+            setting_value: nextValue,
+            description: "Aktif/nonaktifkan notifikasi otomatis batas absen ke pegawai.",
+          }),
+          ABSENCE_LIMIT_WRITE_TIMEOUT_MS,
+          "Simpan setting notifikasi timeout."
+        );
         if (insertError) throw insertError;
       }
 
@@ -289,43 +390,60 @@ export default function OrgAbsenceLimitsManagement() {
     }
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user } } = await withTimeout(
+        supabase.auth.getUser(),
+        ABSENCE_LIMIT_WRITE_TIMEOUT_MS,
+        "Permintaan user auth timeout."
+      );
       if (!user) return;
       let savedRule: AbsenceLimit | null = null;
 
-      const { data: roleData } = await supabase
-        .from("user_roles")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .single();
+      const { data: roleData, error: roleError } = await withTimeout(
+        supabase
+          .from("user_roles")
+          .select("tenant_id")
+          .eq("user_id", user.id)
+          .single(),
+        ABSENCE_LIMIT_WRITE_TIMEOUT_MS,
+        "Permintaan role tenant timeout."
+      );
+      if (roleError) throw roleError;
 
       if (isEditing) {
-        const { data, error } = await supabase
-          .from("absence_limits")
-          .update({
-            max_days: formData.max_days,
-            warning_type: formData.warning_type,
-            description: formData.description || null,
-            is_active: formData.is_active,
-          })
-          .eq("id", formData.id)
-          .select("*")
-          .single();
+        const { data, error } = await withTimeout(
+          supabase
+            .from("absence_limits")
+            .update({
+              max_days: formData.max_days,
+              warning_type: formData.warning_type,
+              description: formData.description || null,
+              is_active: formData.is_active,
+            })
+            .eq("id", formData.id)
+            .select("*")
+            .single(),
+          ABSENCE_LIMIT_WRITE_TIMEOUT_MS,
+          "Update batas absen timeout."
+        );
         if (error) throw error;
         savedRule = data as AbsenceLimit;
         toast.success("Batas absen berhasil diperbarui");
       } else {
-        const { data, error } = await supabase
-          .from("absence_limits")
-          .insert({
-            tenant_id: roleData?.tenant_id,
-            max_days: formData.max_days,
-            warning_type: formData.warning_type,
-            description: formData.description || null,
-            is_active: formData.is_active,
-          })
-          .select("*")
-          .single();
+        const { data, error } = await withTimeout(
+          supabase
+            .from("absence_limits")
+            .insert({
+              tenant_id: roleData?.tenant_id,
+              max_days: formData.max_days,
+              warning_type: formData.warning_type,
+              description: formData.description || null,
+              is_active: formData.is_active,
+            })
+            .select("*")
+            .single(),
+          ABSENCE_LIMIT_WRITE_TIMEOUT_MS,
+          "Tambah batas absen timeout."
+        );
         if (error) throw error;
         savedRule = data as AbsenceLimit;
         toast.success("Batas absen berhasil ditambahkan");
@@ -371,13 +489,17 @@ export default function OrgAbsenceLimitsManagement() {
 
   const toggleRuleStatus = async (limit: AbsenceLimit, nextValue: boolean) => {
     try {
-      const { error } = await supabase
-        .from("absence_limits")
-        .update({
-          is_active: nextValue,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", limit.id);
+      const { error } = await withTimeout(
+        supabase
+          .from("absence_limits")
+          .update({
+            is_active: nextValue,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", limit.id),
+        ABSENCE_LIMIT_WRITE_TIMEOUT_MS,
+        "Ubah status aturan batas absen timeout."
+      );
 
       if (error) throw error;
       setLimits((prev) => prev.map((row) => (row.id === limit.id ? { ...row, is_active: nextValue } : row)));
@@ -412,12 +534,24 @@ export default function OrgAbsenceLimitsManagement() {
         return;
       }
 
-      const { data: employees, error: employeesError } = await supabase
-        .from("employees")
-        .select("id, user_id, name")
-        .eq("tenant_id", tenantId)
-        .eq("is_active", true)
-        .not("user_id", "is", null);
+      const { data: employees, error: employeesError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("id, user_id, name")
+              .eq("tenant_id", tenantId)
+              .eq("is_active", true)
+              .not("user_id", "is", null),
+            ABSENCE_LIMIT_READ_TIMEOUT_MS,
+            "Permintaan data pegawai timeout."
+          ),
+        {
+          maxRetries: ABSENCE_LIMIT_READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (employeesError) throw employeesError;
 
       if (!employees || employees.length === 0) {
@@ -433,13 +567,25 @@ export default function OrgAbsenceLimitsManagement() {
       const endDate = now.toISOString().split("T")[0];
       const employeeIds = employees.map((emp) => emp.id);
 
-      const { data: absentRows, error: absentError } = await supabase
-        .from("attendance_records_partitioned")
-        .select("employee_id, date, status")
-        .in("employee_id", employeeIds)
-        .gte("date", startDate)
-        .lte("date", endDate)
-        .eq("status", "tidak_hadir");
+      const { data: absentRows, error: absentError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("attendance_records_partitioned")
+              .select("employee_id, date, status")
+              .in("employee_id", employeeIds)
+              .gte("date", startDate)
+              .lte("date", endDate)
+              .eq("status", "tidak_hadir"),
+            ABSENCE_LIMIT_READ_TIMEOUT_MS,
+            "Permintaan data absensi timeout."
+          ),
+        {
+          maxRetries: ABSENCE_LIMIT_READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (absentError) throw absentError;
 
       const absenceCount = new Map<string, number>();
@@ -455,15 +601,27 @@ export default function OrgAbsenceLimitsManagement() {
       }
 
       const targetUserIds = candidateEmployees.map((emp) => emp.user_id).filter(Boolean) as string[];
-      const { data: existingNotifs, error: notifError } = await supabase
-        .from("notifications")
-        .select("user_id")
-        .in("user_id", targetUserIds)
-        .eq("type", "warning")
-        .contains("metadata", {
-          absence_limit_rule_id: limit.id,
-          period,
-        });
+      const { data: existingNotifs, error: notifError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("notifications")
+              .select("user_id")
+              .in("user_id", targetUserIds)
+              .eq("type", "warning")
+              .contains("metadata", {
+                absence_limit_rule_id: limit.id,
+                period,
+              }),
+            ABSENCE_LIMIT_READ_TIMEOUT_MS,
+            "Permintaan duplikasi notifikasi timeout."
+          ),
+        {
+          maxRetries: ABSENCE_LIMIT_READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (notifError) throw notifError;
 
       const existingUserSet = new Set((existingNotifs || []).map((n) => n.user_id));
@@ -487,7 +645,11 @@ export default function OrgAbsenceLimitsManagement() {
         });
 
       if (inserts.length > 0) {
-        const { error: insertError } = await supabase.from("notifications").insert(inserts);
+        const { error: insertError } = await withTimeout(
+          supabase.from("notifications").insert(inserts),
+          ABSENCE_LIMIT_WRITE_TIMEOUT_MS,
+          "Simpan notifikasi batas absen timeout."
+        );
         if (insertError) throw insertError;
       }
 
@@ -499,6 +661,7 @@ export default function OrgAbsenceLimitsManagement() {
       });
       toast.error(appendErrorReference("Gagal mengirim notifikasi aturan", errorRef));
     } finally {
+      setIsRetrying(false);
       setSendingRuleId(null);
     }
   };
@@ -516,10 +679,14 @@ export default function OrgAbsenceLimitsManagement() {
     }
 
     try {
-      const { error } = await supabase.from("absence_limits").delete().eq("id", id);
+      const { error } = await withTimeout(
+        supabase.from("absence_limits").delete().eq("id", id),
+        ABSENCE_LIMIT_WRITE_TIMEOUT_MS,
+        "Hapus batas absen timeout."
+      );
       if (error) throw error;
       toast.success("Batas absen berhasil dihapus");
-      fetchData();
+      void fetchData();
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.schedule.absence_limits.delete", { rule_id: id });
       toast.error(appendErrorReference("Gagal menghapus batas absen", errorRef));
@@ -553,6 +720,12 @@ export default function OrgAbsenceLimitsManagement() {
   return (
     <OrganizationLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+            Mencoba ulang memuat data batas absen...
+          </div>
+        )}
+
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -625,9 +798,12 @@ export default function OrgAbsenceLimitsManagement() {
                   />
                 </div>
               </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
-                <Button onClick={handleSubmit}>{isEditing ? "Simpan" : "Tambah"}</Button>
+              <DialogFooter className={dialogActionBarClassName}>
+                <DialogActionHint>Nilai batas absen digunakan untuk notifikasi dan teguran otomatis.</DialogActionHint>
+                <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                  <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
+                  <Button onClick={handleSubmit}>{isEditing ? "Simpan" : "Tambah"}</Button>
+                </div>
               </DialogFooter>
               </DialogContent>
             </Dialog>
@@ -635,8 +811,11 @@ export default function OrgAbsenceLimitsManagement() {
         </div>
 
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 

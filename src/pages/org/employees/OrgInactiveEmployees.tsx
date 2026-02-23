@@ -10,6 +10,7 @@ import { Search, UserX, RotateCcw, ChevronLeft, ChevronRight } from "lucide-reac
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { EmployeeDataTabs } from "@/components/org/employees/EmployeeDataTabs";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
@@ -19,6 +20,8 @@ type OPD = Tables<"opd">;
 type Position = Tables<"positions">;
 
 const ITEMS_PER_PAGE = 10;
+const ORG_INACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS = 12000;
+const ORG_INACTIVE_EMPLOYEES_QUERY_RETRY_MAX = 2;
 
 export default function OrgInactiveEmployees() {
   const confirmDialog = useConfirmDialog();
@@ -28,11 +31,13 @@ export default function OrgInactiveEmployees() {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   const fetchData = useCallback(async () => {
     setIsLoading(true);
     setLoadError(null);
     try {
+      setIsRetrying(false);
       let query = supabase
         .from("employees")
         .select("*, opd(*), position_rel:position_id(*)", { count: "exact" })
@@ -45,7 +50,19 @@ export default function OrgInactiveEmployees() {
 
       const from = (currentPage - 1) * ITEMS_PER_PAGE;
       const to = from + ITEMS_PER_PAGE - 1;
-      const { data, error, count } = await query.order("name").range(from, to);
+      const { data, error, count } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query.order("name").range(from, to),
+            ORG_INACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS,
+            "org.employees.inactive.fetch timeout"
+          ),
+        {
+          maxRetries: ORG_INACTIVE_EMPLOYEES_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setEmployees(data || []);
@@ -77,7 +94,20 @@ export default function OrgInactiveEmployees() {
       return;
     }
     try {
-      const { error } = await supabase.from("employees").update({ is_active: true }).eq("id", id);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.from("employees").update({ is_active: true }).eq("id", id),
+            ORG_INACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS,
+            "org.employees.inactive.reactivate timeout"
+          ),
+        {
+          maxRetries: ORG_INACTIVE_EMPLOYEES_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
       toast.success("Pegawai berhasil diaktifkan kembali");
       void fetchData();
@@ -117,10 +147,22 @@ export default function OrgInactiveEmployees() {
         </div>
         <EmployeeDataTabs />
 
+        {isRetrying && (
+          <Card className="border-amber-300/60 bg-amber-50">
+            <CardContent className="pt-6 text-sm text-amber-800">
+              Sedang mencoba ulang memuat pegawai non-aktif...
+            </CardContent>
+          </Card>
+        )}
         {loadError && (
           <Card className="border-destructive/40">
             <CardContent className="pt-6">
-              <p className="text-sm text-destructive">{loadError}</p>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm text-destructive">{loadError}</p>
+                <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void fetchData()}>
+                  Coba Lagi
+                </Button>
+              </div>
             </CardContent>
           </Card>
         )}

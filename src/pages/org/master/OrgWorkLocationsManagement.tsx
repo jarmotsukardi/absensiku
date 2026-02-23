@@ -17,11 +17,20 @@ import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { validateOfficeCoordinateInput } from "@/lib/officeCoordinates";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 type Office = Tables<"offices">;
 type OPD = Tables<"opd">;
 
 const ITEMS_PER_PAGE = 15;
+const WORK_LOCATIONS_READ_TIMEOUT_MS = 12000;
+const WORK_LOCATIONS_WRITE_TIMEOUT_MS = 15000;
+const WORK_LOCATIONS_MAX_RETRIES = 2;
 
 export default function OrgWorkLocationsManagement() {
   const confirmDialog = useConfirmDialog();
@@ -34,6 +43,7 @@ export default function OrgWorkLocationsManagement() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [formData, setFormData] = useState({
     id: "",
     name: "",
@@ -51,10 +61,23 @@ export default function OrgWorkLocationsManagement() {
   const fetchData = useCallback(async () => {
     setLoadError(null);
     try {
-      const [officesRes, opdsRes] = await Promise.all([
-        supabase.from("offices").select("*, opd(*)").order("name"),
-        supabase.from("opd").select("*").order("name"),
-      ]);
+      setIsRetrying(false);
+      const [officesRes, opdsRes] = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.all([
+              supabase.from("offices").select("*, opd(*)").order("name"),
+              supabase.from("opd").select("*").order("name"),
+            ]),
+            WORK_LOCATIONS_READ_TIMEOUT_MS,
+            "Permintaan data lokasi kerja timeout."
+          ),
+        {
+          maxRetries: WORK_LOCATIONS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (officesRes.error) throw officesRes.error;
       if (opdsRes.error) throw opdsRes.error;
@@ -67,6 +90,7 @@ export default function OrgWorkLocationsManagement() {
       setLoadError(message);
       toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, []);
@@ -87,14 +111,23 @@ export default function OrgWorkLocationsManagement() {
     }
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user } } = await withTimeout(
+        supabase.auth.getUser(),
+        WORK_LOCATIONS_WRITE_TIMEOUT_MS,
+        "Permintaan user auth timeout."
+      );
       if (!user) return;
 
-      const { data: roleData } = await supabase
-        .from("user_roles")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      const { data: roleData, error: roleError } = await withTimeout(
+        supabase
+          .from("user_roles")
+          .select("tenant_id")
+          .eq("user_id", user.id)
+          .maybeSingle(),
+        WORK_LOCATIONS_WRITE_TIMEOUT_MS,
+        "Permintaan tenant role timeout."
+      );
+      if (roleError) throw roleError;
 
       if (!roleData?.tenant_id) {
         toast.error("Tenant tidak ditemukan");
@@ -112,11 +145,19 @@ export default function OrgWorkLocationsManagement() {
       };
 
       if (isEditing) {
-        const { error } = await supabase.from("offices").update(payload).eq("id", formData.id);
+        const { error } = await withTimeout(
+          supabase.from("offices").update(payload).eq("id", formData.id),
+          WORK_LOCATIONS_WRITE_TIMEOUT_MS,
+          "Update lokasi kerja timeout."
+        );
         if (error) throw error;
         toast.success("Lokasi kerja berhasil diperbarui");
       } else {
-        const { error } = await supabase.from("offices").insert(payload);
+        const { error } = await withTimeout(
+          supabase.from("offices").insert(payload),
+          WORK_LOCATIONS_WRITE_TIMEOUT_MS,
+          "Tambah lokasi kerja timeout."
+        );
         if (error) throw error;
         toast.success("Lokasi kerja berhasil ditambahkan");
       }
@@ -162,7 +203,11 @@ export default function OrgWorkLocationsManagement() {
     }
 
     try {
-      const { error } = await supabase.from("offices").delete().eq("id", id);
+      const { error } = await withTimeout(
+        supabase.from("offices").delete().eq("id", id),
+        WORK_LOCATIONS_WRITE_TIMEOUT_MS,
+        "Hapus lokasi kerja timeout."
+      );
       if (error) throw error;
       toast.success("Lokasi kerja berhasil dihapus");
       void fetchData();
@@ -193,6 +238,12 @@ export default function OrgWorkLocationsManagement() {
   return (
     <OrganizationLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+            Mencoba ulang memuat data lokasi kerja...
+          </div>
+        )}
+
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -263,9 +314,12 @@ export default function OrgWorkLocationsManagement() {
                   />
                 </div>
               </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
-                <Button onClick={handleSubmit}>{isEditing ? "Simpan" : "Tambah"}</Button>
+              <DialogFooter className={dialogActionBarClassName}>
+                <DialogActionHint>Koordinat dan radius GPS digunakan untuk validasi absensi.</DialogActionHint>
+                <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                  <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
+                  <Button onClick={handleSubmit}>{isEditing ? "Simpan" : "Tambah"}</Button>
+                </div>
               </DialogFooter>
             </DialogContent>
           </Dialog>
@@ -273,8 +327,11 @@ export default function OrgWorkLocationsManagement() {
 
         {loadError && (
           <Card className="border-destructive/40">
-            <CardContent className="pt-6">
+            <CardContent className="flex flex-col gap-2 pt-6 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-destructive">{loadError}</p>
+              <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+                Coba Lagi
+              </Button>
             </CardContent>
           </Card>
         )}
@@ -288,8 +345,9 @@ export default function OrgWorkLocationsManagement() {
           </CardHeader>
           <CardContent>
             {/* Filter Section */}
-            <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 mb-4">
-              <div className="relative flex-1 max-w-sm">
+            <div className="mb-4 rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="relative flex-1 sm:max-w-sm">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder="Cari lokasi..."
@@ -298,10 +356,10 @@ export default function OrgWorkLocationsManagement() {
                   className="pl-10"
                 />
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex w-full items-center gap-2 sm:w-auto">
                 <Filter className="h-4 w-4 text-muted-foreground" />
                 <Select value={filterOpdId} onValueChange={setFilterOpdId}>
-                  <SelectTrigger className="w-[250px]">
+                  <SelectTrigger className="w-full sm:w-[250px]">
                     <SelectValue placeholder="Filter OPD" />
                   </SelectTrigger>
                   <SelectContent>
@@ -317,6 +375,7 @@ export default function OrgWorkLocationsManagement() {
                   Reset Filter
                 </Button>
               )}
+              </div>
             </div>
 
             <Table>

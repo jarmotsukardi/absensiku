@@ -12,6 +12,8 @@ import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 import {
   ArrowRight,
   ArrowLeft,
@@ -174,12 +176,17 @@ export function MigrationWizard() {
     
     setIsTesting(true);
     try {
-      const response = await fetch(`${url}/rest/v1/`, {
-        headers: {
-          "apikey": key,
-          "Authorization": `Bearer ${key}`,
-        },
-      });
+      const response = await withTimeout(
+        () =>
+          fetch(`${url}/rest/v1/`, {
+            headers: {
+              "apikey": key,
+              "Authorization": `Bearer ${key}`,
+            },
+          }),
+        10000,
+        `Test koneksi ${type} timeout`
+      );
       
       if (response.ok || response.status === 200) {
         if (type === "source") {
@@ -194,7 +201,11 @@ export function MigrationWizard() {
         } else {
           setTargetConnected(false);
         }
-        toast.error(`Koneksi gagal: HTTP ${response.status}`);
+        const ref = reportError(new Error(`HTTP ${response.status}`), "admin.settings.migration_wizard.test_connection.http", {
+          type,
+          status: response.status,
+        });
+        toast.error(appendErrorReference(`Koneksi gagal: HTTP ${response.status}`, ref));
       }
     } catch (error) {
       if (type === "source") {
@@ -202,15 +213,25 @@ export function MigrationWizard() {
       } else {
         setTargetConnected(false);
       }
-      toast.error("Tidak dapat terhubung ke server");
+      const ref = reportError(error, "admin.settings.migration_wizard.test_connection.network", { type });
+      toast.error(appendErrorReference("Tidak dapat terhubung ke server", ref));
     } finally {
       setIsTesting(false);
     }
   };
 
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success(`${label} disalin ke clipboard`);
+  const copyToClipboard = async (text: string, label: string) => {
+    try {
+      await withTimeout(
+        navigator.clipboard.writeText(text),
+        5000,
+        `Menyalin ${label} ke clipboard terlalu lama`,
+      );
+      toast.success(`${label} disalin ke clipboard`);
+    } catch (error) {
+      const ref = reportError(error, "admin.settings.migration_wizard.copy_to_clipboard", { label });
+      toast.error(appendErrorReference(`Gagal menyalin ${label}`, ref));
+    }
   };
 
   const updateStepStatus = (stepId: string, status: MigrationStep["status"]) => {

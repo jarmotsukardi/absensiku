@@ -10,6 +10,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   AlertDialog,
   AlertDialogAction,
   AlertDialogCancel,
@@ -19,6 +25,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import {
   Dialog,
   DialogContent,
@@ -34,7 +41,7 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
-import { Search, Download, Trash2, AlertTriangle, RefreshCw, Copy, Archive, BellRing, CheckCircle2, Clock3, Eye, ExternalLink } from "lucide-react";
+import { Search, Download, Trash2, AlertTriangle, RefreshCw, Copy, Archive, BellRing, CheckCircle2, Clock3, Eye, ExternalLink, MoreHorizontal } from "lucide-react";
 import {
   appendErrorReference,
   clearStoredErrorLogs,
@@ -53,6 +60,7 @@ import { id } from "date-fns/locale";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 const escapeCsvCell = (value: unknown): string => {
   const text = String(value ?? "");
@@ -345,6 +353,8 @@ const toWebhookTargets = (settings: ErrorAlertSettings): Array<{ channel: string
   ].filter((item) => item.url.length > 0);
 
 export default function ErrorLogs() {
+  const ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS = 15000;
+  const ADMIN_ERROR_LOGS_QUERY_RETRY_MAX = 1;
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const realtimeNotifiedRefs = useRef<Set<string>>(new Set());
@@ -353,6 +363,7 @@ export default function ErrorLogs() {
   const [search, setSearch] = useState("");
   const [entries, setEntries] = useState<ErrorLogRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [activeTab, setActiveTab] = useState<SeverityTab>("critical");
   const [archivingRefId, setArchivingRefId] = useState<string | null>(null);
   const [unarchivingRefId, setUnarchivingRefId] = useState<string | null>(null);
@@ -386,9 +397,22 @@ export default function ErrorLogs() {
 
   const loadCurrentUser = useCallback(async () => {
     try {
+      setIsRetrying(false);
       const {
         data: { user },
-      } = await supabase.auth.getUser();
+      } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
+            "admin.error_logs.load_current_user.get_user timeout",
+          ),
+        {
+          maxRetries: ADMIN_ERROR_LOGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       const displayName =
         typeof user?.user_metadata?.full_name === "string"
           ? user.user_metadata.full_name
@@ -398,12 +422,24 @@ export default function ErrorLogs() {
       setCurrentUserId(user?.id || null);
       setCurrentUserLabel(displayName);
       if (user?.id) {
-        const { data: roleRows } = await supabase
-          .from("user_roles")
-          .select("tenant_id")
-          .eq("user_id", user.id)
-          .not("tenant_id", "is", null)
-          .limit(1);
+        const { data: roleRows } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("user_roles")
+                .select("tenant_id")
+                .eq("user_id", user.id)
+                .not("tenant_id", "is", null)
+                .limit(1),
+              ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
+              "admin.error_logs.load_current_user.role_rows timeout",
+            ),
+          {
+            maxRetries: ADMIN_ERROR_LOGS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
         setCurrentUserTenantId(roleRows?.[0]?.tenant_id || null);
       } else {
         setCurrentUserTenantId(null);
@@ -412,22 +448,39 @@ export default function ErrorLogs() {
       setCurrentUserId(null);
       setCurrentUserTenantId(null);
       setCurrentUserLabel(null);
+    } finally {
+      setIsRetrying(false);
     }
   }, []);
 
   const loadAlertSettings = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", ERROR_ALERT_SETTINGS_KEY)
-        .maybeSingle();
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("value")
+              .eq("key", ERROR_ALERT_SETTINGS_KEY)
+              .maybeSingle(),
+            ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
+            "admin.error_logs.alert_settings.fetch timeout",
+          ),
+        {
+          maxRetries: ADMIN_ERROR_LOGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (error) throw error;
       setAlertSettings(normalizeAlertSettings(data?.value));
     } catch (error) {
       const errorRef = reportError(error, "admin.error_logs.alert_settings.fetch");
       toast.error(appendErrorReference("Gagal memuat pengaturan alert realtime", errorRef));
       setAlertSettings(DEFAULT_ALERT_SETTINGS);
+    } finally {
+      setIsRetrying(false);
     }
   }, []);
 
@@ -436,11 +489,24 @@ export default function ErrorLogs() {
       setIsLoading(true);
     }
     try {
-      const { data, error } = await supabase
-        .from("client_error_logs" as never)
-        .select("*")
-        .order("occurred_at", { ascending: false })
-        .limit(5000);
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("client_error_logs" as never)
+              .select("*")
+              .order("occurred_at", { ascending: false })
+              .limit(5000),
+            ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
+            "admin.error_logs.fetch timeout",
+          ),
+        {
+          maxRetries: ADMIN_ERROR_LOGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
 
@@ -491,6 +557,7 @@ export default function ErrorLogs() {
       );
       setDataSource("local");
     } finally {
+      setIsRetrying(false);
       if (!options?.silent) {
         setIsLoading(false);
       }
@@ -701,13 +768,25 @@ export default function ErrorLogs() {
       const postDirectlyFromClient = async () => {
         const results = await Promise.allSettled(
           webhookTargets.map(async (target) => {
-            const response = await fetch(target.url, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
+            const response = await withExponentialBackoff(
+              () =>
+                withTimeout(
+                  fetch(target.url, {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({ ...payload, channel: target.channel }),
+                  }),
+                  ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
+                  `admin.error_logs.direct_webhook_post timeout (${target.channel})`,
+                ),
+              {
+                maxRetries: ADMIN_ERROR_LOGS_QUERY_RETRY_MAX,
+                shouldRetry: isRetryableError,
+                onRetry: () => setIsRetrying(true),
               },
-              body: JSON.stringify({ ...payload, channel: target.channel }),
-            });
+            );
             if (!response.ok) {
               throw new Error(`${target.channel}: HTTP ${response.status}`);
             }
@@ -720,9 +799,21 @@ export default function ErrorLogs() {
       };
 
       try {
-        const { data, error } = await supabase.functions.invoke(CRITICAL_ALERT_RELAY_FUNCTION, {
-          body: payload,
-        });
+        const { data, error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.functions.invoke(CRITICAL_ALERT_RELAY_FUNCTION, {
+                body: payload,
+              }),
+              ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
+              "admin.error_logs.realtime_alert_relay.invoke timeout",
+            ),
+          {
+            maxRetries: ADMIN_ERROR_LOGS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
         if (error) throw error;
         const response = (data || {}) as Record<string, unknown>;
         const failedTargets = Number(response.failed || 0);
@@ -751,14 +842,27 @@ export default function ErrorLogs() {
     setIsSavingAlertSettings(true);
     try {
       const serialized = serializeAlertSettings(alertSettings);
-      const { error } = await supabase.from("system_settings").upsert(
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.from("system_settings").upsert(
+              {
+                key: ERROR_ALERT_SETTINGS_KEY,
+                value: serialized,
+                description: "Pengaturan notifikasi realtime log error kritis (webhook/slack/whatsapp/email).",
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "key" },
+            ),
+            ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
+            "admin.error_logs.alert_settings.save timeout",
+          ),
         {
-          key: ERROR_ALERT_SETTINGS_KEY,
-          value: serialized,
-          description: "Pengaturan notifikasi realtime log error kritis (webhook/slack/whatsapp/email).",
-          updated_at: new Date().toISOString(),
+          maxRetries: ADMIN_ERROR_LOGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
         },
-        { onConflict: "key" },
       );
       if (error) throw error;
       toast.success("Pengaturan alert realtime berhasil disimpan.");
@@ -767,6 +871,7 @@ export default function ErrorLogs() {
       toast.error(appendErrorReference("Gagal menyimpan pengaturan alert realtime", errorRef));
     } finally {
       setIsSavingAlertSettings(false);
+      setIsRetrying(false);
     }
   }, [alertSettings]);
 
@@ -858,7 +963,20 @@ export default function ErrorLogs() {
   const handleRunRetentionNow = async () => {
     setIsRunningRetention(true);
     try {
-      const { data, error } = (await supabase.rpc("apply_client_error_logs_retention" as never)) as {
+      setIsRetrying(false);
+      const { data, error } = (await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("apply_client_error_logs_retention" as never),
+            ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
+            "admin.error_logs.retention.run timeout",
+          ),
+        {
+          maxRetries: ADMIN_ERROR_LOGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      )) as {
         data: Record<string, unknown> | null;
         error: { message?: string } | null;
       };
@@ -876,6 +994,7 @@ export default function ErrorLogs() {
       toast.error(appendErrorReference("Gagal menjalankan retensi log error", errorRef));
     } finally {
       setIsRunningRetention(false);
+      setIsRetrying(false);
     }
   };
 
@@ -1479,6 +1598,87 @@ export default function ErrorLogs() {
     }
   };
 
+  const renderRowActions = (entry: ErrorLogRow) => {
+    const isActionBusy =
+      classifyingRefId === entry.id ||
+      resolvingRefId === entry.id ||
+      reopeningRefId === entry.id ||
+      archivingRefId === entry.id ||
+      unarchivingRefId === entry.id ||
+      isBulkClassifying ||
+      isBulkArchiving ||
+      isBulkUnarchiving ||
+      isBulkResolving ||
+      isBulkReopening;
+
+    return (
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={() => setSelectedDetailEntry(entry)}>
+          <Eye className="mr-1 h-3.5 w-3.5" />
+          Detail
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button type="button" variant="ghost" size="icon" className="h-9 w-9">
+              <MoreHorizontal className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            {getTopupRequestIdFromEntry(entry) ? (
+              <DropdownMenuItem onClick={() => openTopupRequest(entry)}>
+                <ExternalLink className="mr-2 h-4 w-4" />
+                Buka Topup
+              </DropdownMenuItem>
+            ) : null}
+            {activeTab === "critical" ? (
+              <>
+                <DropdownMenuItem disabled={isActionBusy} onClick={() => void handleSetNonCritical(entry, true)}>
+                  Tandai Non Kritis
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={isActionBusy} onClick={() => void handleResolveCritical(entry)}>
+                  Tandai Selesai
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={isActionBusy} onClick={() => void handleArchiveCritical(entry)}>
+                  Arsipkan
+                </DropdownMenuItem>
+              </>
+            ) : null}
+            {activeTab === "non_critical" ? (
+              <DropdownMenuItem disabled={isActionBusy} onClick={() => void handleSetNonCritical(entry, false)}>
+                Tandai Kritis
+              </DropdownMenuItem>
+            ) : null}
+            {activeTab === "resolved_critical" ? (
+              <>
+                <DropdownMenuItem disabled={isActionBusy} onClick={() => void handleReopenCritical(entry)}>
+                  Buka Lagi
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={isActionBusy} onClick={() => void handleArchiveCritical(entry)}>
+                  Arsipkan
+                </DropdownMenuItem>
+              </>
+            ) : null}
+            {activeTab === "archived_critical" ? (
+              <DropdownMenuItem disabled={isActionBusy} onClick={() => void handleUnarchiveCritical(entry)}>
+                Pulihkan
+              </DropdownMenuItem>
+            ) : null}
+            {activeTab === "archived_non_critical" ? (
+              <>
+                <DropdownMenuItem disabled={isActionBusy} onClick={() => void handleSetNonCritical(entry, false)}>
+                  Tandai Kritis
+                </DropdownMenuItem>
+                <DropdownMenuItem disabled={isActionBusy} onClick={() => void handleUnarchiveCritical(entry)}>
+                  Pulihkan
+                </DropdownMenuItem>
+              </>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    );
+  };
+
   return (
     <SuperAdminLayout title="Log Error" subtitle="Catatan error/gagal muat data berdasarkan nomor referensi">
       <div className="space-y-6">
@@ -1517,6 +1717,11 @@ export default function ErrorLogs() {
             </Button>
           </CardContent>
         </Card>
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang koneksi data log error...
+          </div>
+        )}
 
         <Card>
           <CardHeader>
@@ -1594,13 +1799,25 @@ export default function ErrorLogs() {
           </CardHeader>
           <CardContent className="space-y-4">
             <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SeverityTab)}>
-              <TabsList className="grid w-full grid-cols-5">
-                <TabsTrigger value="critical">Kritis ({criticalEntries.length})</TabsTrigger>
-                <TabsTrigger value="non_critical">Non Kritis ({nonCriticalEntries.length})</TabsTrigger>
-                <TabsTrigger value="resolved_critical">Selesai ({resolvedCriticalEntries.length})</TabsTrigger>
-                <TabsTrigger value="archived_critical">Arsip Kritis ({archivedCriticalEntries.length})</TabsTrigger>
-                <TabsTrigger value="archived_non_critical">Arsip Non Kritis ({archivedNonCriticalEntries.length})</TabsTrigger>
-              </TabsList>
+              <div className="overflow-x-auto pb-1">
+                <TabsList className="min-w-max h-auto flex-nowrap gap-1.5 rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+                  <TabsTrigger value="critical" className="whitespace-nowrap">
+                    Kritis ({criticalEntries.length})
+                  </TabsTrigger>
+                  <TabsTrigger value="non_critical" className="whitespace-nowrap">
+                    Non Kritis ({nonCriticalEntries.length})
+                  </TabsTrigger>
+                  <TabsTrigger value="resolved_critical" className="whitespace-nowrap">
+                    Selesai ({resolvedCriticalEntries.length})
+                  </TabsTrigger>
+                  <TabsTrigger value="archived_critical" className="whitespace-nowrap">
+                    Arsip Kritis ({archivedCriticalEntries.length})
+                  </TabsTrigger>
+                  <TabsTrigger value="archived_non_critical" className="whitespace-nowrap">
+                    Arsip Non Kritis ({archivedNonCriticalEntries.length})
+                  </TabsTrigger>
+                </TabsList>
+              </div>
             </Tabs>
 
             {(activeTab === "critical" ||
@@ -1893,11 +2110,13 @@ export default function ErrorLogs() {
                 </TableHeader>
                 <TableBody>
                   {isLoading ? (
-                    <TableRow>
-                      <TableCell colSpan={6} className="text-center text-muted-foreground">
-                        Memuat log error...
-                      </TableCell>
-                    </TableRow>
+                    Array.from({ length: 5 }).map((_, idx) => (
+                      <TableRow key={`loading-row-${idx}`}>
+                        <TableCell colSpan={6}>
+                          <div className="h-8 w-full animate-pulse rounded-md bg-muted/50" />
+                        </TableCell>
+                      </TableRow>
+                    ))
                   ) : paginatedEntries.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={6} className="text-center text-muted-foreground">
@@ -1932,282 +2151,7 @@ export default function ErrorLogs() {
                           {entry.message}
                         </TableCell>
                         <TableCell className="font-mono text-xs">{entry.route || "-"}</TableCell>
-                        <TableCell className="text-right">
-                          {activeTab === "critical" ? (
-                            <div className="flex justify-end gap-2">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setSelectedDetailEntry(entry)}
-                              >
-                                <Eye className="mr-1 h-3.5 w-3.5" />
-                                Detail
-                              </Button>
-                              {getTopupRequestIdFromEntry(entry) ? (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => openTopupRequest(entry)}
-                                >
-                                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
-                                  Buka Topup
-                                </Button>
-                              ) : null}
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => void handleSetNonCritical(entry, true)}
-                                disabled={
-                                  classifyingRefId === entry.id ||
-                                  isBulkClassifying ||
-                                  isBulkArchiving ||
-                                  isBulkUnarchiving ||
-                                  isBulkResolving ||
-                                  isBulkReopening
-                                }
-                              >
-                                Non Kritis
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => void handleResolveCritical(entry)}
-                                disabled={
-                                  resolvingRefId === entry.id ||
-                                  isBulkClassifying ||
-                                  isBulkArchiving ||
-                                  isBulkUnarchiving ||
-                                  isBulkResolving ||
-                                  isBulkReopening
-                                }
-                              >
-                                <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
-                                Selesai
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => void handleArchiveCritical(entry)}
-                                disabled={
-                                  archivingRefId === entry.id ||
-                                  isBulkClassifying ||
-                                  isBulkArchiving ||
-                                  isBulkUnarchiving ||
-                                  isBulkResolving ||
-                                  isBulkReopening
-                                }
-                              >
-                                <Archive className="mr-1 h-3.5 w-3.5" />
-                                Arsipkan
-                              </Button>
-                            </div>
-                          ) : activeTab === "non_critical" ? (
-                            <div className="flex justify-end gap-2">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setSelectedDetailEntry(entry)}
-                              >
-                                <Eye className="mr-1 h-3.5 w-3.5" />
-                                Detail
-                              </Button>
-                              {getTopupRequestIdFromEntry(entry) ? (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => openTopupRequest(entry)}
-                                >
-                                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
-                                  Buka Topup
-                                </Button>
-                              ) : null}
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => void handleSetNonCritical(entry, false)}
-                                disabled={
-                                  classifyingRefId === entry.id ||
-                                  isBulkClassifying ||
-                                  isBulkArchiving ||
-                                  isBulkUnarchiving ||
-                                  isBulkResolving ||
-                                  isBulkReopening
-                                }
-                              >
-                                Tandai Kritis
-                              </Button>
-                            </div>
-                          ) : activeTab === "resolved_critical" ? (
-                            <div className="flex justify-end gap-2">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setSelectedDetailEntry(entry)}
-                              >
-                                <Eye className="mr-1 h-3.5 w-3.5" />
-                                Detail
-                              </Button>
-                              {getTopupRequestIdFromEntry(entry) ? (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => openTopupRequest(entry)}
-                                >
-                                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
-                                  Buka Topup
-                                </Button>
-                              ) : null}
-                              <span className="text-xs text-muted-foreground whitespace-nowrap">
-                                {entry.resolvedAt
-                                  ? format(new Date(entry.resolvedAt), "dd MMM yyyy HH:mm:ss", { locale: id })
-                                  : "-"}
-                              </span>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => void handleReopenCritical(entry)}
-                                disabled={
-                                  reopeningRefId === entry.id ||
-                                  isBulkClassifying ||
-                                  isBulkArchiving ||
-                                  isBulkUnarchiving ||
-                                  isBulkResolving ||
-                                  isBulkReopening
-                                }
-                              >
-                                Buka Lagi
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => void handleArchiveCritical(entry)}
-                                disabled={
-                                  archivingRefId === entry.id ||
-                                  isBulkClassifying ||
-                                  isBulkArchiving ||
-                                  isBulkUnarchiving ||
-                                  isBulkResolving ||
-                                  isBulkReopening
-                                }
-                              >
-                                Arsipkan
-                              </Button>
-                            </div>
-                          ) : activeTab === "archived_critical" ? (
-                            <div className="flex justify-end gap-2">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setSelectedDetailEntry(entry)}
-                              >
-                                <Eye className="mr-1 h-3.5 w-3.5" />
-                                Detail
-                              </Button>
-                              {getTopupRequestIdFromEntry(entry) ? (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => openTopupRequest(entry)}
-                                >
-                                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
-                                  Buka Topup
-                                </Button>
-                              ) : null}
-                              <span className="text-xs text-muted-foreground">
-                                {entry.archivedAt
-                                  ? format(new Date(entry.archivedAt), "dd MMM yyyy HH:mm:ss", { locale: id })
-                                  : "-"}
-                              </span>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => void handleUnarchiveCritical(entry)}
-                                disabled={
-                                  unarchivingRefId === entry.id ||
-                                  isBulkClassifying ||
-                                  isBulkArchiving ||
-                                  isBulkUnarchiving ||
-                                  isBulkResolving ||
-                                  isBulkReopening
-                                }
-                              >
-                                Pulihkan
-                              </Button>
-                            </div>
-                          ) : activeTab === "archived_non_critical" ? (
-                            <div className="flex justify-end gap-2">
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setSelectedDetailEntry(entry)}
-                              >
-                                <Eye className="mr-1 h-3.5 w-3.5" />
-                                Detail
-                              </Button>
-                              {getTopupRequestIdFromEntry(entry) ? (
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="sm"
-                                  onClick={() => openTopupRequest(entry)}
-                                >
-                                  <ExternalLink className="mr-1 h-3.5 w-3.5" />
-                                  Buka Topup
-                                </Button>
-                              ) : null}
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => void handleSetNonCritical(entry, false)}
-                                disabled={
-                                  classifyingRefId === entry.id ||
-                                  isBulkClassifying ||
-                                  isBulkArchiving ||
-                                  isBulkUnarchiving ||
-                                  isBulkResolving ||
-                                  isBulkReopening
-                                }
-                              >
-                                Tandai Kritis
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => void handleUnarchiveCritical(entry)}
-                                disabled={
-                                  unarchivingRefId === entry.id ||
-                                  isBulkClassifying ||
-                                  isBulkArchiving ||
-                                  isBulkUnarchiving ||
-                                  isBulkResolving ||
-                                  isBulkReopening
-                                }
-                              >
-                                Pulihkan
-                              </Button>
-                            </div>
-                          ) : (
-                            "-"
-                          )}
-                        </TableCell>
+                        <TableCell className="text-right">{renderRowActions(entry)}</TableCell>
                       </TableRow>
                     ))
                   )}
@@ -2313,8 +2257,11 @@ export default function ErrorLogs() {
                     : `Sebanyak ${bulkConfirmDialog?.count ?? 0} log selesai pada halaman ini akan dibuka kembali.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Batal</AlertDialogCancel>
+          <AlertDialogFooter className={dialogActionBarClassName}>
+            <DialogActionHint>
+              Tindakan massal hanya berlaku untuk data pada halaman ini.
+            </DialogActionHint>
+            <AlertDialogCancel className="bg-white">Batal</AlertDialogCancel>
             <AlertDialogAction
               onClick={(event) => {
                 event.preventDefault();

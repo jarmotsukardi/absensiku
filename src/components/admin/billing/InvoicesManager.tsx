@@ -40,6 +40,9 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
+import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 type InvoicesFilterMode = "all" | "invalid_number";
 
@@ -90,6 +93,7 @@ const statusLabels: Record<string, string> = {
 };
 
 export function InvoicesManager({ filterMode = "all", onClearFilterMode }: InvoicesManagerProps) {
+  const VERIFY_TIMEOUT_MS = 12000;
   const ITEMS_PER_PAGE = 10;
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -152,9 +156,19 @@ export function InvoicesManager({ filterMode = "all", onClearFilterMode }: Invoi
     if (!selectedInvoice) return;
     setIsProcessing(true);
     try {
-      await verifyPayment(selectedInvoice.id, approved, approved ? undefined : rejectionReason);
+      await withTimeout(
+        verifyPayment(selectedInvoice.id, approved, approved ? undefined : rejectionReason),
+        VERIFY_TIMEOUT_MS,
+        "Memproses verifikasi invoice terlalu lama",
+      );
       setShowVerifyDialog(false);
       setSelectedInvoice(null);
+    } catch (error) {
+      const errorRef = reportError(error, "admin.billing.invoices.verify_payment", {
+        invoice_id: selectedInvoice.id,
+        approved,
+      });
+      toast.error(appendErrorReference("Gagal memproses verifikasi invoice.", errorRef));
     } finally {
       setIsProcessing(false);
     }
@@ -162,8 +176,14 @@ export function InvoicesManager({ filterMode = "all", onClearFilterMode }: Invoi
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-32">
-        <Loader2 className="h-6 w-6 animate-spin" />
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-10 text-center">
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+        </div>
+        <p className="text-base font-medium text-slate-900">Memuat daftar invoice</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Data tagihan organisasi sedang disiapkan. Mohon tunggu sebentar.
+        </p>
       </div>
     );
   }
@@ -228,10 +248,20 @@ export function InvoicesManager({ filterMode = "all", onClearFilterMode }: Invoi
           <TableBody>
             {filteredInvoices.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center text-muted-foreground">
-                  {filterMode === "invalid_number"
-                    ? "Tidak ada invoice dengan format nomor faktur tidak valid"
-                    : "Tidak ada invoice ditemukan"}
+                <TableCell colSpan={8} className="py-10">
+                  <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
+                    <div className="rounded-full bg-slate-100 p-3">
+                      <Search className="h-5 w-5 text-slate-500" />
+                    </div>
+                    <p className="text-base font-medium text-slate-800">
+                      {filterMode === "invalid_number"
+                        ? "Tidak ada invoice dengan format nomor faktur tidak valid"
+                        : "Tidak ada invoice ditemukan"}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Ubah filter status, kata kunci pencarian, atau cek periode data invoice.
+                    </p>
+                  </div>
                 </TableCell>
               </TableRow>
             ) : (

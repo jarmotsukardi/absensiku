@@ -21,6 +21,8 @@
  } from "lucide-react";
  import { toast } from "sonner";
  import { format } from "date-fns";
+ import { appendErrorReference, reportError } from "@/lib/errorLogger";
+ import { withTimeout } from "@/lib/attendanceResilience";
  
  interface SimulatedInvoice {
    id: string;
@@ -44,88 +46,117 @@
      setLogs(prev => [`[${timestamp}] ${message}`, ...prev.slice(0, 49)]);
    };
  
-   const simulateCreateInvoice = async () => {
-     setIsSimulating(true);
+  const simulateCreateInvoice = async () => {
+    setIsSimulating(true);
      addLog("🚀 Memulai simulasi pembuatan invoice...");
- 
-     await new Promise(resolve => setTimeout(resolve, 1000));
- 
-     const invoiceNumber = `SIM-${Date.now().toString().slice(-8)}`;
-     const newInvoice: SimulatedInvoice = {
-       id: crypto.randomUUID(),
-       invoice_number: invoiceNumber,
-       amount: testAmount,
-       status: "PENDING",
-       payment_method: paymentMethod,
-       created_at: new Date().toISOString(),
-     };
- 
-     setSimulatedInvoices(prev => [newInvoice, ...prev]);
-     addLog(`✅ Invoice ${invoiceNumber} berhasil dibuat`);
-     addLog(`💰 Amount: Rp ${testAmount.toLocaleString()}`);
-     addLog(`💳 Payment Method: ${paymentMethod}`);
-     addLog(`📋 Status: PENDING`);
-     
-     toast.success(`Invoice simulasi ${invoiceNumber} berhasil dibuat`);
-     setIsSimulating(false);
+     try {
+       await withTimeout(new Promise(resolve => setTimeout(resolve, 1000)), 5000, "Simulasi pembuatan invoice timeout");
+
+       const invoiceNumber = `SIM-${Date.now().toString().slice(-8)}`;
+       const newInvoice: SimulatedInvoice = {
+         id: crypto.randomUUID(),
+         invoice_number: invoiceNumber,
+         amount: testAmount,
+         status: "PENDING",
+         payment_method: paymentMethod,
+         created_at: new Date().toISOString(),
+       };
+
+       setSimulatedInvoices(prev => [newInvoice, ...prev]);
+       addLog(`✅ Invoice ${invoiceNumber} berhasil dibuat`);
+       addLog(`💰 Amount: Rp ${testAmount.toLocaleString()}`);
+       addLog(`💳 Payment Method: ${paymentMethod}`);
+       addLog(`📋 Status: PENDING`);
+       
+       toast.success(`Invoice simulasi ${invoiceNumber} berhasil dibuat`);
+     } catch (error) {
+       const errorRef = reportError(error, "admin.billing.xendit_sandbox.create_invoice");
+       toast.error(appendErrorReference("Gagal membuat invoice simulasi.", errorRef));
+     } finally {
+       setIsSimulating(false);
+     }
    };
  
-   const simulatePayment = async (invoiceId: string) => {
+  const simulatePayment = async (invoiceId: string) => {
      const invoice = simulatedInvoices.find(i => i.id === invoiceId);
      if (!invoice || invoice.status !== "PENDING") return;
  
-     addLog(`🔄 Memproses pembayaran ${invoice.invoice_number}...`);
-     await new Promise(resolve => setTimeout(resolve, 1500));
- 
-     setSimulatedInvoices(prev => prev.map(i => 
-       i.id === invoiceId 
-         ? { ...i, status: "PAID", paid_at: new Date().toISOString() } 
-         : i
-     ));
- 
-     addLog(`✅ Pembayaran ${invoice.invoice_number} berhasil!`);
-     addLog(`📥 Webhook callback diterima`);
-     addLog(`🔐 Token validasi: OK`);
-     addLog(`💾 Database updated`);
-     addLog(`📧 Notifikasi dikirim`);
- 
-     toast.success(`Pembayaran ${invoice.invoice_number} berhasil disimulasikan`);
+     try {
+       addLog(`🔄 Memproses pembayaran ${invoice.invoice_number}...`);
+       await withTimeout(new Promise(resolve => setTimeout(resolve, 1500)), 5000, "Simulasi pembayaran timeout");
+
+       setSimulatedInvoices(prev => prev.map(i => 
+         i.id === invoiceId 
+           ? { ...i, status: "PAID", paid_at: new Date().toISOString() } 
+           : i
+       ));
+
+       addLog(`✅ Pembayaran ${invoice.invoice_number} berhasil!`);
+       addLog(`📥 Webhook callback diterima`);
+       addLog(`🔐 Token validasi: OK`);
+       addLog(`💾 Database updated`);
+       addLog(`📧 Notifikasi dikirim`);
+
+       toast.success(`Pembayaran ${invoice.invoice_number} berhasil disimulasikan`);
+     } catch (error) {
+       const errorRef = reportError(error, "admin.billing.xendit_sandbox.simulate_payment", {
+         invoice_id: invoiceId,
+         invoice_number: invoice.invoice_number,
+       });
+       toast.error(appendErrorReference(`Simulasi pembayaran ${invoice.invoice_number} gagal.`, errorRef));
+     }
    };
  
-   const simulateExpire = async (invoiceId: string) => {
+  const simulateExpire = async (invoiceId: string) => {
      const invoice = simulatedInvoices.find(i => i.id === invoiceId);
      if (!invoice || invoice.status !== "PENDING") return;
  
-     addLog(`⏰ Mensimulasikan expired ${invoice.invoice_number}...`);
-     await new Promise(resolve => setTimeout(resolve, 800));
- 
-     setSimulatedInvoices(prev => prev.map(i => 
-       i.id === invoiceId 
-         ? { ...i, status: "EXPIRED" } 
-         : i
-     ));
- 
-     addLog(`⚠️ Invoice ${invoice.invoice_number} expired`);
-     addLog(`📥 Webhook EXPIRED diterima`);
-     toast.info(`Invoice ${invoice.invoice_number} expired`);
+     try {
+       addLog(`⏰ Mensimulasikan expired ${invoice.invoice_number}...`);
+       await withTimeout(new Promise(resolve => setTimeout(resolve, 800)), 5000, "Simulasi expiry timeout");
+
+       setSimulatedInvoices(prev => prev.map(i => 
+         i.id === invoiceId 
+           ? { ...i, status: "EXPIRED" } 
+           : i
+       ));
+
+       addLog(`⚠️ Invoice ${invoice.invoice_number} expired`);
+       addLog(`📥 Webhook EXPIRED diterima`);
+       toast.info(`Invoice ${invoice.invoice_number} expired`);
+     } catch (error) {
+       const errorRef = reportError(error, "admin.billing.xendit_sandbox.simulate_expire", {
+         invoice_id: invoiceId,
+         invoice_number: invoice.invoice_number,
+       });
+       toast.error(appendErrorReference(`Simulasi expiry ${invoice.invoice_number} gagal.`, errorRef));
+     }
    };
  
-   const simulateFail = async (invoiceId: string) => {
+  const simulateFail = async (invoiceId: string) => {
      const invoice = simulatedInvoices.find(i => i.id === invoiceId);
      if (!invoice || invoice.status !== "PENDING") return;
  
-     addLog(`❌ Mensimulasikan gagal bayar ${invoice.invoice_number}...`);
-     await new Promise(resolve => setTimeout(resolve, 800));
- 
-     setSimulatedInvoices(prev => prev.map(i => 
-       i.id === invoiceId 
-         ? { ...i, status: "FAILED" } 
-         : i
-     ));
- 
-     addLog(`❌ Pembayaran ${invoice.invoice_number} gagal`);
-     addLog(`📥 Webhook FAILED diterima`);
-     toast.error(`Pembayaran ${invoice.invoice_number} gagal`);
+     try {
+       addLog(`❌ Mensimulasikan gagal bayar ${invoice.invoice_number}...`);
+       await withTimeout(new Promise(resolve => setTimeout(resolve, 800)), 5000, "Simulasi gagal bayar timeout");
+
+       setSimulatedInvoices(prev => prev.map(i => 
+         i.id === invoiceId 
+           ? { ...i, status: "FAILED" } 
+           : i
+       ));
+
+       addLog(`❌ Pembayaran ${invoice.invoice_number} gagal`);
+       addLog(`📥 Webhook FAILED diterima`);
+       toast.error(`Pembayaran ${invoice.invoice_number} gagal`);
+     } catch (error) {
+       const errorRef = reportError(error, "admin.billing.xendit_sandbox.simulate_fail", {
+         invoice_id: invoiceId,
+         invoice_number: invoice.invoice_number,
+       });
+       toast.error(appendErrorReference(`Simulasi gagal bayar ${invoice.invoice_number} gagal.`, errorRef));
+     }
    };
  
    const clearLogs = () => {

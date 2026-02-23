@@ -20,29 +20,50 @@ import { Tables } from "@/integrations/supabase/types";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 type LeaveRequest = Tables<"leave_requests">;
 type Employee = Tables<"employees">;
 type LeaveRequestWithEmployee = LeaveRequest & { employee?: Employee | null };
+const ADMIN_OFFICIAL_TRAVEL_READ_TIMEOUT_MS = 12000;
+const ADMIN_OFFICIAL_TRAVEL_MAX_RETRIES = 2;
 
 export default function OfficialTravelList() {
   const ITEMS_PER_PAGE = 15;
   const [requests, setRequests] = useState<LeaveRequestWithEmployee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
 
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
+      setIsRetrying(false);
       setLoadError(null);
       
-      const { data, error } = await supabase
-        .from("leave_requests")
-        .select("*, employee:employees!leave_requests_employee_id_fkey(*)")
-        .eq("leave_type", "tugas_luar")
-        .order("created_at", { ascending: false });
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("leave_requests")
+              .select("*, employee:employees!leave_requests_employee_id_fkey(*)")
+              .eq("leave_type", "tugas_luar")
+              .order("created_at", { ascending: false }),
+            ADMIN_OFFICIAL_TRAVEL_READ_TIMEOUT_MS,
+            "Permintaan data tugas dinas timeout."
+          ),
+        {
+          maxRetries: ADMIN_OFFICIAL_TRAVEL_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setRequests((data as LeaveRequestWithEmployee[]) || []);
@@ -53,6 +74,7 @@ export default function OfficialTravelList() {
       toast.error(message);
       setRequests([]);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, []);
@@ -108,9 +130,18 @@ export default function OfficialTravelList() {
           </Button>
         </div>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+            Sedang mencoba ulang memuat data tugas dinas...
+          </div>
+        )}
+
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 

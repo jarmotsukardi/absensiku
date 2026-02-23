@@ -123,36 +123,40 @@ export default function Settings() {
       title="Pengaturan Situs"
       subtitle="Kelola pengaturan umum, SEO, dan media sosial"
     >
-      <Card>
+      <Card className="overflow-hidden border-slate-200/80 shadow-sm">
         <CardContent className="p-0">
           <Tabs value={activeCategory} onValueChange={handleCategoryChange} className="w-full">
-            <div className="border-b bg-muted/20 px-4 overflow-x-auto">
-              <TabsList className="h-auto p-0 bg-transparent flex flex-nowrap gap-1">
-                {settingsCategories.map((category) => (
-                  <TabsTrigger
-                    key={category.id}
-                    value={category.id}
-                    className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-background data-[state=active]:shadow-none px-4 py-3 text-sm font-medium whitespace-nowrap"
-                  >
-                    {category.label}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </div>
-
-            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SettingsTabId)} className="w-full">
-              <div className="border-b bg-muted/30 px-4 overflow-x-auto">
-                <TabsList className="h-auto p-0 bg-transparent flex flex-nowrap gap-1">
-                  {currentCategoryTabs.map((tab) => (
+            <div className="border-b border-slate-200/80 bg-gradient-to-b from-slate-50 via-white to-white px-4 py-3">
+              <div className="overflow-x-auto pb-1">
+                <TabsList className="min-w-max h-auto flex-nowrap gap-1.5 rounded-2xl border border-slate-200/80 bg-white/85 p-1.5 shadow-[0_10px_26px_rgba(15,23,42,0.08)] backdrop-blur supports-[backdrop-filter]:bg-white/70">
+                  {settingsCategories.map((category) => (
                     <TabsTrigger
-                      key={tab.id}
-                      value={tab.id}
-                      className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-background data-[state=active]:shadow-none px-4 py-3 text-sm font-medium whitespace-nowrap"
+                      key={category.id}
+                      value={category.id}
+                      className="rounded-xl border border-transparent px-4 py-2.5 text-sm font-semibold whitespace-nowrap text-slate-600 shadow-none transition-all duration-200 hover:-translate-y-px hover:border-slate-200 hover:bg-slate-100 hover:text-slate-900 data-[state=active]:border-slate-800/80 data-[state=active]:bg-slate-900 data-[state=active]:text-white data-[state=active]:shadow-[0_8px_20px_rgba(15,23,42,0.24)]"
                     >
-                      {tab.label}
+                      {category.label}
                     </TabsTrigger>
                   ))}
                 </TabsList>
+              </div>
+            </div>
+
+            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SettingsTabId)} className="w-full">
+              <div className="border-b border-slate-200/70 bg-slate-50/55 px-4 py-2.5">
+                <div className="overflow-x-auto pb-1">
+                  <TabsList className="min-w-max h-auto flex-nowrap gap-1.5 rounded-xl border border-slate-200/80 bg-white/95 p-1.5 shadow-[0_6px_16px_rgba(15,23,42,0.07)]">
+                    {currentCategoryTabs.map((tab) => (
+                      <TabsTrigger
+                        key={tab.id}
+                        value={tab.id}
+                        className="rounded-lg border border-transparent px-3.5 py-2 text-sm font-medium whitespace-nowrap text-slate-600 shadow-none transition-all duration-200 hover:-translate-y-px hover:border-slate-200 hover:bg-slate-100 hover:text-slate-900 data-[state=active]:border-sky-500/70 data-[state=active]:bg-sky-600 data-[state=active]:text-white data-[state=active]:shadow-[0_7px_15px_rgba(2,132,199,0.30)]"
+                      >
+                        {tab.label}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </div>
               </div>
 
               <div className="p-6">

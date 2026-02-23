@@ -9,6 +9,9 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { toast } from "sonner";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 type Organization = Tables<"tenants">;
 
@@ -54,7 +57,10 @@ export function OrganizationDetailPanel({ orgId, onClose }: OrganizationDetailPa
       if (error) throw error;
       setOrganization(data);
     } catch (error) {
-      console.error("Error fetching organization:", error);
+      const errorRef = reportError(error, "admin.organization_detail_panel.fetch_organization", {
+        organization_id: id,
+      });
+      toast.error(appendErrorReference("Gagal memuat detail organisasi", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -62,11 +68,19 @@ export function OrganizationDetailPanel({ orgId, onClose }: OrganizationDetailPa
 
   const fetchStats = async (tenantId: string) => {
     try {
-      const [employeesRes, officesRes, opdRes] = await Promise.all([
-        supabase.from("employees").select("*", { count: "exact", head: true }).eq("tenant_id", tenantId),
-        supabase.from("offices").select("*", { count: "exact", head: true }).eq("tenant_id", tenantId),
-        supabase.from("opd").select("*", { count: "exact", head: true }).eq("tenant_id", tenantId),
-      ]);
+      const [employeesRes, officesRes, opdRes] = await withTimeout(
+        () =>
+          Promise.all([
+            supabase.from("employees").select("*", { count: "exact", head: true }).eq("tenant_id", tenantId),
+            supabase.from("offices").select("*", { count: "exact", head: true }).eq("tenant_id", tenantId),
+            supabase.from("opd").select("*", { count: "exact", head: true }).eq("tenant_id", tenantId),
+          ]),
+        12000,
+      );
+
+      if (employeesRes.error) throw employeesRes.error;
+      if (officesRes.error) throw officesRes.error;
+      if (opdRes.error) throw opdRes.error;
 
       setStats({
         employeesCount: employeesRes.count || 0,
@@ -74,23 +88,34 @@ export function OrganizationDetailPanel({ orgId, onClose }: OrganizationDetailPa
         opdCount: opdRes.count || 0,
       });
     } catch (error) {
-      console.error("Error fetching stats:", error);
+      const errorRef = reportError(error, "admin.organization_detail_panel.fetch_stats", {
+        tenant_id: tenantId,
+      });
+      toast.error(appendErrorReference("Gagal memuat statistik organisasi", errorRef));
     }
   };
 
   const fetchSubscription = async (tenantId: string) => {
     try {
-      const { data } = await supabase
-        .from("subscriptions")
-        .select("*")
-        .eq("tenant_id", tenantId)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const { data, error } = await withTimeout(
+        () =>
+          supabase
+            .from("subscriptions")
+            .select("*")
+            .eq("tenant_id", tenantId)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+        12000,
+      );
+      if (error) throw error;
       
       setSubscription(data);
     } catch (error) {
-      console.error("Error fetching subscription:", error);
+      const errorRef = reportError(error, "admin.organization_detail_panel.fetch_subscription", {
+        tenant_id: tenantId,
+      });
+      toast.error(appendErrorReference("Gagal memuat data langganan organisasi", errorRef));
     }
   };
 

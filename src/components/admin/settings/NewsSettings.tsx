@@ -16,6 +16,8 @@ import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { RichTextEditor } from "@/components/editor/RichTextEditor";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface NewsSettingsData {
   title: string;
@@ -75,26 +77,37 @@ export function NewsSettings() {
   const fetchData = async () => {
     try {
       // Fetch settings
-      const { data: settingsData } = await supabase
-        .from("homepage_sections")
-        .select("settings")
-        .eq("section_key", "news")
-        .maybeSingle();
+      const { data: settingsData } = await withTimeout(
+        () =>
+          supabase
+            .from("homepage_sections")
+            .select("settings")
+            .eq("section_key", "news")
+            .maybeSingle(),
+        10000,
+        "Load news settings timeout"
+      );
 
       if (settingsData?.settings && typeof settingsData.settings === 'object' && !Array.isArray(settingsData.settings)) {
         setSettings({ ...defaultSettings, ...(settingsData.settings as Record<string, unknown>) as Partial<NewsSettingsData> });
       }
 
       // Fetch news (using articles table with category = berita)
-      const { data: newsData } = await supabase
-        .from("articles")
-        .select("*")
-        .eq("category", "berita")
-        .order("created_at", { ascending: false });
+      const { data: newsData } = await withTimeout(
+        () =>
+          supabase
+            .from("articles")
+            .select("*")
+            .eq("category", "berita")
+            .order("created_at", { ascending: false }),
+        10000,
+        "Load news list timeout"
+      );
 
       setNewsList(newsData || []);
     } catch (error) {
-      console.error("Error fetching news settings:", error);
+      const errorRef = reportError(error, "admin.settings.news.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan berita", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -103,18 +116,24 @@ export function NewsSettings() {
   const handleSaveSettings = async () => {
     setIsSaving(true);
     try {
-      const { error } = await supabase
-        .from("homepage_sections")
-        .update({ 
-          settings: JSON.parse(JSON.stringify(settings)) as Json,
-          updated_at: new Date().toISOString()
-        })
-        .eq("section_key", "news");
+      const { error } = await withTimeout(
+        () =>
+          supabase
+            .from("homepage_sections")
+            .update({ 
+              settings: JSON.parse(JSON.stringify(settings)) as Json,
+              updated_at: new Date().toISOString()
+            })
+            .eq("section_key", "news"),
+        10000,
+        "Save news settings timeout"
+      );
 
       if (error) throw error;
       toast.success("Pengaturan berita berhasil disimpan");
     } catch (error) {
-      toast.error("Gagal menyimpan pengaturan");
+      const errorRef = reportError(error, "admin.settings.news.save_settings");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan", errorRef));
     } finally {
       setIsSaving(false);
     }
@@ -151,11 +170,17 @@ export function NewsSettings() {
       return;
     }
     try {
-      await supabase.from("articles").delete().eq("id", id);
+      const { error } = await withTimeout(
+        () => supabase.from("articles").delete().eq("id", id),
+        10000,
+        "Delete news timeout"
+      );
+      if (error) throw error;
       setNewsList(newsList.filter(n => n.id !== id));
       toast.success("Berita dihapus");
     } catch (error) {
-      toast.error("Gagal menghapus");
+      const errorRef = reportError(error, "admin.settings.news.delete", { article_id: id });
+      toast.error(appendErrorReference("Gagal menghapus", errorRef));
     }
   };
 
@@ -169,33 +194,43 @@ export function NewsSettings() {
       const slug = formData.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") + "-" + Date.now();
       
       if (editingNews) {
-        const { error } = await supabase
-          .from("articles")
-          .update({
-            title: formData.title,
-            content: formData.content,
-            excerpt: formData.excerpt || null,
-            image_url: formData.image_url || null,
-            category: "berita",
-            is_published: formData.is_published,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", editingNews.id);
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("articles")
+              .update({
+                title: formData.title,
+                content: formData.content,
+                excerpt: formData.excerpt || null,
+                image_url: formData.image_url || null,
+                category: "berita",
+                is_published: formData.is_published,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", editingNews.id),
+          10000,
+          "Update news timeout"
+        );
         
         if (error) throw error;
         toast.success("Berita diperbarui");
       } else {
-        const { error } = await supabase
-          .from("articles")
-          .insert({
-            title: formData.title,
-            slug,
-            content: formData.content,
-            excerpt: formData.excerpt || null,
-            image_url: formData.image_url || null,
-            category: "berita",
-            is_published: formData.is_published,
-          });
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("articles")
+              .insert({
+                title: formData.title,
+                slug,
+                content: formData.content,
+                excerpt: formData.excerpt || null,
+                image_url: formData.image_url || null,
+                category: "berita",
+                is_published: formData.is_published,
+              }),
+          10000,
+          "Create news timeout"
+        );
         
         if (error) throw error;
         toast.success("Berita ditambahkan");
@@ -204,18 +239,31 @@ export function NewsSettings() {
       setIsDialogOpen(false);
       fetchData();
     } catch (error) {
+      const errorRef = reportError(error, "admin.settings.news.submit", {
+        article_id: editingNews?.id ?? null,
+        mode: editingNews ? "edit" : "create",
+      });
       const message = error instanceof Error ? error.message : "Gagal menyimpan data";
-      toast.error("Gagal menyimpan: " + message);
+      toast.error(appendErrorReference("Gagal menyimpan: " + message, errorRef));
     }
   };
 
   const togglePublish = async (id: string, currentStatus: boolean) => {
     try {
-      await supabase.from("articles").update({ is_published: !currentStatus }).eq("id", id);
+      const { error } = await withTimeout(
+        () => supabase.from("articles").update({ is_published: !currentStatus }).eq("id", id),
+        10000,
+        "Toggle publish news timeout"
+      );
+      if (error) throw error;
       setNewsList(newsList.map(n => n.id === id ? { ...n, is_published: !currentStatus } : n));
       toast.success(currentStatus ? "Berita di-unpublish" : "Berita dipublish");
     } catch (error) {
-      toast.error("Gagal mengubah status");
+      const errorRef = reportError(error, "admin.settings.news.toggle_publish", {
+        article_id: id,
+        target_status: !currentStatus,
+      });
+      toast.error(appendErrorReference("Gagal mengubah status", errorRef));
     }
   };
 

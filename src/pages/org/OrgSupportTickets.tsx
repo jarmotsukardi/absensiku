@@ -9,7 +9,8 @@ import { PageGlossarySection } from "@/components/admin/common/PageGlossarySecti
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -19,6 +20,7 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 type FeedbackReportRow = Tables<"feedback_reports">;
 type TicketStatus = "all" | "open" | "resolved";
@@ -124,12 +126,16 @@ const getPriorityBadge = (priority: TicketPriority) => {
 };
 
 export default function OrgSupportTickets() {
+  const SUPPORT_TICKETS_QUERY_TIMEOUT_MS = 15000;
+  const SUPPORT_TICKETS_QUERY_RETRY_MAX = 1;
   const navigate = useNavigate();
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [form, setForm] = useState(DEFAULT_FORM);
   const [tickets, setTickets] = useState<TicketRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusFilter, setStatusFilter] = useState<TicketStatus>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -138,33 +144,75 @@ export default function OrgSupportTickets() {
   const fetchTickets = useCallback(async (resolvedTenantId: string) => {
     setIsLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("feedback_reports")
-        .select("*")
-        .eq("tenant_id", resolvedTenantId)
-        .eq("feedback_type", "ticket")
-        .eq("reporter_role", "admin_organisasi")
-        .order("created_at", { ascending: false });
+      setIsRetrying(false);
+      setLoadError(null);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("feedback_reports")
+              .select("*")
+              .eq("tenant_id", resolvedTenantId)
+              .eq("feedback_type", "ticket")
+              .eq("reporter_role", "admin_organisasi")
+              .order("created_at", { ascending: false }),
+            SUPPORT_TICKETS_QUERY_TIMEOUT_MS,
+            "org.help.tickets.fetch timeout",
+          ),
+        {
+          maxRetries: SUPPORT_TICKETS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (error) throw error;
       setTickets((data || []).map(normalizeTicket));
     } catch (error) {
       const errorRef = reportError(error, "org.help.tickets.fetch", { tenant_id: resolvedTenantId });
-      toast.error(appendErrorReference("Gagal memuat daftar tiket", errorRef));
+      const message = appendErrorReference("Gagal memuat daftar tiket", errorRef);
+      setLoadError(message);
+      toast.error(message);
       setTickets([]);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   }, []);
 
-  useEffect(() => {
-    const init = async () => {
+  const initPage = useCallback(async () => {
       try {
-        const { data: authData, error: authError } = await supabase.auth.getUser();
+        setLoadError(null);
+        setIsRetrying(false);
+        const { data: authData, error: authError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.auth.getUser(),
+              SUPPORT_TICKETS_QUERY_TIMEOUT_MS,
+              "org.help.tickets.init.auth timeout",
+            ),
+          {
+            maxRetries: SUPPORT_TICKETS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
         if (authError) throw authError;
         const currentUserId = authData.user?.id || null;
         setUserId(currentUserId);
 
-        const resolvedTenantId = await resolveOrgTenantId();
+        const resolvedTenantId = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              resolveOrgTenantId(),
+              SUPPORT_TICKETS_QUERY_TIMEOUT_MS,
+              "org.help.tickets.init.resolve_tenant timeout",
+            ),
+          {
+            maxRetries: SUPPORT_TICKETS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
         if (!resolvedTenantId) {
           toast.error("Tenant organisasi tidak ditemukan.");
           setIsLoading(false);
@@ -172,13 +220,25 @@ export default function OrgSupportTickets() {
         }
 
         try {
-          const { data: subscriptionRow, error: subscriptionError } = await supabase
-            .from("subscriptions")
-            .select("status")
-            .eq("tenant_id", resolvedTenantId)
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .maybeSingle();
+          const { data: subscriptionRow, error: subscriptionError } = await withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase
+                  .from("subscriptions")
+                  .select("status")
+                  .eq("tenant_id", resolvedTenantId)
+                  .order("created_at", { ascending: false })
+                  .limit(1)
+                  .maybeSingle(),
+                SUPPORT_TICKETS_QUERY_TIMEOUT_MS,
+                "org.help.tickets.check_subscription timeout",
+              ),
+            {
+              maxRetries: SUPPORT_TICKETS_QUERY_RETRY_MAX,
+              shouldRetry: isRetryableError,
+              onRetry: () => setIsRetrying(true),
+            },
+          );
           if (subscriptionError) throw subscriptionError;
 
           if (subscriptionRow?.status !== "active") {
@@ -199,12 +259,18 @@ export default function OrgSupportTickets() {
         await fetchTickets(resolvedTenantId);
       } catch (error) {
         const errorRef = reportError(error, "org.help.tickets.init");
-        toast.error(appendErrorReference("Gagal memuat halaman tiket", errorRef));
+        const message = appendErrorReference("Gagal memuat halaman tiket", errorRef);
+        setLoadError(message);
+        toast.error(message);
         setIsLoading(false);
+      } finally {
+        setIsRetrying(false);
       }
-    };
-    void init();
-  }, [fetchTickets, navigate]);
+    }, [fetchTickets, navigate]);
+
+  useEffect(() => {
+    void initPage();
+  }, [initPage]);
 
   const filteredTickets = useMemo(() => {
     const needle = searchQuery.trim().toLowerCase();
@@ -231,28 +297,52 @@ export default function OrgSupportTickets() {
 
     setIsSubmitting(true);
     try {
-      const { data: authData } = await supabase.auth.getUser();
+      const { data: authData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            SUPPORT_TICKETS_QUERY_TIMEOUT_MS,
+            "org.help.tickets.create.auth timeout",
+          ),
+        {
+          maxRetries: SUPPORT_TICKETS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       const reporterName =
         authData.user?.user_metadata?.full_name ||
         authData.user?.user_metadata?.name ||
         authData.user?.email ||
         "Admin Organisasi";
 
-      const { error } = await supabase.from("feedback_reports").insert({
-        tenant_id: tenantId,
-        user_id: userId,
-        reporter_role: "admin_organisasi",
-        reporter_name: String(reporterName),
-        feedback_type: "ticket",
-        status: "open",
-        message: form.message.trim(),
-        browser_info: JSON.stringify({
-          subject: form.subject.trim(),
-          category: form.category,
-          priority: form.priority,
-          source: "org_help_ticket",
-        } as TicketMeta),
-      });
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.from("feedback_reports").insert({
+              tenant_id: tenantId,
+              user_id: userId,
+              reporter_role: "admin_organisasi",
+              reporter_name: String(reporterName),
+              feedback_type: "ticket",
+              status: "open",
+              message: form.message.trim(),
+              browser_info: JSON.stringify({
+                subject: form.subject.trim(),
+                category: form.category,
+                priority: form.priority,
+                source: "org_help_ticket",
+              } as TicketMeta),
+            }),
+            SUPPORT_TICKETS_QUERY_TIMEOUT_MS,
+            "org.help.tickets.create.insert timeout",
+          ),
+        {
+          maxRetries: SUPPORT_TICKETS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (error) throw error;
 
       toast.success("Tiket berhasil dibuat.");
@@ -267,6 +357,7 @@ export default function OrgSupportTickets() {
       toast.error(appendErrorReference("Gagal membuat tiket", errorRef));
     } finally {
       setIsSubmitting(false);
+      setIsRetrying(false);
     }
   };
 
@@ -292,6 +383,22 @@ export default function OrgSupportTickets() {
             Refresh
           </Button>
         </div>
+
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            Sedang mencoba ulang koneksi data tiket...
+          </div>
+        )}
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <span>{loadError}</span>
+              <Button type="button" variant="outline" size="sm" onClick={() => void initPage()}>
+                Coba Lagi
+              </Button>
+            </div>
+          </div>
+        )}
 
         <Card>
           <CardHeader>
@@ -467,6 +574,14 @@ export default function OrgSupportTickets() {
               )}
             </div>
           )}
+          <DialogFooter className={dialogActionBarClassName}>
+            <DialogActionHint>
+              Pantau status tiket secara berkala di daftar tiket.
+            </DialogActionHint>
+            <Button variant="outline" className="bg-white" onClick={() => setSelectedTicket(null)}>
+              Tutup
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </OrganizationLayout>

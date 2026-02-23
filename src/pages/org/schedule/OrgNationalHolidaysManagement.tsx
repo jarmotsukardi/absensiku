@@ -15,6 +15,11 @@ import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 interface NationalHoliday {
   id: string;
@@ -44,6 +49,9 @@ interface NagerHolidayApiItem {
 
 const currentYear = new Date().getFullYear();
 const years = Array.from({ length: 5 }, (_, i) => currentYear - 2 + i);
+const NATIONAL_READ_TIMEOUT_MS = 12000;
+const NATIONAL_WRITE_TIMEOUT_MS = 18000;
+const NATIONAL_READ_MAX_RETRIES = 2;
 
 const normalizeDayValues = (values: string[]): string[] =>
   Array.from(
@@ -92,9 +100,17 @@ const buildDefaultHolidays = (year: number): SourceHoliday[] => [
 const fetchExternalHolidays = async (year: number): Promise<{ holidays: SourceHoliday[]; sourceLabel: string }> => {
   // Source 1: libur.deno.dev (primary)
   try {
-    const response = await fetch(`https://libur.deno.dev/api?year=${year}`);
+    const response = await withTimeout(
+      fetch(`https://libur.deno.dev/api?year=${year}`),
+      NATIONAL_READ_TIMEOUT_MS,
+      "Permintaan API libur.deno.dev timeout.",
+    );
     if (response.ok) {
-      const apiData: unknown = await response.json();
+      const apiData: unknown = await withTimeout(
+        response.json(),
+        NATIONAL_READ_TIMEOUT_MS,
+        "Parsing respons API libur.deno.dev timeout.",
+      );
       if (Array.isArray(apiData)) {
         const denoItems = (apiData as LiburDenoApiItem[])
           .filter((item) => typeof item?.date === "string" && typeof item?.name === "string");
@@ -109,15 +125,24 @@ const fetchExternalHolidays = async (year: number): Promise<{ holidays: SourceHo
         }
       }
     }
-  } catch {
+  } catch (error) {
+    reportError(error, "org.national_holidays.fetch_external.libur_deno", { year });
     // continue to next source
   }
 
   // Source 2: Nager public holidays (fallback)
   try {
-    const response = await fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/ID`);
+    const response = await withTimeout(
+      fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/ID`),
+      NATIONAL_READ_TIMEOUT_MS,
+      "Permintaan API nager.at timeout.",
+    );
     if (response.ok) {
-      const apiData: unknown = await response.json();
+      const apiData: unknown = await withTimeout(
+        response.json(),
+        NATIONAL_READ_TIMEOUT_MS,
+        "Parsing respons API nager.at timeout.",
+      );
       if (Array.isArray(apiData)) {
         const nagerItems = (apiData as NagerHolidayApiItem[])
           .filter((item) => typeof item?.date === "string")
@@ -133,7 +158,8 @@ const fetchExternalHolidays = async (year: number): Promise<{ holidays: SourceHo
         }
       }
     }
-  } catch {
+  } catch (error) {
+    reportError(error, "org.national_holidays.fetch_external.nager", { year });
     // continue to default source
   }
 
@@ -153,6 +179,7 @@ export default function OrgNationalHolidaysManagement() {
   const [isLoading, setIsLoading] = useState(true);
   const [isPulling, setIsPulling] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterYear, setFilterYear] = useState<string>(currentYear.toString());
   const [currentPage, setCurrentPage] = useState(1);
@@ -162,6 +189,7 @@ export default function OrgNationalHolidaysManagement() {
     setIsLoading(true);
     try {
       setLoadError(null);
+      setIsRetrying(false);
       let query = supabase
         .from("national_holidays")
         .select("*", { count: "exact" });
@@ -175,9 +203,21 @@ export default function OrgNationalHolidaysManagement() {
       const from = (currentPage - 1) * itemsPerPage;
       const to = from + itemsPerPage - 1;
 
-      const { data, error, count } = await query
-        .order("date", { ascending: true })
-        .range(from, to);
+      const { data, error, count } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query
+              .order("date", { ascending: true })
+              .range(from, to),
+            NATIONAL_READ_TIMEOUT_MS,
+            "Permintaan data libur nasional timeout."
+          ),
+        {
+          maxRetries: NATIONAL_READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setHolidays((data as NationalHoliday[]) || []);
@@ -192,6 +232,7 @@ export default function OrgNationalHolidaysManagement() {
       setHolidays([]);
       setTotalHolidays(0);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [currentPage, filterYear, searchTerm]);
@@ -205,14 +246,39 @@ export default function OrgNationalHolidaysManagement() {
     setLoadError(null);
     setFallbackPreviewHolidays([]);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      setIsRetrying(false);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            NATIONAL_READ_TIMEOUT_MS,
+            "Permintaan user auth timeout."
+          ),
+        {
+          maxRetries: NATIONAL_READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (!user) return;
 
-      const { data: roles, error: roleError } = await supabase
-        .from("user_roles")
-        .select("role, tenant_id")
-        .eq("user_id", user.id)
-        .in("role", ["admin_instansi", "super_admin"]);
+      const { data: roles, error: roleError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("user_roles")
+              .select("role, tenant_id")
+              .eq("user_id", user.id)
+              .in("role", ["admin_instansi", "super_admin"]),
+            NATIONAL_READ_TIMEOUT_MS,
+            "Permintaan role user timeout."
+          ),
+        {
+          maxRetries: NATIONAL_READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (roleError) throw roleError;
       const adminRole = roles?.find((r) => r.role === "admin_instansi" && r.tenant_id);
@@ -234,11 +300,23 @@ export default function OrgNationalHolidaysManagement() {
       }
       
       // Get national holidays for selected year from DB first
-      const { data: nationalData, error: nationalError } = await supabase
-        .from("national_holidays")
-        .select("*")
-        .eq("year", selectedYearNum)
-        .eq("is_active", true);
+      const { data: nationalData, error: nationalError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("national_holidays")
+              .select("*")
+              .eq("year", selectedYearNum)
+              .eq("is_active", true),
+            NATIONAL_READ_TIMEOUT_MS,
+            "Permintaan libur nasional master timeout."
+          ),
+        {
+          maxRetries: NATIONAL_READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (nationalError) throw nationalError;
 
@@ -290,9 +368,13 @@ export default function OrgNationalHolidaysManagement() {
               year: selectedYearNum,
               is_active: true,
             }));
-            const { error: insertMasterError } = await supabase
-              .from("national_holidays")
-              .insert(insertPayload);
+            const { error: insertMasterError } = await withTimeout(
+              supabase
+                .from("national_holidays")
+                .insert(insertPayload),
+              NATIONAL_WRITE_TIMEOUT_MS,
+              "Simpan master libur nasional timeout."
+            );
             if (insertMasterError) throw insertMasterError;
           }
           await fetchHolidays();
@@ -325,11 +407,23 @@ export default function OrgNationalHolidaysManagement() {
         holidaysByMonth[month].push(day);
       });
 
-      const { data: institutionTypeRows, error: institutionTypeError } = await supabase
-        .from("work_hours")
-        .select("institution_type")
-        .eq("tenant_id", tenantId)
-        .eq("is_active", true);
+      const { data: institutionTypeRows, error: institutionTypeError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("work_hours")
+              .select("institution_type")
+              .eq("tenant_id", tenantId)
+              .eq("is_active", true),
+            NATIONAL_READ_TIMEOUT_MS,
+            "Permintaan tipe institusi timeout."
+          ),
+        {
+          maxRetries: NATIONAL_READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (institutionTypeError) throw institutionTypeError;
 
       const institutionTypes = Array.from(
@@ -339,11 +433,23 @@ export default function OrgNationalHolidaysManagement() {
         institutionTypes.push("pemerintahan");
       }
 
-      const { data: existingRows, error: existingRowsError } = await supabase
-        .from("work_holidays")
-        .select("id, month, institution_type, dates, description")
-        .eq("tenant_id", tenantId)
-        .eq("year", selectedYearNum);
+      const { data: existingRows, error: existingRowsError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("work_holidays")
+              .select("id, month, institution_type, dates, description")
+              .eq("tenant_id", tenantId)
+              .eq("year", selectedYearNum),
+            NATIONAL_READ_TIMEOUT_MS,
+            "Permintaan data libur kerja existing timeout."
+          ),
+        {
+          maxRetries: NATIONAL_READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (existingRowsError) throw existingRowsError;
 
       const existingMap = new Map(
@@ -362,14 +468,18 @@ export default function OrgNationalHolidaysManagement() {
           const existing = existingMap.get(key);
 
           if (!existing) {
-            const { error: insertError } = await supabase.from("work_holidays").insert({
-              tenant_id: tenantId,
-              institution_type: institutionType,
-              year: selectedYearNum,
-              month: monthNum,
-              dates: incomingDays.join(","),
-              description: syncDescription,
-            });
+            const { error: insertError } = await withTimeout(
+              supabase.from("work_holidays").insert({
+                tenant_id: tenantId,
+                institution_type: institutionType,
+                year: selectedYearNum,
+                month: monthNum,
+                dates: incomingDays.join(","),
+                description: syncDescription,
+              }),
+              NATIONAL_WRITE_TIMEOUT_MS,
+              "Simpan kalender libur organisasi timeout."
+            );
             if (insertError) throw insertError;
             insertedCount += 1;
             continue;
@@ -381,14 +491,18 @@ export default function OrgNationalHolidaysManagement() {
             continue;
           }
 
-          const { error: updateError } = await supabase
-            .from("work_holidays")
-            .update({
-              dates: mergedDates,
-              description: existing.description || syncDescription,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", existing.id);
+          const { error: updateError } = await withTimeout(
+            supabase
+              .from("work_holidays")
+              .update({
+                dates: mergedDates,
+                description: existing.description || syncDescription,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", existing.id),
+            NATIONAL_WRITE_TIMEOUT_MS,
+            "Update kalender libur organisasi timeout."
+          );
           if (updateError) throw updateError;
           updatedCount += 1;
         }
@@ -406,6 +520,7 @@ export default function OrgNationalHolidaysManagement() {
       setLoadError(message);
       toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsPulling(false);
     }
   };
@@ -440,6 +555,12 @@ export default function OrgNationalHolidaysManagement() {
   return (
     <OrganizationLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+            Mencoba ulang memuat data libur nasional...
+          </div>
+        )}
+
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -457,8 +578,11 @@ export default function OrgNationalHolidaysManagement() {
         </div>
 
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchHolidays()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 

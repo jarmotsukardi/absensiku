@@ -10,6 +10,7 @@ import { MessageSquare, Save } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface HomepageChatAgentSettingValue {
   enabled: boolean;
@@ -110,11 +111,16 @@ export function HomepageChatAgentSettings() {
 
   const fetchSetting = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", settingKey)
-        .maybeSingle();
+      const { data, error } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", settingKey)
+            .maybeSingle(),
+        10000,
+        "Load chat agent settings timeout"
+      );
 
       if (error) throw error;
       setSetting(normalizeSetting(data?.value));
@@ -141,9 +147,14 @@ export function HomepageChatAgentSettings() {
         updated_at: new Date().toISOString(),
       };
 
-      const { error } = await supabase
-        .from("system_settings")
-        .upsert(payload, { onConflict: "key" });
+      const { error } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .upsert(payload, { onConflict: "key" }),
+        10000,
+        "Save chat agent settings timeout"
+      );
 
       if (error) throw error;
       toast.success("Pengaturan chat agent berhasil disimpan.");

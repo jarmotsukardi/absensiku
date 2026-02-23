@@ -12,6 +12,7 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Json } from "@/integrations/supabase/types";
 import { formatToTimezone } from "@/lib/timezone";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { toast } from "sonner";
 import { History, Search, Filter, Plus, Pencil, Trash2, Loader2, RefreshCw } from "lucide-react";
 
@@ -58,6 +59,8 @@ const tableLabels: Record<string, string> = {
 };
 
 const ITEMS_PER_PAGE = 20;
+const ORG_AUDIT_LOG_QUERY_TIMEOUT_MS = 12000;
+const ORG_AUDIT_LOG_QUERY_RETRY_MAX = 2;
 
 export default function OrgAuditLog() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
@@ -69,6 +72,7 @@ export default function OrgAuditLog() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -85,16 +89,41 @@ export default function OrgAuditLog() {
     setIsLoading(true);
     setLoadError(null);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      setIsRetrying(false);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ORG_AUDIT_LOG_QUERY_TIMEOUT_MS,
+            "org.audit_log.fetch_user timeout"
+          ),
+        {
+          maxRetries: ORG_AUDIT_LOG_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (!user) return;
 
       // Get tenant_id from role (lebih konsisten untuk akun admin organisasi)
-      const { data: roleData, error: roleError } = await supabase
-        .from("user_roles")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .eq("role", "admin_instansi")
-        .maybeSingle();
+      const { data: roleData, error: roleError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("user_roles")
+              .select("tenant_id")
+              .eq("user_id", user.id)
+              .eq("role", "admin_instansi")
+              .maybeSingle(),
+            ORG_AUDIT_LOG_QUERY_TIMEOUT_MS,
+            "org.audit_log.fetch_role timeout"
+          ),
+        {
+          maxRetries: ORG_AUDIT_LOG_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (roleError) throw roleError;
       if (!roleData?.tenant_id) {
@@ -126,7 +155,19 @@ export default function OrgAuditLog() {
         countQuery = countQuery.ilike("table_name", `%${escapedSearch}%`);
       }
 
-      const { count, error: countError } = await countQuery;
+      const { count, error: countError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            countQuery,
+            ORG_AUDIT_LOG_QUERY_TIMEOUT_MS,
+            "org.audit_log.fetch_count timeout"
+          ),
+        {
+          maxRetries: ORG_AUDIT_LOG_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (countError) throw countError;
 
       setTotalCount(count || 0);
@@ -158,9 +199,21 @@ export default function OrgAuditLog() {
         dataQuery = dataQuery.ilike("table_name", `%${escapedSearch}%`);
       }
 
-      const { data, error } = await dataQuery
-        .order("created_at", { ascending: false })
-        .range(from, to);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            dataQuery
+              .order("created_at", { ascending: false })
+              .range(from, to),
+            ORG_AUDIT_LOG_QUERY_TIMEOUT_MS,
+            "org.audit_log.fetch_rows timeout"
+          ),
+        {
+          maxRetries: ORG_AUDIT_LOG_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setLogs(data || []);
@@ -244,16 +297,24 @@ export default function OrgAuditLog() {
           </Button>
         </div>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang memuat log aktivitas...
+          </div>
+        )}
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void fetchLogs()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 
         {/* Filters */}
         <Card>
           <CardContent className="pt-6">
-            <div className="flex flex-col sm:flex-row gap-3">
+            <div className="flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-white/80 p-3 shadow-sm sm:flex-row sm:items-center">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -264,7 +325,7 @@ export default function OrgAuditLog() {
                 />
               </div>
               <Select value={actionFilter} onValueChange={setActionFilter}>
-                <SelectTrigger className="w-[150px]">
+                <SelectTrigger className="w-full sm:w-[170px]">
                   <Filter className="h-4 w-4 mr-2" />
                   <SelectValue placeholder="Aksi" />
                 </SelectTrigger>
@@ -276,7 +337,7 @@ export default function OrgAuditLog() {
                 </SelectContent>
               </Select>
               <Select value={tableFilter} onValueChange={setTableFilter}>
-                <SelectTrigger className="w-[180px]">
+                <SelectTrigger className="w-full sm:w-[210px]">
                   <SelectValue placeholder="Tabel" />
                 </SelectTrigger>
                 <SelectContent>

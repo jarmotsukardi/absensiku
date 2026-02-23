@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -23,6 +24,7 @@ import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout
 import { RichTextEditor } from "@/components/editor/RichTextEditor";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 interface InstitutionType {
   id: string;
@@ -67,9 +69,12 @@ const iconOptions = [
 const ITEMS_PER_PAGE = 10;
 
 export default function AdminInstitutionTypesManagement({ embedded = false }: { embedded?: boolean }) {
+  const ADMIN_INSTITUTION_TYPES_QUERY_TIMEOUT_MS = 15000;
+  const ADMIN_INSTITUTION_TYPES_QUERY_RETRY_MAX = 1;
   const confirmDialog = useConfirmDialog();
   const [types, setTypes] = useState<InstitutionType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -89,8 +94,21 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
   const fetchTypes = useCallback(async () => {
     try {
       setIsLoading(true);
+      setIsRetrying(false);
       setLoadError(null);
-      const { data, error } = await supabase.from("institution_types").select("*").order("sort_order");
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.from("institution_types").select("*").order("sort_order"),
+            ADMIN_INSTITUTION_TYPES_QUERY_TIMEOUT_MS,
+            "admin.institution_types.fetch timeout",
+          ),
+        {
+          maxRetries: ADMIN_INSTITUTION_TYPES_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (error) throw error;
       setTypes(data || []);
     } catch (error: unknown) {
@@ -101,6 +119,7 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
       toast.error(message);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   }, []);
 
@@ -112,6 +131,7 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
     e.preventDefault();
     setIsSaving(true);
     try {
+      setIsRetrying(false);
       const payload = {
         name: formData.name,
         code: formData.code,
@@ -123,11 +143,35 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
       };
 
       if (editingType) {
-        const { error } = await supabase.from("institution_types").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", editingType.id);
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("institution_types").update({ ...payload, updated_at: new Date().toISOString() }).eq("id", editingType.id),
+              ADMIN_INSTITUTION_TYPES_QUERY_TIMEOUT_MS,
+              "admin.institution_types.save.update timeout",
+            ),
+          {
+            maxRetries: ADMIN_INSTITUTION_TYPES_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
         if (error) throw error;
         toast.success("Jenis instansi berhasil diperbarui");
       } else {
-        const { error } = await supabase.from("institution_types").insert(payload);
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("institution_types").insert(payload),
+              ADMIN_INSTITUTION_TYPES_QUERY_TIMEOUT_MS,
+              "admin.institution_types.save.insert timeout",
+            ),
+          {
+            maxRetries: ADMIN_INSTITUTION_TYPES_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
         if (error) throw error;
         toast.success("Jenis instansi berhasil ditambahkan");
       }
@@ -142,6 +186,7 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
       toast.error(appendErrorReference("Gagal menyimpan jenis instansi", errorRef));
     } finally {
       setIsSaving(false);
+      setIsRetrying(false);
     }
   };
 
@@ -171,13 +216,28 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
       return;
     }
     try {
-      const { error } = await supabase.from("institution_types").delete().eq("id", id);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.from("institution_types").delete().eq("id", id),
+            ADMIN_INSTITUTION_TYPES_QUERY_TIMEOUT_MS,
+            "admin.institution_types.delete timeout",
+          ),
+        {
+          maxRetries: ADMIN_INSTITUTION_TYPES_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (error) throw error;
       toast.success("Berhasil dihapus");
       await fetchTypes();
     } catch (error: unknown) {
       const errorRef = reportError(error, "admin.institution_types.delete", { institution_type_id: id });
       toast.error(appendErrorReference("Gagal menghapus jenis instansi", errorRef));
+    } finally {
+      setIsRetrying(false);
     }
   };
 
@@ -211,7 +271,17 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
 
       {loadError && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          {loadError}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button type="button" variant="outline" size="sm" onClick={() => void fetchTypes()}>
+              Coba Lagi
+            </Button>
+          </div>
+        </div>
+      )}
+      {isRetrying && (
+        <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Sedang mencoba ulang koneksi data jenis instansi...
         </div>
       )}
 
@@ -258,9 +328,12 @@ export default function AdminInstitutionTypesManagement({ embedded = false }: { 
               <Switch checked={formData.is_active} onCheckedChange={(c) => setFormData({ ...formData, is_active: c })} />
               <Label>Aktif</Label>
             </div>
-            <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
-              <Button type="submit" disabled={isSaving}>{isSaving ? "Menyimpan..." : "Simpan"}</Button>
+            <DialogFooter className={dialogActionBarClassName}>
+              <DialogActionHint>Perubahan jenis instansi akan memengaruhi pilihan pada proses pembuatan organisasi.</DialogActionHint>
+              <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                <Button type="button" variant="outline" className="w-full sm:w-auto bg-white" onClick={() => setIsDialogOpen(false)}>Batal</Button>
+                <Button type="submit" className="w-full sm:w-auto" disabled={isSaving}>{isSaving ? "Menyimpan..." : "Simpan"}</Button>
+              </div>
             </DialogFooter>
           </form>
         </DialogContent>

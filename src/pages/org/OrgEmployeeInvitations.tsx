@@ -30,8 +30,10 @@ import {
 import { addDays, format } from "date-fns";
 import type { TablesInsert } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import {
   Pagination,
   PaginationContent,
@@ -72,6 +74,8 @@ interface Office {
 type InvitationType = "individual" | "opd" | "office";
 
 const ITEMS_PER_PAGE = 15;
+const ORG_INVITATIONS_QUERY_TIMEOUT_MS = 12000;
+const ORG_INVITATIONS_QUERY_RETRY_MAX = 2;
 
 export default function OrgEmployeeInvitations() {
   const confirmDialog = useConfirmDialog();
@@ -112,6 +116,7 @@ export default function OrgEmployeeInvitations() {
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [officeList, setOfficeList] = useState<Office[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   useEffect(() => {
     void fetchTenantAndData();
@@ -127,19 +132,44 @@ export default function OrgEmployeeInvitations() {
   const fetchTenantAndData = async () => {
     try {
       setLoadError(null);
-      const { data: { user } } = await supabase.auth.getUser();
+      setIsRetrying(false);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ORG_INVITATIONS_QUERY_TIMEOUT_MS,
+            "org.invitations.fetch_tenant.auth timeout"
+          ),
+        {
+          maxRetries: ORG_INVITATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (!user) {
         setIsLoading(false);
         return;
       }
 
-      const { data: roleRows, error: roleError } = await supabase
-        .from("user_roles")
-        .select("tenant_id, role")
-        .eq("user_id", user.id)
-        .eq("role", "admin_instansi")
-        .not("tenant_id", "is", null)
-        .limit(5);
+      const { data: roleRows, error: roleError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("user_roles")
+              .select("tenant_id, role")
+              .eq("user_id", user.id)
+              .eq("role", "admin_instansi")
+              .not("tenant_id", "is", null)
+              .limit(5),
+            ORG_INVITATIONS_QUERY_TIMEOUT_MS,
+            "org.invitations.fetch_tenant.role timeout"
+          ),
+        {
+          maxRetries: ORG_INVITATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (roleError) {
         throw roleError;
@@ -154,21 +184,45 @@ export default function OrgEmployeeInvitations() {
       setTenantId(resolvedTenantId);
 
       // Fetch OPD list
-      const { data: opdData } = await supabase
-        .from("opd")
-        .select("id, name")
-        .eq("tenant_id", resolvedTenantId)
-        .eq("is_active", true)
-        .order("name");
+      const { data: opdData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("opd")
+              .select("id, name")
+              .eq("tenant_id", resolvedTenantId)
+              .eq("is_active", true)
+              .order("name"),
+            ORG_INVITATIONS_QUERY_TIMEOUT_MS,
+            "org.invitations.fetch_tenant.opd timeout"
+          ),
+        {
+          maxRetries: ORG_INVITATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       setOpdList(opdData || []);
 
       // Fetch Office list
-      const { data: officeData } = await supabase
-        .from("offices")
-        .select("id, name")
-        .eq("tenant_id", resolvedTenantId)
-        .eq("is_active", true)
-        .order("name");
+      const { data: officeData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("offices")
+              .select("id, name")
+              .eq("tenant_id", resolvedTenantId)
+              .eq("is_active", true)
+              .order("name"),
+            ORG_INVITATIONS_QUERY_TIMEOUT_MS,
+            "org.invitations.fetch_tenant.offices timeout"
+          ),
+        {
+          maxRetries: ORG_INVITATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       setOfficeList(officeData || []);
     } catch (error) {
       const errorRef = reportError(error, "org.invitations.fetch_tenant_and_data");
@@ -185,6 +239,7 @@ export default function OrgEmployeeInvitations() {
     setIsLoading(true);
     try {
       setLoadError(null);
+      setIsRetrying(false);
       const from = (currentPage - 1) * ITEMS_PER_PAGE;
       const to = from + ITEMS_PER_PAGE - 1;
 
@@ -214,9 +269,21 @@ export default function OrgEmployeeInvitations() {
         query = query.or(`name.ilike.%${escaped}%,email.ilike.%${escaped}%,invitation_code.ilike.%${escaped}%`);
       }
 
-      const { data, count, error } = await query
-        .order("created_at", { ascending: false })
-        .range(from, to);
+      const { data, count, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query
+              .order("created_at", { ascending: false })
+              .range(from, to),
+            ORG_INVITATIONS_QUERY_TIMEOUT_MS,
+            "org.invitations.fetch_list timeout"
+          ),
+        {
+          maxRetries: ORG_INVITATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setInvitations((data || []) as Invitation[]);
@@ -267,14 +334,39 @@ export default function OrgEmployeeInvitations() {
     }
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      setIsRetrying(false);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ORG_INVITATIONS_QUERY_TIMEOUT_MS,
+            "org.invitations.create.auth timeout"
+          ),
+        {
+          maxRetries: ORG_INVITATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (!user || !tenantId) return;
 
-      const { data: empData } = await supabase
-        .from("employees")
-        .select("id")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      const { data: empData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("id")
+              .eq("user_id", user.id)
+              .maybeSingle(),
+            ORG_INVITATIONS_QUERY_TIMEOUT_MS,
+            "org.invitations.create.employee timeout"
+          ),
+        {
+          maxRetries: ORG_INVITATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       const code = generateInvitationCode();
       const expiresAt = addDays(new Date(), parseInt(expiryDays));
@@ -304,7 +396,19 @@ export default function OrgEmployeeInvitations() {
         insertData.nik = "0000000000000000";
       }
 
-      const { error } = await supabase.from("employee_invitations").insert(insertData);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.from("employee_invitations").insert(insertData),
+            ORG_INVITATIONS_QUERY_TIMEOUT_MS,
+            "org.invitations.create.insert timeout"
+          ),
+        {
+          maxRetries: ORG_INVITATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
 
       setGeneratedCode(code);
@@ -314,9 +418,8 @@ export default function OrgEmployeeInvitations() {
         await fetchInvitations();
       }
     } catch (error: unknown) {
-      console.error("Error creating invitation:", error);
-      const errorMessage = error instanceof Error ? error.message : "Gagal membuat undangan";
-      toast.error(errorMessage);
+      const errorRef = reportError(error, "org.invitations.create");
+      toast.error(appendErrorReference("Gagal membuat undangan", errorRef));
     }
   };
 
@@ -511,6 +614,19 @@ export default function OrgEmployeeInvitations() {
   return (
     <OrganizationLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang memuat data undangan...
+          </div>
+        )}
+        {loadError && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void fetchInvitations()}>
+              Coba Lagi
+            </Button>
+          </div>
+        )}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -537,16 +653,16 @@ export default function OrgEmployeeInvitations() {
                   <div className="space-y-2">
                     <Label>Jenis Undangan</Label>
                     <Tabs value={invitationType} onValueChange={(value) => setInvitationType(value as InvitationType)}>
-                      <TabsList className="grid w-full grid-cols-3">
-                        <TabsTrigger value="individual" className="flex items-center gap-1">
+                      <TabsList className="h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+                        <TabsTrigger value="individual" className="flex items-center gap-1 whitespace-nowrap">
                           <User className="h-3 w-3" />
                           <span className="hidden sm:inline">Individual</span>
                         </TabsTrigger>
-                        <TabsTrigger value="opd" className="flex items-center gap-1">
+                        <TabsTrigger value="opd" className="flex items-center gap-1 whitespace-nowrap">
                           <Building2 className="h-3 w-3" />
                           <span className="hidden sm:inline">Per OPD</span>
                         </TabsTrigger>
-                        <TabsTrigger value="office" className="flex items-center gap-1">
+                        <TabsTrigger value="office" className="flex items-center gap-1 whitespace-nowrap">
                           <MapPin className="h-3 w-3" />
                           <span className="hidden sm:inline">Per Lokasi</span>
                         </TabsTrigger>
@@ -651,9 +767,12 @@ export default function OrgEmployeeInvitations() {
                     </div>
                   )}
 
-                  <DialogFooter>
-                    <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
-                    <Button onClick={handleCreateInvitation}>Buat Undangan</Button>
+                  <DialogFooter className={dialogActionBarClassName}>
+                    <DialogActionHint>Pastikan data undangan sudah sesuai.</DialogActionHint>
+                    <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                      <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
+                      <Button onClick={handleCreateInvitation}>Buat Undangan</Button>
+                    </div>
                   </DialogFooter>
                 </div>
               ) : (
@@ -697,8 +816,11 @@ export default function OrgEmployeeInvitations() {
                     </Button>
                   </div>
 
-                  <DialogFooter>
-                    <Button onClick={() => { setIsDialogOpen(false); resetForm(); }}>Selesai</Button>
+                  <DialogFooter className={dialogActionBarClassName}>
+                    <DialogActionHint>Simpan kode/link sebelum menutup dialog.</DialogActionHint>
+                    <div className="flex w-full justify-end">
+                      <Button onClick={() => { setIsDialogOpen(false); resetForm(); }}>Selesai</Button>
+                    </div>
                   </DialogFooter>
                 </div>
               )}
@@ -712,13 +834,7 @@ export default function OrgEmployeeInvitations() {
             <CardDescription>{totalInvitations} undangan</CardDescription>
           </CardHeader>
           <CardContent>
-            {loadError && (
-              <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                {loadError}
-              </div>
-            )}
-
-            <div className="flex flex-col sm:flex-row gap-4 mb-4">
+            <div className="mb-4 flex flex-col gap-4 rounded-2xl border border-slate-200/80 bg-white/80 p-3 shadow-sm sm:flex-row sm:items-center">
               <div className="relative flex-1 max-w-sm">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -730,16 +846,16 @@ export default function OrgEmployeeInvitations() {
               </div>
               <div className="flex gap-2 flex-wrap">
                 <Tabs value={filterStatus} onValueChange={setFilterStatus}>
-                  <TabsList>
-                    <TabsTrigger value="all">Semua</TabsTrigger>
-                    <TabsTrigger value="pending">Menunggu</TabsTrigger>
-                    <TabsTrigger value="verified">Terverifikasi</TabsTrigger>
-                    <TabsTrigger value="rejected">Ditolak</TabsTrigger>
+                  <TabsList className="min-w-max h-auto gap-1.5 rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+                    <TabsTrigger value="all" className="whitespace-nowrap">Semua</TabsTrigger>
+                    <TabsTrigger value="pending" className="whitespace-nowrap">Menunggu</TabsTrigger>
+                    <TabsTrigger value="verified" className="whitespace-nowrap">Terverifikasi</TabsTrigger>
+                    <TabsTrigger value="rejected" className="whitespace-nowrap">Ditolak</TabsTrigger>
                   </TabsList>
                 </Tabs>
                 {opdList.length > 0 && (
                   <Select value={filterOpdId} onValueChange={setFilterOpdId}>
-                    <SelectTrigger className="w-[180px]">
+                    <SelectTrigger className="w-full sm:w-[200px]">
                       <SelectValue placeholder="Filter OPD" />
                     </SelectTrigger>
                     <SelectContent>
@@ -951,13 +1067,16 @@ export default function OrgEmployeeInvitations() {
             </div>
           </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsEditDialogOpen(false)} disabled={isSavingEdit}>
-              Batal
-            </Button>
-            <Button onClick={handleUpdateInvitation} disabled={isSavingEdit}>
-              {isSavingEdit ? "Menyimpan..." : "Simpan Perubahan"}
-            </Button>
+          <DialogFooter className={dialogActionBarClassName}>
+            <DialogActionHint>Perubahan undangan akan langsung diterapkan.</DialogActionHint>
+            <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+              <Button variant="outline" onClick={() => setIsEditDialogOpen(false)} disabled={isSavingEdit}>
+                Batal
+              </Button>
+              <Button onClick={handleUpdateInvitation} disabled={isSavingEdit}>
+                {isSavingEdit ? "Menyimpan..." : "Simpan Perubahan"}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

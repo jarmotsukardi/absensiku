@@ -9,6 +9,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { MessageCircle, Save, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 type AnimationEffect = "pulse" | "glow" | "wobble" | "ripple";
 
@@ -45,6 +47,7 @@ interface ChannelSetting {
 }
 
 export function FloatingWhatsappSettings() {
+  const REQUEST_TIMEOUT_MS = 12000;
   const [isLoading, setIsLoading] = useState(false);
   const [isFetching, setIsFetching] = useState(true);
   const [channels, setChannels] = useState<ChannelSetting[]>([
@@ -73,11 +76,15 @@ export function FloatingWhatsappSettings() {
 
   const fetchSettings = useCallback(async () => {
     try {
-      const [orgAdminRes, publicRes, legacyPublicRes] = await Promise.all([
-        supabase.from("system_settings").select("value").eq("key", "floating_whatsapp_org_admin").maybeSingle(),
-        supabase.from("system_settings").select("value").eq("key", "floating_whatsapp_public").maybeSingle(),
-        supabase.from("system_settings").select("value").eq("key", "floating_whatsapp").maybeSingle(),
-      ]);
+      const [orgAdminRes, publicRes, legacyPublicRes] = await withTimeout(
+        Promise.all([
+          supabase.from("system_settings").select("value").eq("key", "floating_whatsapp_org_admin").maybeSingle(),
+          supabase.from("system_settings").select("value").eq("key", "floating_whatsapp_public").maybeSingle(),
+          supabase.from("system_settings").select("value").eq("key", "floating_whatsapp").maybeSingle(),
+        ]),
+        REQUEST_TIMEOUT_MS,
+        "Memuat pengaturan floating WhatsApp terlalu lama",
+      );
 
       const publicValue = (publicRes.data?.value || legacyPublicRes.data?.value || {}) as Record<string, unknown>;
       const orgAdminValue = (orgAdminRes.data?.value || {}) as Record<string, unknown>;
@@ -96,8 +103,8 @@ export function FloatingWhatsappSettings() {
         })
       );
     } catch (error) {
-      console.error("Error fetching floating whatsapp settings:", error);
-      toast.error("Gagal memuat pengaturan WhatsApp");
+      const errorRef = reportError(error, "admin.settings.floating_whatsapp.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan WhatsApp", errorRef));
     } finally {
       setIsFetching(false);
     }
@@ -128,13 +135,17 @@ export function FloatingWhatsappSettings() {
         updated_at: now,
       }));
 
-      const { error } = await supabase.from("system_settings").upsert(payload, { onConflict: "key" });
+      const { error } = await withTimeout(
+        supabase.from("system_settings").upsert(payload, { onConflict: "key" }),
+        REQUEST_TIMEOUT_MS,
+        "Menyimpan pengaturan floating WhatsApp terlalu lama",
+      );
       if (error) throw error;
 
       toast.success("Pengaturan WhatsApp per tujuan berhasil disimpan");
     } catch (error) {
-      console.error("Error saving settings:", error);
-      toast.error("Gagal menyimpan pengaturan");
+      const errorRef = reportError(error, "admin.settings.floating_whatsapp.save");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan", errorRef));
     } finally {
       setIsLoading(false);
     }

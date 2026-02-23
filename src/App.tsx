@@ -85,7 +85,6 @@ const OrgMutationReport = lazy(() => import("./pages/org/reports/OrgMutationRepo
 const OrgSettings = lazy(() => import("./pages/org/OrgSettings"));
 const OrgAdminOperatorSettings = lazy(() => import("./pages/org/OrgAdminOperatorSettings"));
 const OrgProfile = lazy(() => import("./pages/org/OrgProfile"));
-const OrgActivation = lazy(() => import("./pages/org/OrgActivation"));
 const OrgBilling = lazy(() => import("./pages/org/OrgBilling"));
 const OrgProfileSetup = lazy(() => import("./pages/org/OrgProfileSetup"));
 const OrgOPDAdminsManagement = lazy(() => import("./pages/org/master/OrgOPDAdminsManagement"));
@@ -221,6 +220,7 @@ const App = () => (
               <Route path="/org/leave/approved" element={<OrgApprovedLeaveList />} />
               <Route path="/org/leave/sick" element={<OrgSickLeaveList />} />
               <Route path="/org/leave/official" element={<OrgOfficialTravelList />} />
+              <Route path="/org/leave/official-travel" element={<Navigate to="/org/leave/official" replace />} />
               <Route path="/org/leave/absent" element={<OrgAbsentWithoutNotice />} />
               <Route path="/org/leave/wfh" element={<OrgWfhRequests />} />
               <Route path="/org/leave/flexible" element={<OrgFlexibleAttendanceRequests />} />
@@ -238,8 +238,8 @@ const App = () => (
               <Route path="/org/settings" element={<OrgSettings />} />
               <Route path="/org/settings/admin-operator" element={<OrgAdminOperatorSettings />} />
               <Route path="/org/profile" element={<OrgProfile />} />
-              <Route path="/org/subscription" element={<Navigate to="/org/activation" replace />} />
-              <Route path="/org/activation" element={<OrgActivation />} />
+              <Route path="/org/subscription" element={<Navigate to="/org/billing" replace />} />
+              <Route path="/org/activation" element={<Navigate to="/org/billing" replace />} />
               <Route path="/org/billing" element={<OrgBilling />} />
               <Route path="/org/profile/setup" element={<OrgProfileSetup />} />
               <Route path="/org/invitations" element={<OrgEmployeeInvitations />} />

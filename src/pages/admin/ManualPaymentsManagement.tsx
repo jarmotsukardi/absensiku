@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -33,6 +34,7 @@ import {
   Receipt,
 } from "lucide-react";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 interface ManualPayment {
   id: string;
@@ -67,8 +69,11 @@ const statusBadge: Record<string, { label: string; variant: "default" | "seconda
 };
 
 export default function ManualPaymentsManagement() {
+  const ADMIN_MANUAL_PAYMENTS_QUERY_TIMEOUT_MS = 15000;
+  const ADMIN_MANUAL_PAYMENTS_QUERY_RETRY_MAX = 1;
   const [payments, setPayments] = useState<ManualPayment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("pending");
   const [searchTerm, setSearchTerm] = useState("");
@@ -81,6 +86,7 @@ export default function ManualPaymentsManagement() {
   const fetchPayments = useCallback(async () => {
     setIsLoading(true);
     try {
+      setIsRetrying(false);
       setLoadError(null);
       let query = supabase
         .from("manual_payments")
@@ -94,7 +100,19 @@ export default function ManualPaymentsManagement() {
         query = query.eq("status", activeTab);
       }
 
-      const { data, error } = await query;
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query,
+            ADMIN_MANUAL_PAYMENTS_QUERY_TIMEOUT_MS,
+            "admin.manual_payments.fetch timeout",
+          ),
+        {
+          maxRetries: ADMIN_MANUAL_PAYMENTS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
       setPayments(data || []);
@@ -106,6 +124,7 @@ export default function ManualPaymentsManagement() {
       toast.error(message);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   }, [activeTab]);
 
@@ -115,37 +134,87 @@ export default function ManualPaymentsManagement() {
 
   const handleVerify = async (payment: ManualPayment) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const { data: empData } = await supabase
-        .from("employees")
-        .select("id")
-        .eq("user_id", user?.id)
-        .maybeSingle();
+      setIsRetrying(false);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ADMIN_MANUAL_PAYMENTS_QUERY_TIMEOUT_MS,
+            "admin.manual_payments.verify.get_user timeout",
+          ),
+        {
+          maxRetries: ADMIN_MANUAL_PAYMENTS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
+      const { data: empData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("id")
+              .eq("user_id", user?.id)
+              .maybeSingle(),
+            ADMIN_MANUAL_PAYMENTS_QUERY_TIMEOUT_MS,
+            "admin.manual_payments.verify.employee timeout",
+          ),
+        {
+          maxRetries: ADMIN_MANUAL_PAYMENTS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       // Update payment status
-      const { error: paymentError } = await supabase
-        .from("manual_payments")
-        .update({
-          status: "verified",
-          verified_by: empData?.id || null,
-          verified_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", payment.id);
+      const { error: paymentError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("manual_payments")
+              .update({
+                status: "verified",
+                verified_by: empData?.id || null,
+                verified_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", payment.id),
+            ADMIN_MANUAL_PAYMENTS_QUERY_TIMEOUT_MS,
+            "admin.manual_payments.verify.update_payment timeout",
+          ),
+        {
+          maxRetries: ADMIN_MANUAL_PAYMENTS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (paymentError) throw paymentError;
 
       // Extend subscription if applicable
       if (payment.subscription_id) {
         // Add 30 days to subscription
-        await supabase
-          .from("subscriptions")
-          .update({
-            status: "active",
-            end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", payment.subscription_id);
+        const { error: subscriptionError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("subscriptions")
+                .update({
+                  status: "active",
+                  end_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", payment.subscription_id),
+              ADMIN_MANUAL_PAYMENTS_QUERY_TIMEOUT_MS,
+              "admin.manual_payments.verify.update_subscription timeout",
+            ),
+          {
+            maxRetries: ADMIN_MANUAL_PAYMENTS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
+        if (subscriptionError) throw subscriptionError;
       }
 
       toast.success("Pembayaran berhasil diverifikasi");
@@ -154,6 +223,8 @@ export default function ManualPaymentsManagement() {
     } catch (error: unknown) {
       const errorRef = reportError(error, "admin.manual_payments.verify", { payment_id: payment.id });
       toast.error(appendErrorReference("Gagal memverifikasi pembayaran", errorRef));
+    } finally {
+      setIsRetrying(false);
     }
   };
 
@@ -164,23 +235,60 @@ export default function ManualPaymentsManagement() {
     }
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const { data: empData } = await supabase
-        .from("employees")
-        .select("id")
-        .eq("user_id", user?.id)
-        .maybeSingle();
+      setIsRetrying(false);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ADMIN_MANUAL_PAYMENTS_QUERY_TIMEOUT_MS,
+            "admin.manual_payments.reject.get_user timeout",
+          ),
+        {
+          maxRetries: ADMIN_MANUAL_PAYMENTS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
+      const { data: empData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("id")
+              .eq("user_id", user?.id)
+              .maybeSingle(),
+            ADMIN_MANUAL_PAYMENTS_QUERY_TIMEOUT_MS,
+            "admin.manual_payments.reject.employee timeout",
+          ),
+        {
+          maxRetries: ADMIN_MANUAL_PAYMENTS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
-      const { error } = await supabase
-        .from("manual_payments")
-        .update({
-          status: "rejected",
-          rejection_reason: rejectionReason,
-          verified_by: empData?.id || null,
-          verified_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", selectedPayment.id);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("manual_payments")
+              .update({
+                status: "rejected",
+                rejection_reason: rejectionReason,
+                verified_by: empData?.id || null,
+                verified_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", selectedPayment.id),
+            ADMIN_MANUAL_PAYMENTS_QUERY_TIMEOUT_MS,
+            "admin.manual_payments.reject.update timeout",
+          ),
+        {
+          maxRetries: ADMIN_MANUAL_PAYMENTS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
 
@@ -192,6 +300,8 @@ export default function ManualPaymentsManagement() {
     } catch (error: unknown) {
       const errorRef = reportError(error, "admin.manual_payments.reject", { payment_id: selectedPayment.id });
       toast.error(appendErrorReference("Gagal menolak pembayaran", errorRef));
+    } finally {
+      setIsRetrying(false);
     }
   };
 
@@ -240,20 +350,32 @@ export default function ManualPaymentsManagement() {
 
         {loadError && (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <span>{loadError}</span>
+              <Button type="button" variant="outline" size="sm" onClick={() => void fetchPayments()}>
+                Coba Lagi
+              </Button>
+            </div>
+          </div>
+        )}
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang koneksi data pembayaran manual...
           </div>
         )}
 
         <Card>
           <CardHeader>
             <Tabs value={activeTab} onValueChange={setActiveTab}>
-              <div className="flex flex-col md:flex-row gap-4 justify-between">
-                <TabsList>
-                  <TabsTrigger value="pending">Menunggu</TabsTrigger>
-                  <TabsTrigger value="verified">Terverifikasi</TabsTrigger>
-                  <TabsTrigger value="rejected">Ditolak</TabsTrigger>
-                  <TabsTrigger value="all">Semua</TabsTrigger>
-                </TabsList>
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div className="overflow-x-auto pb-1">
+                  <TabsList className="min-w-max h-auto gap-1.5 rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+                    <TabsTrigger value="pending" className="whitespace-nowrap">Menunggu</TabsTrigger>
+                    <TabsTrigger value="verified" className="whitespace-nowrap">Terverifikasi</TabsTrigger>
+                    <TabsTrigger value="rejected" className="whitespace-nowrap">Ditolak</TabsTrigger>
+                    <TabsTrigger value="all" className="whitespace-nowrap">Semua</TabsTrigger>
+                  </TabsList>
+                </div>
                 <div className="relative w-full md:w-64">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
@@ -448,21 +570,23 @@ export default function ManualPaymentsManagement() {
                 )}
               </div>
             )}
-            <DialogFooter>
+            <DialogFooter className={dialogActionBarClassName}>
+              <DialogActionHint>Verifikasi akan mengubah status pembayaran manual secara permanen.</DialogActionHint>
               {selectedPayment?.status === "pending" && (
-                <>
-                  <Button 
-                    variant="destructive" 
+                <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                  <Button
+                    className="w-full sm:w-auto"
+                    variant="destructive"
                     onClick={() => setIsRejectOpen(true)}
                   >
                     <X className="h-4 w-4 mr-1" />
                     Tolak
                   </Button>
-                  <Button onClick={() => handleVerify(selectedPayment)}>
+                  <Button className="w-full sm:w-auto" onClick={() => handleVerify(selectedPayment)}>
                     <Check className="h-4 w-4 mr-1" />
                     Verifikasi
                   </Button>
-                </>
+                </div>
               )}
             </DialogFooter>
           </DialogContent>
@@ -486,9 +610,12 @@ export default function ManualPaymentsManagement() {
                 />
               </div>
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsRejectOpen(false)}>Batal</Button>
-              <Button variant="destructive" onClick={handleReject}>Tolak Pembayaran</Button>
+            <DialogFooter className={dialogActionBarClassName}>
+              <DialogActionHint>Alasan penolakan akan dikirim sebagai catatan review pembayaran.</DialogActionHint>
+              <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                <Button variant="outline" className="w-full sm:w-auto bg-white" onClick={() => setIsRejectOpen(false)}>Batal</Button>
+                <Button className="w-full sm:w-auto" variant="destructive" onClick={handleReject}>Tolak Pembayaran</Button>
+              </div>
             </DialogFooter>
           </DialogContent>
         </Dialog>

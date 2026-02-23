@@ -16,10 +16,16 @@ import { DesktopBlockedMessage } from "@/components/employee/DesktopBlockedMessa
 import { SessionLoadingScreen } from "@/components/employee/SessionLoadingScreen";
 import { MapPin, Mail, Lock, Loader2, RefreshCw, UserPlus, ArrowLeft, CheckCircle2, Eye, EyeOff, AlertTriangle, Phone, MapPinIcon, User, Building2, Key } from "lucide-react";
 import { ForgotPasswordDialog } from "@/components/auth/ForgotPasswordDialog";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 // Konstanta untuk optimasi performa
 const DEBOUNCE_MS = 1000;
 const MIN_REQUEST_INTERVAL_MS = 2000;
+const EMPLOYEE_LOGIN_RETRY_MAX = 1;
+const EMPLOYEE_LOGIN_TIMEOUT_MS = 12000;
+const EMPLOYEE_ROLE_CHECK_RETRY_MAX = 0;
+const EMPLOYEE_ROLE_CHECK_TIMEOUT_MS = 6000;
 
 // Generate simple math captcha
 const generateCaptcha = () => {
@@ -189,6 +195,83 @@ export default function EmployeeLogin() {
   const [showRegisterInfoDialog, setShowRegisterInfoDialog] = useState<"email" | "invite" | null>(null);
   const [apkUrl, setApkUrl] = useState<string | null>(null);
 
+  const fetchLoginRoles = useCallback(async (userId: string): Promise<string[]> => {
+    try {
+      const { data: roleRows, error: roleError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () => supabase.from("user_roles").select("role").eq("user_id", userId),
+            EMPLOYEE_ROLE_CHECK_TIMEOUT_MS,
+          ),
+        {
+          maxRetries: EMPLOYEE_ROLE_CHECK_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
+
+      if (roleError) throw roleError;
+      return (roleRows || []).map((row) => row.role);
+    } catch (primaryError) {
+      reportError(primaryError, "employee.login.fetch_roles", { user_id: userId });
+
+      const { data: employeeRows, error: employeeError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () => supabase.from("employees").select("id").eq("user_id", userId).limit(1),
+            EMPLOYEE_ROLE_CHECK_TIMEOUT_MS,
+          ),
+        {
+          maxRetries: EMPLOYEE_ROLE_CHECK_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
+
+      if (employeeError) throw employeeError;
+      return employeeRows && employeeRows.length > 0 ? ["pegawai"] : [];
+    }
+  }, []);
+
+  const routeByLoginRole = useCallback(
+    (roles: string[], silent = false) => {
+      const isSuperAdmin = roles.includes("super_admin");
+      const isAdminInstansi = roles.includes("admin_instansi");
+      const isOperator = roles.includes("atasan");
+
+      if (isSuperAdmin) {
+        if (!silent) {
+          toast({
+            title: "Dialihkan",
+            description: "Akun ini bertipe Super Admin. Anda dialihkan ke panel admin.",
+          });
+        }
+        navigate("/admin", { replace: true });
+        return;
+      }
+
+      if (isAdminInstansi || isOperator) {
+        if (!silent) {
+          toast({
+            title: "Dialihkan",
+            description: "Akun ini bertipe admin/operator organisasi.",
+          });
+        }
+        navigate(isOperator ? "/org/leave/requests" : "/org", { replace: true });
+        return;
+      }
+
+      navigate("/employee/dashboard", { replace: true });
+    },
+    [navigate, toast],
+  );
+
+  const resolveRoleAndRoute = useCallback(
+    async (userId: string, silent = false) => {
+      const roles = await fetchLoginRoles(userId);
+      routeByLoginRole(roles, silent);
+    },
+    [fetchLoginRoles, routeByLoginRole],
+  );
+
   // Handler ketika loading screen selesai
   const handleLoadingComplete = useCallback(() => {
     setSessionCheckComplete(true);
@@ -197,25 +280,48 @@ export default function EmployeeLogin() {
   // Effect untuk cek sesi dan redirect jika valid
   useEffect(() => {
     if (sessionCheckComplete && !sessionManagement.isChecking) {
-      if (sessionManagement.isValid && sessionManagement.session) {
-        navigate("/employee/dashboard", { replace: true });
+      if (sessionManagement.isValid && sessionManagement.session?.user) {
+        void resolveRoleAndRoute(sessionManagement.session.user.id, true).catch((error) => {
+          reportError(error, "employee.login.restore_session_role_check", {
+            user_id: sessionManagement.session?.user?.id || null,
+          });
+          navigate("/employee/dashboard", { replace: true });
+        });
       } else {
         setShowLoadingScreen(false);
       }
     }
-  }, [sessionCheckComplete, sessionManagement.isChecking, sessionManagement.isValid, sessionManagement.session, navigate]);
+  }, [
+    navigate,
+    resolveRoleAndRoute,
+    sessionCheckComplete,
+    sessionManagement.isChecking,
+    sessionManagement.isValid,
+    sessionManagement.session,
+  ]);
 
   // Listen untuk auth state changes (untuk handle login sukses)
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_IN" && session) {
+      if (event === "SIGNED_IN" && session?.user) {
         sessionManagement.onLoginSuccess(session);
-        navigate("/employee/dashboard", { replace: true });
+        void resolveRoleAndRoute(session.user.id, true).catch((error) => {
+          const errorRef = reportError(error, "employee.login.auth_state_change_role_check", {
+            event,
+            user_id: session.user.id,
+          });
+          toast({
+            variant: "destructive",
+            title: "Terjadi Kesalahan",
+            description: appendErrorReference("Gagal memverifikasi role akun.", errorRef),
+          });
+          navigate("/employee/dashboard", { replace: true });
+        });
       }
     });
 
     return () => subscription.unsubscribe();
-  }, [navigate, sessionManagement]);
+  }, [navigate, resolveRoleAndRoute, sessionManagement, toast]);
 
   const fetchInvitation = useCallback(async () => {
     if (!invitationCode) return;
@@ -379,10 +485,21 @@ export default function EmployeeLogin() {
     setIsLoading(true);
 
     try {
-      const { data: authData, error } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
-        password,
-      });
+      const { data: authData, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase.auth.signInWithPassword({
+                email: email.trim().toLowerCase(),
+                password,
+              }),
+            EMPLOYEE_LOGIN_TIMEOUT_MS,
+          ),
+        {
+          maxRetries: EMPLOYEE_LOGIN_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
       if (error) {
         if (isEnabled) {
@@ -451,10 +568,11 @@ export default function EmployeeLogin() {
         })();
       }
     } catch (error) {
+      const errorRef = reportError(error, "employee.login.handle_login", { email });
       toast({
         variant: "destructive",
         title: "Terjadi Kesalahan",
-        description: "Tidak dapat menghubungi server.",
+        description: appendErrorReference("Tidak dapat menghubungi server.", errorRef),
       });
     } finally {
       setIsLoading(false);

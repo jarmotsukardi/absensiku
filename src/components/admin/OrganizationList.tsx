@@ -36,6 +36,12 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 type Organization = Tables<"tenants"> & {
   employees_count?: number;
@@ -46,6 +52,9 @@ interface OrganizationListProps {
   filterType?: string;
 }
 const ITEMS_PER_PAGE = 10;
+const ORG_LIST_READ_TIMEOUT_MS = 12000;
+const ORG_LIST_WRITE_TIMEOUT_MS = 15000;
+const ORG_LIST_MAX_RETRIES = 2;
 
 const orgTypeIcons: Record<string, React.ComponentType<{ className?: string }>> = {
   pemerintah_daerah: Landmark,
@@ -68,10 +77,14 @@ export function OrganizationList({ filterType }: OrganizationListProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   const fetchOrganizations = useCallback(async () => {
     try {
       setIsLoading(true);
+      setIsRetrying(false);
+      setLoadError(null);
       
       let query = supabase
         .from("tenants")
@@ -82,23 +95,38 @@ export function OrganizationList({ filterType }: OrganizationListProps) {
         query = query.eq("organization_type", filterType as "pemerintah_daerah" | "instansi_pemerintah" | "perusahaan" | "sekolah");
       }
 
-      const { data: tenants, error } = await query;
+      const { data: tenants, error } = await withExponentialBackoff(
+        () => withTimeout(query, ORG_LIST_READ_TIMEOUT_MS, "Permintaan daftar organisasi timeout."),
+        {
+          maxRetries: ORG_LIST_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
 
       // Fetch employee counts and subscription status for each tenant
       const orgsWithDetails = await Promise.all(
         (tenants || []).map(async (tenant) => {
-          const { count: employeesCount } = await supabase
-            .from("employees")
-            .select("*", { count: "exact", head: true })
-            .eq("tenant_id", tenant.id);
+          const { count: employeesCount } = await withTimeout(
+            supabase
+              .from("employees")
+              .select("*", { count: "exact", head: true })
+              .eq("tenant_id", tenant.id),
+            ORG_LIST_READ_TIMEOUT_MS,
+            "Permintaan jumlah pegawai organisasi timeout."
+          );
 
-          const { data: subscription } = await supabase
-            .from("subscriptions")
-            .select("status")
-            .eq("tenant_id", tenant.id)
-            .single();
+          const { data: subscription } = await withTimeout(
+            supabase
+              .from("subscriptions")
+              .select("status")
+              .eq("tenant_id", tenant.id)
+              .single(),
+            ORG_LIST_READ_TIMEOUT_MS,
+            "Permintaan status langganan organisasi timeout."
+          );
 
           return {
             ...tenant,
@@ -110,9 +138,15 @@ export function OrganizationList({ filterType }: OrganizationListProps) {
 
       setOrganizations(orgsWithDetails);
     } catch (error) {
-      console.error("Error fetching organizations:", error);
-      toast.error("Gagal memuat data organisasi");
+      const errorRef = reportError(error, "admin.components.organization_list.fetch", {
+        filter_type: filterType ?? null,
+      });
+      const message = appendErrorReference("Gagal memuat data organisasi", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setOrganizations([]);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [filterType]);
@@ -134,13 +168,21 @@ export function OrganizationList({ filterType }: OrganizationListProps) {
     }
 
     try {
-      const { error } = await supabase.from("tenants").delete().eq("id", id);
+      const { error } = await withTimeout(
+        supabase.from("tenants").delete().eq("id", id),
+        ORG_LIST_WRITE_TIMEOUT_MS,
+        "Hapus organisasi timeout."
+      );
       if (error) throw error;
       toast.success("Organisasi berhasil dihapus");
-      fetchOrganizations();
+      void fetchOrganizations();
     } catch (error) {
-      console.error("Error deleting organization:", error);
-      toast.error("Gagal menghapus organisasi");
+      const errorRef = reportError(error, "admin.components.organization_list.delete", {
+        tenant_id: id,
+      });
+      const message = appendErrorReference("Gagal menghapus organisasi", errorRef);
+      toast.error(message);
+      setLoadError(message);
     }
   };
 
@@ -195,6 +237,19 @@ export function OrganizationList({ filterType }: OrganizationListProps) {
 
   return (
     <div className="space-y-4">
+      {isRetrying && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+          Sedang mencoba ulang memuat daftar organisasi...
+        </div>
+      )}
+      {loadError && (
+        <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+          <span>{loadError}</span>
+          <Button variant="outline" size="sm" onClick={() => void fetchOrganizations()}>
+            Coba Lagi
+          </Button>
+        </div>
+      )}
       <div className="relative max-w-sm">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input

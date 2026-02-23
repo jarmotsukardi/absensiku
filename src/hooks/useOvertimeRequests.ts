@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { TablesUpdate } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
  
 export interface OvertimeRequest {
    id: string;
@@ -70,6 +71,8 @@ const withContextError = (
   const ref = reportError(error, context, metadata);
   return appendErrorReference(`${label}: ${getErrorMessage(error)}`, ref);
 };
+const OVERTIME_REQUESTS_QUERY_TIMEOUT_MS = 15000;
+const OVERTIME_REQUESTS_QUERY_RETRY_MAX = 1;
 
 export function useOvertimeSettings(tenantId?: string) {
    const [settings, setSettings] = useState<OvertimeSettings | null>(null);
@@ -144,11 +147,13 @@ export function useOvertimeRequests(filters?: {
    const [requests, setRequests] = useState<OvertimeRequest[]>([]);
    const [isLoading, setIsLoading] = useState(true);
    const [totalCount, setTotalCount] = useState(0);
+   const [isRetrying, setIsRetrying] = useState(false);
    const [loadError, setLoadError] = useState<string | null>(null);
  
    const fetchRequests = useCallback(async () => {
      try {
        setLoadError(null);
+       setIsRetrying(false);
        let query = supabase
          .from("overtime_requests")
          .select(`
@@ -178,7 +183,19 @@ export function useOvertimeRequests(filters?: {
            employeeQuery.eq("tenant_id", filters.tenantId);
          }
 
-         const { data: employeeMatches, error: employeeError } = await employeeQuery;
+         const { data: employeeMatches, error: employeeError } = await withExponentialBackoff(
+           () =>
+             withTimeout(
+               employeeQuery,
+               OVERTIME_REQUESTS_QUERY_TIMEOUT_MS,
+               "overtime_requests.fetch.employee_lookup timeout",
+             ),
+           {
+             maxRetries: OVERTIME_REQUESTS_QUERY_RETRY_MAX,
+             shouldRetry: isRetryableError,
+             onRetry: () => setIsRetrying(true),
+           },
+         );
          if (employeeError) throw employeeError;
 
          const employeeIds = (employeeMatches || []).map((employee) => employee.id);
@@ -194,7 +211,19 @@ export function useOvertimeRequests(filters?: {
          query = query.range(from, to);
        }
 
-       const { data, error, count } = await query;
+       const { data, error, count } = await withExponentialBackoff(
+         () =>
+           withTimeout(
+             query,
+             OVERTIME_REQUESTS_QUERY_TIMEOUT_MS,
+             "overtime_requests.fetch.query timeout",
+           ),
+         {
+           maxRetries: OVERTIME_REQUESTS_QUERY_RETRY_MAX,
+           shouldRetry: isRetryableError,
+           onRetry: () => setIsRetrying(true),
+         },
+       );
        if (error) throw error;
        setRequests((data || []) as OvertimeRequest[]);
        setTotalCount(count || 0);
@@ -211,6 +240,7 @@ export function useOvertimeRequests(filters?: {
        setTotalCount(0);
      } finally {
        setIsLoading(false);
+       setIsRetrying(false);
      }
    }, [filters?.employeeId, filters?.page, filters?.pageSize, filters?.searchQuery, filters?.status, filters?.tenantId]);
  
@@ -353,6 +383,7 @@ export function useOvertimeRequests(filters?: {
    return { 
      requests, 
      isLoading, 
+     isRetrying,
      loadError,
      totalCount,
      createRequest, 

@@ -17,6 +17,7 @@ import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { RequestReportsTabs } from "@/components/org/reports/RequestReportsTabs";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 type LeaveRequestRow = Tables<"leave_requests">;
 type OPD = Tables<"opd">;
@@ -42,6 +43,8 @@ interface LeaveRecord extends LeaveRequestRow {
 
 const ITEMS_PER_PAGE = 20;
 const FETCH_CHUNK = 500;
+const LEAVE_REPORT_QUERY_TIMEOUT_MS = 15000;
+const LEAVE_REPORT_QUERY_RETRY_MAX = 1;
 
 const LEAVE_TYPE_OPTIONS: Array<{ value: LeaveType; label: string }> = [
   { value: "izin", label: "Izin" },
@@ -109,14 +112,29 @@ export default function OrgLeaveReport() {
     const init = async () => {
       try {
         setLoadError(null);
-        const resolvedTenant = await resolveOrgTenantId();
+        const resolvedTenant = await withTimeout(
+          resolveOrgTenantId(),
+          LEAVE_REPORT_QUERY_TIMEOUT_MS,
+          "org.reports.leave.init.resolve_tenant timeout",
+        );
         setTenantId(resolvedTenant);
         if (!resolvedTenant) return;
 
-        const [opdRes, workUnitRes] = await Promise.all([
-          supabase.from("opd").select("*").eq("tenant_id", resolvedTenant).order("name"),
-          supabase.from("work_units").select("*").eq("tenant_id", resolvedTenant).order("name"),
-        ]);
+        const [opdRes, workUnitRes] = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              Promise.all([
+                supabase.from("opd").select("*").eq("tenant_id", resolvedTenant).order("name"),
+                supabase.from("work_units").select("*").eq("tenant_id", resolvedTenant).order("name"),
+              ]),
+              LEAVE_REPORT_QUERY_TIMEOUT_MS,
+              "org.reports.leave.init.query timeout",
+            ),
+          {
+            maxRetries: LEAVE_REPORT_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
+        );
 
         if (opdRes.error) throw opdRes.error;
         if (workUnitRes.error) throw workUnitRes.error;
@@ -155,7 +173,18 @@ export default function OrgLeaveReport() {
     setIsLoading(true);
     try {
       setLoadError(null);
-      const employeeIds = await getTenantEmployeeIds(tenantId);
+      const employeeIds = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            getTenantEmployeeIds(tenantId),
+            LEAVE_REPORT_QUERY_TIMEOUT_MS,
+            "org.reports.leave.fetch.employee_ids timeout",
+          ),
+        {
+          maxRetries: LEAVE_REPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (employeeIds.length === 0) {
         setRecords([]);
         return;
@@ -185,7 +214,18 @@ export default function OrgLeaveReport() {
           query = query.lte("start_date", endDate);
         }
 
-        const { data, error } = await query;
+        const { data, error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              query,
+              LEAVE_REPORT_QUERY_TIMEOUT_MS,
+              "org.reports.leave.fetch.chunk timeout",
+            ),
+          {
+            maxRetries: LEAVE_REPORT_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
+        );
         if (error) throw error;
 
         const chunk = ((data || []) as LeaveQueryRow[]).map((row) => ({
@@ -452,7 +492,8 @@ export default function OrgLeaveReport() {
             <CardTitle>Filter Laporan</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
               <div className="grid gap-2">
                 <Label>Tanggal Mulai</Label>
                 <Input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
@@ -529,6 +570,7 @@ export default function OrgLeaveReport() {
                 <Button onClick={handleShow} className="w-full" disabled={isLoading}>
                   {isLoading ? "Memuat..." : "Tampilkan"}
                 </Button>
+              </div>
               </div>
             </div>
           </CardContent>

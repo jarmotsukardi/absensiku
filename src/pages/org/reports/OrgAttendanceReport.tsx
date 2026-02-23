@@ -17,14 +17,19 @@ import {
   PaginationPrevious,
   PaginationEllipsis,
 } from "@/components/ui/pagination";
-import { FileSpreadsheet, Download, Search, Printer } from "lucide-react";
+import { FileSpreadsheet, Download, Search, Printer, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
-import { isPeakHours } from "@/lib/attendanceResilience";
+import {
+  isPeakHours,
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 import { AttendanceRecapTabs } from "@/components/org/reports/AttendanceRecapTabs";
 
 type OPD = Tables<"opd">;
@@ -46,6 +51,9 @@ type AttendanceReportRecord = {
 
 const STATUS_OPTIONS = ["Hadir", "Izin", "Cuti", "Sakit", "Tugas Luar", "Tidak Hadir"];
 const KETERANGAN_OPTIONS = ["Hadir", "Telat", "Pulang Cepat", "Telat + Pulang Cepat", "Tidak Absen Pulang", "Telat (Belum Pulang)"];
+const ATTENDANCE_READ_TIMEOUT_MS = 12000;
+const ATTENDANCE_OUTPUT_TIMEOUT_MS = 20000;
+const ATTENDANCE_MAX_RETRIES = 2;
 
 const escapeHtml = (value: string): string =>
   value
@@ -94,6 +102,7 @@ export default function OrgAttendanceReport() {
   const [searchTerm, setSearchTerm] = useState("");
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalRecords, setTotalRecords] = useState(0);
   const [hasQueried, setHasQueried] = useState(false);
@@ -104,11 +113,24 @@ export default function OrgAttendanceReport() {
 
   const fetchOpds = useCallback(async (tid: string) => {
     try {
-      const { data, error } = await supabase
-        .from("opd")
-        .select("*")
-        .eq("tenant_id", tid)
-        .order("name");
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("opd")
+              .select("*")
+              .eq("tenant_id", tid)
+              .order("name"),
+            ATTENDANCE_READ_TIMEOUT_MS,
+            "Permintaan data OPD timeout."
+          ),
+        {
+          maxRetries: ATTENDANCE_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
       setOpds(data || []);
     } catch (error) {
@@ -117,30 +139,68 @@ export default function OrgAttendanceReport() {
       toast.error(message);
       setLoadError(message);
       setOpds([]);
+    } finally {
+      setIsRetrying(false);
     }
   }, []);
 
   const fetchInitialData = useCallback(async () => {
     try {
       setLoadError(null);
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ATTENDANCE_READ_TIMEOUT_MS,
+            "Permintaan user auth timeout."
+          ),
+        {
+          maxRetries: ATTENDANCE_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (!user) return;
 
       let resolvedTenantId: string | null = null;
-      const { data: roleRows, error: roleError } = await supabase
-        .from("user_roles")
-        .select("role, tenant_id")
-        .eq("user_id", user.id)
-        .eq("role", "admin_instansi");
+      const { data: roleRows, error: roleError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("user_roles")
+              .select("role, tenant_id")
+              .eq("user_id", user.id)
+              .eq("role", "admin_instansi"),
+            ATTENDANCE_READ_TIMEOUT_MS,
+            "Permintaan role tenant timeout."
+          ),
+        {
+          maxRetries: ATTENDANCE_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (roleError) throw roleError;
       resolvedTenantId = roleRows?.find((row) => row.tenant_id)?.tenant_id ?? null;
 
       if (!resolvedTenantId) {
-        const { data: empData, error: empError } = await supabase
-          .from("employees")
-          .select("tenant_id")
-          .eq("user_id", user.id)
-          .maybeSingle();
+        const { data: empData, error: empError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("employees")
+                .select("tenant_id")
+                .eq("user_id", user.id)
+                .maybeSingle(),
+              ATTENDANCE_READ_TIMEOUT_MS,
+              "Permintaan tenant pegawai timeout."
+            ),
+          {
+            maxRetries: ATTENDANCE_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (empError) throw empError;
         resolvedTenantId = empData?.tenant_id ?? null;
       }
@@ -153,6 +213,8 @@ export default function OrgAttendanceReport() {
       const message = appendErrorReference("Gagal memuat data awal laporan", errorRef);
       toast.error(message);
       setLoadError(message);
+    } finally {
+      setIsRetrying(false);
     }
   }, [fetchOpds]);
 
@@ -176,16 +238,29 @@ export default function OrgAttendanceReport() {
     setIsLoading(true);
     try {
       setLoadError(null);
-      const { data, error } = await supabase.rpc("org_get_attendance_report_page", {
-        p_start_date: startDate,
-        p_end_date: endDate,
-        p_opd_id: filterOpd === "all" ? null : filterOpd,
-        p_search: searchTerm.trim() || null,
-        p_status: filterStatus === "all" ? null : filterStatus,
-        p_keterangan: filterKeterangan === "all" ? null : filterKeterangan,
-        p_page: page,
-        p_page_size: itemsPerPage,
-      });
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("org_get_attendance_report_page", {
+              p_start_date: startDate,
+              p_end_date: endDate,
+              p_opd_id: filterOpd === "all" ? null : filterOpd,
+              p_search: searchTerm.trim() || null,
+              p_status: filterStatus === "all" ? null : filterStatus,
+              p_keterangan: filterKeterangan === "all" ? null : filterKeterangan,
+              p_page: page,
+              p_page_size: itemsPerPage,
+            }),
+            ATTENDANCE_READ_TIMEOUT_MS,
+            "Permintaan halaman laporan absensi timeout."
+          ),
+        {
+          maxRetries: ATTENDANCE_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
 
       const rows = (data || []) as Array<AttendanceReportRecord & { total_count: number }>;
@@ -204,6 +279,7 @@ export default function OrgAttendanceReport() {
       setRecords([]);
       setTotalRecords(0);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [busyHoursMessage, endDate, filterKeterangan, filterOpd, filterStatus, itemsPerPage, searchTerm, startDate, tenantId]);
@@ -217,16 +293,27 @@ export default function OrgAttendanceReport() {
     let allRows: AttendanceReportRecord[] = [];
 
     while (true) {
-      const { data, error } = await supabase.rpc("org_get_attendance_report_page", {
-        p_start_date: startDate,
-        p_end_date: endDate,
-        p_opd_id: filterOpd === "all" ? null : filterOpd,
-        p_search: searchTerm.trim() || null,
-        p_status: filterStatus === "all" ? null : filterStatus,
-        p_keterangan: filterKeterangan === "all" ? null : filterKeterangan,
-        p_page: page,
-        p_page_size: pageSize,
-      });
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("org_get_attendance_report_page", {
+              p_start_date: startDate,
+              p_end_date: endDate,
+              p_opd_id: filterOpd === "all" ? null : filterOpd,
+              p_search: searchTerm.trim() || null,
+              p_status: filterStatus === "all" ? null : filterStatus,
+              p_keterangan: filterKeterangan === "all" ? null : filterKeterangan,
+              p_page: page,
+              p_page_size: pageSize,
+            }),
+            ATTENDANCE_OUTPUT_TIMEOUT_MS,
+            "Permintaan data export laporan absensi timeout."
+          ),
+        {
+          maxRetries: ATTENDANCE_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+        }
+      );
       if (error) throw error;
 
       const rows = (data || []) as Array<AttendanceReportRecord & { total_count: number }>;
@@ -410,6 +497,12 @@ export default function OrgAttendanceReport() {
   return (
     <OrganizationLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+            Mencoba ulang memuat data laporan absensi...
+          </div>
+        )}
+
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -431,8 +524,12 @@ export default function OrgAttendanceReport() {
         <AttendanceRecapTabs />
 
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchReportPage(currentPage)}>
+              <RotateCcw className="mr-2 h-4 w-4" />
+              Coba Lagi
+            </Button>
           </div>
         )}
 
@@ -447,7 +544,8 @@ export default function OrgAttendanceReport() {
             <CardTitle>Filter Laporan</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
+            <div className="rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
               <div className="grid gap-2">
                 <Label>OPD</Label>
                 <Select value={filterOpd} onValueChange={setFilterOpd}>
@@ -496,6 +594,7 @@ export default function OrgAttendanceReport() {
                 <Button onClick={fetchReport} className="w-full" disabled={isLoading || isBusyHours}>
                   {isLoading ? "Memuat..." : "Tampilkan"}
                 </Button>
+              </div>
               </div>
             </div>
           </CardContent>

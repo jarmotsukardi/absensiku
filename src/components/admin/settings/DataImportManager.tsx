@@ -10,6 +10,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { supabase } from "@/integrations/supabase/client";
 import { debugLog } from "@/lib/debugLog";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 import { toast } from "sonner";
 import {
   Upload,
@@ -196,16 +198,22 @@ export function DataImportManager() {
         setImportFileName(file.name);
         setImportResults([]);
       } catch (error) {
-        console.error("JSON parse error:", error);
+        const errorRef = reportError(error, "admin.settings.data_import.parse_json", {
+          file_name: file.name,
+          file_size: file.size,
+        });
         if (loadingToast) toast.dismiss(loadingToast);
-        toast.error("File JSON tidak valid atau rusak");
+        toast.error(appendErrorReference("File JSON tidak valid atau rusak", errorRef));
       }
     };
     
     reader.onerror = () => {
-      console.error("FileReader error:", reader.error);
+      const errorRef = reportError(reader.error ?? new Error("FileReader gagal membaca file"), "admin.settings.data_import.read_file", {
+        file_name: file.name,
+        file_size: file.size,
+      });
       if (loadingToast) toast.dismiss(loadingToast);
-      toast.error("Gagal membaca file");
+      toast.error(appendErrorReference("Gagal membaca file", errorRef));
     };
     
     reader.readAsText(file);
@@ -311,13 +319,15 @@ export function DataImportManager() {
           return cleaned;
         });
 
-        // Use raw insert since we're importing data from backup
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { error } = await (supabase.from(tableName as ImportableTable) as any)
-          .upsert(cleanedBatch, { 
-            onConflict: 'id',
-            ignoreDuplicates: false 
-          });
+        const { error } = await withTimeout(
+          () =>
+            supabase.from(tableName as ImportableTable).upsert(cleanedBatch, {
+              onConflict: "id",
+              ignoreDuplicates: false,
+            }),
+          15000,
+          `Import tabel ${tableName} timeout`
+        );
 
         if (error) {
           result.failed += batch.length;
@@ -344,35 +354,43 @@ export function DataImportManager() {
     setImportProgress(0);
     setImportResults([]);
 
-    const results: ImportResult[] = [];
-    const tablesToImport = IMPORT_ORDER.filter(t => selectedTables.has(t));
-    
-    for (let i = 0; i < tablesToImport.length; i++) {
-      const tableName = tablesToImport[i];
-      const tableData = importData[tableName];
+    try {
+      const results: ImportResult[] = [];
+      const tablesToImport = IMPORT_ORDER.filter(t => selectedTables.has(t));
       
-      setCurrentTable(tableName);
-      setImportProgress(Math.round(((i + 0.5) / tablesToImport.length) * 100));
+      for (let i = 0; i < tablesToImport.length; i++) {
+        const tableName = tablesToImport[i];
+        const tableData = importData[tableName];
+        
+        setCurrentTable(tableName);
+        setImportProgress(Math.round(((i + 0.5) / tablesToImport.length) * 100));
 
-      if (Array.isArray(tableData) && tableData.length > 0) {
-        const result = await importSingleTable(tableName, tableData);
-        results.push(result);
+        if (Array.isArray(tableData) && tableData.length > 0) {
+          const result = await importSingleTable(tableName, tableData);
+          results.push(result);
+        }
+
+        setImportProgress(Math.round(((i + 1) / tablesToImport.length) * 100));
       }
 
-      setImportProgress(Math.round(((i + 1) / tablesToImport.length) * 100));
-    }
+      setImportResults(results);
 
-    setImportResults(results);
-    setCurrentTable("");
-    setIsImporting(false);
+      const totalSuccess = results.reduce((acc, r) => acc + r.success, 0);
+      const totalFailed = results.reduce((acc, r) => acc + r.failed, 0);
 
-    const totalSuccess = results.reduce((acc, r) => acc + r.success, 0);
-    const totalFailed = results.reduce((acc, r) => acc + r.failed, 0);
-
-    if (totalFailed === 0) {
-      toast.success(`Import selesai: ${totalSuccess} records berhasil diimport`);
-    } else {
-      toast.warning(`Import selesai: ${totalSuccess} berhasil, ${totalFailed} gagal`);
+      if (totalFailed === 0) {
+        toast.success(`Import selesai: ${totalSuccess} records berhasil diimport`);
+      } else {
+        toast.warning(`Import selesai: ${totalSuccess} berhasil, ${totalFailed} gagal`);
+      }
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.data_import.run_import", {
+        selected_table_count: selectedTables.size,
+      });
+      toast.error(appendErrorReference("Import gagal dijalankan", errorRef));
+    } finally {
+      setCurrentTable("");
+      setIsImporting(false);
     }
   };
 

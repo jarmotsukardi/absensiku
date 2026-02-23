@@ -8,12 +8,23 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Loader2, Plus, Trash2, Edit, HelpCircle, Save, Search, Sparkles } from "lucide-react";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import {
+  FAQ_AUDIENCE_BADGE_CLASSNAME,
+  FAQ_AUDIENCE_LABEL,
+  inferFaqAudience,
+  isFaqAudience,
+  shouldAutoCorrectLegacyAudience,
+} from "@/lib/faqAudience";
+import type { FaqAudience } from "@/lib/faqAudience";
 
 interface FAQ {
   id: string;
@@ -21,6 +32,7 @@ interface FAQ {
   answer: string;
   category: string;
   sort_order: number;
+  audience?: FaqAudience;
 }
 
 interface FAQSettingsValue {
@@ -35,8 +47,252 @@ interface FAQSettingsValue {
   } | null;
 }
 
+const normalizeFaqItem = (item: FAQ): FAQ => {
+  const inferredAudience = inferFaqAudience({
+    category: item.category,
+    question: item.question,
+    answer: item.answer,
+  });
+  const currentAudience = isFaqAudience(item.audience) ? item.audience : undefined;
+  const audience =
+    shouldAutoCorrectLegacyAudience({
+      currentAudience,
+      category: item.category,
+      question: item.question,
+      answer: item.answer,
+    })
+      ? inferredAudience
+      : (currentAudience ?? inferredAudience);
+
+  return {
+    ...item,
+    audience,
+  };
+};
+
 const ITEMS_PER_PAGE = 10;
-const RECOMMENDED_FAQ_UPDATES: Array<{ question: string; answer: string; category: string }> = [
+type RecommendedFAQUpdate = {
+  question: string;
+  answer: string;
+  category: string;
+  audience?: FaqAudience;
+};
+
+const PUBLIC_RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
+  {
+    question: "Apa fitur utama AbsensiKu untuk instansi?",
+    answer:
+      "AbsensiKu menyediakan absensi GPS, pengajuan izin/cuti/lembur/WFH, dashboard kehadiran realtime, laporan, notifikasi, dan audit log. Semua dirancang agar operasional harian instansi lebih cepat dan tertib.",
+    category: "Fitur Utama",
+    audience: "public",
+  },
+  {
+    question: "Apakah sistem mendukung geofence dan radius absensi?",
+    answer:
+      "Ya. Admin dapat mengatur titik lokasi kerja dan radius validasi agar absensi hanya dilakukan di area yang ditentukan. Ini membantu mencegah absensi dari lokasi yang tidak sah.",
+    category: "Fitur Utama",
+    audience: "public",
+  },
+  {
+    question: "Apakah sistem mendukung kerja shift dan non-shift?",
+    answer:
+      "Ya. Anda dapat mengelola pola kerja reguler maupun shift dengan aturan jam kerja, toleransi keterlambatan, dan pengaturan hari kerja yang fleksibel.",
+    category: "Fitur Utama",
+    audience: "public",
+  },
+  {
+    question: "Apakah tersedia pengajuan izin, cuti, lembur, dan WFH?",
+    answer:
+      "Ya. Semua permohonan tersebut tersedia dalam satu alur, lengkap dengan proses persetujuan dan pelacakan status agar transparan bagi pegawai dan admin.",
+    category: "Fitur Utama",
+    audience: "public",
+  },
+  {
+    question: "Apakah tersedia dashboard kehadiran realtime?",
+    answer:
+      "Ya. Dashboard menampilkan ringkasan kehadiran harian, status keterlambatan, serta indikator operasional penting agar pimpinan cepat mengambil keputusan.",
+    category: "Fitur Utama",
+    audience: "public",
+  },
+  {
+    question: "Apakah ada notifikasi otomatis untuk aktivitas penting?",
+    answer:
+      "Ya. Sistem mendukung notifikasi in-app, email, dan kanal lain sesuai konfigurasi agar pengajuan, verifikasi, dan peringatan penting tidak terlewat.",
+    category: "Fitur Utama",
+    audience: "public",
+  },
+  {
+    question: "Bagaimana skema harga AbsensiKu dihitung?",
+    answer:
+      "Perhitungan harga berbasis jumlah pegawai aktif dan durasi paket yang dipilih. Simulasi biaya dapat dilihat langsung melalui kalkulator langganan sebelum membuat invoice.",
+    category: "Harga & Paket",
+    audience: "public",
+  },
+  {
+    question: "Apakah tersedia paket bulanan, triwulanan, semester, dan tahunan?",
+    answer:
+      "Ya. Paket langganan tersedia dalam beberapa durasi agar instansi bisa menyesuaikan kebutuhan operasional dan anggaran.",
+    category: "Harga & Paket",
+    audience: "public",
+  },
+  {
+    question: "Apakah ada biaya implementasi awal?",
+    answer:
+      "Biaya implementasi mengikuti kebijakan paket dan kebutuhan instansi. Untuk kebutuhan khusus, tim kami dapat memberikan skema implementasi yang sesuai.",
+    category: "Harga & Paket",
+    audience: "public",
+  },
+  {
+    question: "Apakah total invoice sudah final tanpa hitung pajak manual?",
+    answer:
+      "Ya. Nilai invoice yang tampil ke pelanggan adalah nilai final pembayaran. Instansi tidak perlu menghitung komponen biaya internal secara manual.",
+    category: "Harga & Paket",
+    audience: "public",
+  },
+  {
+    question: "Bagaimana jika jumlah pegawai berubah di tengah periode?",
+    answer:
+      "Perubahan jumlah pegawai akan memengaruhi simulasi pada periode berikutnya sesuai kebijakan paket aktif. Detailnya dapat dilihat di modul billing organisasi.",
+    category: "Harga & Paket",
+    audience: "public",
+  },
+  {
+    question: "Apakah tersedia negosiasi untuk instansi dengan skala besar?",
+    answer:
+      "Ya. Untuk kebutuhan B2B/enterprise dengan volume besar, tersedia mekanisme evaluasi dan penawaran harga khusus oleh tim admin pusat.",
+    category: "Harga & Paket",
+    audience: "public",
+  },
+  {
+    question: "Bagaimana keamanan data absensi disimpan?",
+    answer:
+      "Data absensi disimpan terpusat dengan kontrol akses berbasis peran, jejak aktivitas, dan praktik keamanan aplikasi untuk menjaga kerahasiaan serta integritas data.",
+    category: "Keamanan & Privasi",
+    audience: "public",
+  },
+  {
+    question: "Apakah aktivitas admin dan pengguna tercatat?",
+    answer:
+      "Ya. Aktivitas penting dicatat dalam audit log agar memudahkan pelacakan perubahan, investigasi, dan kepatuhan operasional.",
+    category: "Keamanan & Privasi",
+    audience: "public",
+  },
+  {
+    question: "Apakah akses pengguna bisa dibatasi sesuai peran?",
+    answer:
+      "Ya. Sistem mendukung pembagian hak akses seperti superadmin, admin organisasi, operator, dan pegawai agar setiap akun hanya melihat fitur yang relevan.",
+    category: "Keamanan & Privasi",
+    audience: "public",
+  },
+  {
+    question: "Bagaimana sistem mencegah manipulasi absensi?",
+    answer:
+      "Sistem menggunakan validasi lokasi, aturan jadwal, dan kontrol operasional lainnya untuk meminimalkan penyalahgunaan serta meningkatkan akurasi data kehadiran.",
+    category: "Keamanan & Privasi",
+    audience: "public",
+  },
+  {
+    question: "Apakah data dapat diarsipkan sesuai kebijakan retensi?",
+    answer:
+      "Ya. Data operasional dan log dapat mengikuti kebijakan retensi agar performa tetap terjaga tanpa menghilangkan kebutuhan audit.",
+    category: "Keamanan & Privasi",
+    audience: "public",
+  },
+  {
+    question: "Bagaimana pemulihan jika terjadi gangguan layanan?",
+    answer:
+      "Sistem menyediakan mekanisme pemantauan dan prosedur pemulihan bertahap. Tim admin dapat menindaklanjuti cepat berdasarkan log dan indikator kesehatan sistem.",
+    category: "Keamanan & Privasi",
+    audience: "public",
+  },
+  {
+    question: "Berapa lama implementasi sampai organisasi siap pakai?",
+    answer:
+      "Waktu implementasi bergantung pada kesiapan data awal dan skala organisasi. Dengan template onboarding, proses setup umumnya jauh lebih cepat.",
+    category: "Implementasi & Onboarding",
+    audience: "public",
+  },
+  {
+    question: "Apakah ada wizard setup awal organisasi?",
+    answer:
+      "Ya. Tersedia wizard onboarding untuk membantu pengisian data dasar seperti OPD, unit kerja, jabatan, jam kerja, batas absen, dan konten awal.",
+    category: "Implementasi & Onboarding",
+    audience: "public",
+  },
+  {
+    question: "Apakah bisa impor data pegawai secara massal?",
+    answer:
+      "Ya. Admin dapat melakukan import data pegawai dengan template yang disediakan untuk mempercepat migrasi dari sistem lama.",
+    category: "Implementasi & Onboarding",
+    audience: "public",
+  },
+  {
+    question: "Apakah tim kami mendapat panduan saat onboarding?",
+    answer:
+      "Ya. Proses onboarding didukung panduan modul, glosarium, dan FAQ agar admin organisasi memahami alur setup dan operasional sejak awal.",
+    category: "Implementasi & Onboarding",
+    audience: "public",
+  },
+  {
+    question: "Apa yang perlu disiapkan sebelum go-live?",
+    answer:
+      "Siapkan struktur organisasi, data pegawai, lokasi kerja, jam kerja, serta kebijakan izin/cuti. Dengan data ini, aktivasi operasional dapat berjalan lebih mulus.",
+    category: "Implementasi & Onboarding",
+    audience: "public",
+  },
+  {
+    question: "Bagaimana proses training admin organisasi dilakukan?",
+    answer:
+      "Training difokuskan pada alur harian: master data, permohonan, laporan, notifikasi, dan billing. Tujuannya agar tim admin siap mengelola sistem secara mandiri.",
+    category: "Implementasi & Onboarding",
+    audience: "public",
+  },
+  {
+    question: "Apakah AbsensiKu bisa diintegrasikan dengan sistem HR atau payroll?",
+    answer:
+      "Ya. Integrasi dapat disesuaikan dengan kebutuhan data dan proses internal instansi agar alur SDM lebih terhubung.",
+    category: "Integrasi & Dukungan",
+    audience: "public",
+  },
+  {
+    question: "Apakah tersedia API atau webhook untuk integrasi?",
+    answer:
+      "Tersedia opsi integrasi untuk kebutuhan otomatisasi dan sinkronisasi. Detail implementasi mengikuti kebijakan dan kesiapan teknis masing-masing instansi.",
+    category: "Integrasi & Dukungan",
+    audience: "public",
+  },
+  {
+    question: "Kanal dukungan apa saja yang tersedia untuk pelanggan?",
+    answer:
+      "Dukungan tersedia melalui FAQ, bantuan in-app, tiket bantuan organisasi, serta kanal komunikasi lain sesuai pengaturan layanan aktif.",
+    category: "Integrasi & Dukungan",
+    audience: "public",
+  },
+  {
+    question: "Bagaimana alur tiket bantuan untuk pelanggan aktif?",
+    answer:
+      "Pelanggan aktif dapat membuat tiket dari menu bantuan organisasi. Tiket masuk ke panel admin untuk ditindaklanjuti dan dipantau hingga selesai.",
+    category: "Integrasi & Dukungan",
+    audience: "public",
+  },
+  {
+    question: "Bagaimana target waktu respon dukungan teknis?",
+    answer:
+      "Waktu respon mengikuti prioritas insiden dan kanal dukungan yang digunakan. Kasus kritis akan diproses lebih cepat sesuai tingkat urgensi.",
+    category: "Integrasi & Dukungan",
+    audience: "public",
+  },
+  {
+    question: "Apakah ada FAQ berbeda untuk publik, pegawai, admin organisasi, dan superadmin?",
+    answer:
+      "Ya. Konten FAQ dipisahkan per audiens agar informasi yang tampil lebih relevan: publik, employee, admin organisasi, dan superadmin.",
+    category: "Integrasi & Dukungan",
+    audience: "public",
+  },
+];
+
+const RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
+  ...PUBLIC_RECOMMENDED_FAQ_UPDATES,
   {
     question: "Bagaimana sumber jawaban Chat Agent di halaman utama ditentukan?",
     answer:
@@ -125,6 +381,18 @@ const RECOMMENDED_FAQ_UPDATES: Array<{ question: string; answer: string; categor
     question: "Apakah kalkulator langganan di /org/activation menyimpan pilihan terakhir?",
     answer:
       "Ya. Pilihan paket dan jumlah member disimpan otomatis per tenant. Admin organisasi bisa klik 'Lanjut Buat Invoice' dari overlay kalkulator untuk langsung menuju blok metode pembayaran.",
+    category: "Billing & Harga",
+  },
+  {
+    question: "Kenapa daftar faktur di /org/billing kadang terlihat lama memuat?",
+    answer:
+      "Saat data masih diproses, tabel menampilkan status loading informatif. Jika tetap lama, klik Refresh di header billing. Sistem juga menampilkan pesan fallback agar admin tahu proses masih berjalan, bukan halaman kosong/error.",
+    category: "Billing & Harga",
+  },
+  {
+    question: "Bagaimana membaca kondisi kosong di menu Billing organisasi?",
+    answer:
+      "Kondisi kosong berarti belum ada data valid untuk section tersebut, misalnya belum ada invoice, belum ada topup, atau belum ada transaksi wallet. UI menampilkan arahan aksi lanjut seperti Buka Penawaran, Reset Filter, atau Kirim Request Topup.",
     category: "Billing & Harga",
   },
   {
@@ -385,6 +653,24 @@ const RECOMMENDED_FAQ_UPDATES: Array<{ question: string; answer: string; categor
       "Indikator berada di sidebar /org, tepat di bawah menu Setup Awal. Saat diklik, pengguna akan diarahkan ke /org/onboarding untuk melanjutkan checklist modul.",
     category: "Onboarding Org",
   },
+  {
+    question: "Apa dampak perubahan terbaru di menu admin terhadap workflow operasional harian?",
+    answer:
+      "Menu admin kini dikelompokkan per kategori dan sub-tab agar alur kerja lebih cepat: pilih kategori utama dulu (mis. Umum, Operasional, Billing), lalu pilih sub-tab detail. Dampaknya, waktu pindah antar modul berkurang dan konteks pengaturan lebih terstruktur.",
+    category: "Admin Super",
+  },
+  {
+    question: "Apa parameter baru yang perlu diatur admin setelah fitur ini dirilis?",
+    answer:
+      "Pastikan konfigurasi cloud capacity monitor sudah terisi (khususnya usage manual Vercel bila API usage belum aktif), auto-sync FAQ rekomendasi sesuai kebutuhan, serta review warning threshold per provider agar notifikasi kapasitas bekerja tepat waktu.",
+    category: "Admin Super",
+  },
+  {
+    question: "Bagaimana indikator sukses dan risiko dari fitur admin terbaru?",
+    answer:
+      "Indikator sukses: navigasi tab lebih cepat, error navigasi menurun, dan pengaturan penting lebih mudah ditemukan. Risiko utama: kebingungan awal jika belum terbiasa dengan struktur kategori baru. Mitigasi: gunakan FAQ, glosary halaman, dan pantau log error setelah rilis.",
+    category: "Admin Super",
+  },
 ];
 
 const normalizeQuestion = (value: string) => value.trim().toLowerCase();
@@ -414,6 +700,7 @@ const mergeRecommendedFaqs = (currentFaqs: FAQ[]) => {
   let sortOffset = 1;
 
   for (const item of RECOMMENDED_FAQ_UPDATES) {
+    const targetAudience = item.audience ?? inferFaqAudience(item);
     const targetKey = normalizeQuestion(item.question);
     let targetIndex = indexByQuestion.get(targetKey);
 
@@ -428,10 +715,18 @@ const mergeRecommendedFaqs = (currentFaqs: FAQ[]) => {
 
     if (targetIndex !== undefined) {
       const existing = nextFaqs[targetIndex];
+      const existingAudience =
+        existing.audience ??
+        inferFaqAudience({
+          category: existing.category,
+          question: existing.question,
+          answer: existing.answer,
+        });
       const needsUpdate =
         existing.question !== item.question ||
         existing.answer !== item.answer ||
-        existing.category !== item.category;
+        existing.category !== item.category ||
+        existingAudience !== targetAudience;
       if (needsUpdate) {
         const oldKey = normalizeQuestion(existing.question);
         nextFaqs[targetIndex] = {
@@ -439,6 +734,7 @@ const mergeRecommendedFaqs = (currentFaqs: FAQ[]) => {
           question: item.question,
           answer: item.answer,
           category: item.category,
+          audience: targetAudience,
         };
         indexByQuestion.delete(oldKey);
         indexByQuestion.set(targetKey, targetIndex);
@@ -453,6 +749,7 @@ const mergeRecommendedFaqs = (currentFaqs: FAQ[]) => {
       answer: item.answer,
       category: item.category,
       sort_order: nextSortBase + sortOffset,
+      audience: targetAudience,
     });
     indexByQuestion.set(targetKey, nextFaqs.length + additions.length - 1);
     sortOffset += 1;
@@ -492,16 +789,27 @@ const buildFaqSettingsPayload = (
 };
 
 export default function FAQManagement() {
+  const ADMIN_FAQ_QUERY_TIMEOUT_MS = 15000;
+  const ADMIN_FAQ_QUERY_RETRY_MAX = 1;
   const [faqs, setFaqs] = useState<FAQ[]>([]);
   const [filteredFaqs, setFilteredFaqs] = useState<FAQ[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<FAQ | null>(null);
-  const [formData, setFormData] = useState({ question: "", answer: "", category: "Umum", sort_order: 1 });
+  const [formData, setFormData] = useState<{
+    question: string;
+    answer: string;
+    category: string;
+    sort_order: number;
+    audience: FaqAudience;
+  }>({ question: "", answer: "", category: "Umum", sort_order: 1, audience: "org_admin" });
   const [searchQuery, setSearchQuery] = useState("");
+  const [audienceFilter, setAudienceFilter] = useState<"all" | FaqAudience>("all");
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [legacyFaqValue, setLegacyFaqValue] = useState<FAQSettingsValue | null>(null);
   const [autoSyncEnabled, setAutoSyncEnabled] = useState(true);
   const [autoSyncLastRunAt, setAutoSyncLastRunAt] = useState<string | null>(null);
@@ -514,24 +822,47 @@ export default function FAQManagement() {
 
   useEffect(() => {
     // Filter FAQs based on search query
+    const normalizedSearchQuery = searchQuery.toLowerCase();
     const filtered = faqs.filter(
       (faq) =>
-        faq.question.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        faq.answer.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        faq.category.toLowerCase().includes(searchQuery.toLowerCase())
+        (faq.question.toLowerCase().includes(normalizedSearchQuery) ||
+          faq.answer.toLowerCase().includes(normalizedSearchQuery) ||
+          faq.category.toLowerCase().includes(normalizedSearchQuery)) &&
+        (categoryFilter === "all" || faq.category === categoryFilter) &&
+        (audienceFilter === "all" ||
+          (faq.audience ??
+            inferFaqAudience({
+              category: faq.category,
+              question: faq.question,
+              answer: faq.answer,
+            })) === audienceFilter)
     );
     setFilteredFaqs(filtered);
     setCurrentPage(1);
-  }, [searchQuery, faqs]);
+  }, [searchQuery, audienceFilter, categoryFilter, faqs]);
 
   const fetchFAQs = async () => {
+    setIsLoading(true);
     setLoadError(null);
     try {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("id, value")
-        .eq("key", "faq_settings")
-        .maybeSingle();
+      setIsRetrying(false);
+      const { data } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("id, value")
+              .eq("key", "faq_settings")
+              .maybeSingle(),
+            ADMIN_FAQ_QUERY_TIMEOUT_MS,
+            "admin.faq.fetch.settings timeout",
+          ),
+        {
+          maxRetries: ADMIN_FAQ_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       const value = data?.value as unknown;
       let faqItems: FAQ[] = [];
@@ -551,22 +882,34 @@ export default function FAQManagement() {
         }
       }
 
-      const sortedFaqs = faqItems.sort((a, b) => a.sort_order - b.sort_order);
+      const normalizedFaqs = faqItems.map((item) => normalizeFaqItem(item));
+      const audienceFixCount = faqItems.reduce((count, item, index) => {
+        const normalizedAudience = normalizedFaqs[index]?.audience;
+        const rawAudience = isFaqAudience(item.audience) ? item.audience : undefined;
+        return rawAudience !== normalizedAudience ? count + 1 : count;
+      }, 0);
+      const sortedFaqs = normalizedFaqs.sort((a, b) => a.sort_order - b.sort_order);
       const mergedResult = mergeRecommendedFaqs(sortedFaqs);
-      const shouldPersistAutoSync =
+      const hasRecommendationDelta = mergedResult.additionsCount > 0 || mergedResult.updatedCount > 0;
+      const shouldPersistRecommendationSync =
         runtimeAutoSyncEnabled &&
-        (!data?.id || !storedObject || mergedResult.additionsCount > 0 || mergedResult.updatedCount > 0);
+        (!data?.id || !storedObject || hasRecommendationDelta);
+      const shouldPersistAudienceNormalization = audienceFixCount > 0;
+      const shouldPersistAutoSync = shouldPersistRecommendationSync || shouldPersistAudienceNormalization;
       const nextFaqs = mergedResult.merged;
       const autoSyncRunAt =
-        shouldPersistAutoSync && (mergedResult.additionsCount > 0 || mergedResult.updatedCount > 0)
+        shouldPersistAutoSync
           ? new Date().toISOString()
           : storedObject?.auto_sync_last_run_at;
       const autoSyncRunResult =
-        shouldPersistAutoSync && (mergedResult.additionsCount > 0 || mergedResult.updatedCount > 0)
+        shouldPersistAutoSync
           ? {
               additions: mergedResult.additionsCount,
-              updated: mergedResult.updatedCount,
-              source: "auto_sync_on_load",
+              updated: mergedResult.updatedCount + audienceFixCount,
+              source:
+                shouldPersistAudienceNormalization && !hasRecommendationDelta
+                  ? "audience_normalization"
+                  : "auto_sync_on_load",
             }
           : storedObject?.auto_sync_last_result ?? null;
 
@@ -579,22 +922,50 @@ export default function FAQManagement() {
       if (shouldPersistAutoSync && nextFaqs.length > 0) {
         const nextValue = nextLegacyValue;
         if (data?.id) {
-          const { error: updateError } = await supabase
-            .from("system_settings")
-            .update({ value: nextValue, updated_at: new Date().toISOString() })
-            .eq("key", "faq_settings");
+          const { error: updateError } = await withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase
+                  .from("system_settings")
+                  .update({ value: nextValue, updated_at: new Date().toISOString() })
+                  .eq("key", "faq_settings"),
+                ADMIN_FAQ_QUERY_TIMEOUT_MS,
+                "admin.faq.fetch.autosync.update timeout",
+              ),
+            {
+              maxRetries: ADMIN_FAQ_QUERY_RETRY_MAX,
+              shouldRetry: isRetryableError,
+              onRetry: () => setIsRetrying(true),
+            },
+          );
           if (updateError) throw updateError;
         } else {
-          const { error: insertError } = await supabase
-            .from("system_settings")
-            .insert({ key: "faq_settings", value: nextValue });
+          const { error: insertError } = await withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase
+                  .from("system_settings")
+                  .insert({ key: "faq_settings", value: nextValue }),
+                ADMIN_FAQ_QUERY_TIMEOUT_MS,
+                "admin.faq.fetch.autosync.insert timeout",
+              ),
+            {
+              maxRetries: ADMIN_FAQ_QUERY_RETRY_MAX,
+              shouldRetry: isRetryableError,
+              onRetry: () => setIsRetrying(true),
+            },
+          );
           if (insertError) throw insertError;
         }
 
-        if (mergedResult.additionsCount > 0 || mergedResult.updatedCount > 0) {
+        if (hasRecommendationDelta) {
+          const audienceFixNote =
+            audienceFixCount > 0 ? ` + koreksi audience ${audienceFixCount}` : "";
           toast.success(
-            `FAQ auto-sync: ${mergedResult.additionsCount} ditambahkan, ${mergedResult.updatedCount} diperbarui.`,
+            `FAQ auto-sync: ${mergedResult.additionsCount} ditambahkan, ${mergedResult.updatedCount} diperbarui${audienceFixNote}.`,
           );
+        } else if (shouldPersistAudienceNormalization) {
+          toast.success(`Target audience FAQ dikoreksi otomatis: ${audienceFixCount} item.`);
         } else {
           toast.success("FAQ default berhasil diinisialisasi otomatis.");
         }
@@ -615,6 +986,7 @@ export default function FAQManagement() {
       setFilteredFaqs([]);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   };
 
@@ -622,11 +994,24 @@ export default function FAQManagement() {
     setIsSaving(true);
     setLoadError(null);
     try {
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "faq_settings")
-        .maybeSingle();
+      setIsRetrying(false);
+      const { data: existing } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("id")
+              .eq("key", "faq_settings")
+              .maybeSingle(),
+            ADMIN_FAQ_QUERY_TIMEOUT_MS,
+            "admin.faq.save_all.check_existing timeout",
+          ),
+        {
+          maxRetries: ADMIN_FAQ_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       const jsonValue = JSON.parse(JSON.stringify(faqs));
       const nextValue = buildFaqSettingsPayload(jsonValue, legacyFaqValue, {
@@ -636,14 +1021,40 @@ export default function FAQManagement() {
       });
       
       if (existing) {
-        await supabase
-          .from("system_settings")
-          .update({ value: nextValue, updated_at: new Date().toISOString() })
-          .eq("key", "faq_settings");
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("system_settings")
+                .update({ value: nextValue, updated_at: new Date().toISOString() })
+                .eq("key", "faq_settings"),
+              ADMIN_FAQ_QUERY_TIMEOUT_MS,
+              "admin.faq.save_all.update timeout",
+            ),
+          {
+            maxRetries: ADMIN_FAQ_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
+        if (error) throw error;
       } else {
-        await supabase
-          .from("system_settings")
-          .insert({ key: "faq_settings", value: nextValue });
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("system_settings")
+                .insert({ key: "faq_settings", value: nextValue }),
+              ADMIN_FAQ_QUERY_TIMEOUT_MS,
+              "admin.faq.save_all.insert timeout",
+            ),
+          {
+            maxRetries: ADMIN_FAQ_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
+        if (error) throw error;
       }
       
       setLegacyFaqValue(nextValue);
@@ -657,6 +1068,7 @@ export default function FAQManagement() {
       setLoadError(message);
     } finally {
       setIsSaving(false);
+      setIsRetrying(false);
     }
   };
 
@@ -675,7 +1087,13 @@ export default function FAQManagement() {
 
   const handleAdd = () => {
     setEditingItem(null);
-    setFormData({ question: "", answer: "", category: "Umum", sort_order: faqs.length + 1 });
+    setFormData({
+      question: "",
+      answer: "",
+      category: "Umum",
+      sort_order: faqs.length + 1,
+      audience: "org_admin",
+    });
     setIsDialogOpen(true);
   };
 
@@ -686,6 +1104,13 @@ export default function FAQManagement() {
       answer: faq.answer,
       category: faq.category,
       sort_order: faq.sort_order,
+      audience:
+        faq.audience ??
+        inferFaqAudience({
+          category: faq.category,
+          question: faq.question,
+          answer: faq.answer,
+        }),
     });
     setIsDialogOpen(true);
   };
@@ -702,10 +1127,10 @@ export default function FAQManagement() {
     }
 
     if (editingItem) {
-      setFaqs(faqs.map((f) => (f.id === editingItem.id ? { ...f, ...formData } : f)));
+      setFaqs(faqs.map((f) => (f.id === editingItem.id ? normalizeFaqItem({ ...f, ...formData }) : f)));
       toast.success("FAQ diperbarui. Klik 'Simpan Semua' untuk menyimpan perubahan.");
     } else {
-      setFaqs([...faqs, { id: Date.now().toString(), ...formData }]);
+      setFaqs([...faqs, normalizeFaqItem({ id: Date.now().toString(), ...formData })]);
       toast.success("FAQ ditambahkan. Klik 'Simpan Semua' untuk menyimpan perubahan.");
     }
     setIsDialogOpen(false);
@@ -718,7 +1143,7 @@ export default function FAQManagement() {
       return;
     }
 
-    setFaqs(mergedResult.merged);
+    setFaqs(mergedResult.merged.map((item) => normalizeFaqItem(item)));
     toast.success(
       `Sinkronisasi selesai: ${mergedResult.additionsCount} ditambahkan, ${mergedResult.updatedCount} diperbarui. Klik 'Simpan Semua' untuk menerapkan.`,
     );
@@ -738,29 +1163,147 @@ export default function FAQManagement() {
           : [currentPage - 2, currentPage - 1, currentPage, currentPage + 1, currentPage + 2];
 
   // Get unique categories
-  const categories = [...new Set(faqs.map((f) => f.category))];
+  const totalCategories = [...new Set(faqs.map((f) => f.category).filter(Boolean))].length;
+  const categorySourceFaqs = faqs.filter(
+    (faq) =>
+      audienceFilter === "all" ||
+      (faq.audience ??
+        inferFaqAudience({
+          category: faq.category,
+          question: faq.question,
+          answer: faq.answer,
+        })) === audienceFilter,
+  );
+  const categoryCountMap = categorySourceFaqs.reduce<Record<string, number>>((accumulator, faq) => {
+    const key = faq.category?.trim();
+    if (!key) return accumulator;
+    accumulator[key] = (accumulator[key] ?? 0) + 1;
+    return accumulator;
+  }, {});
+  const categories = Object.keys(categoryCountMap).sort((a, b) => a.localeCompare(b, "id"));
+  const categoryTabs = categories.map((category) => ({
+    category,
+    count: categoryCountMap[category] ?? 0,
+  }));
+
+  useEffect(() => {
+    if (categoryFilter !== "all" && !categories.includes(categoryFilter)) {
+      setCategoryFilter("all");
+    }
+  }, [categoryFilter, categories]);
+  const audienceStats = {
+    public: faqs.filter((f) => f.audience === "public").length,
+    employee: faqs.filter((f) => f.audience === "employee").length,
+    org_admin: faqs.filter((f) => f.audience === "org_admin").length,
+    super_admin: faqs.filter((f) => f.audience === "super_admin").length,
+  };
 
   return (
     <SuperAdminLayout title="Manajemen FAQ" subtitle="Kelola pertanyaan yang sering diajukan">
       <div className="space-y-6">
         {/* Header Actions */}
-        <div className="flex flex-col sm:flex-row gap-4 justify-between">
-          <div className="relative flex-1 max-w-sm">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Cari FAQ..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10"
-            />
+        <div className="space-y-4">
+          <div className="w-full rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+            <div className="relative max-w-sm">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Cari FAQ..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+            <div className="mt-3 space-y-3">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant={audienceFilter === "all" ? "default" : "outline"}
+                  onClick={() => setAudienceFilter("all")}
+                >
+                  Semua Target
+                </Button>
+                <Button
+                  size="sm"
+                  variant={audienceFilter === "public" ? "default" : "outline"}
+                  onClick={() => setAudienceFilter("public")}
+                >
+                  Umum
+                </Button>
+                <Button
+                  size="sm"
+                  variant={audienceFilter === "employee" ? "default" : "outline"}
+                  onClick={() => setAudienceFilter("employee")}
+                >
+                  Employee
+                </Button>
+                <Button
+                  size="sm"
+                  variant={audienceFilter === "org_admin" ? "default" : "outline"}
+                  onClick={() => setAudienceFilter("org_admin")}
+                >
+                  Admin Organisasi
+                </Button>
+                <Button
+                  size="sm"
+                  variant={audienceFilter === "super_admin" ? "default" : "outline"}
+                  onClick={() => setAudienceFilter("super_admin")}
+                >
+                  Superadmin
+                </Button>
+              </div>
+              <div className="rounded-lg border border-border/60 bg-background/70 p-2">
+                <div className="mb-2 flex items-center justify-between gap-2 px-1">
+                  <p className="text-xs font-medium text-muted-foreground">Tab Kategori</p>
+                  {categoryFilter !== "all" && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => setCategoryFilter("all")}
+                    >
+                      Reset
+                    </Button>
+                  )}
+                </div>
+                <div className="flex flex-wrap content-start items-start gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={categoryFilter === "all" ? "default" : "outline"}
+                    className="h-8 rounded-full px-3 text-xs"
+                    onClick={() => setCategoryFilter("all")}
+                  >
+                    Semua Kategori ({categorySourceFaqs.length})
+                  </Button>
+                  {categoryTabs.map((item) => (
+                    <Button
+                      key={item.category}
+                      type="button"
+                      size="sm"
+                      variant={categoryFilter === item.category ? "default" : "outline"}
+                      className="h-8 rounded-full px-3 text-xs"
+                      onClick={() => setCategoryFilter(item.category)}
+                    >
+                      {item.category} ({item.count})
+                    </Button>
+                  ))}
+                </div>
+                {categoryFilter !== "all" && (
+                  <p className="mt-2 px-1 text-xs text-muted-foreground">
+                    Kategori aktif: <span className="font-medium text-foreground">{categoryFilter}</span>
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3">
+          <div className="flex w-full flex-wrap items-center gap-3">
             <div className="rounded-md border px-3 py-2">
               <div className="flex items-center gap-2">
                 <Switch checked={autoSyncEnabled} onCheckedChange={setAutoSyncEnabled} />
                 <span className="text-sm font-medium">Auto-sync FAQ Rekomendasi</span>
               </div>
-              <p className="mt-1 text-xs text-muted-foreground">
+              <p className="mt-1 text-xs text-slate-600">
                 Terakhir: {formatAutoSyncTimestamp(autoSyncLastRunAt)}
                 {autoSyncLastResult
                   ? ` • +${autoSyncLastResult.additions} / ~${autoSyncLastResult.updated}`
@@ -797,7 +1340,7 @@ export default function FAQManagement() {
               <CardTitle className="text-sm font-medium text-muted-foreground">Kategori</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{categories.length}</div>
+              <div className="text-2xl font-bold">{totalCategories}</div>
             </CardContent>
           </Card>
           <Card>
@@ -809,6 +1352,32 @@ export default function FAQManagement() {
             </CardContent>
           </Card>
         </div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+          <Card>
+            <CardContent className="pt-4">
+              <p className="text-xs text-muted-foreground">{FAQ_AUDIENCE_LABEL.public}</p>
+              <p className="text-xl font-semibold">{audienceStats.public}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4">
+              <p className="text-xs text-muted-foreground">{FAQ_AUDIENCE_LABEL.employee}</p>
+              <p className="text-xl font-semibold">{audienceStats.employee}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4">
+              <p className="text-xs text-muted-foreground">{FAQ_AUDIENCE_LABEL.org_admin}</p>
+              <p className="text-xl font-semibold">{audienceStats.org_admin}</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4">
+              <p className="text-xs text-muted-foreground">{FAQ_AUDIENCE_LABEL.super_admin}</p>
+              <p className="text-xl font-semibold">{audienceStats.super_admin}</p>
+            </CardContent>
+          </Card>
+        </div>
 
         {/* FAQ Table */}
         <Card>
@@ -817,12 +1386,24 @@ export default function FAQManagement() {
               <HelpCircle className="h-5 w-5 text-primary" />
               Daftar FAQ
             </CardTitle>
-            <CardDescription>Kelola pertanyaan dan jawaban untuk halaman depan</CardDescription>
+            <CardDescription className="text-slate-600">
+              Kelola pertanyaan, jawaban, dan segmentasi target FAQ.
+            </CardDescription>
           </CardHeader>
           <CardContent>
+            {isRetrying && (
+              <div className="mb-4 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                Sedang mencoba ulang koneksi data FAQ...
+              </div>
+            )}
             {loadError && (
               <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                {loadError}
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <span>{loadError}</span>
+                  <Button type="button" variant="outline" size="sm" onClick={() => void fetchFAQs()}>
+                    Coba Lagi
+                  </Button>
+                </div>
               </div>
             )}
             {isLoading ? (
@@ -831,26 +1412,33 @@ export default function FAQManagement() {
               </div>
             ) : (
               <>
+                <div className="max-h-[520px] overflow-auto rounded-md border border-border/60">
                 <Table>
-                  <TableHeader>
+                  <TableHeader className="sticky top-0 z-10 bg-slate-50/95 backdrop-blur supports-[backdrop-filter]:bg-slate-50/85">
                     <TableRow>
-                      <TableHead className="w-[50px]">No</TableHead>
-                      <TableHead>Pertanyaan</TableHead>
-                      <TableHead className="hidden md:table-cell">Jawaban</TableHead>
-                      <TableHead>Kategori</TableHead>
-                      <TableHead className="w-[100px]">Aksi</TableHead>
+                      <TableHead className="w-[50px] bg-slate-50/95">No</TableHead>
+                      <TableHead className="bg-slate-50/95">Pertanyaan</TableHead>
+                      <TableHead className="hidden bg-slate-50/95 md:table-cell">Jawaban</TableHead>
+                      <TableHead className="bg-slate-50/95">Kategori</TableHead>
+                      <TableHead className="bg-slate-50/95">Target</TableHead>
+                      <TableHead className="w-[100px] bg-slate-50/95">Aksi</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {paginatedFaqs.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                        <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
                           {searchQuery ? "Tidak ada FAQ yang cocok" : "Belum ada FAQ"}
                         </TableCell>
                       </TableRow>
                     ) : (
                       paginatedFaqs.map((faq, index) => (
-                        <TableRow key={faq.id}>
+                        <TableRow
+                          key={faq.id}
+                          className={`transition-colors duration-150 hover:bg-slate-100/70 ${
+                            index % 2 === 0 ? "bg-white" : "bg-slate-50/50"
+                          }`}
+                        >
                           <TableCell className="font-medium">{startIndex + index + 1}</TableCell>
                           <TableCell>
                             <div className="max-w-[300px]">
@@ -862,6 +1450,22 @@ export default function FAQManagement() {
                           </TableCell>
                           <TableCell>
                             <Badge variant="outline">{faq.category}</Badge>
+                          </TableCell>
+                          <TableCell>
+                            {(() => {
+                              const audience =
+                                faq.audience ??
+                                inferFaqAudience({
+                                  category: faq.category,
+                                  question: faq.question,
+                                  answer: faq.answer,
+                                });
+                              return (
+                                <Badge variant="outline" className={FAQ_AUDIENCE_BADGE_CLASSNAME[audience]}>
+                                  {FAQ_AUDIENCE_LABEL[audience]}
+                                </Badge>
+                              );
+                            })()}
                           </TableCell>
                           <TableCell>
                             <div className="flex gap-1">
@@ -878,7 +1482,11 @@ export default function FAQManagement() {
                     )}
                   </TableBody>
                 </Table>
-
+                </div>
+                <p className="mt-2 text-xs text-slate-600">
+                  Scroll tabel untuk melihat data panjang, header kolom tetap terlihat di atas.
+                </p>
+                
                 {/* Pagination */}
                 {totalPages > 1 && (
                   <div className="flex items-center justify-between mt-4">
@@ -963,12 +1571,32 @@ export default function FAQManagement() {
                   />
                 </div>
               </div>
+              <div className="space-y-2">
+                <Label>Ditujukan Untuk</Label>
+                <Select
+                  value={formData.audience}
+                  onValueChange={(value) => setFormData({ ...formData, audience: value as FaqAudience })}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Pilih target FAQ" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="public">{FAQ_AUDIENCE_LABEL.public}</SelectItem>
+                    <SelectItem value="employee">{FAQ_AUDIENCE_LABEL.employee}</SelectItem>
+                    <SelectItem value="org_admin">{FAQ_AUDIENCE_LABEL.org_admin}</SelectItem>
+                    <SelectItem value="super_admin">{FAQ_AUDIENCE_LABEL.super_admin}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
-                Batal
-              </Button>
-              <Button onClick={handleSubmit}>Simpan</Button>
+            <DialogFooter className={dialogActionBarClassName}>
+              <DialogActionHint>Pastikan pertanyaan dan jawaban ringkas agar mudah dipahami pengguna.</DialogActionHint>
+              <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                <Button variant="outline" className="w-full sm:w-auto bg-white" onClick={() => setIsDialogOpen(false)}>
+                  Batal
+                </Button>
+                <Button className="w-full sm:w-auto" onClick={handleSubmit}>Simpan</Button>
+              </div>
             </DialogFooter>
           </DialogContent>
         </Dialog>

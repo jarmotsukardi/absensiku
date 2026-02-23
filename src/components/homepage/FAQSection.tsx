@@ -23,8 +23,13 @@ const defaultFAQs: FAQ[] = [
 
 export function FAQSection({ faqs, showPromoSidebar = false, promoTitle, promoSubtitle }: FAQSectionProps) {
   const allFaqs = faqs.length > 0 ? faqs : defaultFAQs;
-  const displayFAQs = allFaqs.slice(0, MAX_DISPLAY);
-  const hasMore = allFaqs.length > MAX_DISPLAY;
+  const orderedFaqs = [...allFaqs].sort((a, b) => {
+    const left = Number.isFinite(a.sort_order) ? a.sort_order : Number.MAX_SAFE_INTEGER;
+    const right = Number.isFinite(b.sort_order) ? b.sort_order : Number.MAX_SAFE_INTEGER;
+    return left - right;
+  });
+  const displayFAQs = orderedFaqs.slice(0, MAX_DISPLAY);
+  const hasMore = orderedFaqs.length > MAX_DISPLAY;
 
   return (
     <section id="faq" className="py-20 px-4 bg-muted/30">
@@ -59,7 +64,7 @@ export function FAQSection({ faqs, showPromoSidebar = false, promoTitle, promoSu
               <div className="text-center mt-6">
                 <Link to="/faq">
                   <Button variant="outline" className="gap-2">
-                    Lihat Semua FAQ ({allFaqs.length})
+                    Lihat Semua FAQ ({orderedFaqs.length})
                     <ChevronRight className="w-4 h-4" />
                   </Button>
                 </Link>

@@ -7,6 +7,13 @@ import { Input } from "@/components/ui/input";
 import { FileText, Search, User, Calendar, ArrowRight } from "lucide-react";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { Button } from "@/components/ui/button";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 type AuditLog = Omit<Tables<"audit_logs">, "old_values" | "new_values"> & {
   old_values: Json | null;
@@ -35,37 +42,61 @@ const tableLabels: Record<string, string> = {
   attendance_corrections: "Koreksi",
   holidays: "Hari Libur",
 };
+const ORG_AUDIT_LOG_READ_TIMEOUT_MS = 12000;
+const ORG_AUDIT_LOG_MAX_RETRIES = 2;
 
 export function OrganizationAuditLog({ tenantId }: OrganizationAuditLogProps) {
   const ITEMS_PER_PAGE = 10;
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
 
   const fetchLogs = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("audit_logs")
-        .select(`
-          *,
-          employee:employees(name)
-        `)
-        .eq("tenant_id", tenantId)
-        .order("created_at", { ascending: false })
-        .limit(100);
+      setIsRetrying(false);
+      setLoadError(null);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("audit_logs")
+              .select(`
+                *,
+                employee:employees(name)
+              `)
+              .eq("tenant_id", tenantId)
+              .order("created_at", { ascending: false })
+              .limit(100),
+            ORG_AUDIT_LOG_READ_TIMEOUT_MS,
+            "Permintaan audit log organisasi timeout."
+          ),
+        {
+          maxRetries: ORG_AUDIT_LOG_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setLogs((data as AuditLog[]) || []);
     } catch (error) {
-      console.error("Error fetching audit logs:", error);
+      const errorRef = reportError(error, "admin.components.organization_audit_log.fetch", {
+        tenant_id: tenantId,
+      });
+      const message = appendErrorReference("Gagal memuat audit log organisasi", errorRef);
+      setLoadError(message);
+      setLogs([]);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [tenantId]);
 
   useEffect(() => {
-    fetchLogs();
+    void fetchLogs();
   }, [fetchLogs]);
 
   const filteredLogs = logs.filter((log) => {
@@ -111,6 +142,19 @@ export function OrganizationAuditLog({ tenantId }: OrganizationAuditLogProps) {
             className="pl-10"
           />
         </div>
+        {isRetrying && (
+          <div className="mb-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+            Sedang mencoba ulang memuat audit log...
+          </div>
+        )}
+        {loadError && (
+          <div className="mb-4 flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchLogs()}>
+              Coba Lagi
+            </Button>
+          </div>
+        )}
 
         {isLoading ? (
           <div className="flex items-center justify-center py-8">

@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useFinancialLedger, useInvoices } from "@/hooks/useBilling";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Invoice, useFinancialLedger, useInvoices, useManualVerificationInvoices } from "@/hooks/useBilling";
 import { 
   DollarSign, 
   Receipt, 
@@ -12,7 +14,8 @@ import {
   XCircle,
   AlertCircle,
   ShieldCheck,
-  ShieldAlert
+  ShieldAlert,
+  FolderClock
 } from "lucide-react";
 import { format, startOfMonth, endOfMonth } from "date-fns";
 import { id } from "date-fns/locale";
@@ -29,6 +32,7 @@ import { ManualPaymentArchive } from "@/components/admin/billing/ManualPaymentAr
 import { WalletTopupVerification } from "@/components/admin/billing/WalletTopupVerification";
 import { GlossaryPanel } from "@/components/common/GlossaryPanel";
 import { useSearchParams } from "react-router-dom";
+import { supabase } from "@/integrations/supabase/client";
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat("id-ID", {
@@ -60,10 +64,28 @@ const BILLING_TABS = [
   { id: "policy", label: "Kebijakan Billing" },
 ] as const;
 
+type BillingTabId = (typeof BILLING_TABS)[number]["id"];
+type BillingTabGroupId = "operasional" | "produk" | "integrasi" | "kebijakan";
+
+const BILLING_TAB_GROUPS: Array<{ id: BillingTabGroupId; label: string; tabs: BillingTabId[] }> = [
+  { id: "operasional", label: "Operasional", tabs: ["overview", "invoices", "manual", "manual_archive", "wallet_topup"] },
+  { id: "produk", label: "Produk & Laporan", tabs: ["packages", "report", "marketing"] },
+  { id: "integrasi", label: "Integrasi Payment", tabs: ["sandbox", "xendit"] },
+  { id: "kebijakan", label: "Kebijakan", tabs: ["settings", "policy"] },
+];
+
+const resolveGroupForTab = (tabId: string): BillingTabGroupId => {
+  const matched = BILLING_TAB_GROUPS.find((group) => group.tabs.includes(tabId as BillingTabId));
+  return matched?.id || "operasional";
+};
+
 export default function BillingDashboard() {
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState("overview");
+  const [activeGroup, setActiveGroup] = useState<BillingTabGroupId>("operasional");
   const [invoiceFilterMode, setInvoiceFilterMode] = useState<"all" | "invalid_number">("all");
+  const [manualArchiveCount, setManualArchiveCount] = useState(0);
+  const [walletTopupPendingCount, setWalletTopupPendingCount] = useState(0);
   const currentMonth = {
     start: format(startOfMonth(new Date()), "yyyy-MM-dd"),
     end: format(endOfMonth(new Date()), "yyyy-MM-dd"),
@@ -71,15 +93,13 @@ export default function BillingDashboard() {
   
   const { summary, isLoading: isLoadingLedger } = useFinancialLedger(currentMonth);
   const { invoices, isLoading: isLoadingInvoices } = useInvoices();
+  const {
+    invoices: manualVerificationInvoices,
+    isLoading: isLoadingManualVerification,
+    refetch: refetchManualVerification,
+  } = useManualVerificationInvoices();
 
-  const manualVerificationStatuses = new Set([
-    "AWAITING_VERIFICATION",
-    "AWAITING_VERIFICATION_FULL",
-    "PENDING_VERIFICATION_PARTIAL",
-  ]);
-  const manualVerificationCount = invoices.filter((i) =>
-    manualVerificationStatuses.has((i.status || "").toUpperCase()),
-  ).length;
+  const manualVerificationCount = manualVerificationInvoices.length;
   const pendingStatuses = new Set([
     "PENDING",
     "AWAITING_VERIFICATION",
@@ -109,12 +129,64 @@ export default function BillingDashboard() {
   const focusTopupRequestId = searchParams.get("topupRequestId");
   const sourceErrorRef = searchParams.get("errorRef");
 
+  const fetchOperationalTabCounts = useCallback(async () => {
+    const [archiveRes, topupRes] = await Promise.all([
+      supabase
+        .from("manual_payments")
+        .select("id", { count: "exact", head: true })
+        .eq("is_archived", true),
+      supabase
+        .from("wallet_topup_requests")
+        .select("id", { count: "exact", head: true })
+        .in("status", ["PENDING", "pending"]),
+    ]);
+
+    if (!archiveRes.error) {
+      setManualArchiveCount(Number(archiveRes.count || 0));
+    }
+    if (!topupRes.error) {
+      setWalletTopupPendingCount(Number(topupRes.count || 0));
+    }
+  }, []);
+
   useEffect(() => {
     const tab = searchParams.get("tab");
     if (tab && validTabIds.has(tab)) {
       setActiveTab(tab);
+      setActiveGroup(resolveGroupForTab(tab));
     }
   }, [searchParams, validTabIds]);
+
+  useEffect(() => {
+    setActiveGroup(resolveGroupForTab(activeTab));
+  }, [activeTab]);
+
+  useEffect(() => {
+    void fetchOperationalTabCounts();
+    const channel = supabase
+      .channel(`admin-billing-tab-counts-${Date.now()}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "manual_payments" },
+        () => void fetchOperationalTabCounts(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "wallet_topup_requests" },
+        () => void fetchOperationalTabCounts(),
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchOperationalTabCounts]);
+
+  const visibleTabs = useMemo(() => {
+    const group = BILLING_TAB_GROUPS.find((item) => item.id === activeGroup) || BILLING_TAB_GROUPS[0];
+    const tabSet = new Set(group.tabs);
+    return BILLING_TABS.filter((tab) => tabSet.has(tab.id));
+  }, [activeGroup]);
 
   const openInvalidInvoiceNumbers = () => {
     setActiveTab("invoices");
@@ -139,7 +211,7 @@ export default function BillingDashboard() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {isLoadingLedger ? "..." : formatCurrency(summary.total_gross)}
+                {isLoadingLedger ? <Skeleton className="h-8 w-28" /> : formatCurrency(summary.total_gross)}
               </div>
               <p className="text-xs text-muted-foreground">
                 {summary.transaction_count} transaksi
@@ -154,7 +226,7 @@ export default function BillingDashboard() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-green-600">
-                {isLoadingLedger ? "..." : formatCurrency(summary.total_net)}
+                {isLoadingLedger ? <Skeleton className="h-8 w-28" /> : formatCurrency(summary.total_net)}
               </div>
               <p className="text-xs text-muted-foreground">
                 Setelah fee & PPN
@@ -169,7 +241,7 @@ export default function BillingDashboard() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold text-yellow-600">
-                {isLoadingInvoices ? "..." : manualVerificationCount}
+                {isLoadingManualVerification ? <Skeleton className="h-8 w-12" /> : manualVerificationCount}
               </div>
               <p className="text-xs text-muted-foreground">
                 Antrean tab Verifikasi Manual
@@ -215,7 +287,13 @@ export default function BillingDashboard() {
               </CardHeader>
               <CardContent>
                 <div className={`text-2xl font-bold ${invoiceNumberHealth.invalid > 0 ? "text-red-600" : "text-green-600"}`}>
-                  {isLoadingInvoices ? "..." : invoiceNumberHealth.invalid > 0 ? "Tidak Sehat" : "Sehat"}
+                  {isLoadingInvoices ? (
+                    <Skeleton className="h-8 w-24" />
+                  ) : invoiceNumberHealth.invalid > 0 ? (
+                    "Tidak Sehat"
+                  ) : (
+                    "Sehat"
+                  )}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Valid {invoiceNumberHealth.valid}/{invoiceNumberHealth.total} • Invalid {invoiceNumberHealth.invalid}
@@ -236,15 +314,51 @@ export default function BillingDashboard() {
           <CardContent className="p-0">
             <Tabs value={activeTab} onValueChange={setActiveTab}>
               <div className="border-b border-slate-200/80 bg-gradient-to-b from-slate-50 to-white px-3 py-3">
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  {BILLING_TAB_GROUPS.map((group) => (
+                    <Button
+                      key={group.id}
+                      type="button"
+                      size="sm"
+                      variant={activeGroup === group.id ? "default" : "outline"}
+                      className="rounded-full"
+                      onClick={() => {
+                        setActiveGroup(group.id);
+                        if (!group.tabs.includes(activeTab as BillingTabId)) {
+                          setActiveTab(group.tabs[0]);
+                        }
+                      }}
+                    >
+                      {group.label}
+                    </Button>
+                  ))}
+                </div>
                 <div className="overflow-x-auto pb-1">
-                  <TabsList className="min-w-max h-auto gap-1.5 rounded-2xl border border-slate-200 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
-                    {BILLING_TABS.map((tab) => (
+                  <TabsList className="min-w-max h-auto gap-1.5 rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-[0_12px_28px_rgba(15,23,42,0.10)] backdrop-blur supports-[backdrop-filter]:bg-white/70">
+                    {visibleTabs.map((tab) => (
                       <TabsTrigger
                         key={tab.id}
                         value={tab.id}
-                        className="rounded-xl border-0 px-4 py-2.5 text-sm font-medium text-slate-600 shadow-none transition-all duration-200 hover:bg-slate-100 hover:text-slate-900 hover:shadow-none data-[state=active]:bg-slate-900 data-[state=active]:text-white data-[state=active]:shadow-[0_8px_20px_rgba(15,23,42,0.28)]"
+                        className="rounded-xl border border-transparent px-4 py-2.5 text-sm font-medium text-slate-600 shadow-none transition-all duration-200 hover:-translate-y-px hover:border-slate-200 hover:bg-slate-100 hover:text-slate-900 data-[state=active]:border-slate-800/70 data-[state=active]:bg-slate-900 data-[state=active]:text-white data-[state=active]:shadow-[0_10px_24px_rgba(15,23,42,0.30)]"
                       >
-                        {tab.label}
+                        <span className="inline-flex items-center gap-2">
+                          <span>{tab.label}</span>
+                          {tab.id === "manual" && manualVerificationCount > 0 ? (
+                            <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-amber-100 px-1.5 text-[11px] font-semibold text-amber-700">
+                              {manualVerificationCount}
+                            </span>
+                          ) : null}
+                          {tab.id === "manual_archive" && manualArchiveCount > 0 ? (
+                            <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-slate-200 px-1.5 text-[11px] font-semibold text-slate-700">
+                              {manualArchiveCount}
+                            </span>
+                          ) : null}
+                          {tab.id === "wallet_topup" && walletTopupPendingCount > 0 ? (
+                            <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-blue-100 px-1.5 text-[11px] font-semibold text-blue-700">
+                              {walletTopupPendingCount}
+                            </span>
+                          ) : null}
+                        </span>
                       </TabsTrigger>
                     ))}
                   </TabsList>
@@ -253,7 +367,11 @@ export default function BillingDashboard() {
 
               <div className="p-6">
                 <TabsContent value="overview" className="mt-0">
-                  <OverviewContent />
+                  <OverviewContent
+                    invoices={manualVerificationInvoices}
+                    isLoading={isLoadingManualVerification}
+                    onOpenManualTab={() => setActiveTab("manual")}
+                  />
                 </TabsContent>
                 <TabsContent value="invoices" className="mt-0">
                   <InvoicesManager
@@ -262,7 +380,11 @@ export default function BillingDashboard() {
                   />
                 </TabsContent>
                 <TabsContent value="manual" className="mt-0">
-                  <ManualPaymentVerification />
+                  <ManualPaymentVerification
+                    invoices={manualVerificationInvoices}
+                    isLoading={isLoadingManualVerification}
+                    onRefetch={refetchManualVerification}
+                  />
                 </TabsContent>
                 <TabsContent value="manual_archive" className="mt-0">
                   <ManualPaymentArchive />
@@ -300,21 +422,37 @@ export default function BillingDashboard() {
   );
 }
 
-function OverviewContent() {
-  const { invoices: legacyInvoices, isLoading: isLoadingLegacy } = useInvoices({ status: "AWAITING_VERIFICATION" });
-  const { invoices: fullInvoices, isLoading: isLoadingFull } = useInvoices({ status: "AWAITING_VERIFICATION_FULL" });
-  const { invoices: partialInvoices, isLoading: isLoadingPartial } = useInvoices({ status: "PENDING_VERIFICATION_PARTIAL" });
-  const invoices = [...legacyInvoices, ...fullInvoices, ...partialInvoices];
-  const isLoading = isLoadingLegacy || isLoadingFull || isLoadingPartial;
+interface OverviewContentProps {
+  invoices: Invoice[];
+  isLoading: boolean;
+  onOpenManualTab: () => void;
+}
+
+function OverviewContent({ invoices, isLoading, onOpenManualTab }: OverviewContentProps) {
 
   return (
     <div className="space-y-6">
       <div>
         <h3 className="text-lg font-semibold mb-4">Menunggu Verifikasi Pembayaran</h3>
         {isLoading ? (
-          <p className="text-muted-foreground">Memuat...</p>
+          <div className="space-y-3">
+            <Skeleton className="h-[76px] w-full rounded-lg" />
+            <Skeleton className="h-[76px] w-full rounded-lg" />
+            <Skeleton className="h-[76px] w-full rounded-lg" />
+          </div>
         ) : invoices.length === 0 ? (
-          <p className="text-muted-foreground">Tidak ada pembayaran yang menunggu verifikasi</p>
+          <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-8 text-center">
+            <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm">
+              <FolderClock className="h-5 w-5 text-slate-500" />
+            </div>
+            <p className="text-base font-medium text-slate-900">Tidak ada pembayaran yang menunggu verifikasi</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Item verifikasi baru akan muncul otomatis saat organisasi mengirim konfirmasi pembayaran manual.
+            </p>
+            <Button className="mt-4" variant="outline" size="sm" onClick={onOpenManualTab}>
+              Buka Tab Verifikasi Manual
+            </Button>
+          </div>
         ) : (
           <div className="space-y-3">
             {invoices.slice(0, 5).map((invoice) => (

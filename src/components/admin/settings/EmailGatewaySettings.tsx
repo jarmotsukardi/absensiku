@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { useSystemSettings } from "@/hooks/useSystemSettings";
 import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 const SMTP_PRESETS = {
   gmail: {
@@ -46,6 +47,7 @@ const SMTP_PRESETS = {
 };
 
 export function EmailGatewaySettings() {
+  const REQUEST_TIMEOUT_MS = 12000;
   const { setting, isLoading, isSaving, saveSetting } = useSystemSettings("email_gateway");
   const [isTesting, setIsTesting] = useState(false);
   const [testEmail, setTestEmail] = useState("");
@@ -94,10 +96,18 @@ export function EmailGatewaySettings() {
     setIsTesting(true);
     
     try {
-      const { data: sessionData } = await supabase.auth.getSession();
+      const { data: sessionData } = await withTimeout(
+        supabase.auth.getSession(),
+        REQUEST_TIMEOUT_MS,
+        "Memuat sesi autentikasi terlalu lama",
+      );
       let accessToken = sessionData.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
       if (!sessionData.session?.access_token) {
-        const { data: refreshData } = await supabase.auth.refreshSession();
+        const { data: refreshData } = await withTimeout(
+          supabase.auth.refreshSession(),
+          REQUEST_TIMEOUT_MS,
+          "Menyegarkan sesi autentikasi terlalu lama",
+        );
         if (refreshData.session?.access_token) {
           accessToken = refreshData.session.access_token;
         }
@@ -127,23 +137,43 @@ export function EmailGatewaySettings() {
 
       const readJsonSafe = async (response: Response): Promise<Record<string, unknown>> => {
         try {
-          return await response.json();
+          return await withTimeout(
+            response.json(),
+            REQUEST_TIMEOUT_MS,
+            "Membaca response JSON test email terlalu lama",
+          );
         } catch {
-          const raw = await response.text().catch(() => "");
+          const raw = await withTimeout(
+            response.text(),
+            REQUEST_TIMEOUT_MS,
+            "Membaca response text test email terlalu lama",
+          ).catch(() => "");
           return { raw };
         }
       };
 
-      let response = await invokeTest(accessToken);
+      let response = await withTimeout(
+        invokeTest(accessToken),
+        REQUEST_TIMEOUT_MS,
+        "Permintaan test email terlalu lama",
+      );
       let data = await readJsonSafe(response);
 
       if (
         response.status === 401 &&
         String(data?.message || "").toLowerCase().includes("invalid jwt")
       ) {
-        const { data: refreshData } = await supabase.auth.refreshSession();
+        const { data: refreshData } = await withTimeout(
+          supabase.auth.refreshSession(),
+          REQUEST_TIMEOUT_MS,
+          "Menyegarkan sesi retry test email terlalu lama",
+        );
         const retryToken = refreshData.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
-        response = await invokeTest(retryToken);
+        response = await withTimeout(
+          invokeTest(retryToken),
+          REQUEST_TIMEOUT_MS,
+          "Permintaan ulang test email terlalu lama",
+        );
         data = await readJsonSafe(response);
       }
 

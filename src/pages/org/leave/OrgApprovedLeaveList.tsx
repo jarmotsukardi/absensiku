@@ -14,6 +14,7 @@ import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 type ApprovedLeaveRequest = Tables<"leave_requests"> & {
   employees: {
@@ -24,46 +25,82 @@ type ApprovedLeaveRequest = Tables<"leave_requests"> & {
 
 export default function OrgApprovedLeaveList() {
   const ITEMS_PER_PAGE = 15;
+  const APPROVED_LEAVE_QUERY_TIMEOUT_MS = 15000;
+  const APPROVED_LEAVE_QUERY_RETRY_MAX = 1;
   const [requests, setRequests] = useState<ApprovedLeaveRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const initTenant = async () => {
-      try {
-        setTenantId(await resolveOrgTenantId());
-      } catch (error) {
-        const errorRef = reportError(error, "org.approved_leave.resolve_tenant");
-        setLoadError(appendErrorReference("Gagal menentukan tenant organisasi", errorRef));
-        setTenantId(null);
-      }
-    };
-    void initTenant();
+  const initializeTenant = useCallback(async () => {
+    try {
+      const resolvedTenantId = await withTimeout(
+        resolveOrgTenantId(),
+        APPROVED_LEAVE_QUERY_TIMEOUT_MS,
+        "org.approved_leave.resolve_tenant timeout",
+      );
+      setTenantId(resolvedTenantId);
+      setLoadError(null);
+    } catch (error) {
+      const errorRef = reportError(error, "org.approved_leave.resolve_tenant");
+      setLoadError(appendErrorReference("Gagal menentukan tenant organisasi", errorRef));
+      setTenantId(null);
+    }
   }, []);
 
+  useEffect(() => {
+    void initializeTenant();
+  }, [initializeTenant]);
+
   const fetchData = useCallback(async () => {
+    setIsLoading(true);
     setLoadError(null);
     try {
+      setIsRetrying(false);
       if (!tenantId) {
         setRequests([]);
         return;
       }
-      const employeeIds = await getTenantEmployeeIds(tenantId);
+      const employeeIds = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            getTenantEmployeeIds(tenantId),
+            APPROVED_LEAVE_QUERY_TIMEOUT_MS,
+            "org.approved_leave.fetch.employee_ids timeout",
+          ),
+        {
+          maxRetries: APPROVED_LEAVE_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (employeeIds.length === 0) {
         setRequests([]);
         return;
       }
 
-      const { data, error } = await supabase
-        .from("leave_requests")
-        .select("*, employees!leave_requests_employee_id_fkey(name, nip)")
-        .in("employee_id", employeeIds)
-        .eq("status", "disetujui")
-        .in("leave_type", ["izin", "cuti_tahunan", "cuti_penting", "cuti_lainnya"])
-        .order("start_date", { ascending: false });
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("leave_requests")
+              .select("*, employees!leave_requests_employee_id_fkey(name, nip)")
+              .in("employee_id", employeeIds)
+              .eq("status", "disetujui")
+              .in("leave_type", ["izin", "cuti_tahunan", "cuti_penting", "cuti_lainnya"])
+              .order("start_date", { ascending: false }),
+            APPROVED_LEAVE_QUERY_TIMEOUT_MS,
+            "org.approved_leave.fetch.query timeout",
+          ),
+        {
+          maxRetries: APPROVED_LEAVE_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
       setRequests((data || []) as ApprovedLeaveRequest[]);
@@ -74,6 +111,7 @@ export default function OrgApprovedLeaveList() {
       toast.error(message);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   }, [tenantId]);
 
@@ -85,6 +123,13 @@ export default function OrgApprovedLeaveList() {
     }
     void fetchData();
   }, [tenantId, fetchData]);
+
+  const handleRetryLoad = async () => {
+    await initializeTenant();
+    if (tenantId) {
+      await fetchData();
+    }
+  };
 
   const handleExport = () => {
     toast.info("Fitur export akan segera tersedia");
@@ -129,10 +174,18 @@ export default function OrgApprovedLeaveList() {
 
         {loadError && (
           <Card className="border-destructive/40">
-            <CardContent className="pt-6">
+            <CardContent className="flex items-center justify-between gap-3 pt-6">
               <p className="text-sm text-destructive">{loadError}</p>
+              <Button size="sm" variant="outline" onClick={handleRetryLoad} className="border-destructive/30 text-destructive hover:bg-destructive/10">
+                Coba Lagi
+              </Button>
             </CardContent>
           </Card>
+        )}
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            Sedang mencoba ulang koneksi data...
+          </div>
         )}
 
         <Card>

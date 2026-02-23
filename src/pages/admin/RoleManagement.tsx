@@ -28,6 +28,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -50,6 +51,11 @@ import { Crown, Edit, Loader2, Plus, Search, Shield, Trash2, UserCog, Users } fr
 import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { toast } from "sonner";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 
 type AppRole = "super_admin" | "admin_instansi" | "atasan" | "pegawai";
@@ -132,6 +138,9 @@ const ROLE_LABEL: Record<AppRole, string> = {
 
 const PAGE_SIZE = 15;
 const GLOSSARY_PAGE_SIZE = 6;
+const ADMIN_ROLE_READ_TIMEOUT_MS = 12000;
+const ADMIN_ROLE_WRITE_TIMEOUT_MS = 15000;
+const ADMIN_ROLE_MAX_RETRIES = 2;
 
 const ROLE_GLOSSARY: RoleGlossaryItem[] = [
   {
@@ -216,6 +225,7 @@ export default function RoleManagement() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   const [query, setQuery] = useState("");
   const [roleFilter, setRoleFilter] = useState<"all" | AppRole>("all");
@@ -256,17 +266,42 @@ export default function RoleManagement() {
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
+    setIsRetrying(false);
     setLoadError(null);
     try {
       const [roleRes, tenantRes] = await Promise.all([
-        supabase
-          .from("user_roles")
-          .select("id,user_id,role,tenant_id,created_at")
-          .order("created_at", { ascending: false }),
-        supabase
-          .from("tenants")
-          .select("id,name")
-          .order("name", { ascending: true }),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("user_roles")
+                .select("id,user_id,role,tenant_id,created_at")
+                .order("created_at", { ascending: false }),
+              ADMIN_ROLE_READ_TIMEOUT_MS,
+              "Permintaan data role assignment timeout."
+            ),
+          {
+            maxRetries: ADMIN_ROLE_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("tenants")
+                .select("id,name")
+                .order("name", { ascending: true }),
+              ADMIN_ROLE_READ_TIMEOUT_MS,
+              "Permintaan daftar tenant timeout."
+            ),
+          {
+            maxRetries: ADMIN_ROLE_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
       ]);
 
       if (roleRes.error) throw roleRes.error;
@@ -277,11 +312,23 @@ export default function RoleManagement() {
 
       let refs: EmployeeRef[] = [];
       if (userIds.length > 0) {
-        const { data: employeeRows, error: employeeError } = await supabase
-          .from("employees")
-          .select("user_id,email,name")
-          .in("user_id", userIds)
-          .order("updated_at", { ascending: false });
+        const { data: employeeRows, error: employeeError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("employees")
+                .select("user_id,email,name")
+                .in("user_id", userIds)
+                .order("updated_at", { ascending: false }),
+              ADMIN_ROLE_READ_TIMEOUT_MS,
+              "Permintaan referensi pegawai timeout."
+            ),
+          {
+            maxRetries: ADMIN_ROLE_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (employeeError) throw employeeError;
 
         const seen = new Set<string>();
@@ -305,6 +352,7 @@ export default function RoleManagement() {
       setTenants([]);
       setEmployeeRefs([]);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, []);
@@ -411,13 +459,17 @@ export default function RoleManagement() {
     }
 
     try {
-      const { data, error } = await supabase
-        .from("employees")
-        .select("user_id,email,name")
-        .ilike("email", email)
-        .not("user_id", "is", null)
-        .order("updated_at", { ascending: false })
-        .limit(1);
+      const { data, error } = await withTimeout(
+        supabase
+          .from("employees")
+          .select("user_id,email,name")
+          .ilike("email", email)
+          .not("user_id", "is", null)
+          .order("updated_at", { ascending: false })
+          .limit(1),
+        ADMIN_ROLE_WRITE_TIMEOUT_MS,
+        "Pencarian user by email timeout."
+      );
       if (error) throw error;
 
       const found = data?.[0];
@@ -449,24 +501,32 @@ export default function RoleManagement() {
     setIsSaving(true);
     try {
       if (editing) {
-        const { error } = await supabase
-          .from("user_roles")
-          .update({
-            user_id: trimmedUserId,
-            role: formRole,
-            tenant_id: formRole === "super_admin" ? null : tenantId,
-          })
-          .eq("id", editing.id);
+        const { error } = await withTimeout(
+          supabase
+            .from("user_roles")
+            .update({
+              user_id: trimmedUserId,
+              role: formRole,
+              tenant_id: formRole === "super_admin" ? null : tenantId,
+            })
+            .eq("id", editing.id),
+          ADMIN_ROLE_WRITE_TIMEOUT_MS,
+          "Perbarui role assignment timeout."
+        );
         if (error) throw error;
         toast.success("Role assignment berhasil diperbarui");
       } else {
-        const { error } = await supabase
-          .from("user_roles")
-          .insert({
-            user_id: trimmedUserId,
-            role: formRole,
-            tenant_id: formRole === "super_admin" ? null : tenantId,
-          });
+        const { error } = await withTimeout(
+          supabase
+            .from("user_roles")
+            .insert({
+              user_id: trimmedUserId,
+              role: formRole,
+              tenant_id: formRole === "super_admin" ? null : tenantId,
+            }),
+          ADMIN_ROLE_WRITE_TIMEOUT_MS,
+          "Tambah role assignment timeout."
+        );
         if (error) throw error;
         toast.success("Role assignment berhasil ditambahkan");
       }
@@ -491,7 +551,11 @@ export default function RoleManagement() {
     if (!deleting) return;
     setIsSaving(true);
     try {
-      const { error } = await supabase.from("user_roles").delete().eq("id", deleting.id);
+      const { error } = await withTimeout(
+        supabase.from("user_roles").delete().eq("id", deleting.id),
+        ADMIN_ROLE_WRITE_TIMEOUT_MS,
+        "Hapus role assignment timeout."
+      );
       if (error) throw error;
 
       toast.success("Role assignment berhasil dihapus");
@@ -550,9 +614,17 @@ export default function RoleManagement() {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            {isRetrying && (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+                Sedang mencoba ulang memuat data role...
+              </div>
+            )}
             {loadError && (
-              <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                {loadError}
+              <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+                <span>{loadError}</span>
+                <Button variant="outline" size="sm" onClick={() => void loadData()}>
+                  Coba Lagi
+                </Button>
               </div>
             )}
             <div className="grid gap-3 md:grid-cols-3">
@@ -846,12 +918,15 @@ export default function RoleManagement() {
             </div>
           </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>Batal</Button>
-            <Button onClick={handleSave} disabled={isSaving}>
-              {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Simpan
-            </Button>
+          <DialogFooter className={dialogActionBarClassName}>
+            <DialogActionHint>Assignment role akan langsung aktif setelah disimpan.</DialogActionHint>
+            <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+              <Button variant="outline" onClick={() => setDialogOpen(false)}>Batal</Button>
+              <Button onClick={handleSave} disabled={isSaving}>
+                {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Simpan
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { applyOrgOnboardingTemplateToTenant } from "@/lib/orgOnboardingTemplates";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 const organizationSchema = z.object({
   name: z.string().min(1, "Nama organisasi wajib diisi").max(200),
@@ -34,12 +35,16 @@ const organizationSchema = z.object({
 type OrganizationFormData = z.infer<typeof organizationSchema>;
 
 export default function OrganizationForm() {
+  const ADMIN_ORG_FORM_QUERY_TIMEOUT_MS = 15000;
+  const ADMIN_ORG_FORM_QUERY_RETRY_MAX = 1;
   const navigate = useNavigate();
   const { id } = useParams();
   const isEdit = Boolean(id);
   
   const [isLoading, setIsLoading] = useState(false);
   const [isFetching, setIsFetching] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isAuthorized, setIsAuthorized] = useState(false);
 
   // Auth guard - check super admin access
@@ -47,12 +52,37 @@ export default function OrganizationForm() {
     let mounted = true;
     const checkAuth = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        setIsRetrying(false);
+        const { data: { session } } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.auth.getSession(),
+              ADMIN_ORG_FORM_QUERY_TIMEOUT_MS,
+              "admin.organization_form.check_auth.get_session timeout",
+            ),
+          {
+            maxRetries: ADMIN_ORG_FORM_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
         if (!session?.user) {
           navigate("/admin/login", { replace: true });
           return;
         }
-        const { data: isSA } = await supabase.rpc("is_super_admin", { _user_id: session.user.id });
+        const { data: isSA } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.rpc("is_super_admin", { _user_id: session.user.id }),
+              ADMIN_ORG_FORM_QUERY_TIMEOUT_MS,
+              "admin.organization_form.check_auth.is_super_admin timeout",
+            ),
+          {
+            maxRetries: ADMIN_ORG_FORM_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
         if (!mounted) return;
         if (!isSA) {
           toast.error("Akses ditolak: hanya Super Admin");
@@ -61,8 +91,11 @@ export default function OrganizationForm() {
         }
         setIsAuthorized(true);
         if (!isEdit) setIsFetching(false);
-      } catch {
-        navigate("/admin/login", { replace: true });
+    } catch (error) {
+      reportError(error, "admin.organization_form.check_auth");
+      navigate("/admin/login", { replace: true });
+    } finally {
+      setIsRetrying(false);
       }
     };
     checkAuth();
@@ -82,11 +115,25 @@ export default function OrganizationForm() {
 
   const fetchOrganization = useCallback(async (orgId: string) => {
     try {
-      const { data, error } = await supabase
-        .from("tenants")
-        .select("*")
-        .eq("id", orgId)
-        .single();
+      setIsRetrying(false);
+      setLoadError(null);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("tenants")
+              .select("*")
+              .eq("id", orgId)
+              .single(),
+            ADMIN_ORG_FORM_QUERY_TIMEOUT_MS,
+            "admin.organization_form.fetch_org timeout",
+          ),
+        {
+          maxRetries: ADMIN_ORG_FORM_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
 
@@ -103,11 +150,14 @@ export default function OrganizationForm() {
         });
       }
     } catch (error) {
-      console.error("Error fetching organization:", error);
-      toast.error("Gagal memuat data organisasi");
+      const errorRef = reportError(error, "admin.organization_form.fetch_org", { tenant_id: orgId });
+      const message = appendErrorReference("Gagal memuat data organisasi", errorRef);
+      setLoadError(message);
+      toast.error(message);
       navigate("/admin");
     } finally {
       setIsFetching(false);
+      setIsRetrying(false);
     }
   }, [navigate]);
 
@@ -139,6 +189,8 @@ export default function OrganizationForm() {
     }
 
     setIsLoading(true);
+    setIsRetrying(false);
+    setLoadError(null);
 
     try {
       const dataToSave = {
@@ -153,33 +205,81 @@ export default function OrganizationForm() {
       };
 
       if (isEdit && id) {
-        const { error } = await supabase
-          .from("tenants")
-          .update(dataToSave)
-          .eq("id", id);
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("tenants")
+                .update(dataToSave)
+                .eq("id", id),
+              ADMIN_ORG_FORM_QUERY_TIMEOUT_MS,
+              "admin.organization_form.submit.update_tenant timeout",
+            ),
+          {
+            maxRetries: ADMIN_ORG_FORM_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
 
         if (error) throw error;
         toast.success("Organisasi berhasil diperbarui");
       } else {
-        const { data: newTenant, error } = await supabase
-          .from("tenants")
-          .insert(dataToSave)
-          .select()
-          .single();
+        const { data: newTenant, error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("tenants")
+                .insert(dataToSave)
+                .select()
+                .single(),
+              ADMIN_ORG_FORM_QUERY_TIMEOUT_MS,
+              "admin.organization_form.submit.insert_tenant timeout",
+            ),
+          {
+            maxRetries: ADMIN_ORG_FORM_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
 
         if (error) throw error;
 
         // Create default subscription for new tenant.
         if (newTenant) {
-          const { error: subscriptionError } = await supabase.from("subscriptions").insert({
-            tenant_id: newTenant.id,
-            status: "trial",
-          });
+          const { error: subscriptionError } = await withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase.from("subscriptions").insert({
+                  tenant_id: newTenant.id,
+                  status: "trial",
+                }),
+                ADMIN_ORG_FORM_QUERY_TIMEOUT_MS,
+                "admin.organization_form.submit.insert_subscription timeout",
+              ),
+            {
+              maxRetries: ADMIN_ORG_FORM_QUERY_RETRY_MAX,
+              shouldRetry: isRetryableError,
+              onRetry: () => setIsRetrying(true),
+            },
+          );
           if (subscriptionError) throw subscriptionError;
 
           // Seed onboarding template (master/schedule/settings/content) for first-time tenant usage.
           try {
-            await applyOrgOnboardingTemplateToTenant(newTenant.id);
+            await withExponentialBackoff(
+              () =>
+                withTimeout(
+                  applyOrgOnboardingTemplateToTenant(newTenant.id),
+                  ADMIN_ORG_FORM_QUERY_TIMEOUT_MS,
+                  "admin.organization_form.submit.seed_onboarding timeout",
+                ),
+              {
+                maxRetries: ADMIN_ORG_FORM_QUERY_RETRY_MAX,
+                shouldRetry: isRetryableError,
+                onRetry: () => setIsRetrying(true),
+              },
+            );
           } catch (seedError: unknown) {
             const errorRef = reportError(seedError, "admin.organization.seed_onboarding_template", {
               tenant_id: newTenant.id,
@@ -198,7 +298,6 @@ export default function OrganizationForm() {
 
       navigate("/admin");
     } catch (error: unknown) {
-      console.error("Error saving organization:", error);
       const isUniqueCodeError =
         typeof error === "object" &&
         error !== null &&
@@ -209,10 +308,18 @@ export default function OrganizationForm() {
         toast.error("Kode organisasi sudah digunakan");
         setErrors({ code: "Kode sudah digunakan" });
       } else {
-        toast.error("Gagal menyimpan organisasi");
+        const errorRef = reportError(error, "admin.organization_form.submit", {
+          is_edit: isEdit,
+          tenant_id: id || null,
+          code: formData.code,
+        });
+        const message = appendErrorReference("Gagal menyimpan organisasi", errorRef);
+        setLoadError(message);
+        toast.error(message);
       }
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   };
 
@@ -245,6 +352,20 @@ export default function OrganizationForm() {
       </header>
 
       <main className="container mx-auto px-4 py-8 max-w-2xl">
+        {isRetrying && (
+          <Card className="mb-4 border-amber-300/60 bg-amber-50">
+            <CardContent className="pt-4">
+              <p className="text-sm text-amber-800">Sedang mencoba ulang koneksi data organisasi...</p>
+            </CardContent>
+          </Card>
+        )}
+        {loadError && (
+          <Card className="mb-4 border-destructive/40">
+            <CardContent className="pt-4">
+              <p className="text-sm text-destructive">{loadError}</p>
+            </CardContent>
+          </Card>
+        )}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">

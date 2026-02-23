@@ -38,6 +38,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -60,6 +61,7 @@ import {
   DEFAULT_BILLING_INVOICE_TEMPLATE,
   renderBillingInvoiceTemplate,
 } from "@/lib/billingInvoiceTemplate";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 type InvoiceRow = Pick<
   Tables<"invoices">,
@@ -185,6 +187,8 @@ const DEFAULT_BANK_INFO: BillingBankInfo = {
   accountNumber: "1234567890",
   accountName: "PT AbsensiKu Indonesia",
 };
+const BILLING_QUERY_TIMEOUT_MS = 15000;
+const BILLING_QUERY_RETRY_MAX = 1;
 
 const parseInvoiceTemplate = (value: unknown): string => {
   if (!value || typeof value !== "object" || Array.isArray(value)) return DEFAULT_BILLING_INVOICE_TEMPLATE;
@@ -473,7 +477,8 @@ export default function OrgBilling() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<BillingStatusFilter>("all");
-  const [activeBillingMenu, setActiveBillingMenu] = useState<BillingMenu>("invoices");
+  const [activeBillingMenu, setActiveBillingMenu] = useState<BillingMenu>("offers");
+  const [calculatorOverlayRequestToken, setCalculatorOverlayRequestToken] = useState(0);
   const [sortField, setSortField] = useState<BillingSortField>("issue_date");
   const [sortDirection, setSortDirection] = useState<BillingSortDirection>("desc");
   const [currentPage, setCurrentPage] = useState(1);
@@ -503,14 +508,26 @@ export default function OrgBilling() {
   const [paymentSectionFlash, setPaymentSectionFlash] = useState(false);
   const [isProofUploadConfirmOpen, setIsProofUploadConfirmOpen] = useState(false);
   const proofFileInputRef = useRef<HTMLInputElement | null>(null);
+  const consumedMenuDeepLinkRef = useRef<string | null>(null);
 
   const fetchWalletSnapshot = useCallback(async (resolvedTenantId: string) => {
     setIsWalletLoading(true);
     try {
-      const { data, error } = await supabase.rpc("get_tenant_wallet_snapshot" as never, {
-        p_tenant_id: resolvedTenantId,
-        p_limit: 20,
-      } as never);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("get_tenant_wallet_snapshot" as never, {
+              p_tenant_id: resolvedTenantId,
+              p_limit: 20,
+            } as never),
+            BILLING_QUERY_TIMEOUT_MS,
+            "org.billing.wallet.fetch timeout",
+          ),
+        {
+          maxRetries: BILLING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (error) throw error;
 
       const raw = (data || {}) as {
@@ -560,10 +577,21 @@ export default function OrgBilling() {
   const fetchWalletTopupRequests = useCallback(async (resolvedTenantId: string) => {
     setIsWalletTopupLoading(true);
     try {
-      const { data, error } = await supabase.rpc("get_wallet_topup_requests_for_tenant" as never, {
-        p_tenant_id: resolvedTenantId,
-        p_limit: 50,
-      } as never);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("get_wallet_topup_requests_for_tenant" as never, {
+              p_tenant_id: resolvedTenantId,
+              p_limit: 50,
+            } as never),
+            BILLING_QUERY_TIMEOUT_MS,
+            "org.billing.wallet_topup.fetch timeout",
+          ),
+        {
+          maxRetries: BILLING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (error) throw error;
       const rows = ((data as { requests?: WalletTopupRequestRow[] } | null)?.requests || []).map((row) => ({
         id: row.id,
@@ -593,7 +621,18 @@ export default function OrgBilling() {
     try {
       const {
         data: { session },
-      } = await supabase.auth.getSession();
+      } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getSession(),
+            BILLING_QUERY_TIMEOUT_MS,
+            "org.billing.fetch_invoices.session timeout",
+          ),
+        {
+          maxRetries: BILLING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
       // Avoid noisy error logs when user is not authenticated yet.
       if (!session) {
@@ -606,33 +645,55 @@ export default function OrgBilling() {
         return;
       }
 
-      const resolvedTenantId = await resolveOrgTenantId();
+      const resolvedTenantId = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            resolveOrgTenantId(),
+            BILLING_QUERY_TIMEOUT_MS,
+            "org.billing.fetch_invoices.resolve_tenant timeout",
+          ),
+        {
+          maxRetries: BILLING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (!resolvedTenantId) {
         throw new Error("Tenant organisasi tidak ditemukan");
       }
       setTenantId(resolvedTenantId);
 
-      const [invoicesRes, tenantRes, subscriptionRes, billingSettingsRes, invoiceTemplateRes] = await Promise.all([
-        supabase
-          .from("invoices")
-          .select(
-            "id, invoice_number, issue_date, due_date, gross_amount, status, created_at, package_name, package_duration_months, employee_count, subtotal, discount_amount, vat_amount, vat_percentage, xendit_fee, net_amount, payment_method_type, payment_proof_url, invoice_url, external_id, paid_at, verified_at, rejection_reason, updated_at, metadata, notes",
-          )
-          .eq("tenant_id", resolvedTenantId)
-          .order("created_at", { ascending: false })
-          .limit(500),
-        supabase.from("tenants").select("id, name, code, address").eq("id", resolvedTenantId).maybeSingle(),
-        supabase
-          .from("subscriptions")
-          .select("status, end_date, grace_period_end")
-          .eq("tenant_id", resolvedTenantId)
-          .order("updated_at", { ascending: false })
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle(),
-        supabase.from("system_settings").select("value").eq("key", "billing_settings").maybeSingle(),
-        supabase.from("system_settings").select("value").eq("key", "billing_invoice_template").maybeSingle(),
-      ]);
+      const [invoicesRes, tenantRes, subscriptionRes, billingSettingsRes, invoiceTemplateRes] = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.all([
+              supabase
+                .from("invoices")
+                .select(
+                  "id, invoice_number, issue_date, due_date, gross_amount, status, created_at, package_name, package_duration_months, employee_count, subtotal, discount_amount, vat_amount, vat_percentage, xendit_fee, net_amount, payment_method_type, payment_proof_url, invoice_url, external_id, paid_at, verified_at, rejection_reason, updated_at, metadata, notes",
+                )
+                .eq("tenant_id", resolvedTenantId)
+                .order("created_at", { ascending: false })
+                .limit(500),
+              supabase.from("tenants").select("id, name, code, address").eq("id", resolvedTenantId).maybeSingle(),
+              supabase
+                .from("subscriptions")
+                .select("status, end_date, grace_period_end")
+                .eq("tenant_id", resolvedTenantId)
+                .order("updated_at", { ascending: false })
+                .order("created_at", { ascending: false })
+                .limit(1)
+                .maybeSingle(),
+              supabase.from("system_settings").select("value").eq("key", "billing_settings").maybeSingle(),
+              supabase.from("system_settings").select("value").eq("key", "billing_invoice_template").maybeSingle(),
+            ]),
+            BILLING_QUERY_TIMEOUT_MS,
+            "org.billing.fetch_invoices.query timeout",
+          ),
+        {
+          maxRetries: BILLING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
       if (invoicesRes.error) throw invoicesRes.error;
       if (tenantRes.error) {
@@ -866,6 +927,10 @@ export default function OrgBilling() {
   const hasActiveFilter =
     searchQuery.trim().length > 0 || statusFilter !== "all" || issueDateFrom.length > 0 || issueDateTo.length > 0;
   const dueInvoicesCount = statusCounts.unpaid;
+  const latestPayableInvoice = useMemo(
+    () => invoices.find((invoice) => isInvoicePayable(invoice.status)) || null,
+    [invoices],
+  );
 
   const statusFilterItems: Array<{ key: BillingStatusFilter; label: string; count: number }> = [
     { key: "all", label: "Semua", count: statusCounts.all },
@@ -873,10 +938,39 @@ export default function OrgBilling() {
     { key: "unpaid", label: "Belum Lunas", count: statusCounts.unpaid },
   ];
 
-  const billingMenus: Array<{ key: BillingMenu; label: string }> = [
-    { key: "invoices", label: "Faktur Saya" },
-    { key: "offers", label: "Penawaran Saya" },
-    { key: "topup", label: "Tambah Saldo" },
+  const pendingTopupCount = useMemo(
+    () =>
+      walletTopupRequests.filter((row) => {
+        const status = (row.status || "").toUpperCase();
+        return status === "PENDING" || status === "MENUNGGU";
+      }).length,
+    [walletTopupRequests],
+  );
+
+  const billingMenus: Array<{
+    key: BillingMenu;
+    label: string;
+    badgeCount: number;
+    badgeClassName: string;
+  }> = [
+    {
+      key: "invoices",
+      label: "Faktur Saya",
+      badgeCount: dueInvoicesCount,
+      badgeClassName: "bg-red-100 text-red-700",
+    },
+    {
+      key: "offers",
+      label: "Penawaran Saya",
+      badgeCount: latestPayableInvoice ? 1 : 0,
+      badgeClassName: "bg-blue-100 text-blue-700",
+    },
+    {
+      key: "topup",
+      label: "Tambah Saldo",
+      badgeCount: pendingTopupCount,
+      badgeClassName: "bg-amber-100 text-amber-700",
+    },
   ];
 
   const clearBillingDeepLinkQuery = useCallback(() => {
@@ -889,12 +983,19 @@ export default function OrgBilling() {
 
   useEffect(() => {
     const deepLinkMenu = searchParams.get("menu");
-    if (deepLinkMenu === "invoices" || deepLinkMenu === "offers" || deepLinkMenu === "topup") {
-      if (activeBillingMenu !== deepLinkMenu) {
-        setActiveBillingMenu(deepLinkMenu);
-      }
-    }
-  }, [activeBillingMenu, searchParams]);
+    if (deepLinkMenu !== "invoices" && deepLinkMenu !== "offers" && deepLinkMenu !== "topup") return;
+
+    const deepLinkSignature = `${deepLinkMenu}:${searchParams.toString()}`;
+    if (consumedMenuDeepLinkRef.current === deepLinkSignature) return;
+    consumedMenuDeepLinkRef.current = deepLinkSignature;
+
+    setActiveBillingMenu(deepLinkMenu);
+
+    // "menu" dipakai sebagai deep-link sekali pakai agar default /org/billing tetap ke faktur.
+    const next = new URLSearchParams(searchParams);
+    next.delete("menu");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   useEffect(() => {
     if (isLoading) return;
@@ -985,6 +1086,11 @@ export default function OrgBilling() {
     setActiveBillingMenu(menu);
   };
 
+  const handleOpenCalculatorOverlay = () => {
+    setActiveBillingMenu("offers");
+    setCalculatorOverlayRequestToken((prev) => prev + 1);
+  };
+
   const resetInvoiceFilters = () => {
     setIssueDateFrom("");
     setIssueDateTo("");
@@ -1002,12 +1108,23 @@ export default function OrgBilling() {
 
     setIsSubmittingTopup(true);
     try {
-      const { data, error } = await supabase.rpc("submit_wallet_topup_request" as never, {
-        p_tenant_id: tenantId,
-        p_requested_amount: parsedAmount,
-        p_reference_number: topupReferenceInput.trim() || null,
-        p_notes: topupNotesInput.trim() || null,
-      } as never);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("submit_wallet_topup_request" as never, {
+              p_tenant_id: tenantId,
+              p_requested_amount: parsedAmount,
+              p_reference_number: topupReferenceInput.trim() || null,
+              p_notes: topupNotesInput.trim() || null,
+            } as never),
+            BILLING_QUERY_TIMEOUT_MS,
+            "org.billing.wallet_topup.submit timeout",
+          ),
+        {
+          maxRetries: BILLING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (error) throw error;
 
       const reused = Boolean((data as { reused?: boolean } | null)?.reused);
@@ -1114,33 +1231,63 @@ export default function OrgBilling() {
       }
 
       const invoiceNumber = selectedInvoice.invoice_number || getInvoiceNumber(selectedInvoice);
-      const { error: manualPaymentError } = await supabase
-        .from("manual_payments")
-        .insert({
-          tenant_id: tenantId,
-          amount: paidAmount,
-          confirmed_amount: paidAmount,
-          payment_method: "bank_transfer",
-          transfer_proof_url: paymentProofUrl,
-          transfer_proof_path: paymentProofPath,
-          reference_number: null,
-          payment_date: new Date().toISOString().slice(0, 10),
-          status: paidAmount < selectedInvoiceRemaining ? "pending_verification_partial" : "awaiting_verification_full",
-          invoice_number: invoiceNumber,
-          notes: "Konfirmasi pembayaran dari /org/billing",
-        });
+      const { error: manualPaymentError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase
+                .from("manual_payments")
+                .insert({
+                  tenant_id: tenantId,
+                  amount: paidAmount,
+                  confirmed_amount: paidAmount,
+                  payment_method: "bank_transfer",
+                  transfer_proof_url: paymentProofUrl,
+                  transfer_proof_path: paymentProofPath,
+                  reference_number: null,
+                  payment_date: new Date().toISOString().slice(0, 10),
+                  status:
+                    paidAmount < selectedInvoiceRemaining
+                      ? "pending_verification_partial"
+                      : "awaiting_verification_full",
+                  invoice_number: invoiceNumber,
+                  notes: "Konfirmasi pembayaran dari /org/billing",
+                }),
+            BILLING_QUERY_TIMEOUT_MS,
+            "org.billing.submit_payment_proof.insert_manual_payment timeout",
+          ),
+        {
+          maxRetries: BILLING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (manualPaymentError) throw manualPaymentError;
 
-      const { error: updateError } = await supabase
-        .from("invoices")
-        .update({
-          payment_proof_url: paymentProofUrl,
-          status: paidAmount < selectedInvoiceRemaining ? "PENDING_VERIFICATION_PARTIAL" : "AWAITING_VERIFICATION_FULL",
-          rejection_reason: null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", selectedInvoice.id)
-        .eq("tenant_id", tenantId);
+      const { error: updateError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase
+                .from("invoices")
+                .update({
+                  payment_proof_url: paymentProofUrl,
+                  status:
+                    paidAmount < selectedInvoiceRemaining
+                      ? "PENDING_VERIFICATION_PARTIAL"
+                      : "AWAITING_VERIFICATION_FULL",
+                  rejection_reason: null,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", selectedInvoice.id)
+                .eq("tenant_id", tenantId),
+            BILLING_QUERY_TIMEOUT_MS,
+            "org.billing.submit_payment_proof.update_invoice timeout",
+          ),
+        {
+          maxRetries: BILLING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
       if (updateError) throw updateError;
 
@@ -1186,16 +1333,28 @@ export default function OrgBilling() {
         .filter((value) => typeof value === "string" && value.trim().length > 0)
         .join("\n");
 
-      const { error } = await supabase
-        .from("invoices")
-        .update({
-          status: "CANCELLED",
-          notes: nextNotes,
-          rejection_reason: reasonAudit,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", selectedInvoice.id)
-        .eq("tenant_id", tenantId);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase
+                .from("invoices")
+                .update({
+                  status: "CANCELLED",
+                  notes: nextNotes,
+                  rejection_reason: reasonAudit,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", selectedInvoice.id)
+                .eq("tenant_id", tenantId),
+            BILLING_QUERY_TIMEOUT_MS,
+            "org.billing.cancel_invoice.update timeout",
+          ),
+        {
+          maxRetries: BILLING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
       if (error) throw error;
 
@@ -1237,16 +1396,28 @@ export default function OrgBilling() {
         .filter((value) => typeof value === "string" && value.trim().length > 0)
         .join("\n");
 
-      const { error: cancelError } = await supabase
-        .from("invoices")
-        .update({
-          status: "CANCELLED",
-          notes: nextNotes,
-          rejection_reason: reasonAudit,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", selectedInvoice.id)
-        .eq("tenant_id", tenantId);
+      const { error: cancelError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase
+                .from("invoices")
+                .update({
+                  status: "CANCELLED",
+                  notes: nextNotes,
+                  rejection_reason: reasonAudit,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", selectedInvoice.id)
+                .eq("tenant_id", tenantId),
+            BILLING_QUERY_TIMEOUT_MS,
+            "org.billing.revise_invoice.cancel timeout",
+          ),
+        {
+          maxRetries: BILLING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
       if (cancelError) throw cancelError;
 
@@ -1279,7 +1450,7 @@ export default function OrgBilling() {
       toast.success("Faktur lama dibatalkan. Lanjutkan revisi jumlah pegawai/bulan di halaman aktivasi.");
       await fetchInvoices({ silent: true });
       setIsDetailOpen(false);
-      navigate("/org/activation?from=invoice-revision");
+      navigate("/org/billing?menu=offers&from=invoice-revision");
     } catch (error) {
       const errorRef = reportError(error, "org.billing.revise_invoice_via_activation", {
         invoice_id: selectedInvoice.id,
@@ -1300,14 +1471,25 @@ export default function OrgBilling() {
 
     setIsDuplicatingInvoice(true);
     try {
-      const { data: activeInvoice, error: activeInvoiceError } = await supabase
-        .from("invoices")
-        .select("id, invoice_number")
-        .eq("tenant_id", tenantId)
-        .in("status", [...ACTIVE_INVOICE_STATUSES])
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+      const { data: activeInvoice, error: activeInvoiceError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("invoices")
+              .select("id, invoice_number")
+              .eq("tenant_id", tenantId)
+              .in("status", [...ACTIVE_INVOICE_STATUSES])
+              .order("created_at", { ascending: false })
+              .limit(1)
+              .maybeSingle(),
+            BILLING_QUERY_TIMEOUT_MS,
+            "org.billing.duplicate_invoice.check_active timeout",
+          ),
+        {
+          maxRetries: BILLING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
       if (activeInvoiceError) throw activeInvoiceError;
       if (activeInvoice?.id) {
@@ -1317,7 +1499,18 @@ export default function OrgBilling() {
         return;
       }
 
-      const { data: invoiceNumberData, error: invoiceNumberError } = await supabase.rpc("generate_invoice_number");
+      const { data: invoiceNumberData, error: invoiceNumberError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("generate_invoice_number"),
+            BILLING_QUERY_TIMEOUT_MS,
+            "org.billing.duplicate_invoice.generate_number timeout",
+          ),
+        {
+          maxRetries: BILLING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (invoiceNumberError) throw invoiceNumberError;
       const invoiceNumber = typeof invoiceNumberData === "string" ? invoiceNumberData.trim() : "";
       if (!invoiceNumber) {
@@ -1327,40 +1520,55 @@ export default function OrgBilling() {
       const dueDate = new Date();
       dueDate.setDate(dueDate.getDate() + 3);
 
-      const { data: insertedInvoice, error: insertError } = await supabase
-        .from("invoices")
-        .insert({
-          tenant_id: tenantId,
-          invoice_number: invoiceNumber,
-          package_name: selectedInvoice.package_name || "Langganan Sistem Absensi",
-          package_duration_months: selectedInvoice.package_duration_months || 1,
-          package_discount_percentage: 0,
-          employee_count: selectedInvoice.employee_count || 1,
-          price_per_employee:
-            (selectedInvoice.subtotal || selectedInvoice.gross_amount || 0) /
-            Math.max(1, (selectedInvoice.employee_count || 1) * (selectedInvoice.package_duration_months || 1)),
-          subtotal: selectedInvoice.subtotal || selectedInvoice.gross_amount || 0,
-          discount_amount: selectedInvoice.discount_amount || 0,
-          vat_percentage: selectedInvoice.vat_percentage || 0,
-          vat_amount: selectedInvoice.vat_amount || 0,
-          gross_amount: selectedInvoice.gross_amount || 0,
-          xendit_fee: 0,
-          net_amount: selectedInvoice.gross_amount || 0,
-          status: "PENDING",
-          payment_method_type: "MANUAL_TRANSFER",
-          due_date: dueDate.toISOString().slice(0, 10),
-          metadata: {
-            duplicated_from_invoice_id: selectedInvoice.id,
-            duplicated_from_invoice_number: getInvoiceNumber(selectedInvoice),
-          },
-          notes: [selectedInvoice.notes, `[DUPLICATED_FROM] ${getInvoiceNumber(selectedInvoice)}`]
-            .filter((value) => typeof value === "string" && value.trim().length > 0)
-            .join("\n"),
-        })
-        .select(
-          "id, invoice_number, issue_date, due_date, gross_amount, status, created_at, package_name, package_duration_months, employee_count, subtotal, discount_amount, vat_amount, vat_percentage, xendit_fee, net_amount, payment_method_type, payment_proof_url, invoice_url, external_id, paid_at, verified_at, rejection_reason, updated_at, metadata, notes",
-        )
-        .single();
+      const { data: insertedInvoice, error: insertError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase
+                .from("invoices")
+                .insert({
+                  tenant_id: tenantId,
+                  invoice_number: invoiceNumber,
+                  package_name: selectedInvoice.package_name || "Langganan Sistem Absensi",
+                  package_duration_months: selectedInvoice.package_duration_months || 1,
+                  package_discount_percentage: 0,
+                  employee_count: selectedInvoice.employee_count || 1,
+                  price_per_employee:
+                    (selectedInvoice.subtotal || selectedInvoice.gross_amount || 0) /
+                    Math.max(
+                      1,
+                      (selectedInvoice.employee_count || 1) * (selectedInvoice.package_duration_months || 1),
+                    ),
+                  subtotal: selectedInvoice.subtotal || selectedInvoice.gross_amount || 0,
+                  discount_amount: selectedInvoice.discount_amount || 0,
+                  vat_percentage: selectedInvoice.vat_percentage || 0,
+                  vat_amount: selectedInvoice.vat_amount || 0,
+                  gross_amount: selectedInvoice.gross_amount || 0,
+                  xendit_fee: 0,
+                  net_amount: selectedInvoice.gross_amount || 0,
+                  status: "PENDING",
+                  payment_method_type: "MANUAL_TRANSFER",
+                  due_date: dueDate.toISOString().slice(0, 10),
+                  metadata: {
+                    duplicated_from_invoice_id: selectedInvoice.id,
+                    duplicated_from_invoice_number: getInvoiceNumber(selectedInvoice),
+                  },
+                  notes: [selectedInvoice.notes, `[DUPLICATED_FROM] ${getInvoiceNumber(selectedInvoice)}`]
+                    .filter((value) => typeof value === "string" && value.trim().length > 0)
+                    .join("\n"),
+                })
+                .select(
+                  "id, invoice_number, issue_date, due_date, gross_amount, status, created_at, package_name, package_duration_months, employee_count, subtotal, discount_amount, vat_amount, vat_percentage, xendit_fee, net_amount, payment_method_type, payment_proof_url, invoice_url, external_id, paid_at, verified_at, rejection_reason, updated_at, metadata, notes",
+                )
+                .single(),
+            BILLING_QUERY_TIMEOUT_MS,
+            "org.billing.duplicate_invoice.insert timeout",
+          ),
+        {
+          maxRetries: BILLING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
       if (insertError) throw insertError;
 
@@ -1408,6 +1616,15 @@ export default function OrgBilling() {
       proofFileInputRef.current.value = "";
     }
     setIsDetailOpen(true);
+  };
+
+  const handlePrimaryBillingAction = () => {
+    if (latestPayableInvoice) {
+      setActiveBillingMenu("invoices");
+      openInvoiceDetail(latestPayableInvoice);
+      return;
+    }
+    setActiveBillingMenu("offers");
   };
 
   const getInvoiceNumber = (invoice: InvoiceRow) => {
@@ -1530,23 +1747,35 @@ export default function OrgBilling() {
       try {
         const invoiceNumber = selectedInvoice.invoice_number || "";
         const invoiceTenantId = selectedInvoice.tenant_id || tenantId || null;
-        const [ledgerRes, manualRes] = await Promise.all([
-          supabase
-            .from("financial_ledger")
-            .select("id, transaction_date, payment_source, gross_amount")
-            .eq("invoice_id", selectedInvoice.id)
-            .order("transaction_date", { ascending: false })
-            .limit(20),
-          invoiceNumber && invoiceTenantId
-            ? supabase
-                .from("manual_payments")
-                .select("id, amount, confirmed_amount, verified_amount, verification_method, status, payment_date, reference_number, transfer_proof_url, created_at, verified_at, rejection_reason")
-                .eq("tenant_id", invoiceTenantId)
-                .eq("invoice_number", invoiceNumber)
-                .order("created_at", { ascending: false })
-                .limit(50)
-            : Promise.resolve({ data: [], error: null }),
-        ]);
+        const [ledgerRes, manualRes] = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              () =>
+                Promise.all([
+                  supabase
+                    .from("financial_ledger")
+                    .select("id, transaction_date, payment_source, gross_amount")
+                    .eq("invoice_id", selectedInvoice.id)
+                    .order("transaction_date", { ascending: false })
+                    .limit(20),
+                  invoiceNumber && invoiceTenantId
+                    ? supabase
+                        .from("manual_payments")
+                        .select("id, amount, confirmed_amount, verified_amount, verification_method, status, payment_date, reference_number, transfer_proof_url, created_at, verified_at, rejection_reason")
+                        .eq("tenant_id", invoiceTenantId)
+                        .eq("invoice_number", invoiceNumber)
+                        .order("created_at", { ascending: false })
+                        .limit(50)
+                    : Promise.resolve({ data: [], error: null }),
+                ]),
+              BILLING_QUERY_TIMEOUT_MS,
+              "org.billing.fetch_invoice_detail_history.query timeout",
+            ),
+          {
+            maxRetries: BILLING_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
+        );
 
         if (ledgerRes.error) throw ledgerRes.error;
         if (manualRes.error) throw manualRes.error;
@@ -1679,24 +1908,73 @@ export default function OrgBilling() {
     nominalInput?.focus();
   };
 
+  const heroContent = useMemo(() => {
+    if (activeBillingMenu === "offers") {
+      return {
+        title: "Penawaran Saya",
+        description: "Kelola paket langganan dan buat invoice baru",
+        breadcrumb: "Home Area Pelanggan / Area Pelanggan / Penawaran Saya",
+      };
+    }
+    if (activeBillingMenu === "topup") {
+      return {
+        title: "Tambah Saldo",
+        description: "Topup saldo wallet untuk kebutuhan pembayaran organisasi",
+        breadcrumb: "Home Area Pelanggan / Area Pelanggan / Tambah Saldo",
+      };
+    }
+    return {
+      title: "Faktur Saya",
+      description: "Riwayat faktur dan status langganan organisasi",
+      breadcrumb: "Home Area Pelanggan / Area Pelanggan / Faktur Saya",
+    };
+  }, [activeBillingMenu]);
+
   return (
     <OrganizationLayout>
-      <div className="space-y-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2">
-              <Receipt className="h-6 w-6" />
-              Faktur Saya
-            </h1>
-            <p className="text-muted-foreground">Riwayat faktur dengan kami</p>
-            <p className="text-xs text-muted-foreground mt-1">Home Area Pelanggan / Area Pelanggan / Faktur Saya</p>
+      <div className="space-y-5">
+        <div className="rounded-2xl border bg-gradient-to-br from-slate-900 via-slate-800 to-slate-700 p-5 text-white shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h1 className="text-2xl font-bold flex items-center gap-2">
+                <Receipt className="h-6 w-6" />
+                {heroContent.title}
+              </h1>
+              <p className="mt-1 text-slate-200">{heroContent.description}</p>
+              <p className="text-xs text-slate-300/90 mt-1">{heroContent.breadcrumb}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void fetchInvoices()}
+                disabled={isLoading}
+                className="border-white/30 bg-white/10 text-white hover:bg-white/20"
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
+                Refresh
+              </Button>
+              <GlossaryPanel defaultCategory="billing" />
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => void fetchInvoices()} disabled={isLoading}>
-              <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
-              Refresh
-            </Button>
-            <GlossaryPanel defaultCategory="billing" />
+
+          <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-xl border border-white/15 bg-white/10 px-3 py-2.5">
+              <p className="text-[11px] uppercase tracking-wide text-slate-200/90">Invoice Due</p>
+              <p className="mt-1 text-xl font-semibold">{dueInvoicesCount}</p>
+            </div>
+            <div className="rounded-xl border border-white/15 bg-white/10 px-3 py-2.5">
+              <p className="text-[11px] uppercase tracking-wide text-slate-200/90">Menunggu Verifikasi</p>
+              <p className="mt-1 text-xl font-semibold">{statusCounts.pendingVerification}</p>
+            </div>
+            <div className="rounded-xl border border-white/15 bg-white/10 px-3 py-2.5">
+              <p className="text-[11px] uppercase tracking-wide text-slate-200/90">Status Langganan</p>
+              <p className="mt-1 text-lg font-semibold">{subscriptionStatusMeta.label}</p>
+            </div>
+            <div className="rounded-xl border border-white/15 bg-white/10 px-3 py-2.5">
+              <p className="text-[11px] uppercase tracking-wide text-slate-200/90">Saldo Wallet</p>
+              <p className="mt-1 text-lg font-semibold">{formatCurrency(walletSnapshot?.balance || 0)}</p>
+            </div>
           </div>
         </div>
 
@@ -1706,8 +1984,33 @@ export default function OrgBilling() {
           </div>
         )}
 
-        <div className="grid gap-4 xl:grid-cols-[280px,minmax(0,1fr)]">
-          <aside className="space-y-4">
+        <div className="sticky top-14 z-20">
+          <div className="rounded-xl border bg-background/95 px-3 py-3 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-background/80">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-sm">
+                <p className="font-medium text-foreground">
+                  {latestPayableInvoice
+                    ? `Invoice aktif ${getInvoiceNumber(latestPayableInvoice)} siap ditindaklanjuti.`
+                    : "Belum ada invoice aktif. Lanjutkan ke penawaran untuk membuat invoice baru."}
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Alur cepat: Kalkulator {"->"} Mau Bayar {"->"} Konfirmasi Bukti {"->"} Verifikasi Admin
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button onClick={handlePrimaryBillingAction}>
+                  {latestPayableInvoice ? "Lihat Invoice Aktif" : "Mau Bayar"}
+                </Button>
+                <Button variant="outline" onClick={handleOpenCalculatorOverlay}>
+                  Buka Kalkulator
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 xl:grid-cols-[280px,minmax(0,1fr)]">
+          <aside className="space-y-3">
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-base font-semibold flex items-center gap-2">
@@ -1783,21 +2086,28 @@ export default function OrgBilling() {
                   Billing
                 </CardTitle>
               </CardHeader>
-              <CardContent className="pt-0 px-0">
-                <div className="divide-y">
+              <CardContent className="pt-0">
+                <div className="rounded-2xl border border-border/60 bg-gradient-to-b from-muted/35 to-muted/20 p-1.5 shadow-sm">
                   {billingMenus.map((menu) => (
                     <button
                       key={menu.key}
                       type="button"
                       onClick={() => handleBillingMenuClick(menu.key)}
                       className={cn(
-                        "w-full px-4 py-3 text-left text-sm transition-colors",
+                        "w-full rounded-xl px-3 py-2.5 text-left text-sm font-medium transition-all duration-200",
                         activeBillingMenu === menu.key
-                          ? "bg-slate-700 text-white"
-                          : "hover:bg-muted/50 text-foreground",
+                          ? "bg-background text-foreground shadow-md ring-1 ring-primary/25"
+                          : "text-muted-foreground hover:bg-background/80 hover:text-foreground hover:shadow-sm",
                       )}
                     >
-                      {menu.label}
+                      <span className="flex items-center justify-between gap-2">
+                        <span>{menu.label}</span>
+                        {menu.badgeCount > 0 ? (
+                          <span className={cn("inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-semibold", menu.badgeClassName)}>
+                            {menu.badgeCount}
+                          </span>
+                        ) : null}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -1808,11 +2118,21 @@ export default function OrgBilling() {
           <section>
             {activeBillingMenu === "offers" ? (
               tenantId && tenantProfile ? (
-                <OrgActivationTab tenantId={tenantId} tenantName={tenantProfile.name || "Organisasi"} />
+                <OrgActivationTab
+                  tenantId={tenantId}
+                  tenantName={tenantProfile.name || "Organisasi"}
+                  openCalculatorRequestToken={calculatorOverlayRequestToken}
+                />
               ) : (
                 <Card>
-                  <CardContent className="py-16 text-center text-muted-foreground">
-                    Data tenant belum tersedia. Klik refresh untuk memuat ulang.
+                  <CardContent className="py-12">
+                    <div className="mx-auto max-w-lg space-y-2 text-center">
+                      <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-muted">
+                        <CircleAlert className="h-5 w-5 text-muted-foreground" />
+                      </div>
+                      <p className="text-base font-medium text-slate-900">Data tenant belum tersedia</p>
+                      <p className="text-sm text-muted-foreground">Klik refresh untuk memuat ulang data billing organisasi.</p>
+                    </div>
                   </CardContent>
                 </Card>
               )
@@ -1896,7 +2216,17 @@ export default function OrgBilling() {
                         Memuat request topup...
                       </div>
                     ) : walletTopupRequests.length === 0 ? (
-                      <div className="py-8 text-center text-muted-foreground">Belum ada request topup.</div>
+                      <div className="py-8">
+                        <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
+                          <div className="rounded-full bg-slate-100 p-3">
+                            <Wallet className="h-5 w-5 text-slate-500" />
+                          </div>
+                          <p className="text-base font-medium text-slate-800">Belum ada request topup</p>
+                          <p className="text-sm text-muted-foreground">
+                            Buat request topup di form atas agar tim admin bisa memproses penambahan saldo.
+                          </p>
+                        </div>
+                      </div>
                     ) : (
                       <div className="overflow-x-auto">
                         <table className="min-w-full text-sm">
@@ -1944,7 +2274,17 @@ export default function OrgBilling() {
                         Memuat riwayat saldo...
                       </div>
                     ) : !walletSnapshot?.transactions?.length ? (
-                      <div className="py-8 text-center text-muted-foreground">Belum ada transaksi saldo wallet.</div>
+                      <div className="py-8">
+                        <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
+                          <div className="rounded-full bg-slate-100 p-3">
+                            <CreditCard className="h-5 w-5 text-slate-500" />
+                          </div>
+                          <p className="text-base font-medium text-slate-800">Belum ada transaksi saldo wallet</p>
+                          <p className="text-sm text-muted-foreground">
+                            Riwayat transaksi akan tampil otomatis setelah ada topup atau pemakaian saldo.
+                          </p>
+                        </div>
+                      </div>
                     ) : (
                       <div className="overflow-x-auto">
                         <table className="min-w-full text-sm">
@@ -2000,37 +2340,38 @@ export default function OrgBilling() {
                     <Button variant="outline" onClick={() => setActiveBillingMenu("offers")}>
                       Buka Penawaran
                     </Button>
-                    <Button variant="outline" onClick={() => navigate("/org/activation")}>
+                    <Button variant="outline" onClick={() => setActiveBillingMenu("offers")}>
                       Buka Aktivasi
                     </Button>
                   </div>
                 </CardContent>
               </Card>
             ) : (
-              <Card>
+              <Card className="overflow-hidden border-slate-200/80 shadow-sm">
                 <CardContent className="p-0">
-                  <div className="border-b px-5 py-4 text-white" style={{ backgroundColor: "#555968" }}>
+                  <div className="border-b border-slate-700/70 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-700 px-5 py-4 text-white">
                     <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                      <p className="text-sm md:text-base text-white">
+                      <p className="text-sm md:text-base text-white/95">
                         Tampilan {totalEntries === 0 ? 0 : startIndex + 1} ke {endIndex} dari {totalEntries} entri
                         {hasActiveFilter && (
-                          <span className="text-slate-200"> (filtered from {invoices.length} total entri)</span>
+                          <span className="text-slate-300"> (filtered from {invoices.length} total entri)</span>
                         )}
                       </p>
-                      <div className="relative w-full md:w-64">
+                      <div className="relative w-full md:w-72">
                         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-300" />
                         <Input
                           placeholder="Cari faktur..."
                           value={searchQuery}
                           onChange={(event) => setSearchQuery(event.target.value)}
-                          className="h-10 rounded-sm border-slate-300 bg-slate-100 text-slate-900 placeholder:text-slate-400 pl-10"
+                          className="h-10 rounded-xl border-slate-200/90 bg-white text-slate-900 placeholder:text-slate-400 pl-10 shadow-sm"
                         />
                       </div>
                     </div>
                   </div>
 
-                  <div className="border-b bg-slate-50 px-5 py-3">
-                    <div className="grid gap-3 md:grid-cols-[1fr,1fr,auto,auto] md:items-end">
+                  <div className="border-b bg-slate-50/80 px-5 py-3">
+                    <div className="rounded-xl border border-slate-200/80 bg-white/90 p-3 shadow-sm">
+                      <div className="grid gap-3 md:grid-cols-[1fr,1fr,auto,auto] md:items-end">
                       <div className="space-y-1">
                         <Label htmlFor="issue-from" className="text-xs text-muted-foreground">
                           Dari Tanggal Faktur
@@ -2068,14 +2409,15 @@ export default function OrgBilling() {
                         <FileSpreadsheet className="mr-2 h-4 w-4" />
                         Export CSV
                       </Button>
+                      </div>
                     </div>
                   </div>
 
-                  <div className="relative w-full overflow-x-auto">
+                  <div className="relative w-full overflow-x-auto bg-white">
                     <table className="w-full min-w-[760px] border-separate border-spacing-0 text-sm">
                       <thead>
                         <tr className="border-0 bg-transparent">
-                          <th className="h-11 border-r border-slate-300 border-b-4 border-[#8cc46b] bg-[#f2f2f2] px-4 text-left text-base font-medium align-middle">
+                          <th className="h-11 border-r border-slate-200 border-b border-slate-300 bg-slate-100/90 px-4 text-left text-sm font-semibold align-middle">
                             <button
                               type="button"
                               className="inline-flex w-full items-center justify-between gap-2 text-slate-800"
@@ -2090,7 +2432,7 @@ export default function OrgBilling() {
                               />
                             </button>
                           </th>
-                          <th className="h-11 border-r border-slate-300 border-b-4 border-[#8cc46b] bg-[#f2f2f2] px-4 text-left text-base font-medium align-middle">
+                          <th className="h-11 border-r border-slate-200 border-b border-slate-300 bg-slate-100/90 px-4 text-left text-sm font-semibold align-middle">
                             <button
                               type="button"
                               className="inline-flex w-full items-center justify-between gap-2 text-slate-800"
@@ -2102,7 +2444,7 @@ export default function OrgBilling() {
                               />
                             </button>
                           </th>
-                          <th className="h-11 border-r border-slate-300 border-b-4 border-[#8cc46b] bg-[#f2f2f2] px-4 text-left text-base font-medium align-middle">
+                          <th className="h-11 border-r border-slate-200 border-b border-slate-300 bg-slate-100/90 px-4 text-left text-sm font-semibold align-middle">
                             <button
                               type="button"
                               className="inline-flex w-full items-center justify-between gap-2 text-slate-800"
@@ -2114,7 +2456,7 @@ export default function OrgBilling() {
                               />
                             </button>
                           </th>
-                          <th className="h-11 border-r border-slate-300 border-b-4 border-[#8cc46b] bg-[#f2f2f2] px-4 text-left text-base font-medium align-middle">
+                          <th className="h-11 border-r border-slate-200 border-b border-slate-300 bg-slate-100/90 px-4 text-left text-sm font-semibold align-middle">
                             <button
                               type="button"
                               className="inline-flex w-full items-center justify-between gap-2 text-slate-800"
@@ -2129,7 +2471,7 @@ export default function OrgBilling() {
                               />
                             </button>
                           </th>
-                          <th className="h-11 border-b-4 border-[#8cc46b] bg-[#f2f2f2] px-4 text-left text-base font-medium align-middle">
+                          <th className="h-11 border-b border-slate-300 bg-slate-100/90 px-4 text-left text-sm font-semibold align-middle">
                             <button
                               type="button"
                               className="inline-flex w-full items-center justify-between gap-2 text-slate-800"
@@ -2147,16 +2489,44 @@ export default function OrgBilling() {
                         {isLoading && (
                           <tr className="border-b border-slate-200/90">
                             <td colSpan={5} className="p-4 py-10">
-                              <div className="flex items-center justify-center">
-                                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                              <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
+                                <div className="rounded-full bg-slate-100 p-3">
+                                  <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+                                </div>
+                                <p className="text-base font-medium text-slate-800">Memuat daftar faktur</p>
+                                <p className="text-sm text-muted-foreground">
+                                  Data tagihan organisasi sedang disiapkan. Mohon tunggu sebentar.
+                                </p>
                               </div>
                             </td>
                           </tr>
                         )}
                         {!isLoading && paginatedInvoices.length === 0 && (
                           <tr className="border-b border-slate-200/90 bg-white">
-                            <td colSpan={5} className="p-4 py-10 text-center text-muted-foreground">
-                              Tidak ada data faktur
+                            <td colSpan={5} className="p-4 py-10">
+                              <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
+                                <div className="rounded-full bg-slate-100 p-3">
+                                  <Receipt className="h-5 w-5 text-slate-500" />
+                                </div>
+                                <p className="text-base font-medium text-slate-800">
+                                  {hasActiveFilter ? "Tidak ada faktur sesuai filter" : "Belum ada data faktur"}
+                                </p>
+                                <p className="text-sm text-muted-foreground">
+                                  {hasActiveFilter
+                                    ? "Ubah filter pencarian atau reset untuk melihat semua data."
+                                    : "Buat invoice pertama dari menu Penawaran agar proses billing bisa dimulai."}
+                                </p>
+                                <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
+                                  {hasActiveFilter ? (
+                                    <Button variant="outline" size="sm" onClick={resetInvoiceFilters}>
+                                      Reset Filter
+                                    </Button>
+                                  ) : null}
+                                  <Button size="sm" onClick={() => setActiveBillingMenu("offers")}>
+                                    Buka Penawaran
+                                  </Button>
+                                </div>
+                              </div>
                             </td>
                           </tr>
                         )}
@@ -2200,11 +2570,11 @@ export default function OrgBilling() {
                     </table>
                   </div>
 
-                  <div className="border-t p-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <div className="border-t border-slate-200 bg-slate-50/70 p-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <span>Tampil</span>
                       <Select value={String(pageSize)} onValueChange={(value) => setPageSize(Number(value))}>
-                        <SelectTrigger className="w-24">
+                        <SelectTrigger className="w-24 bg-white shadow-sm">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -2256,29 +2626,39 @@ export default function OrgBilling() {
       </div>
 
       <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
-        <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto p-0">
+        <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto p-0">
           <DialogHeader className="sr-only">
             <DialogTitle>Detail Faktur</DialogTitle>
           </DialogHeader>
           {selectedInvoice && (
             <div className="space-y-4 p-4 md:p-6">
-              <div className="flex flex-col gap-3 border-b pb-4 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground">Invoice</p>
-                  <h2 className="text-2xl font-bold text-slate-900">#{getInvoiceNumber(selectedInvoice)}</h2>
+              <div className="rounded-2xl border border-slate-200/80 bg-gradient-to-r from-slate-50 to-white px-4 py-4 shadow-sm">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Invoice</p>
+                    <h2 className="text-2xl font-bold text-slate-900">#{getInvoiceNumber(selectedInvoice)}</h2>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Terbit: {formatInvoiceDate(selectedInvoice.issue_date || selectedInvoice.created_at)}
+                    </p>
+                  </div>
+                  <div className="flex flex-col items-start gap-2 sm:items-end">
+                    {renderStatusBadge(selectedInvoice.status)}
+                    <span className="text-sm font-semibold text-slate-900">
+                      Total: {formatCurrency(selectedInvoice.gross_amount || 0)}
+                    </span>
+                  </div>
                 </div>
-                {renderStatusBadge(selectedInvoice.status)}
               </div>
 
-              <div className="grid gap-6 md:grid-cols-2">
-                <div>
-                  <p className="text-sm font-semibold text-slate-700">Invoiced To</p>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Invoiced To</p>
                   <p className="mt-1 text-sm text-slate-900">{tenantProfile?.name || "-"}</p>
                   <p className="text-sm text-muted-foreground">{tenantProfile?.code || "-"}</p>
                   <p className="text-sm text-muted-foreground">{tenantProfile?.address || "-"}</p>
                 </div>
-                <div className="md:text-right">
-                  <p className="text-sm font-semibold text-slate-700">Pay To</p>
+                <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm md:text-right">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Pay To</p>
                   <p className="mt-1 text-sm text-slate-900">{bankInfo.accountName}</p>
                   <p className="text-sm text-muted-foreground">
                     {bankInfo.bankName} {bankInfo.accountNumber}
@@ -2287,23 +2667,23 @@ export default function OrgBilling() {
                 </div>
               </div>
 
-              <div className="grid gap-6 md:grid-cols-2">
-                <div>
-                  <p className="text-sm font-semibold text-slate-700">Invoice Date</p>
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Invoice Date</p>
                   <p className="mt-1 text-sm text-slate-900">{formatInvoiceDate(selectedInvoice.issue_date || selectedInvoice.created_at)}</p>
-                  <p className="mt-3 text-sm font-semibold text-slate-700">Due Date</p>
+                  <p className="mt-3 text-xs uppercase tracking-wide text-muted-foreground">Due Date</p>
                   <p className="mt-1 text-sm text-slate-900">{formatInvoiceDate(selectedInvoice.due_date)}</p>
                   <p className={cn("mt-1 text-xs", getDueStatusMeta(selectedInvoice).className)}>
                     {getDueStatusMeta(selectedInvoice).label}
                   </p>
                 </div>
-                <div className="md:text-right">
-                  <p className="text-sm font-semibold text-slate-700">Payment Method</p>
+                <div className="rounded-xl border border-slate-200/80 bg-white p-4 shadow-sm md:text-right">
+                  <p className="text-xs uppercase tracking-wide text-muted-foreground">Payment Method</p>
                   <p className="mt-1 text-sm text-slate-900">{getPaymentMethodLabel(selectedInvoice.payment_method_type)}</p>
                 </div>
               </div>
 
-              <div className="grid gap-3 rounded-md border bg-slate-50/70 p-4 text-sm md:grid-cols-2">
+              <div className="grid gap-3 rounded-xl border border-slate-200/80 bg-slate-50/70 p-4 text-sm md:grid-cols-2">
                 <div>
                   <p className="text-xs text-muted-foreground">External ID</p>
                   <p className="font-medium text-slate-900">{selectedInvoice.external_id || "-"}</p>
@@ -2364,15 +2744,19 @@ export default function OrgBilling() {
               {isInvoicePayable(selectedInvoice.status) ? (
                 <div
                   id="invoice-payment-confirmation-section"
-                  className={cn("rounded-md border", paymentSectionFlash && "ring-2 ring-primary/50 animate-pulse")}
+                  className={cn(
+                    "rounded-xl border border-slate-200/80 bg-white shadow-sm",
+                    paymentSectionFlash && "ring-2 ring-primary/50 animate-pulse",
+                  )}
                 >
-                  <div className="border-b px-4 py-3 font-semibold">Aksi Pembayaran</div>
+                  <div className="border-b border-slate-200 px-4 py-3 font-semibold">Aksi Pembayaran</div>
                   <div className="space-y-3 px-4 py-3">
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2">
                       <Button
                         variant="outline"
                         onClick={() => openInvoiceCheckout(selectedInvoice)}
                         disabled={!selectedInvoice.invoice_url}
+                        className="shadow-sm"
                       >
                         <ExternalLink className="mr-2 h-4 w-4" />
                         Bayar via Link
@@ -2383,7 +2767,7 @@ export default function OrgBilling() {
                     </div>
 
                     {selectedInvoice.payment_proof_url ? (
-                      <div className="rounded-md border bg-muted/20 px-3 py-2 text-sm">
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
                         Bukti saat ini:{" "}
                         <a
                           href={selectedInvoice.payment_proof_url}
@@ -2433,7 +2817,7 @@ export default function OrgBilling() {
                             setIsActualTransferDeclared(false);
                           }}
                         />
-                      <div className="rounded-md border border-dashed p-2.5">
+                      <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50/40 p-2.5">
                         <div className="flex flex-wrap items-center gap-2">
                           <Button
                             type="button"
@@ -2531,7 +2915,7 @@ export default function OrgBilling() {
                       </p>
                     )}
                     <Button
-                      className="w-full md:w-auto"
+                      className="w-full md:w-auto md:min-w-[240px]"
                       onClick={() => void submitPaymentProof()}
                       disabled={isSubmittingPaymentProof || Boolean(manualPaidAmountInlineError) || !isActualTransferDeclared}
                     >
@@ -2542,14 +2926,14 @@ export default function OrgBilling() {
                 </div>
               ) : null}
 
-              <div className="rounded-md border">
-                <div className="border-b px-4 py-3 font-semibold">Aksi Faktur</div>
+              <div className="rounded-xl border border-slate-200/80 bg-white shadow-sm">
+                <div className="border-b border-slate-200 px-4 py-3 font-semibold">Aksi Faktur</div>
                 <div className="space-y-3 px-4 py-3">
                   <p className="text-xs text-muted-foreground">
                     Demi integritas audit, faktur terbit tidak bisa diedit. Gunakan pembatalan atau duplikasi sebagai faktur baru.
                   </p>
                   {isInvoiceCancellableByOrg(selectedInvoice.status) ? (
-                    <div className="grid gap-2 md:grid-cols-[1fr,auto] md:items-end">
+                    <div className="grid gap-2 rounded-lg border border-red-200 bg-red-50/40 p-3 md:grid-cols-[1fr,auto] md:items-end">
                       <div className="space-y-1">
                         <Label htmlFor="cancel-reason">Alasan Pembatalan</Label>
                         <Select
@@ -2594,7 +2978,7 @@ export default function OrgBilling() {
                     </p>
                   )}
                   {isInvoiceCancellableByOrg(selectedInvoice.status) ? (
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2">
                       <Button
                         variant="outline"
                         onClick={() => void reviseInvoiceViaActivation()}
@@ -2628,8 +3012,8 @@ export default function OrgBilling() {
                 </div>
               </div>
 
-              <div className="rounded-md border">
-                <div className="border-b px-4 py-3 font-semibold">Invoice Items</div>
+              <div className="rounded-xl border border-slate-200/80 bg-white shadow-sm">
+                <div className="border-b border-slate-200 px-4 py-3 font-semibold">Invoice Items</div>
                 <div className="px-4 py-3">
                   <div className="grid grid-cols-[1fr,180px] gap-3 border-b pb-2 text-sm font-semibold">
                     <span>Description</span>
@@ -2657,20 +3041,20 @@ export default function OrgBilling() {
               </div>
 
               {selectedInvoice.notes ? (
-                <div className="rounded-md border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+                <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 px-4 py-3 text-sm text-muted-foreground shadow-sm">
                   {selectedInvoice.notes}
                 </div>
               ) : null}
 
-              <div className="rounded-md border">
-                <div className="border-b px-4 py-3">
+              <div className="rounded-xl border border-slate-200/80 bg-white shadow-sm">
+                <div className="border-b border-slate-200 px-4 py-3">
                   <p className="font-semibold">Riwayat Cicilan Pembayaran</p>
                   <p className="mt-1 text-xs text-muted-foreground">
                     Kebijakan cicilan digunakan ketika pembayaran belum penuh (misalnya kurang transfer atau transfer bertahap).
                     Invoice dinyatakan lunas setelah total pembayaran terverifikasi sama dengan total tagihan.
                   </p>
                 </div>
-                <div className="grid gap-2 border-b bg-muted/20 px-4 py-3 text-sm md:grid-cols-3">
+                <div className="grid gap-2 border-b border-slate-200 bg-slate-50/70 px-4 py-3 text-sm md:grid-cols-3">
                   <div>
                     <p className="text-xs text-muted-foreground">Total Tagihan</p>
                     <p className="font-semibold">{formatCurrency(selectedInvoice.gross_amount || 0)}</p>
@@ -2690,12 +3074,12 @@ export default function OrgBilling() {
                   <div className="overflow-x-auto">
                     <table className="w-full min-w-[720px] text-sm">
                       <thead>
-                        <tr className="border-b bg-[#f8f8f8]">
-                          <th className="px-4 py-2 text-left font-semibold">Tanggal</th>
-                          <th className="px-4 py-2 text-left font-semibold">Referensi</th>
-                          <th className="px-4 py-2 text-right font-semibold">Nominal</th>
-                          <th className="px-4 py-2 text-left font-semibold">Status</th>
-                          <th className="px-4 py-2 text-left font-semibold">Bukti</th>
+                        <tr className="border-b border-slate-200 bg-slate-100/90">
+                          <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">Tanggal</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">Referensi</th>
+                          <th className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-slate-700">Nominal</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">Status</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">Bukti</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2714,19 +3098,19 @@ export default function OrgBilling() {
                           </tr>
                         )}
                         {!isManualPaymentLoading &&
-                          detailManualPayments.map((entry) => {
+                          detailManualPayments.map((entry, index) => {
                             const statusMeta = getManualPaymentStatusMeta(entry.status);
                             return (
-                              <tr key={entry.id} className="border-b">
+                              <tr key={entry.id} className={cn("border-b border-slate-200", index % 2 === 1 ? "bg-slate-50/50" : "bg-white")}>
                                 <td className="px-4 py-3">{formatInvoiceDate(entry.payment_date || entry.created_at)}</td>
                                 <td className="px-4 py-3 font-mono text-xs">{entry.reference_number || "-"}</td>
-                                <td className="px-4 py-3 text-right">
+                                <td className="px-4 py-3 text-right font-semibold">
                                   {entry.status === "verified"
                                     ? formatCurrency(entry.verified_amount ?? entry.amount ?? 0)
                                     : formatCurrency(entry.confirmed_amount ?? entry.amount ?? 0)}
                                 </td>
                                 <td className="px-4 py-3">
-                                  <span className={cn("inline-flex rounded-sm border px-2 py-1 text-xs font-semibold", statusMeta.className)}>
+                                  <span className={cn("inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold", statusMeta.className)}>
                                     {statusMeta.label}
                                   </span>
                                   {entry.verification_method ? (
@@ -2744,7 +3128,7 @@ export default function OrgBilling() {
                                       href={entry.transfer_proof_url}
                                       target="_blank"
                                       rel="noopener noreferrer"
-                                      className="text-primary hover:underline"
+                                      className="font-medium text-primary hover:underline"
                                     >
                                       Lihat Bukti
                                     </a>
@@ -2761,19 +3145,19 @@ export default function OrgBilling() {
                 )}
               </div>
 
-              <div className="rounded-md border">
-                <div className="border-b px-4 py-3 font-semibold">Riwayat Transaksi</div>
+              <div className="rounded-xl border border-slate-200/80 bg-white shadow-sm">
+                <div className="border-b border-slate-200 px-4 py-3 font-semibold">Riwayat Transaksi</div>
                 {detailTransactionError ? (
                   <div className="px-4 py-3 text-sm text-destructive">{detailTransactionError}</div>
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="w-full min-w-[620px] text-sm">
                       <thead>
-                        <tr className="border-b bg-[#f8f8f8]">
-                          <th className="px-4 py-2 text-left font-semibold">Transaction Date</th>
-                          <th className="px-4 py-2 text-left font-semibold">Gateway</th>
-                          <th className="px-4 py-2 text-left font-semibold">Transaction ID</th>
-                          <th className="px-4 py-2 text-right font-semibold">Amount</th>
+                        <tr className="border-b border-slate-200 bg-slate-100/90">
+                          <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">Transaction Date</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">Gateway</th>
+                          <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">Transaction ID</th>
+                          <th className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-slate-700">Amount</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -2792,52 +3176,62 @@ export default function OrgBilling() {
                           </tr>
                         )}
                         {!isTransactionLoading &&
-                          detailTransactions.map((tx) => (
-                            <tr key={tx.id} className="border-b">
+                          detailTransactions.map((tx, index) => (
+                            <tr key={tx.id} className={cn("border-b border-slate-200", index % 2 === 1 ? "bg-slate-50/50" : "bg-white")}>
                               <td className="px-4 py-3">{tx.transaction_date ? formatInvoiceDate(tx.transaction_date) : "-"}</td>
                               <td className="px-4 py-3">{getGatewayLabel(tx.payment_source)}</td>
                               <td className="px-4 py-3 font-mono text-xs">TX-{tx.id.slice(0, 8).toUpperCase()}</td>
-                              <td className="px-4 py-3 text-right">{formatCurrency(tx.gross_amount || 0)}</td>
+                              <td className="px-4 py-3 text-right font-semibold">{formatCurrency(tx.gross_amount || 0)}</td>
                             </tr>
                           ))}
                       </tbody>
                     </table>
                   </div>
                 )}
-                <div className="flex items-center justify-end gap-6 border-t px-4 py-3 text-sm font-semibold">
-                  <span>Balance</span>
-                  <span>
+                <div className="flex items-center justify-end gap-6 border-t border-slate-200 bg-slate-50/70 px-4 py-3 text-sm font-semibold">
+                  <span className="text-muted-foreground">Balance</span>
+                  <span className="text-slate-900">
                     {formatCurrency(selectedInvoiceRemaining)}
                   </span>
                 </div>
               </div>
 
-              <div className="flex flex-wrap justify-end gap-2">
-                {selectedInvoice.invoice_url && isInvoicePayable(selectedInvoice.status) ? (
-                  <Button variant="outline" onClick={() => openInvoiceCheckout(selectedInvoice)}>
-                    <ExternalLink className="mr-2 h-4 w-4" />
-                    Buka Link Pembayaran
-                  </Button>
-                ) : null}
-                <Button
-                  variant="outline"
-                  onClick={() => downloadInvoicePdf(selectedInvoice)}
-                >
-                  Download PDF
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(getInvoiceNumber(selectedInvoice));
-                      toast.success("Nomor faktur disalin");
-                    } catch {
-                      toast.error("Gagal menyalin nomor faktur");
-                    }
-                  }}
-                >
-                  Salin Nomor Faktur
-                </Button>
+              <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 px-4 py-3 shadow-sm">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-muted-foreground">Aksi Cepat Faktur</p>
+                    <p className="text-xs text-muted-foreground">Unduh, salin nomor, atau lanjutkan pembayaran online.</p>
+                  </div>
+                  <div className="flex w-full flex-wrap justify-end gap-2 sm:w-auto">
+                    {selectedInvoice.invoice_url && isInvoicePayable(selectedInvoice.status) ? (
+                      <Button onClick={() => openInvoiceCheckout(selectedInvoice)} className="w-full sm:w-auto">
+                        <ExternalLink className="mr-2 h-4 w-4" />
+                        Buka Link Pembayaran
+                      </Button>
+                    ) : null}
+                    <Button
+                      variant="outline"
+                      className="w-full sm:w-auto bg-white"
+                      onClick={() => downloadInvoicePdf(selectedInvoice)}
+                    >
+                      Download PDF
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="w-full sm:w-auto bg-white"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(getInvoiceNumber(selectedInvoice));
+                          toast.success("Nomor faktur disalin");
+                        } catch {
+                          toast.error("Gagal menyalin nomor faktur");
+                        }
+                      }}
+                    >
+                      Salin Nomor Faktur
+                    </Button>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -2860,8 +3254,9 @@ export default function OrgBilling() {
               <p className="mt-1 text-xs text-destructive">{manualPaidAmountInlineError}</p>
             ) : null}
           </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel onClick={handleBackToNominal}>Kembali Isi Nominal</AlertDialogCancel>
+          <AlertDialogFooter className={dialogActionBarClassName}>
+            <DialogActionHint>Konfirmasi ini memastikan nominal input sesuai bukti transfer sebelum upload file.</DialogActionHint>
+            <AlertDialogCancel className="bg-white" onClick={handleBackToNominal}>Kembali Isi Nominal</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleConfirmChooseProofFile}
               disabled={manualPaidAmountValue <= 0 || Boolean(manualPaidAmountInlineError)}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,7 @@ import type { Tables } from "@/integrations/supabase/types";
 interface OrgActivationTabProps {
   tenantId: string;
   tenantName: string;
+  openCalculatorRequestToken?: number;
 }
 
 type SubscriptionPackage = Tables<"subscription_packages">;
@@ -129,7 +130,11 @@ const extractManualBankNames = (raw: unknown): string[] => {
 
 const isBriBankName = (bankName: string) => bankName.trim().toUpperCase() === "BRI";
 
-export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps) {
+export function OrgActivationTab({
+  tenantId,
+  tenantName,
+  openCalculatorRequestToken = 0,
+}: OrgActivationTabProps) {
   const navigate = useNavigate();
   const ITEMS_PER_PAGE = 10;
   const CALCULATOR_PREFS_KEY = `org_activation_calculator:${tenantId}`;
@@ -156,14 +161,23 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
   const [currentPage, setCurrentPage] = useState(1);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [scrollFlashTarget, setScrollFlashTarget] = useState<ScrollFlashTarget>(null);
+  const [isSlowLoading, setIsSlowLoading] = useState(false);
+  const handledCalculatorTokenRef = useRef(0);
 
   const fetchAll = useCallback(async () => {
+    setIsLoading(true);
+    setIsSlowLoading(false);
     try {
       const [pkgRes, subRes, invRes, empRes, xenditRes, b2bRes, tenantRes, billingRes] = await Promise.all([
         supabase.from("subscription_packages").select("*").eq("is_active", true).order("sort_order"),
         supabase.from("subscriptions").select("*").eq("tenant_id", tenantId).maybeSingle(),
         supabase.from("invoices").select("*").eq("tenant_id", tenantId).order("created_at", { ascending: false }).limit(20),
-        supabase.from("employees").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId).eq("is_active", true),
+        supabase
+          .from("employees")
+          .select("id", { count: "exact" })
+          .eq("tenant_id", tenantId)
+          .eq("is_active", true)
+          .limit(1),
         supabase.from("system_settings").select("value").eq("key", "xendit_enabled").maybeSingle(),
         supabase.from("system_settings").select("value").eq("key", "b2b_negotiation_threshold").maybeSingle(),
         supabase.from("tenants").select("billing_mode").eq("id", tenantId).maybeSingle(),
@@ -197,6 +211,15 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
   useEffect(() => {
     void fetchAll();
   }, [fetchAll]);
+
+  useEffect(() => {
+    if (!isLoading) {
+      setIsSlowLoading(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setIsSlowLoading(true), 7000);
+    return () => window.clearTimeout(timer);
+  }, [isLoading]);
 
   useEffect(() => {
     setHasHydratedCalculatorState(false);
@@ -418,6 +441,14 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
     ];
   }, [selectedPkgId, latestInvoice, subscription?.status, hasOpenInvoice]);
 
+  const activationProgressPercent = useMemo(() => {
+    const totalSegments = Math.max(activationSteps.length - 1, 1);
+    const doneCount = activationSteps.filter((step) => step.state === "done").length;
+    const currentIndex = activationSteps.findIndex((step) => step.state === "current");
+    const weightedProgress = doneCount + (currentIndex >= 0 ? 0.5 : 0);
+    return Math.min(100, Math.max(0, (weightedProgress / totalSegments) * 100));
+  }, [activationSteps]);
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "PAID": return <Badge className="bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">Lunas</Badge>;
@@ -587,11 +618,44 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    if (!openCalculatorRequestToken) return;
+    if (handledCalculatorTokenRef.current === openCalculatorRequestToken) return;
+    handledCalculatorTokenRef.current = openCalculatorRequestToken;
+    setIsCalculatorOpen(true);
+  }, [openCalculatorRequestToken]);
+
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
+      <Card className="border-slate-200/80 shadow-sm">
+        <CardContent className="py-10">
+          <div className="mx-auto flex max-w-md flex-col items-center gap-3 text-center">
+            <div className="rounded-full bg-slate-100 p-3">
+              <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
+            </div>
+            <p className="text-base font-medium text-slate-800">Memuat data penawaran dan faktur...</p>
+            <p className="text-sm text-muted-foreground">
+              Sistem sedang mengambil data paket, langganan aktif, dan riwayat invoice.
+            </p>
+            {isSlowLoading ? (
+              <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-left">
+                <p className="flex items-center gap-2 text-sm font-medium text-amber-800">
+                  <AlertTriangle className="h-4 w-4" />
+                  Pemuatan lebih lama dari biasanya
+                </p>
+                <p className="mt-1 text-xs text-amber-700">
+                  Coba muat ulang. Jika tetap lambat, cek koneksi atau refresh halaman.
+                </p>
+                <div className="mt-3 flex justify-end">
+                  <Button size="sm" variant="outline" onClick={() => void fetchAll()}>
+                    Coba Lagi
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </CardContent>
+      </Card>
     );
   }
 
@@ -1013,25 +1077,38 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
           <CardDescription>Progress realtime proses langganan dari pemilihan paket sampai aktivasi.</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-3 md:grid-cols-4">
+          <div className="space-y-4">
+            <div className="hidden md:block">
+              <div className="relative h-1 rounded-full bg-slate-200 dark:bg-slate-800">
+                <div
+                  className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-emerald-500 via-blue-500 to-indigo-500 transition-all duration-300"
+                  style={{ width: `${activationProgressPercent}%` }}
+                />
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-4">
             {activationSteps.map((step, index) => (
               <div
                 key={step.title}
-                className={`rounded-lg border p-3 ${
+                className={`rounded-xl border p-3 shadow-sm transition-colors ${
                   step.state === "done"
-                    ? "border-green-300 bg-green-50 dark:border-green-900 dark:bg-green-950/20"
+                    ? "border-emerald-300 bg-emerald-50/90 dark:border-emerald-900 dark:bg-emerald-950/20"
                     : step.state === "current"
-                      ? "border-blue-300 bg-blue-50 dark:border-blue-900 dark:bg-blue-950/20"
+                      ? "border-blue-300 bg-blue-50/90 ring-1 ring-blue-200 dark:border-blue-900 dark:bg-blue-950/20 dark:ring-blue-900/30"
                       : "border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900/30"
                 }`}
               >
                 <div className="flex items-center gap-2">
                   {step.state === "done" ? (
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-600 text-white shadow-sm">
+                      <CheckCircle2 className="h-4 w-4" />
+                    </span>
                   ) : step.state === "current" ? (
-                    <Clock className="h-4 w-4 text-blue-600" />
+                    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-blue-600 text-white shadow-sm">
+                      <Clock className="h-4 w-4" />
+                    </span>
                   ) : (
-                    <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border text-[10px] text-muted-foreground">
+                    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-slate-300 bg-white text-[11px] font-semibold text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-400">
                       {index + 1}
                     </span>
                   )}
@@ -1040,13 +1117,14 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
                 <p className="mt-1 text-xs text-muted-foreground">{step.description}</p>
               </div>
             ))}
+            </div>
           </div>
         </CardContent>
       </Card>
 
       {/* Payment Method Selection */}
-      <Card id={PAYMENT_METHOD_CARD_ID}>
-        <CardHeader>
+      <Card id={PAYMENT_METHOD_CARD_ID} className="border-slate-200/80 shadow-sm">
+        <CardHeader className="space-y-2 pb-5">
           <CardTitle className="flex items-center gap-2">
             <Wallet className="h-5 w-5 text-primary" />
             Metode Pembayaran
@@ -1058,19 +1136,23 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
             </p>
           )}
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <CardContent className="space-y-5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Manual Transfer */}
             <button
               type="button"
               onClick={() => setPaymentMethod("manual")}
-              className={`p-4 rounded-xl border-2 text-left transition-all ${
-                paymentMethod === "manual" ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
+              className={`group p-4 rounded-2xl border text-left transition-all ${
+                paymentMethod === "manual"
+                  ? "border-primary/60 bg-primary/[0.06] ring-1 ring-primary/30 shadow-sm"
+                  : "border-slate-200 bg-slate-50/30 hover:border-primary/35 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900/20"
               }`}
             >
               <div className="flex items-center gap-3 mb-2">
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                  paymentMethod === "manual" ? "bg-primary text-primary-foreground" : "bg-muted"
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors ${
+                  paymentMethod === "manual"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted group-hover:bg-primary/10 group-hover:text-primary"
                 }`}>
                   <Landmark className="h-5 w-5" />
                 </div>
@@ -1091,7 +1173,7 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
                         <span className="inline-flex h-4 min-w-6 items-center justify-center rounded bg-[#00529b] px-1 font-bold text-[9px] leading-none text-white">
                           BRI
                         </span>
-                        {bankName}
+                        Bank Rakyat Indonesia
                       </Badge>
                     ) : (
                       <Badge key={bankName} variant="outline" className="text-[10px]">
@@ -1112,14 +1194,19 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
               type="button"
               onClick={() => isXenditAllowed && setPaymentMethod("xendit")}
               disabled={!isXenditAllowed}
-              className={`p-4 rounded-xl border-2 text-left transition-all ${
-                !isXenditAllowed ? "opacity-50 cursor-not-allowed border-border" :
-                paymentMethod === "xendit" ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
+              className={`group p-4 rounded-2xl border text-left transition-all ${
+                !isXenditAllowed
+                  ? "opacity-55 cursor-not-allowed border-slate-200 bg-slate-50/20 dark:border-slate-800 dark:bg-slate-900/10"
+                  : paymentMethod === "xendit"
+                    ? "border-primary/60 bg-primary/[0.06] ring-1 ring-primary/30 shadow-sm"
+                    : "border-slate-200 bg-slate-50/30 hover:border-primary/35 hover:bg-slate-50 dark:border-slate-800 dark:bg-slate-900/20"
               }`}
             >
               <div className="flex items-center gap-3 mb-2">
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                  paymentMethod === "xendit" ? "bg-primary text-primary-foreground" : "bg-muted"
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors ${
+                  paymentMethod === "xendit"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted group-hover:bg-primary/10 group-hover:text-primary"
                 }`}>
                   <CreditCard className="h-5 w-5" />
                 </div>
@@ -1218,7 +1305,7 @@ export function OrgActivationTab({ tenantId, tenantName }: OrgActivationTabProps
       {paymentMethod === "manual" ? (
         <div
           id={MANUAL_PAYMENT_SECTION_ID}
-          className={`grid gap-6 xl:grid-cols-[minmax(320px,420px),minmax(0,1fr)] items-start rounded-md ${
+          className={`grid gap-7 xl:grid-cols-[minmax(320px,400px),minmax(0,1fr)] items-start rounded-md ${
             scrollFlashTarget === "manual" ? "ring-2 ring-primary/50 animate-pulse p-1" : ""
           }`}
         >

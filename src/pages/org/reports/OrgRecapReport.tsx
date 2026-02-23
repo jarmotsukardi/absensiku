@@ -7,12 +7,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { BarChart3, Download, Printer } from "lucide-react";
+import { BarChart3, Download, Printer, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
-import { isPeakHours } from "@/lib/attendanceResilience";
+import {
+  isPeakHours,
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 import { AttendanceRecapTabs } from "@/components/org/reports/AttendanceRecapTabs";
 
 type OPD = Tables<"opd">;
@@ -46,6 +51,9 @@ const months = [
   "Januari", "Februari", "Maret", "April", "Mei", "Juni",
   "Juli", "Agustus", "September", "Oktober", "November", "Desember",
 ];
+const RECAP_READ_TIMEOUT_MS = 12000;
+const RECAP_OUTPUT_TIMEOUT_MS = 20000;
+const RECAP_MAX_RETRIES = 2;
 
 export default function OrgRecapReport() {
   const [recap, setRecap] = useState<RecapData[]>([]);
@@ -59,6 +67,7 @@ export default function OrgRecapReport() {
   const [totalRows, setTotalRows] = useState(0);
   const [hasQueried, setHasQueried] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [isBusyHours, setIsBusyHours] = useState<boolean>(() => isPeakHours());
   const ITEMS_PER_PAGE = 15;
   const busyHoursMessage =
@@ -67,7 +76,20 @@ export default function OrgRecapReport() {
   useEffect(() => {
     const fetchOpds = async () => {
       try {
-        const { data, error } = await supabase.from("opd").select("*").order("name");
+        setIsRetrying(false);
+        const { data, error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("opd").select("*").order("name"),
+              RECAP_READ_TIMEOUT_MS,
+              "Permintaan data OPD timeout."
+            ),
+          {
+            maxRetries: RECAP_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (error) throw error;
         setOpds(data || []);
       } catch (error) {
@@ -75,6 +97,8 @@ export default function OrgRecapReport() {
         const message = appendErrorReference("Gagal memuat data OPD", errorRef);
         toast.error(message);
         setLoadError(message);
+      } finally {
+        setIsRetrying(false);
       }
     };
     void fetchOpds();
@@ -95,14 +119,27 @@ export default function OrgRecapReport() {
     setIsLoading(true);
     try {
       setLoadError(null);
-      const { data, error } = await supabase.rpc("org_get_attendance_recap_page", {
-        p_year: year,
-        p_month: month,
-        p_opd_id: filterOpd === "all" ? null : filterOpd,
-        p_search: searchTerm.trim() || null,
-        p_page: page,
-        p_page_size: ITEMS_PER_PAGE,
-      });
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("org_get_attendance_recap_page", {
+              p_year: year,
+              p_month: month,
+              p_opd_id: filterOpd === "all" ? null : filterOpd,
+              p_search: searchTerm.trim() || null,
+              p_page: page,
+              p_page_size: ITEMS_PER_PAGE,
+            }),
+            RECAP_READ_TIMEOUT_MS,
+            "Permintaan halaman rekapitulasi timeout."
+          ),
+        {
+          maxRetries: RECAP_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
 
       const rows = (data || []) as Array<RecapData & { total_count: number }>;
@@ -132,6 +169,7 @@ export default function OrgRecapReport() {
       setRecap([]);
       setTotalRows(0);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [ITEMS_PER_PAGE, busyHoursMessage, filterOpd, month, searchTerm, year]);
@@ -145,14 +183,25 @@ export default function OrgRecapReport() {
     let allRows: RecapData[] = [];
 
     while (true) {
-      const { data, error } = await supabase.rpc("org_get_attendance_recap_page", {
-        p_year: year,
-        p_month: month,
-        p_opd_id: filterOpd === "all" ? null : filterOpd,
-        p_search: searchTerm.trim() || null,
-        p_page: page,
-        p_page_size: pageSize,
-      });
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("org_get_attendance_recap_page", {
+              p_year: year,
+              p_month: month,
+              p_opd_id: filterOpd === "all" ? null : filterOpd,
+              p_search: searchTerm.trim() || null,
+              p_page: page,
+              p_page_size: pageSize,
+            }),
+            RECAP_OUTPUT_TIMEOUT_MS,
+            "Permintaan data export rekapitulasi timeout."
+          ),
+        {
+          maxRetries: RECAP_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+        }
+      );
       if (error) throw error;
 
       const rows = (data || []) as Array<RecapData & { total_count: number }>;
@@ -352,6 +401,12 @@ export default function OrgRecapReport() {
   return (
     <OrganizationLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+            Mencoba ulang memuat data rekapitulasi...
+          </div>
+        )}
+
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -373,8 +428,12 @@ export default function OrgRecapReport() {
         <AttendanceRecapTabs />
 
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchRecapPage(currentPage)}>
+              <RotateCcw className="mr-2 h-4 w-4" />
+              Coba Lagi
+            </Button>
           </div>
         )}
 
@@ -389,7 +448,8 @@ export default function OrgRecapReport() {
             <CardTitle>Filter Rekapitulasi</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-4 md:grid-cols-4">
+            <div className="rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="grid gap-4 md:grid-cols-4">
               <div className="grid gap-2">
                 <Label>OPD</Label>
                 <Select value={filterOpd} onValueChange={setFilterOpd}>
@@ -421,6 +481,7 @@ export default function OrgRecapReport() {
                 <Button onClick={handleShow} className="w-full" disabled={isLoading || isBusyHours}>
                   {isLoading ? "Memuat..." : "Tampilkan"}
                 </Button>
+              </div>
               </div>
             </div>
           </CardContent>

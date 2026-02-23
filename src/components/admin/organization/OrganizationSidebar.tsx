@@ -44,7 +44,6 @@ import {
   Newspaper,
   Home,
   Bell,
-  Zap,
   Receipt,
   Wand2,
   LifeBuoy,
@@ -61,6 +60,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { fetchOrgOnboardingCounts } from "@/lib/orgOnboardingTemplates";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface SubMenuItem {
   title: string;
@@ -83,6 +83,7 @@ interface MenuGroup {
 type OrgSidebarAccessLevel = "admin" | "operator";
 
 const ORG_ONBOARDING_MODULE_TOTAL = 7;
+const SIDEBAR_ONBOARDING_TIMEOUT_MS = 10000;
 
 const MENU_GROUPS: MenuGroup[] = [
   {
@@ -150,7 +151,6 @@ const MENU_GROUPS: MenuGroup[] = [
   {
     label: "Billing",
     items: [
-      { title: "Aktivasi", icon: Zap, path: "/org/activation" },
       { title: "Billing", icon: Receipt, path: "/org/billing" },
     ],
   },
@@ -278,12 +278,20 @@ export function OrganizationSidebar({
     const loadOnboardingStatus = async () => {
       setIsOnboardingStatusLoading(true);
       try {
-        const tenantId = await resolveOrgTenantId();
+        const tenantId = await withTimeout(
+          Promise.resolve(resolveOrgTenantId()),
+          SIDEBAR_ONBOARDING_TIMEOUT_MS,
+          "Timeout menentukan tenant onboarding sidebar",
+        );
         if (!tenantId) {
           if (!cancelled) setOnboardingReadyModules(0);
           return;
         }
-        const counts = await fetchOrgOnboardingCounts(tenantId);
+        const counts = await withTimeout(
+          Promise.resolve(fetchOrgOnboardingCounts(tenantId)),
+          SIDEBAR_ONBOARDING_TIMEOUT_MS,
+          "Timeout membaca status onboarding sidebar",
+        );
         const readyCount = Object.values(counts).filter((value) => value > 0).length;
         if (!cancelled) {
           setOnboardingReadyModules(readyCount);

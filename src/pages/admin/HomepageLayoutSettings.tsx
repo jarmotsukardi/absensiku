@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ComponentType } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import type { Json } from "@/integrations/supabase/types";
@@ -34,7 +34,8 @@ import { PromoSidebarSettings } from "@/components/admin/settings/PromoSidebarSe
 import { TargetSegmentSettings } from "@/components/admin/settings/TargetSegmentSettings";
 import { HomepageChatAgentSettings } from "@/components/admin/settings/HomepageChatAgentSettings";
 import { useNavigate } from "react-router-dom";
-import { reportError } from "@/lib/errorLogger";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 interface HomepageSection {
   id: string;
@@ -51,6 +52,8 @@ const sectionIcons: Record<string, ComponentType<{ className?: string }>> = {
   footer: Layout, pricing: CreditCard, statistics: BarChart3, partners: Users,
   news: Newspaper, promo_sidebar: Megaphone, app_download: Download, target_segment: HeartHandshake,
 };
+const HOMEPAGE_LAYOUT_QUERY_TIMEOUT_MS = 12000;
+const HOMEPAGE_LAYOUT_QUERY_RETRY_MAX = 2;
 
 export default function HomepageLayoutSettings() {
   const navigate = useNavigate();
@@ -59,25 +62,59 @@ export default function HomepageLayoutSettings() {
   const [isSaving, setIsSaving] = useState(false);
   const [draggedItem, setDraggedItem] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState("layout");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
-  useEffect(() => { fetchSections(); }, []);
-
-  const fetchSections = async () => {
+  const fetchSections = useCallback(async () => {
     try {
-      const { data, error } = await supabase.from("homepage_sections").select("*").order("sort_order");
+      setLoadError(null);
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.from("homepage_sections").select("*").order("sort_order"),
+            HOMEPAGE_LAYOUT_QUERY_TIMEOUT_MS,
+            "admin.homepage_layout.fetch_sections timeout"
+          ),
+        {
+          maxRetries: HOMEPAGE_LAYOUT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
       setSections(data || []);
     } catch (error) {
       const errorRef = reportError(error, "admin.homepage_layout.fetch_sections");
-      toast.error(`Gagal memuat data (Ref: ${errorRef})`);
+      const message = appendErrorReference("Gagal memuat data layout homepage", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => { void fetchSections(); }, [fetchSections]);
 
   const handleToggle = async (id: string, isEnabled: boolean) => {
     try {
-      const { error } = await supabase.from("homepage_sections").update({ is_enabled: isEnabled, updated_at: new Date().toISOString() }).eq("id", id);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("homepage_sections")
+              .update({ is_enabled: isEnabled, updated_at: new Date().toISOString() })
+              .eq("id", id),
+            HOMEPAGE_LAYOUT_QUERY_TIMEOUT_MS,
+            "admin.homepage_layout.toggle_section timeout"
+          ),
+        {
+          maxRetries: HOMEPAGE_LAYOUT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
       setSections(prev => prev.map(s => s.id === id ? { ...s, is_enabled: isEnabled } : s));
       toast.success("Status berhasil diubah");
@@ -107,14 +144,27 @@ export default function HomepageLayoutSettings() {
   const handleSaveOrder = async () => {
     setIsSaving(true);
     try {
+      setIsRetrying(false);
       const updatedAt = new Date().toISOString();
-      const results = await Promise.all(
-        sections.map((section) =>
-          supabase
-            .from("homepage_sections")
-            .update({ sort_order: section.sort_order, updated_at: updatedAt })
-            .eq("id", section.id),
-        ),
+      const results = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.all(
+              sections.map((section) =>
+                supabase
+                  .from("homepage_sections")
+                  .update({ sort_order: section.sort_order, updated_at: updatedAt })
+                  .eq("id", section.id),
+              )
+            ),
+            HOMEPAGE_LAYOUT_QUERY_TIMEOUT_MS,
+            "admin.homepage_layout.save_order timeout"
+          ),
+        {
+          maxRetries: HOMEPAGE_LAYOUT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
       );
       const failed = results.find((result) => result.error);
       if (failed?.error) {
@@ -138,37 +188,52 @@ export default function HomepageLayoutSettings() {
   return (
     <SuperAdminLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang memuat pengaturan layout...
+          </div>
+        )}
+        {loadError && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void fetchSections()}>
+              Coba Lagi
+            </Button>
+          </div>
+        )}
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2"><Layout className="h-6 w-6" />Pengaturan Layout Halaman Depan</h1>
           <p className="text-muted-foreground">Atur section, banner, dan konten halaman utama</p>
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="h-auto flex flex-wrap gap-1 p-1">
-            <TabsTrigger value="layout" className="flex-shrink-0"><Layout className="h-4 w-4" /><span className="hidden sm:inline ml-1">Tata Letak</span></TabsTrigger>
-            <TabsTrigger value="hero" className="flex-shrink-0"><Image className="h-4 w-4" /><span className="hidden sm:inline ml-1">Hero</span></TabsTrigger>
-            <TabsTrigger value="target_segment" className="flex-shrink-0"><HeartHandshake className="h-4 w-4" /><span className="hidden sm:inline ml-1">Solusi</span></TabsTrigger>
-            <TabsTrigger value="statistics" className="flex-shrink-0"><BarChart3 className="h-4 w-4" /><span className="hidden sm:inline ml-1">Statistik</span></TabsTrigger>
-            <TabsTrigger value="features" className="flex-shrink-0"><Layout className="h-4 w-4" /><span className="hidden sm:inline ml-1">Fitur</span></TabsTrigger>
-            <TabsTrigger value="news" className="flex-shrink-0"><Newspaper className="h-4 w-4" /><span className="hidden sm:inline ml-1">Berita</span></TabsTrigger>
-            <TabsTrigger value="articles" className="flex-shrink-0"><FileText className="h-4 w-4" /><span className="hidden sm:inline ml-1">Artikel</span></TabsTrigger>
-            <TabsTrigger value="pricing" className="flex-shrink-0"><CreditCard className="h-4 w-4" /><span className="hidden sm:inline ml-1">Harga</span></TabsTrigger>
-            <TabsTrigger value="testimonials" className="flex-shrink-0"><Users className="h-4 w-4" /><span className="hidden sm:inline ml-1">Testimoni</span></TabsTrigger>
-            <TabsTrigger value="faq" className="flex-shrink-0"><HelpCircle className="h-4 w-4" /><span className="hidden sm:inline ml-1">FAQ</span></TabsTrigger>
-            <TabsTrigger value="payment" className="flex-shrink-0"><CreditCard className="h-4 w-4" /><span className="hidden sm:inline ml-1">Pembayaran</span></TabsTrigger>
-            <TabsTrigger value="cta" className="flex-shrink-0"><Phone className="h-4 w-4" /><span className="hidden sm:inline ml-1">CTA</span></TabsTrigger>
-            <TabsTrigger value="footer" className="flex-shrink-0"><Layout className="h-4 w-4" /><span className="hidden sm:inline ml-1">Footer</span></TabsTrigger>
-            <TabsTrigger value="quicklinks" className="flex-shrink-0"><Link2 className="h-4 w-4" /><span className="hidden sm:inline ml-1">Quick Links</span></TabsTrigger>
-            <TabsTrigger value="legal" className="flex-shrink-0"><FileCheck className="h-4 w-4" /><span className="hidden sm:inline ml-1">Legal</span></TabsTrigger>
-            <TabsTrigger value="social" className="flex-shrink-0"><Share2 className="h-4 w-4" /><span className="hidden sm:inline ml-1">Sosmed</span></TabsTrigger>
-            <TabsTrigger value="chat_agent" className="flex-shrink-0"><MessageSquare className="h-4 w-4" /><span className="hidden sm:inline ml-1">Chat Agent</span></TabsTrigger>
-            <TabsTrigger value="banners" className="flex-shrink-0"><Megaphone className="h-4 w-4" /><span className="hidden sm:inline ml-1">Banner</span></TabsTrigger>
-            <TabsTrigger value="sidebar" className="flex-shrink-0"><PanelRight className="h-4 w-4" /><span className="hidden sm:inline ml-1">Sidebar</span></TabsTrigger>
-            <TabsTrigger value="promo" className="flex-shrink-0"><Megaphone className="h-4 w-4" /><span className="hidden sm:inline ml-1">Promosi</span></TabsTrigger>
-            <TabsTrigger value="download" className="flex-shrink-0"><Download className="h-4 w-4" /><span className="hidden sm:inline ml-1">Download</span></TabsTrigger>
-            <TabsTrigger value="clients" className="flex-shrink-0"><Users className="h-4 w-4" /><span className="hidden sm:inline ml-1">Klien</span></TabsTrigger>
-            <TabsTrigger value="about" className="flex-shrink-0"><Info className="h-4 w-4" /><span className="hidden sm:inline ml-1">Tentang</span></TabsTrigger>
-          </TabsList>
+          <div className="overflow-x-auto pb-1">
+            <TabsList className="min-w-max h-auto flex-nowrap gap-1.5 rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+              <TabsTrigger value="layout" className="flex-shrink-0 whitespace-nowrap"><Layout className="h-4 w-4" /><span className="hidden sm:inline ml-1">Tata Letak</span></TabsTrigger>
+              <TabsTrigger value="hero" className="flex-shrink-0 whitespace-nowrap"><Image className="h-4 w-4" /><span className="hidden sm:inline ml-1">Hero</span></TabsTrigger>
+              <TabsTrigger value="target_segment" className="flex-shrink-0 whitespace-nowrap"><HeartHandshake className="h-4 w-4" /><span className="hidden sm:inline ml-1">Solusi</span></TabsTrigger>
+              <TabsTrigger value="statistics" className="flex-shrink-0 whitespace-nowrap"><BarChart3 className="h-4 w-4" /><span className="hidden sm:inline ml-1">Statistik</span></TabsTrigger>
+              <TabsTrigger value="features" className="flex-shrink-0 whitespace-nowrap"><Layout className="h-4 w-4" /><span className="hidden sm:inline ml-1">Fitur</span></TabsTrigger>
+              <TabsTrigger value="news" className="flex-shrink-0 whitespace-nowrap"><Newspaper className="h-4 w-4" /><span className="hidden sm:inline ml-1">Berita</span></TabsTrigger>
+              <TabsTrigger value="articles" className="flex-shrink-0 whitespace-nowrap"><FileText className="h-4 w-4" /><span className="hidden sm:inline ml-1">Artikel</span></TabsTrigger>
+              <TabsTrigger value="pricing" className="flex-shrink-0 whitespace-nowrap"><CreditCard className="h-4 w-4" /><span className="hidden sm:inline ml-1">Harga</span></TabsTrigger>
+              <TabsTrigger value="testimonials" className="flex-shrink-0 whitespace-nowrap"><Users className="h-4 w-4" /><span className="hidden sm:inline ml-1">Testimoni</span></TabsTrigger>
+              <TabsTrigger value="faq" className="flex-shrink-0 whitespace-nowrap"><HelpCircle className="h-4 w-4" /><span className="hidden sm:inline ml-1">FAQ</span></TabsTrigger>
+              <TabsTrigger value="payment" className="flex-shrink-0 whitespace-nowrap"><CreditCard className="h-4 w-4" /><span className="hidden sm:inline ml-1">Pembayaran</span></TabsTrigger>
+              <TabsTrigger value="cta" className="flex-shrink-0 whitespace-nowrap"><Phone className="h-4 w-4" /><span className="hidden sm:inline ml-1">CTA</span></TabsTrigger>
+              <TabsTrigger value="footer" className="flex-shrink-0 whitespace-nowrap"><Layout className="h-4 w-4" /><span className="hidden sm:inline ml-1">Footer</span></TabsTrigger>
+              <TabsTrigger value="quicklinks" className="flex-shrink-0 whitespace-nowrap"><Link2 className="h-4 w-4" /><span className="hidden sm:inline ml-1">Quick Links</span></TabsTrigger>
+              <TabsTrigger value="legal" className="flex-shrink-0 whitespace-nowrap"><FileCheck className="h-4 w-4" /><span className="hidden sm:inline ml-1">Legal</span></TabsTrigger>
+              <TabsTrigger value="social" className="flex-shrink-0 whitespace-nowrap"><Share2 className="h-4 w-4" /><span className="hidden sm:inline ml-1">Sosmed</span></TabsTrigger>
+              <TabsTrigger value="chat_agent" className="flex-shrink-0 whitespace-nowrap"><MessageSquare className="h-4 w-4" /><span className="hidden sm:inline ml-1">Chat Agent</span></TabsTrigger>
+              <TabsTrigger value="banners" className="flex-shrink-0 whitespace-nowrap"><Megaphone className="h-4 w-4" /><span className="hidden sm:inline ml-1">Banner</span></TabsTrigger>
+              <TabsTrigger value="sidebar" className="flex-shrink-0 whitespace-nowrap"><PanelRight className="h-4 w-4" /><span className="hidden sm:inline ml-1">Sidebar</span></TabsTrigger>
+              <TabsTrigger value="promo" className="flex-shrink-0 whitespace-nowrap"><Megaphone className="h-4 w-4" /><span className="hidden sm:inline ml-1">Promosi</span></TabsTrigger>
+              <TabsTrigger value="download" className="flex-shrink-0 whitespace-nowrap"><Download className="h-4 w-4" /><span className="hidden sm:inline ml-1">Download</span></TabsTrigger>
+              <TabsTrigger value="clients" className="flex-shrink-0 whitespace-nowrap"><Users className="h-4 w-4" /><span className="hidden sm:inline ml-1">Klien</span></TabsTrigger>
+              <TabsTrigger value="about" className="flex-shrink-0 whitespace-nowrap"><Info className="h-4 w-4" /><span className="hidden sm:inline ml-1">Tentang</span></TabsTrigger>
+            </TabsList>
+          </div>
 
           <TabsContent value="layout" className="mt-6">
             <Card>

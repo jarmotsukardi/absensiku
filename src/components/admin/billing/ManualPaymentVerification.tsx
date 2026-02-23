@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useInvoices, Invoice } from "@/hooks/useBilling";
+import { useManualVerificationInvoices, Invoice } from "@/hooks/useBilling";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,6 +13,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import {
   Select,
   SelectContent,
@@ -36,6 +37,7 @@ import { supabase } from "@/integrations/supabase/client";
 import type { TablesUpdate } from "@/integrations/supabase/types";
 import { toast } from "sonner";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat("id-ID", {
@@ -45,29 +47,23 @@ const formatCurrency = (amount: number) => {
   }).format(amount);
 };
 
-export function ManualPaymentVerification() {
+interface ManualPaymentVerificationProps {
+  invoices?: Invoice[];
+  isLoading?: boolean;
+  onRefetch?: () => Promise<unknown> | void;
+}
+
+export function ManualPaymentVerification(props: ManualPaymentVerificationProps = {}) {
+  const OP_TIMEOUT_MS = 12000;
   const [searchQuery, setSearchQuery] = useState("");
   const {
-    invoices: legacyVerificationInvoices,
-    isLoading: isLoadingLegacyVerification,
-    refetch: refetchLegacyVerification,
-  } = useInvoices({
-    status: "AWAITING_VERIFICATION",
-  });
-  const {
-    invoices: fullVerificationInvoices,
-    isLoading: isLoadingFullVerification,
-    refetch: refetchFullVerification,
-  } = useInvoices({
-    status: "AWAITING_VERIFICATION_FULL",
-  });
-  const {
-    invoices: partialVerificationInvoices,
-    isLoading: isLoadingPartialVerification,
-    refetch: refetchPartialVerification,
-  } = useInvoices({
-    status: "PENDING_VERIFICATION_PARTIAL",
-  });
+    invoices: hookManualInvoices,
+    isLoading: hookIsLoading,
+    refetch: hookRefetchManualVerification,
+  } = useManualVerificationInvoices();
+  const allManualInvoices = props.invoices ?? hookManualInvoices;
+  const isLoading = props.isLoading ?? hookIsLoading;
+  const refetchManualVerification = props.onRefetch ?? hookRefetchManualVerification;
   
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [showVerifyDialog, setShowVerifyDialog] = useState(false);
@@ -82,9 +78,6 @@ export function ManualPaymentVerification() {
   const [verifiedAmountInput, setVerifiedAmountInput] = useState("");
   const [verificationMethod, setVerificationMethod] = useState("manual");
 
-  const allManualInvoices = [...legacyVerificationInvoices, ...fullVerificationInvoices, ...partialVerificationInvoices];
-  const isLoading = isLoadingLegacyVerification || isLoadingFullVerification || isLoadingPartialVerification;
-  
   const filteredInvoices = allManualInvoices.filter((inv) => {
     if (!searchQuery) return true;
     const query = searchQuery.toLowerCase();
@@ -126,13 +119,17 @@ export function ManualPaymentVerification() {
     try {
       const nowIso = new Date().toISOString();
       const expectedAmount = Number(selectedInvoice.gross_amount || 0);
-      const { data: manualPaymentRows, error: manualPaymentFetchError } = await supabase
-        .from("manual_payments")
-        .select("id, amount, confirmed_amount, verified_amount, verification_method, status, reference_number, transfer_proof_url, payment_date, created_at")
-        .eq("tenant_id", selectedInvoice.tenant_id)
-        .eq("invoice_number", selectedInvoice.invoice_number)
-        .order("created_at", { ascending: false })
-        .limit(50);
+      const { data: manualPaymentRows, error: manualPaymentFetchError } = await withTimeout(
+        supabase
+          .from("manual_payments")
+          .select("id, amount, confirmed_amount, verified_amount, verification_method, status, reference_number, transfer_proof_url, payment_date, created_at")
+          .eq("tenant_id", selectedInvoice.tenant_id)
+          .eq("invoice_number", selectedInvoice.invoice_number)
+          .order("created_at", { ascending: false })
+          .limit(50),
+        OP_TIMEOUT_MS,
+        "Membaca bukti pembayaran manual terlalu lama",
+      );
 
       if (manualPaymentFetchError) {
         const errorRef = reportError(
@@ -231,15 +228,19 @@ export function ManualPaymentVerification() {
         const verifiedInputCents = Math.round(verifiedInputAmount * 100);
         const confirmedCents = Math.round(confirmedAmount * 100);
         if (verifiedInputCents !== confirmedCents) {
-          const { error: auditError } = await supabase.rpc("log_manual_payment_verification_audit" as never, {
-            p_invoice_id: selectedInvoice.id,
-            p_manual_payment_id: pendingManualPayment.id,
-            p_tenant_id: selectedInvoice.tenant_id,
-            p_claimed_amount: Math.round(confirmedAmount),
-            p_verified_amount: Math.round(verifiedInputAmount),
-            p_decision: "reject",
-            p_notes: verificationNotes || "Mismatch nominal klaim user vs verifikasi admin",
-          } as never);
+          const { error: auditError } = await withTimeout(
+            supabase.rpc("log_manual_payment_verification_audit" as never, {
+              p_invoice_id: selectedInvoice.id,
+              p_manual_payment_id: pendingManualPayment.id,
+              p_tenant_id: selectedInvoice.tenant_id,
+              p_claimed_amount: Math.round(confirmedAmount),
+              p_verified_amount: Math.round(verifiedInputAmount),
+              p_decision: "reject",
+              p_notes: verificationNotes || "Mismatch nominal klaim user vs verifikasi admin",
+            } as never),
+            OP_TIMEOUT_MS,
+            "Mencatat audit mismatch terlalu lama",
+          );
           if (auditError) {
             reportError(auditError, "admin.billing.manual_payment.audit.mismatch_log_failed", {
               invoice_id: selectedInvoice.id,
@@ -292,8 +293,70 @@ export function ManualPaymentVerification() {
           return;
         }
 
-        // Get current user for verified_by
-        const { data: { user } } = await supabase.auth.getUser();
+        // Resolve verifier employee id (manual_payments.verified_by -> employees.id)
+        const {
+          data: { user },
+          error: authError,
+        } = await withTimeout(
+          supabase.auth.getUser(),
+          OP_TIMEOUT_MS,
+          "Memvalidasi sesi verifikator terlalu lama",
+        );
+        if (authError) {
+          const errorRef = reportError(authError, "admin.billing.manual_payment.verifier.auth_failed", {
+            invoice_id: selectedInvoice.id,
+            tenant_id: selectedInvoice.tenant_id,
+            invoice_number: selectedInvoice.invoice_number,
+            manual_payment_id: pendingManualPayment.id,
+          });
+          toast.error(appendErrorReference("Sesi verifikator tidak valid. Silakan login ulang.", errorRef));
+          return;
+        }
+
+        let verifierEmployeeId: string | null = null;
+        if (user?.id) {
+          const { data: tenantScopedEmployee, error: tenantScopedEmployeeError } = await supabase
+            .from("employees")
+            .select("id")
+            .eq("user_id", user.id)
+            .eq("tenant_id", selectedInvoice.tenant_id)
+            .limit(1)
+            .maybeSingle();
+
+          if (tenantScopedEmployeeError) {
+            reportError(tenantScopedEmployeeError, "admin.billing.manual_payment.verifier.employee_lookup_failed", {
+              invoice_id: selectedInvoice.id,
+              tenant_id: selectedInvoice.tenant_id,
+              invoice_number: selectedInvoice.invoice_number,
+              user_id: user.id,
+              scoped: "tenant",
+            });
+          } else {
+            verifierEmployeeId = tenantScopedEmployee?.id ?? null;
+          }
+
+          if (!verifierEmployeeId) {
+            const { data: fallbackEmployee, error: fallbackEmployeeError } = await supabase
+              .from("employees")
+              .select("id")
+              .eq("user_id", user.id)
+              .limit(1)
+              .maybeSingle();
+
+            if (fallbackEmployeeError) {
+              reportError(fallbackEmployeeError, "admin.billing.manual_payment.verifier.employee_lookup_failed", {
+                invoice_id: selectedInvoice.id,
+                tenant_id: selectedInvoice.tenant_id,
+                invoice_number: selectedInvoice.invoice_number,
+                user_id: user.id,
+                scoped: "global_fallback",
+              });
+            } else {
+              verifierEmployeeId = fallbackEmployee?.id ?? null;
+            }
+          }
+        }
+
         const { error: manualPaymentVerifyError } = await supabase
           .from("manual_payments")
           .update({
@@ -302,7 +365,7 @@ export function ManualPaymentVerification() {
             verified_amount: verifiedInputAmount,
             verification_method: verificationMethod,
             verified_at: nowIso,
-            verified_by: user?.id ?? null,
+            verified_by: verifierEmployeeId,
             updated_at: nowIso,
           })
           .eq("id", pendingManualPayment.id);
@@ -340,7 +403,7 @@ export function ManualPaymentVerification() {
           updates.paid_at = nowIso;
           updates.rejection_reason = null;
           updates.notes = verificationNotes || "Pembayaran manual diverifikasi";
-          updates.verified_by = user?.id;
+          updates.verified_by = verifierEmployeeId;
           updates.verified_at = nowIso;
         }
       } else {
@@ -383,15 +446,19 @@ export function ManualPaymentVerification() {
           const claimedAmount = Number(pendingManualPayment.confirmed_amount ?? pendingManualPayment.amount ?? 0);
           const parsedVerifiedInput = Number((verifiedAmountInput || "").replace(/[^\d.]/g, ""));
           const verifiedAmountForAudit = Number.isFinite(parsedVerifiedInput) ? parsedVerifiedInput : 0;
-          const { error: auditError } = await supabase.rpc("log_manual_payment_verification_audit" as never, {
-            p_invoice_id: selectedInvoice.id,
-            p_manual_payment_id: pendingManualPayment.id,
-            p_tenant_id: selectedInvoice.tenant_id,
-            p_claimed_amount: Math.round(claimedAmount),
-            p_verified_amount: Math.round(verifiedAmountForAudit),
-            p_decision: "reject",
-            p_notes: rejectionReason,
-          } as never);
+          const { error: auditError } = await withTimeout(
+            supabase.rpc("log_manual_payment_verification_audit" as never, {
+              p_invoice_id: selectedInvoice.id,
+              p_manual_payment_id: pendingManualPayment.id,
+              p_tenant_id: selectedInvoice.tenant_id,
+              p_claimed_amount: Math.round(claimedAmount),
+              p_verified_amount: Math.round(verifiedAmountForAudit),
+              p_decision: "reject",
+              p_notes: rejectionReason,
+            } as never),
+            OP_TIMEOUT_MS,
+            "Mencatat audit penolakan terlalu lama",
+          );
           if (auditError) {
             reportError(auditError, "admin.billing.manual_payment.audit.reject_log_failed", {
               invoice_id: selectedInvoice.id,
@@ -449,7 +516,6 @@ export function ManualPaymentVerification() {
               tenant_id: selectedInvoice.tenant_id,
               subscription_id: currentSub.id,
             });
-            console.error("Subscription update error:", subUpdateError);
           }
         } else {
           const { error: subInsertError } = await supabase
@@ -468,7 +534,6 @@ export function ManualPaymentVerification() {
               invoice_id: selectedInvoice.id,
               tenant_id: selectedInvoice.tenant_id,
             });
-            console.error("Subscription insert error:", subInsertError);
           }
         }
 
@@ -484,7 +549,6 @@ export function ManualPaymentVerification() {
             invoice_id: selectedInvoice.id,
             tenant_id: selectedInvoice.tenant_id,
           });
-          console.error("Failed to check existing financial ledger row:", existingLedgerError);
         } else if (!existingLedger) {
           const { error: ledgerInsertError } = await supabase.from("financial_ledger").insert({
             invoice_id: selectedInvoice.id,
@@ -504,40 +568,50 @@ export function ManualPaymentVerification() {
               invoice_id: selectedInvoice.id,
               tenant_id: selectedInvoice.tenant_id,
             });
-            console.error("Failed to insert financial ledger row:", ledgerInsertError);
           }
         }
 
-        const { error: streakSyncError } = await supabase.rpc("mark_streak_invoiced", {
-          p_tenant_id: selectedInvoice.tenant_id,
-          p_invoice_id: selectedInvoice.id,
-        });
+        const { error: streakSyncError } = await withTimeout(
+          supabase.rpc("mark_streak_invoiced", {
+            p_tenant_id: selectedInvoice.tenant_id,
+            p_invoice_id: selectedInvoice.id,
+          }),
+          OP_TIMEOUT_MS,
+          "Sinkron status streak terlalu lama",
+        );
         if (streakSyncError) {
           reportError(streakSyncError, "admin.billing.manual_payment.streak_sync_failed", {
             invoice_id: selectedInvoice.id,
             tenant_id: selectedInvoice.tenant_id,
           });
-          console.error("Failed to sync streak invoiced state:", streakSyncError);
         }
 
         const [waDispatch, emailDispatch] = await Promise.all([
-          supabase.functions.invoke<{ success?: boolean; error?: string; trace_id?: string }>(
-            "dispatch-billing-whatsapp",
-            {
-              body: {
-                invoice_id: selectedInvoice.id,
-                trigger: "ADMIN_VERIFY_MANUAL",
+          withTimeout(
+            supabase.functions.invoke<{ success?: boolean; error?: string; trace_id?: string }>(
+              "dispatch-billing-whatsapp",
+              {
+                body: {
+                  invoice_id: selectedInvoice.id,
+                  trigger: "ADMIN_VERIFY_MANUAL",
+                },
               },
-            },
+            ),
+            OP_TIMEOUT_MS,
+            "Dispatch WhatsApp billing terlalu lama",
           ),
-          supabase.functions.invoke<{ success?: boolean; error?: string; trace_id?: string }>(
-            "dispatch-billing-email",
-            {
-              body: {
-                invoice_id: selectedInvoice.id,
-                trigger: "ADMIN_VERIFY_MANUAL",
+          withTimeout(
+            supabase.functions.invoke<{ success?: boolean; error?: string; trace_id?: string }>(
+              "dispatch-billing-email",
+              {
+                body: {
+                  invoice_id: selectedInvoice.id,
+                  trigger: "ADMIN_VERIFY_MANUAL",
+                },
               },
-            },
+            ),
+            OP_TIMEOUT_MS,
+            "Dispatch email billing terlalu lama",
           ),
         ]);
 
@@ -594,7 +668,7 @@ export function ManualPaymentVerification() {
       }
       setShowVerifyDialog(false);
       setSelectedInvoice(null);
-      await Promise.all([refetchLegacyVerification(), refetchFullVerification(), refetchPartialVerification()]);
+      await refetchManualVerification();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
       const errorRef = reportError(error, "admin.billing.manual_payment.verify_process", {
@@ -608,8 +682,14 @@ export function ManualPaymentVerification() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-32">
-        <Loader2 className="h-6 w-6 animate-spin" />
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-10 text-center">
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+        </div>
+        <p className="text-base font-medium text-slate-900">Memuat verifikasi manual</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Antrean pembayaran transfer sedang disiapkan.
+        </p>
       </div>
     );
   }
@@ -801,24 +881,30 @@ export function ManualPaymentVerification() {
             </div>
           )}
 
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button variant="outline" onClick={() => setShowVerifyDialog(false)}>
-              Batal
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => handleVerify(false)}
-              disabled={isProcessing || !rejectionReason}
-            >
-              {isProcessing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              <XCircle className="mr-2 h-4 w-4" />
-              Tolak
-            </Button>
-            <Button onClick={() => handleVerify(true)} disabled={isProcessing}>
-              {isProcessing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              <CheckCircle className="mr-2 h-4 w-4" />
-              Setujui Pembayaran
-            </Button>
+          <DialogFooter className={dialogActionBarClassName}>
+            <DialogActionHint>
+              Pastikan nominal verifikasi sudah sesuai bukti transfer sebelum menyetujui pembayaran.
+            </DialogActionHint>
+            <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+              <Button variant="outline" className="w-full sm:w-auto bg-white" onClick={() => setShowVerifyDialog(false)}>
+                Batal
+              </Button>
+              <Button
+                variant="destructive"
+                className="w-full sm:w-auto"
+                onClick={() => handleVerify(false)}
+                disabled={isProcessing || !rejectionReason}
+              >
+                {isProcessing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                <XCircle className="mr-2 h-4 w-4" />
+                Tolak
+              </Button>
+              <Button className="w-full sm:w-auto sm:min-w-[190px]" onClick={() => handleVerify(true)} disabled={isProcessing}>
+                {isProcessing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                <CheckCircle className="mr-2 h-4 w-4" />
+                Setujui Pembayaran
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

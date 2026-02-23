@@ -19,6 +19,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import {
   Pagination,
   PaginationContent,
@@ -69,12 +71,15 @@ interface TenantAdminRole {
 
 export default function OrgNotificationManagement() {
   const PAGE_SIZE = 20;
+  const ORG_NOTIFICATIONS_QUERY_TIMEOUT_MS = 15000;
+  const ORG_NOTIFICATIONS_QUERY_RETRY_MAX = 1;
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [notifiableEmployeeIds, setNotifiableEmployeeIds] = useState<string[]>([]);
   const [opdOptions, setOpdOptions] = useState<OPDOption[]>([]);
   const [workUnitOptions, setWorkUnitOptions] = useState<WorkUnitOption[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -148,32 +153,60 @@ export default function OrgNotificationManagement() {
   );
 
   const fetchActiveEmployees = useCallback(async (tid: string): Promise<Employee[]> => {
-    const { data, error } = await supabase
-      .from("employees")
-      .select("id, user_id, name, position, opd_id, work_unit_id")
-      .eq("tenant_id", tid)
-      .eq("is_active", true)
-      .order("name");
+    const { data, error } = await withExponentialBackoff(
+      () =>
+        withTimeout(
+          supabase
+            .from("employees")
+            .select("id, user_id, name, position, opd_id, work_unit_id")
+            .eq("tenant_id", tid)
+            .eq("is_active", true)
+            .order("name"),
+          ORG_NOTIFICATIONS_QUERY_TIMEOUT_MS,
+          "org.notifications.fetch_active_employees timeout",
+        ),
+      {
+        maxRetries: ORG_NOTIFICATIONS_QUERY_RETRY_MAX,
+        shouldRetry: isRetryableError,
+        onRetry: () => setIsRetrying(true),
+      }
+    );
 
     if (error) throw error;
     return (data || []) as Employee[];
   }, []);
 
   const fetchTargetScopes = useCallback(async (tid: string) => {
-    const [opdRes, workUnitsRes] = await Promise.all([
-      supabase
-        .from("opd")
-        .select("id, name, code, is_active")
-        .eq("tenant_id", tid)
-        .eq("is_active", true)
-        .order("name"),
-      supabase
-        .from("work_units")
-        .select("id, name, code, opd_id, is_active")
-        .eq("tenant_id", tid)
-        .eq("is_active", true)
-        .order("name"),
-    ]);
+    const [opdRes, workUnitsRes] = await withExponentialBackoff(
+      () =>
+        Promise.all([
+          withTimeout(
+            supabase
+              .from("opd")
+              .select("id, name, code, is_active")
+              .eq("tenant_id", tid)
+              .eq("is_active", true)
+              .order("name"),
+            ORG_NOTIFICATIONS_QUERY_TIMEOUT_MS,
+            "org.notifications.fetch_target_scopes.opd timeout",
+          ),
+          withTimeout(
+            supabase
+              .from("work_units")
+              .select("id, name, code, opd_id, is_active")
+              .eq("tenant_id", tid)
+              .eq("is_active", true)
+              .order("name"),
+            ORG_NOTIFICATIONS_QUERY_TIMEOUT_MS,
+            "org.notifications.fetch_target_scopes.work_units timeout",
+          ),
+        ]),
+      {
+        maxRetries: ORG_NOTIFICATIONS_QUERY_RETRY_MAX,
+        shouldRetry: isRetryableError,
+        onRetry: () => setIsRetrying(true),
+      }
+    );
 
     if (opdRes.error) throw opdRes.error;
     if (workUnitsRes.error) throw workUnitsRes.error;
@@ -204,14 +237,27 @@ export default function OrgNotificationManagement() {
 
   const fetchNotifications = useCallback(async (tid: string) => {
     try {
+      setIsRetrying(false);
       setLoadError(null);
       const [activeEmployees, tenantAdminsRes] = await Promise.all([
         fetchActiveEmployees(tid),
-        supabase
-          .from("user_roles")
-          .select("user_id")
-          .eq("tenant_id", tid)
-          .eq("role", "admin_instansi"),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("user_roles")
+                .select("user_id")
+                .eq("tenant_id", tid)
+                .eq("role", "admin_instansi"),
+              ORG_NOTIFICATIONS_QUERY_TIMEOUT_MS,
+              "org.notifications.fetch_notifications.tenant_admins timeout",
+            ),
+          {
+            maxRetries: ORG_NOTIFICATIONS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
       ]);
 
       if (tenantAdminsRes.error) throw tenantAdminsRes.error;
@@ -265,9 +311,45 @@ export default function OrgNotificationManagement() {
       );
 
       const [{ data, error, count }, readRes, unreadRes] = await Promise.all([
-        pagedQuery,
-        readCountQuery,
-        unreadCountQuery,
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              pagedQuery,
+              ORG_NOTIFICATIONS_QUERY_TIMEOUT_MS,
+              "org.notifications.fetch_notifications.paged timeout",
+            ),
+          {
+            maxRetries: ORG_NOTIFICATIONS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              readCountQuery,
+              ORG_NOTIFICATIONS_QUERY_TIMEOUT_MS,
+              "org.notifications.fetch_notifications.read_count timeout",
+            ),
+          {
+            maxRetries: ORG_NOTIFICATIONS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              unreadCountQuery,
+              ORG_NOTIFICATIONS_QUERY_TIMEOUT_MS,
+              "org.notifications.fetch_notifications.unread_count timeout",
+            ),
+          {
+            maxRetries: ORG_NOTIFICATIONS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
       ]);
 
       if (!error && data) {
@@ -294,6 +376,8 @@ export default function OrgNotificationManagement() {
       setTotalCount(0);
       setReadCount(0);
       setUnreadCount(0);
+    } finally {
+      setIsRetrying(false);
     }
   }, [applyNotificationFilters, currentPage, fetchActiveEmployees]);
 
@@ -317,8 +401,21 @@ export default function OrgNotificationManagement() {
 
   const fetchTenantAndData = useCallback(async () => {
     try {
+      setIsRetrying(false);
       setLoadError(null);
-      const resolvedTenantId = await resolveOrgTenantId();
+      const resolvedTenantId = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            resolveOrgTenantId(),
+            ORG_NOTIFICATIONS_QUERY_TIMEOUT_MS,
+            "org.notifications.fetch_tenant_and_data timeout",
+          ),
+        {
+          maxRetries: ORG_NOTIFICATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (resolvedTenantId) {
         setTenantId(resolvedTenantId);
         await Promise.all([fetchEmployees(resolvedTenantId), fetchTargetScopes(resolvedTenantId)]);
@@ -343,6 +440,7 @@ export default function OrgNotificationManagement() {
       setNotifications([]);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   }, [fetchEmployees, fetchTargetScopes]);
 
@@ -373,6 +471,7 @@ export default function OrgNotificationManagement() {
     setIsSending(true);
     
     try {
+      setIsRetrying(false);
       if (targetType === "selected" && selectedEmployees.length === 0) {
         toast.error("Pilih minimal satu pegawai");
         setIsSending(false);
@@ -414,9 +513,21 @@ export default function OrgNotificationManagement() {
         is_read: false,
       }));
 
-      const { error: insertError } = await supabase
-        .from('notifications')
-        .insert(notificationsToInsert);
+      const { error: insertError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from('notifications')
+              .insert(notificationsToInsert),
+            ORG_NOTIFICATIONS_QUERY_TIMEOUT_MS,
+            "org.notifications.send.insert timeout",
+          ),
+        {
+          maxRetries: ORG_NOTIFICATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (insertError) throw insertError;
 
@@ -437,6 +548,7 @@ export default function OrgNotificationManagement() {
       toast.error(appendErrorReference("Gagal mengirim notifikasi", errorRef));
     } finally {
       setIsSending(false);
+      setIsRetrying(false);
     }
   };
 
@@ -474,11 +586,24 @@ export default function OrgNotificationManagement() {
 
   const deleteNotification = async (id: string) => {
     try {
+      setIsRetrying(false);
       const deletedNotification = notifications.find((notification) => notification.id === id) || null;
-      const { error } = await supabase
-        .from('notifications')
-        .delete()
-        .eq('id', id);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from('notifications')
+              .delete()
+              .eq('id', id),
+            ORG_NOTIFICATIONS_QUERY_TIMEOUT_MS,
+            "org.notifications.delete timeout",
+          ),
+        {
+          maxRetries: ORG_NOTIFICATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
 
       toast.success("Notifikasi berhasil dihapus");
@@ -497,6 +622,8 @@ export default function OrgNotificationManagement() {
     } catch (error) {
       const errorRef = reportError(error, "org.notifications.delete", { notification_id: id, tenant_id: tenantId });
       toast.error(appendErrorReference("Gagal menghapus notifikasi", errorRef));
+    } finally {
+      setIsRetrying(false);
     }
   };
 
@@ -814,18 +941,21 @@ export default function OrgNotificationManagement() {
                   />
                 </div>
               </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
-                  Batal
-                </Button>
-                <Button onClick={sendNotification} disabled={isSending || finalRecipients.length === 0} className="gap-2">
-                  {isSending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Send className="h-4 w-4" />
-                  )}
-                  {isSending ? "Mengirim..." : "Kirim"}
-                </Button>
+              <DialogFooter className={dialogActionBarClassName}>
+                <DialogActionHint>Notifikasi akan dikirim ke semua penerima terpilih.</DialogActionHint>
+                <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                  <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
+                    Batal
+                  </Button>
+                  <Button onClick={sendNotification} disabled={isSending || finalRecipients.length === 0} className="gap-2">
+                    {isSending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Send className="h-4 w-4" />
+                    )}
+                    {isSending ? "Mengirim..." : "Kirim"}
+                  </Button>
+                </div>
               </DialogFooter>
             </DialogContent>
           </Dialog>
@@ -833,7 +963,28 @@ export default function OrgNotificationManagement() {
 
         {loadError && (
           <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <span>{loadError}</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (tenantId) {
+                    void fetchNotifications(tenantId);
+                  } else {
+                    void fetchTenantAndData();
+                  }
+                }}
+              >
+                Coba Lagi
+              </Button>
+            </div>
+          </div>
+        )}
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang koneksi data notifikasi...
           </div>
         )}
 
@@ -883,7 +1034,8 @@ export default function OrgNotificationManagement() {
         {/* Filters */}
         <Card>
           <CardContent className="p-4">
-            <div className="flex flex-col sm:flex-row gap-4">
+            <div className="rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -912,6 +1064,7 @@ export default function OrgNotificationManagement() {
               >
                 <RefreshCw className="h-4 w-4" />
               </Button>
+              </div>
             </div>
           </CardContent>
         </Card>

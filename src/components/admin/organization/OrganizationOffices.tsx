@@ -13,6 +13,12 @@ import {
 } from "@/components/ui/table";
 import { MapPin, Plus, Clock, MapPinned } from "lucide-react";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 interface Office {
   id: string;
@@ -29,25 +35,49 @@ interface Office {
 interface OrganizationOfficesProps {
   tenantId: string;
 }
+const ORG_OFFICES_READ_TIMEOUT_MS = 12000;
+const ORG_OFFICES_MAX_RETRIES = 2;
 
 export function OrganizationOffices({ tenantId }: OrganizationOfficesProps) {
   const [offices, setOffices] = useState<Office[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const fetchOffices = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("offices")
-        .select("*")
-        .eq("tenant_id", tenantId)
-        .order("name");
+      setIsRetrying(false);
+      setLoadError(null);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("offices")
+              .select("*")
+              .eq("tenant_id", tenantId)
+              .order("name"),
+            ORG_OFFICES_READ_TIMEOUT_MS,
+            "Permintaan data kantor organisasi timeout."
+          ),
+        {
+          maxRetries: ORG_OFFICES_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setOffices(data || []);
     } catch (error) {
-      console.error("Error fetching offices:", error);
-      toast.error("Gagal memuat data kantor");
+      const errorRef = reportError(error, "admin.components.organization_offices.fetch", {
+        tenant_id: tenantId,
+      });
+      const message = appendErrorReference("Gagal memuat data kantor", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setOffices([]);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [tenantId]);
@@ -81,6 +111,19 @@ export function OrganizationOffices({ tenantId }: OrganizationOfficesProps) {
         </div>
       </CardHeader>
       <CardContent>
+        {isRetrying && (
+          <div className="mb-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+            Sedang mencoba ulang memuat data kantor...
+          </div>
+        )}
+        {loadError && (
+          <div className="mb-4 flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchOffices()}>
+              Coba Lagi
+            </Button>
+          </div>
+        )}
         {isLoading ? (
           <div className="flex items-center justify-center py-8">
             <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>

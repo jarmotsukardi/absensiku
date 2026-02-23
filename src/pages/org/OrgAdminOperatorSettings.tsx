@@ -10,6 +10,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { toast } from "sonner";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 type RoleType = "admin_instansi" | "atasan";
 
@@ -25,21 +26,49 @@ interface RoleMember {
 }
 
 export default function OrgAdminOperatorSettings() {
+  const ORG_ROLE_SETTINGS_QUERY_TIMEOUT_MS = 15000;
+  const ORG_ROLE_SETTINGS_QUERY_RETRY_MAX = 1;
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [members, setMembers] = useState<RoleMember[]>([]);
 
   const fetchRoleMembers = useCallback(async () => {
     setIsLoading(true);
     try {
-      const resolvedTenantId = await resolveOrgTenantId();
+      setIsRetrying(false);
+      setLoadError(null);
+      const resolvedTenantId = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            resolveOrgTenantId(),
+            ORG_ROLE_SETTINGS_QUERY_TIMEOUT_MS,
+            "org.settings.admin_operator.resolve_tenant timeout",
+          ),
+        {
+          maxRetries: ORG_ROLE_SETTINGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (!resolvedTenantId) {
         setMembers([]);
         return;
       }
 
-      const { data: roleRows, error: roleError } = await supabase.rpc(
-        "org_list_admin_operator_members",
+      const { data: roleRows, error: roleError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("org_list_admin_operator_members"),
+            ORG_ROLE_SETTINGS_QUERY_TIMEOUT_MS,
+            "org.settings.admin_operator.fetch_members timeout",
+          ),
+        {
+          maxRetries: ORG_ROLE_SETTINGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
       );
 
       if (roleError) throw roleError;
@@ -60,10 +89,13 @@ export default function OrgAdminOperatorSettings() {
       setMembers(mappedMembers);
     } catch (error) {
       const errorRef = reportError(error, "org.settings.admin_operator.fetch");
-      toast.error(appendErrorReference("Gagal memuat data Admin & Operator", errorRef));
+      const message = appendErrorReference("Gagal memuat data Admin & Operator", errorRef);
+      setLoadError(message);
+      toast.error(message);
       setMembers([]);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   }, []);
 
@@ -90,10 +122,23 @@ export default function OrgAdminOperatorSettings() {
 
     setIsSaving(member.id);
     try {
-      const { error } = await supabase.rpc("org_update_admin_operator_role", {
-        _role_id: member.id,
-        _target_role: targetRole,
-      });
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("org_update_admin_operator_role", {
+              _role_id: member.id,
+              _target_role: targetRole,
+            }),
+            ORG_ROLE_SETTINGS_QUERY_TIMEOUT_MS,
+            "org.settings.admin_operator.change_role timeout",
+          ),
+        {
+          maxRetries: ORG_ROLE_SETTINGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
 
@@ -112,6 +157,7 @@ export default function OrgAdminOperatorSettings() {
       toast.error(appendErrorReference("Gagal mengubah role pengguna", errorRef));
     } finally {
       setIsSaving(null);
+      setIsRetrying(false);
     }
   };
 
@@ -193,6 +239,25 @@ export default function OrgAdminOperatorSettings() {
             Kelola role admin organisasi dan operator (role sistem: atasan).
           </p>
         </div>
+        {loadError && (
+          <Card className="border-destructive/40">
+            <CardContent className="pt-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-destructive">{loadError}</p>
+                <Button type="button" variant="outline" size="sm" onClick={() => void fetchRoleMembers()}>
+                  Coba Lagi
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        {isRetrying && (
+          <Card className="border-amber-300/60 bg-amber-50">
+            <CardContent className="pt-4">
+              <p className="text-sm text-amber-800">Sedang mencoba ulang koneksi data Admin & Operator...</p>
+            </CardContent>
+          </Card>
+        )}
 
         <Card className="border-amber-200 bg-amber-50/70 dark:bg-amber-950/20 dark:border-amber-800">
           <CardHeader>
@@ -212,16 +277,18 @@ export default function OrgAdminOperatorSettings() {
         </Card>
 
         <Tabs defaultValue="admin">
-          <TabsList>
-            <TabsTrigger value="admin" className="gap-2">
-              <ShieldCheck className="h-4 w-4" />
-              Admin Organisasi ({adminMembers.length})
-            </TabsTrigger>
-            <TabsTrigger value="operator" className="gap-2">
-              <UserCog className="h-4 w-4" />
-              Operator ({operatorMembers.length})
-            </TabsTrigger>
-          </TabsList>
+          <div className="overflow-x-auto pb-1">
+            <TabsList className="min-w-max h-auto gap-1.5 rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+              <TabsTrigger value="admin" className="gap-2 whitespace-nowrap">
+                <ShieldCheck className="h-4 w-4" />
+                Admin Organisasi ({adminMembers.length})
+              </TabsTrigger>
+              <TabsTrigger value="operator" className="gap-2 whitespace-nowrap">
+                <UserCog className="h-4 w-4" />
+                Operator ({operatorMembers.length})
+              </TabsTrigger>
+            </TabsList>
+          </div>
 
           <TabsContent value="admin">
             <Card>

@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 import {
   Plug,
   CheckCircle,
@@ -32,6 +34,7 @@ interface ConnectionTestResult {
 }
 
 export function ConnectionTester() {
+  const REQUEST_TIMEOUT_MS = 12000;
   const [targetUrl, setTargetUrl] = useState("");
   const [targetAnonKey, setTargetAnonKey] = useState("");
   const [targetServiceKey, setTargetServiceKey] = useState("");
@@ -56,12 +59,16 @@ export function ConnectionTester() {
 
     try {
       // Test REST API connection
-      const response = await fetch(`${targetUrl}/rest/v1/`, {
-        headers: {
-          "apikey": targetAnonKey,
-          "Authorization": `Bearer ${targetAnonKey}`,
-        },
-      });
+      const response = await withTimeout(
+        fetch(`${targetUrl}/rest/v1/`, {
+          headers: {
+            "apikey": targetAnonKey,
+            "Authorization": `Bearer ${targetAnonKey}`,
+          },
+        }),
+        REQUEST_TIMEOUT_MS,
+        "Pengujian koneksi REST API terlalu lama",
+      );
 
       if (response.ok) {
         // Try to get more info about the project
@@ -69,12 +76,16 @@ export function ConnectionTester() {
 
         // Test if we can access tables (this will fail without proper RLS but connection works)
         try {
-          const tablesResponse = await fetch(`${targetUrl}/rest/v1/`, {
-            method: "OPTIONS",
-            headers: {
-              "apikey": targetAnonKey,
-            },
-          });
+          const tablesResponse = await withTimeout(
+            fetch(`${targetUrl}/rest/v1/`, {
+              method: "OPTIONS",
+              headers: {
+                "apikey": targetAnonKey,
+              },
+            }),
+            REQUEST_TIMEOUT_MS,
+            "Pengujian endpoint auth terlalu lama",
+          );
           if (tablesResponse.ok) {
             details.hasAuth = true;
           }
@@ -84,12 +95,16 @@ export function ConnectionTester() {
 
         // Test storage
         try {
-          const storageResponse = await fetch(`${targetUrl}/storage/v1/bucket`, {
-            headers: {
-              "apikey": targetAnonKey,
-              "Authorization": `Bearer ${targetAnonKey}`,
-            },
-          });
+          const storageResponse = await withTimeout(
+            fetch(`${targetUrl}/storage/v1/bucket`, {
+              headers: {
+                "apikey": targetAnonKey,
+                "Authorization": `Bearer ${targetAnonKey}`,
+              },
+            }),
+            REQUEST_TIMEOUT_MS,
+            "Pengujian endpoint storage terlalu lama",
+          );
           details.hasStorage = storageResponse.ok;
         } catch {
           details.hasStorage = false;
@@ -115,12 +130,14 @@ export function ConnectionTester() {
         toast.error("Gagal terhubung ke database target");
       }
     } catch (error) {
-      console.error("Connection test error:", error);
+      const errorRef = reportError(error, "admin.settings.connection_tester.test", {
+        target_url: targetUrl,
+      });
       setTestResult({
         success: false,
         message: "Tidak dapat terhubung ke server. Periksa URL dan koneksi internet."
       });
-      toast.error("Gagal menguji koneksi");
+      toast.error(appendErrorReference("Gagal menguji koneksi", errorRef));
     } finally {
       setIsLoading(false);
     }

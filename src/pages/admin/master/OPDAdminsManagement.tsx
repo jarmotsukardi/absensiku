@@ -15,6 +15,12 @@ import { Plus, Search, Pencil, Trash2, Shield, Loader2 } from "lucide-react";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 interface OPDAdmin {
   id: string;
@@ -46,6 +52,9 @@ interface Employee {
 }
 
 const ITEMS_PER_PAGE = 10;
+const ADMIN_OPD_ADMINS_READ_TIMEOUT_MS = 12000;
+const ADMIN_OPD_ADMINS_WRITE_TIMEOUT_MS = 15000;
+const ADMIN_OPD_ADMINS_MAX_RETRIES = 2;
 
 export default function OPDAdminsManagement() {
   const confirmDialog = useConfirmDialog();
@@ -59,6 +68,7 @@ export default function OPDAdminsManagement() {
   const [isEditing, setIsEditing] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const getErrorMessage = (error: unknown) =>
     error instanceof Error ? error.message : "Terjadi kesalahan";
   
@@ -84,25 +94,52 @@ export default function OPDAdminsManagement() {
 
   const fetchData = useCallback(async () => {
     setIsLoading(true);
+    setIsRetrying(false);
     setLoadError(null);
     try {
       // Fetch OPD Admins with relations
-      const { data: adminsData, error: adminsError } = await supabase
-        .from("opd_admins")
-        .select(`
-          *,
-          opd:opd_id(name, code)
-        `)
-        .order("created_at", { ascending: false });
+      const { data: adminsData, error: adminsError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("opd_admins")
+              .select(`
+                *,
+                opd:opd_id(name, code)
+              `)
+              .order("created_at", { ascending: false }),
+            ADMIN_OPD_ADMINS_READ_TIMEOUT_MS,
+            "Permintaan data admin OPD timeout."
+          ),
+        {
+          maxRetries: ADMIN_OPD_ADMINS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (adminsError) throw adminsError;
       
       // Fetch employee data separately to avoid multiple relationship error
       const adminIds = adminsData?.map(a => a.employee_id) || [];
-      const { data: adminEmployeesData } = await supabase
-        .from("employees")
-        .select("id, name, email, nik")
-        .in("id", adminIds);
+      const { data: adminEmployeesData } = adminIds.length
+        ? await withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase
+                  .from("employees")
+                  .select("id, name, email, nik")
+                  .in("id", adminIds),
+                ADMIN_OPD_ADMINS_READ_TIMEOUT_MS,
+                "Permintaan pegawai admin OPD timeout."
+              ),
+            {
+              maxRetries: ADMIN_OPD_ADMINS_MAX_RETRIES,
+              shouldRetry: isRetryableError,
+              onRetry: () => setIsRetrying(true),
+            }
+          )
+        : { data: [] as Employee[] };
 
       const employeeMap = new Map(adminEmployeesData?.map(e => [e.id, e]) || []);
       
@@ -114,21 +151,45 @@ export default function OPDAdminsManagement() {
       setAdmins(adminsWithEmployee as OPDAdmin[]);
 
       // Fetch all OPDs
-      const { data: opdsData, error: opdsError } = await supabase
-        .from("opd")
-        .select("id, name, code, tenant_id")
-        .eq("is_active", true)
-        .order("name");
+      const { data: opdsData, error: opdsError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("opd")
+              .select("id, name, code, tenant_id")
+              .eq("is_active", true)
+              .order("name"),
+            ADMIN_OPD_ADMINS_READ_TIMEOUT_MS,
+            "Permintaan daftar OPD timeout."
+          ),
+        {
+          maxRetries: ADMIN_OPD_ADMINS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (opdsError) throw opdsError;
       setOpds(opdsData || []);
 
       // Fetch all employees
-      const { data: employeesData, error: employeesError } = await supabase
-        .from("employees")
-        .select("id, name, email, nik, opd_id")
-        .eq("is_active", true)
-        .order("name");
+      const { data: employeesData, error: employeesError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("id, name, email, nik, opd_id")
+              .eq("is_active", true)
+              .order("name"),
+            ADMIN_OPD_ADMINS_READ_TIMEOUT_MS,
+            "Permintaan daftar pegawai timeout."
+          ),
+        {
+          maxRetries: ADMIN_OPD_ADMINS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (employeesError) throw employeesError;
       setEmployees(employeesData || []);
@@ -142,6 +203,7 @@ export default function OPDAdminsManagement() {
       setEmployees([]);
       setFilteredEmployees([]);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, []);
@@ -161,9 +223,45 @@ export default function OPDAdminsManagement() {
     setLoadError(null);
     try {
       if (isEditing) {
-        const { error } = await supabase
-          .from("opd_admins")
-          .update({
+        const { error } = await withTimeout(
+          supabase
+            .from("opd_admins")
+            .update({
+              opd_id: formData.opd_id,
+              employee_id: formData.employee_id,
+              is_active: formData.is_active,
+              can_approve_leave: formData.can_approve_leave,
+              can_view_reports: formData.can_view_reports,
+              can_export_reports: formData.can_export_reports,
+              can_invite_employees: formData.can_invite_employees,
+            })
+            .eq("id", formData.id),
+          ADMIN_OPD_ADMINS_WRITE_TIMEOUT_MS,
+          "Perbarui admin OPD timeout."
+        );
+
+        if (error) throw error;
+        toast.success("Admin OPD berhasil diperbarui");
+      } else {
+        // Check if admin already exists
+        const { data: existing } = await withTimeout(
+          supabase
+            .from("opd_admins")
+            .select("id")
+            .eq("opd_id", formData.opd_id)
+            .eq("employee_id", formData.employee_id)
+            .maybeSingle(),
+          ADMIN_OPD_ADMINS_WRITE_TIMEOUT_MS,
+          "Cek duplikasi admin OPD timeout."
+        );
+
+        if (existing) {
+          toast.error("Pegawai sudah menjadi admin OPD ini");
+          return;
+        }
+
+        const { error } = await withTimeout(
+          supabase.from("opd_admins").insert({
             opd_id: formData.opd_id,
             employee_id: formData.employee_id,
             is_active: formData.is_active,
@@ -171,34 +269,10 @@ export default function OPDAdminsManagement() {
             can_view_reports: formData.can_view_reports,
             can_export_reports: formData.can_export_reports,
             can_invite_employees: formData.can_invite_employees,
-          })
-          .eq("id", formData.id);
-
-        if (error) throw error;
-        toast.success("Admin OPD berhasil diperbarui");
-      } else {
-        // Check if admin already exists
-        const { data: existing } = await supabase
-          .from("opd_admins")
-          .select("id")
-          .eq("opd_id", formData.opd_id)
-          .eq("employee_id", formData.employee_id)
-          .maybeSingle();
-
-        if (existing) {
-          toast.error("Pegawai sudah menjadi admin OPD ini");
-          return;
-        }
-
-        const { error } = await supabase.from("opd_admins").insert({
-          opd_id: formData.opd_id,
-          employee_id: formData.employee_id,
-          is_active: formData.is_active,
-          can_approve_leave: formData.can_approve_leave,
-          can_view_reports: formData.can_view_reports,
-          can_export_reports: formData.can_export_reports,
-          can_invite_employees: formData.can_invite_employees,
-        });
+          }),
+          ADMIN_OPD_ADMINS_WRITE_TIMEOUT_MS,
+          "Tambah admin OPD timeout."
+        );
 
         if (error) throw error;
         toast.success("Admin OPD berhasil ditambahkan");
@@ -247,7 +321,11 @@ export default function OPDAdminsManagement() {
 
     setLoadError(null);
     try {
-      const { error } = await supabase.from("opd_admins").delete().eq("id", id);
+      const { error } = await withTimeout(
+        supabase.from("opd_admins").delete().eq("id", id),
+        ADMIN_OPD_ADMINS_WRITE_TIMEOUT_MS,
+        "Hapus admin OPD timeout."
+      );
       if (error) throw error;
       toast.success("Admin OPD berhasil dihapus");
       void fetchData();
@@ -300,15 +378,17 @@ export default function OPDAdminsManagement() {
     <SuperAdminLayout title="Admin OPD" subtitle="Kelola admin untuk setiap OPD">
       <div className="space-y-6">
         {/* Header Actions */}
-        <div className="flex flex-col sm:flex-row justify-between gap-4">
-          <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Cari admin OPD..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10"
-            />
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="w-full rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm sm:flex-1">
+            <div className="relative max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Cari admin OPD..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10"
+              />
+            </div>
           </div>
           <Dialog open={isDialogOpen} onOpenChange={(open) => { if (!open) resetForm(); else setIsDialogOpen(true); }}>
             <DialogTrigger asChild>
@@ -413,13 +493,16 @@ export default function OPDAdminsManagement() {
                   </div>
                 </div>
 
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={resetForm}>
-                    Batal
-                  </Button>
-                  <Button type="submit">
-                    {isEditing ? "Simpan Perubahan" : "Tambah Admin"}
-                  </Button>
+                <DialogFooter className={dialogActionBarClassName}>
+                  <DialogActionHint>Hak akses admin OPD akan aktif segera setelah disimpan.</DialogActionHint>
+                  <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                    <Button type="button" variant="outline" onClick={resetForm}>
+                      Batal
+                    </Button>
+                    <Button type="submit">
+                      {isEditing ? "Simpan Perubahan" : "Tambah Admin"}
+                    </Button>
+                  </div>
                 </DialogFooter>
               </form>
             </DialogContent>
@@ -438,9 +521,17 @@ export default function OPDAdminsManagement() {
             </CardDescription>
           </CardHeader>
           <CardContent>
+            {isRetrying && (
+              <div className="mb-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+                Sedang mencoba ulang memuat data admin OPD...
+              </div>
+            )}
             {loadError && (
-              <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                {loadError}
+              <div className="mb-4 flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+                <span>{loadError}</span>
+                <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+                  Coba Lagi
+                </Button>
               </div>
             )}
             {isLoading ? (

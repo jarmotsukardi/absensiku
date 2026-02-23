@@ -12,6 +12,7 @@ import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { supabase } from "@/integrations/supabase/client";
 import { reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 
 type PlanTier = "free" | "pro" | "team" | "enterprise";
@@ -261,10 +262,19 @@ export function CloudCapacitySettings() {
     setLoading(true);
     try {
       const [settingRes, snapshotRes] = await Promise.all([
-        supabase.from("system_settings").select("value").eq("key", SETTING_KEY).maybeSingle(),
-        (supabase as unknown as {
-          rpc: (fn: string, args?: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
-        }).rpc("get_platform_usage_snapshot"),
+        withTimeout(
+          () => supabase.from("system_settings").select("value").eq("key", SETTING_KEY).maybeSingle(),
+          10000,
+          "Load cloud capacity settings timeout"
+        ),
+        withTimeout(
+          () =>
+            (supabase as unknown as {
+              rpc: (fn: string, args?: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+            }).rpc("get_platform_usage_snapshot"),
+          12000,
+          "Load cloud usage snapshot timeout"
+        ),
       ]);
 
       if (settingRes.error) throw settingRes.error;
@@ -336,7 +346,11 @@ export function CloudCapacitySettings() {
   const evaluateFreePlanAlerts = useCallback(
     async (configToCheck: CloudCapacityConfig, snapshotToCheck: UsageSnapshot | null) => {
       const providers: ProviderKey[] = ["supabase", "vercel"];
-      const superAdminRes = await supabase.from("user_roles").select("user_id").eq("role", "super_admin");
+      const superAdminRes = await withTimeout(
+        () => supabase.from("user_roles").select("user_id").eq("role", "super_admin"),
+        10000,
+        "Load super admin users timeout"
+      );
       if (superAdminRes.error) throw superAdminRes.error;
       const superAdminIds = Array.from(new Set((superAdminRes.data || []).map((r) => r.user_id).filter(Boolean)));
       if (superAdminIds.length === 0) return;
@@ -368,13 +382,18 @@ export function CloudCapacitySettings() {
         )}). Siapkan upgrade paket Pro/Team/Enterprise.`;
 
         for (const userId of superAdminIds) {
-          const dedupeRes = await supabase
-            .from("notifications")
-            .select("id")
-            .eq("user_id", userId)
-            .contains("metadata", { alert_key: alertKey })
-            .gte("created_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
-            .limit(1);
+          const dedupeRes = await withTimeout(
+            () =>
+              supabase
+                .from("notifications")
+                .select("id")
+                .eq("user_id", userId)
+                .contains("metadata", { alert_key: alertKey })
+                .gte("created_at", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+                .limit(1),
+            10000,
+            "Check notification dedupe timeout"
+          );
 
           if (dedupeRes.error) {
             const dedupeRef = reportError(dedupeRes.error, "admin.cloud_capacity.notification_dedupe", {
@@ -388,22 +407,27 @@ export function CloudCapacitySettings() {
 
           if ((dedupeRes.data || []).length > 0) continue;
 
-          const insertRes = await supabase.from("notifications").insert({
-            user_id: userId,
-            title,
-            message,
-            type: "warning",
-            is_read: false,
-            link: "/admin/settings",
-            metadata: {
-              source: "cloud_capacity_monitor",
-              provider,
-              plan: "free",
-              metric: top.metric,
-              utilization: top.utilization,
-              alert_key: alertKey,
-            },
-          });
+          const insertRes = await withTimeout(
+            () =>
+              supabase.from("notifications").insert({
+                user_id: userId,
+                title,
+                message,
+                type: "warning",
+                is_read: false,
+                link: "/admin/settings",
+                metadata: {
+                  source: "cloud_capacity_monitor",
+                  provider,
+                  plan: "free",
+                  metric: top.metric,
+                  utilization: top.utilization,
+                  alert_key: alertKey,
+                },
+              }),
+            10000,
+            "Insert capacity warning notification timeout"
+          );
 
           if (insertRes.error) {
             const insertRef = reportError(insertRes.error, "admin.cloud_capacity.notification_insert", {
@@ -427,15 +451,20 @@ export function CloudCapacitySettings() {
         updated_at: new Date().toISOString(),
       };
 
-      const { error } = await supabase.from("system_settings").upsert(
-        {
-          key: SETTING_KEY,
-          value: payload,
-          description:
-            "Monitoring kapasitas Supabase & Vercel (plan, limit, usage, dan warning threshold untuk antisipasi upgrade paket).",
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "key" }
+      const { error } = await withTimeout(
+        () =>
+          supabase.from("system_settings").upsert(
+            {
+              key: SETTING_KEY,
+              value: payload,
+              description:
+                "Monitoring kapasitas Supabase & Vercel (plan, limit, usage, dan warning threshold untuk antisipasi upgrade paket).",
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "key" }
+          ),
+        10000,
+        "Save cloud capacity settings timeout"
       );
 
       if (error) throw error;
@@ -453,9 +482,14 @@ export function CloudCapacitySettings() {
   const refreshSnapshot = async () => {
     setLoading(true);
     try {
-      const { data, error } = await (supabase as unknown as {
-        rpc: (fn: string, args?: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
-      }).rpc("get_platform_usage_snapshot");
+      const { data, error } = await withTimeout(
+        () =>
+          (supabase as unknown as {
+            rpc: (fn: string, args?: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
+          }).rpc("get_platform_usage_snapshot"),
+        12000,
+        "Refresh cloud usage snapshot timeout"
+      );
 
       if (error) {
         const ref = reportError(error, "admin.cloud_capacity.refresh_rpc");

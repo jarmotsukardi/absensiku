@@ -13,6 +13,7 @@ import { toast } from "sonner";
 import { Save, Loader2, Flame, Clock, AlertTriangle, RefreshCw, Play, ShieldCheck, ShieldAlert, ChevronsUpDown, Check } from "lucide-react";
 import type { Json } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { cn } from "@/lib/utils";
 
 const getNumericSettingValue = (settingValue: Json, fallback: number) => {
@@ -95,6 +96,8 @@ const parseReminderDaysInput = (raw: string): number[] => {
 
 const MALUKU_TENGAH_CODE = "KAB2512015";
 const PROTECTED_CODES_DEFAULT = [MALUKU_TENGAH_CODE];
+const TRIAL_SETTINGS_OP_TIMEOUT_MS = 15000;
+const TRIAL_SETTINGS_OP_RETRY_MAX = 1;
 
 type TenantPickerOption = {
   id: string;
@@ -195,24 +198,36 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
 
   const fetchSettings = async () => {
     try {
-      const [settingsRes, tenantsRes] = await Promise.all([
-        supabase
-          .from("system_settings")
-          .select("key, value")
-          .in("key", [
-            "streak_threshold",
-            "streak_grace_period_days",
-            "unpaid_cleanup_enabled",
-            "unpaid_cleanup_retention_days",
-            "unpaid_cleanup_reminder_days",
-            "unpaid_cleanup_hard_delete_auth",
-            "unpaid_cleanup_protected_tenant_codes",
-          ]),
-        supabase
-          .from("tenants")
-          .select("id, code, name, is_active")
-          .order("name", { ascending: true }),
-      ]);
+      const [settingsRes, tenantsRes] = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              Promise.all([
+                supabase
+                  .from("system_settings")
+                  .select("key, value")
+                  .in("key", [
+                    "streak_threshold",
+                    "streak_grace_period_days",
+                    "unpaid_cleanup_enabled",
+                    "unpaid_cleanup_retention_days",
+                    "unpaid_cleanup_reminder_days",
+                    "unpaid_cleanup_hard_delete_auth",
+                    "unpaid_cleanup_protected_tenant_codes",
+                  ]),
+                supabase
+                  .from("tenants")
+                  .select("id, code, name, is_active")
+                  .order("name", { ascending: true }),
+              ]),
+            TRIAL_SETTINGS_OP_TIMEOUT_MS,
+            "admin.trial_settings.fetch_settings.query timeout",
+          ),
+        {
+          maxRetries: TRIAL_SETTINGS_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
       if (settingsRes.error) throw settingsRes.error;
       if (tenantsRes.error) throw tenantsRes.error;
@@ -265,24 +280,59 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
   };
 
   const upsertSetting = async (key: string, value: Json, description: string) => {
-    const { data: existing, error: existingError } = await supabase
-      .from("system_settings")
-      .select("id")
-      .eq("key", key)
-      .maybeSingle();
+    const { data: existing, error: existingError } = await withExponentialBackoff(
+      () =>
+        withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .select("id")
+              .eq("key", key)
+              .maybeSingle(),
+          TRIAL_SETTINGS_OP_TIMEOUT_MS,
+          `Load setting ${key} timeout`,
+        ),
+      {
+        maxRetries: TRIAL_SETTINGS_OP_RETRY_MAX,
+        shouldRetry: isRetryableError,
+      },
+    );
 
     if (existingError) throw existingError;
 
     if (existing?.id) {
-      const { error } = await supabase
-        .from("system_settings")
-        .update({ value, updated_at: new Date().toISOString() })
-        .eq("id", existing.id);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase
+                .from("system_settings")
+                .update({ value, updated_at: new Date().toISOString() })
+                .eq("id", existing.id),
+            TRIAL_SETTINGS_OP_TIMEOUT_MS,
+            `Update setting ${key} timeout`,
+          ),
+        {
+          maxRetries: TRIAL_SETTINGS_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (error) throw error;
       return;
     }
 
-    const { error } = await supabase.from("system_settings").insert({ key, value, description });
+    const { error } = await withExponentialBackoff(
+      () =>
+        withTimeout(
+          () => supabase.from("system_settings").insert({ key, value, description }),
+          TRIAL_SETTINGS_OP_TIMEOUT_MS,
+          `Insert setting ${key} timeout`,
+        ),
+      {
+        maxRetries: TRIAL_SETTINGS_OP_RETRY_MAX,
+        shouldRetry: isRetryableError,
+      },
+    );
     if (error) throw error;
   };
 
@@ -361,7 +411,18 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
   const handleSyncLifecycle = async () => {
     setIsSyncing(true);
     try {
-      const { data, error } = await supabase.rpc("sync_unpaid_cleanup_schedules", { p_tenant_id: null });
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () => supabase.rpc("sync_unpaid_cleanup_schedules", { p_tenant_id: null }),
+            TRIAL_SETTINGS_OP_TIMEOUT_MS,
+            "Sync cleanup schedules timeout"
+          ),
+        {
+          maxRetries: TRIAL_SETTINGS_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        }
+      );
       if (error) throw error;
 
       setLastActionResult({
@@ -393,11 +454,23 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
     }
 
     try {
-      const { data, error } = await supabase.rpc("run_unpaid_cleanup_lifecycle", {
-        p_limit: 200,
-        p_dry_run: dryRun,
-        p_tenant_id: null,
-      });
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase.rpc("run_unpaid_cleanup_lifecycle", {
+                p_limit: 200,
+                p_dry_run: dryRun,
+                p_tenant_id: null,
+              }),
+            TRIAL_SETTINGS_OP_TIMEOUT_MS,
+            dryRun ? "Dry-run lifecycle timeout" : "Run lifecycle timeout"
+          ),
+        {
+          maxRetries: TRIAL_SETTINGS_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        }
+      );
       if (error) throw error;
 
       setLastActionResult({

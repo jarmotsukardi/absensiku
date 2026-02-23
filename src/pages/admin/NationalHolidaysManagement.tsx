@@ -7,12 +7,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { format, parseISO } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { 
   Calendar, 
@@ -50,12 +52,21 @@ interface NagerHolidayApiItem {
 }
 
 const ITEMS_PER_PAGE = 15;
+const EXTERNAL_API_TIMEOUT_MS = 12000;
 
 const fetchExternalNationalHolidays = async (year: string): Promise<{ holidays: PublicHolidayApiItem[]; sourceLabel: string }> => {
   try {
-    const response = await fetch(`https://libur.deno.dev/api?year=${year}`);
+    const response = await withTimeout(
+      () => fetch(`https://libur.deno.dev/api?year=${year}`),
+      EXTERNAL_API_TIMEOUT_MS,
+      "admin.national_holidays.fetch_external.libur_deno timeout",
+    );
     if (response.ok) {
-      const data: unknown = await response.json();
+      const data: unknown = await withTimeout(
+        () => response.json(),
+        EXTERNAL_API_TIMEOUT_MS,
+        "admin.national_holidays.parse_external.libur_deno timeout",
+      );
       if (Array.isArray(data)) {
         const holidays = (data as PublicHolidayApiItem[])
           .filter((holiday) => typeof holiday?.date === "string" && typeof holiday?.name === "string");
@@ -64,14 +75,23 @@ const fetchExternalNationalHolidays = async (year: string): Promise<{ holidays: 
         }
       }
     }
-  } catch {
+  } catch (error) {
+    reportError(error, "admin.national_holidays.fetch_external.libur_deno", { year });
     // fallback
   }
 
   try {
-    const response = await fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/ID`);
+    const response = await withTimeout(
+      () => fetch(`https://date.nager.at/api/v3/PublicHolidays/${year}/ID`),
+      EXTERNAL_API_TIMEOUT_MS,
+      "admin.national_holidays.fetch_external.nager timeout",
+    );
     if (response.ok) {
-      const data: unknown = await response.json();
+      const data: unknown = await withTimeout(
+        () => response.json(),
+        EXTERNAL_API_TIMEOUT_MS,
+        "admin.national_holidays.parse_external.nager timeout",
+      );
       if (Array.isArray(data)) {
         const holidays = (data as NagerHolidayApiItem[])
           .filter((item) => typeof item?.date === "string")
@@ -85,7 +105,8 @@ const fetchExternalNationalHolidays = async (year: string): Promise<{ holidays: 
         }
       }
     }
-  } catch {
+  } catch (error) {
+    reportError(error, "admin.national_holidays.fetch_external.nager", { year });
     // fallback
   }
 
@@ -112,11 +133,16 @@ export default function NationalHolidaysManagement() {
 
   const fetchHolidays = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("national_holidays")
-        .select("*")
-        .eq("year", parseInt(selectedYear))
-        .order("date");
+      const { data, error } = await withTimeout(
+        () =>
+          supabase
+            .from("national_holidays")
+            .select("*")
+            .eq("year", parseInt(selectedYear))
+            .order("date"),
+        10000,
+        "Load national holidays timeout"
+      );
 
       if (error) throw error;
       setHolidays(data || []);
@@ -158,13 +184,18 @@ export default function NationalHolidaysManagement() {
         const exists = holidays.some(h => h.date === holidayDate);
         
         if (!exists) {
-          const { error } = await supabase.from("national_holidays").insert({
-            date: holidayDate,
-            name: holidayName,
-            description: `Libur Nasional (sumber ${external.sourceLabel})`,
-            year: parseInt(selectedYear),
-            is_active: true,
-          });
+          const { error } = await withTimeout(
+            () =>
+              supabase.from("national_holidays").insert({
+                date: holidayDate,
+                name: holidayName,
+                description: `Libur Nasional (sumber ${external.sourceLabel})`,
+                year: parseInt(selectedYear),
+                is_active: true,
+              }),
+            10000,
+            "Insert holiday from API timeout"
+          );
           
           if (!error) insertedCount++;
         } else {
@@ -210,28 +241,38 @@ export default function NationalHolidaysManagement() {
       const year = new Date(formData.date).getFullYear();
       
       if (editingHoliday) {
-        const { error } = await supabase
-          .from("national_holidays")
-          .update({
-            date: formData.date,
-            name: formData.name,
-            description: formData.description || null,
-            year,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", editingHoliday.id);
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("national_holidays")
+              .update({
+                date: formData.date,
+                name: formData.name,
+                description: formData.description || null,
+                year,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", editingHoliday.id),
+          10000,
+          "Update national holiday timeout"
+        );
 
         if (error) throw error;
         toast.success("Hari libur berhasil diupdate");
       } else {
-        const { error } = await supabase
-          .from("national_holidays")
-          .insert({
-            date: formData.date,
-            name: formData.name,
-            description: formData.description || null,
-            year,
-          });
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("national_holidays")
+              .insert({
+                date: formData.date,
+                name: formData.name,
+                description: formData.description || null,
+                year,
+              }),
+          10000,
+          "Insert national holiday timeout"
+        );
 
         if (error) throw error;
         toast.success("Hari libur berhasil ditambahkan");
@@ -262,10 +303,15 @@ export default function NationalHolidaysManagement() {
     }
 
     try {
-      const { error } = await supabase
-        .from("national_holidays")
-        .delete()
-        .eq("id", id);
+      const { error } = await withTimeout(
+        () =>
+          supabase
+            .from("national_holidays")
+            .delete()
+            .eq("id", id),
+        10000,
+        "Delete national holiday timeout"
+      );
 
       if (error) throw error;
       toast.success("Hari libur berhasil dihapus");
@@ -316,11 +362,17 @@ export default function NationalHolidaysManagement() {
       for (const holiday of defaultHolidays) {
         const exists = holidays.some(h => h.date === holiday.date);
         if (!exists) {
-          await supabase.from("national_holidays").insert({
-            ...holiday,
-            year,
-            is_active: true,
-          });
+          const { error } = await withTimeout(
+            () =>
+              supabase.from("national_holidays").insert({
+                ...holiday,
+                year,
+                is_active: true,
+              }),
+            10000,
+            "Insert default national holiday timeout"
+          );
+          if (error) throw error;
           insertedCount++;
         }
       }
@@ -349,10 +401,16 @@ export default function NationalHolidaysManagement() {
     }
 
     try {
-      const { data: sourceHolidays } = await supabase
-        .from("national_holidays")
-        .select("*")
-        .eq("year", sourceYear);
+      const { data: sourceHolidays, error: sourceError } = await withTimeout(
+        () =>
+          supabase
+            .from("national_holidays")
+            .select("*")
+            .eq("year", sourceYear),
+        10000,
+        "Load source holidays from previous year timeout"
+      );
+      if (sourceError) throw sourceError;
       
       if (!sourceHolidays || sourceHolidays.length === 0) {
         toast.error(`Tidak ada data libur nasional untuk tahun ${sourceYear}`);
@@ -364,13 +422,19 @@ export default function NationalHolidaysManagement() {
         const newDate = holiday.date.replace(sourceYear.toString(), targetYear.toString());
         const exists = holidays.some(h => h.date === newDate);
         if (!exists) {
-          await supabase.from("national_holidays").insert({
-            date: newDate,
-            name: holiday.name,
-            description: holiday.description,
-            year: targetYear,
-            is_active: true,
-          });
+          const { error } = await withTimeout(
+            () =>
+              supabase.from("national_holidays").insert({
+                date: newDate,
+                name: holiday.name,
+                description: holiday.description,
+                year: targetYear,
+                is_active: true,
+              }),
+            10000,
+            "Insert copied holiday timeout"
+          );
+          if (error) throw error;
           copiedCount++;
         }
       }
@@ -465,9 +529,12 @@ export default function NationalHolidaysManagement() {
                     />
                   </div>
                 </div>
-                <DialogFooter>
-                  <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
-                  <Button onClick={handleSubmit}>Simpan</Button>
+                <DialogFooter className={dialogActionBarClassName}>
+                  <DialogActionHint>Perubahan hari libur akan memengaruhi perhitungan jadwal kerja nasional.</DialogActionHint>
+                  <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                    <Button variant="outline" className="w-full sm:w-auto bg-white" onClick={() => setIsDialogOpen(false)}>Batal</Button>
+                    <Button className="w-full sm:w-auto" onClick={handleSubmit}>Simpan</Button>
+                  </div>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
@@ -476,8 +543,9 @@ export default function NationalHolidaysManagement() {
 
         <Card>
           <CardHeader>
-            <div className="flex flex-col md:flex-row gap-4 justify-between">
-              <div className="flex gap-2 items-center">
+            <div className="rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="flex flex-wrap gap-2 items-center">
                 <Select value={selectedYear} onValueChange={(v) => { setSelectedYear(v); setCurrentPage(1); }}>
                   <SelectTrigger className="w-32">
                     <SelectValue />
@@ -498,6 +566,7 @@ export default function NationalHolidaysManagement() {
                   onChange={(e) => { setSearchTerm(e.target.value); setCurrentPage(1); }}
                   className="pl-10"
                 />
+              </div>
               </div>
             </div>
           </CardHeader>

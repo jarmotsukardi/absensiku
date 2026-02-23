@@ -9,6 +9,9 @@ import { PageGlossarySection } from "@/components/admin/common/PageGlossarySecti
 import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import { resolveFaqAudience } from "@/lib/faqAudience";
+import type { FaqAudience } from "@/lib/faqAudience";
 import { toast } from "sonner";
 import {
   HelpCircle,
@@ -30,6 +33,7 @@ interface FAQ {
   question: string;
   answer: string;
   sort_order?: number | null;
+  audience?: FaqAudience;
 }
 
 interface GeneralSettingsValue {
@@ -180,16 +184,27 @@ const normalizeFaqSettings = (raw: unknown): FAQ[] => {
         question: row.question,
         answer: row.answer,
         sort_order,
+        audience: resolveFaqAudience({
+          audience: row.audience,
+          category,
+          question: row.question,
+          answer: row.answer,
+        }),
       } satisfies FAQ;
     })
     .filter((row): row is FAQ => Boolean(row))
+    .filter((row) => row.audience === "org_admin")
     .sort((a, b) => (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER));
 };
 
 export default function OrgHelp() {
+  const ORG_HELP_QUERY_TIMEOUT_MS = 15000;
+  const ORG_HELP_QUERY_RETRY_MAX = 1;
   const navigate = useNavigate();
   const location = useLocation();
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [faqs, setFaqs] = useState<FAQ[]>([]);
@@ -198,10 +213,24 @@ export default function OrgHelp() {
   const activeTab = location.pathname === "/org/help/support" ? "support" : "faq";
   const canCreateTicket = subscriptionStatus === "active";
 
-  useEffect(() => {
-    const loadData = async () => {
-      try {
-        const { data: authData } = await supabase.auth.getUser();
+  const loadData = async () => {
+    try {
+      setIsLoading(true);
+      setIsRetrying(false);
+      setLoadError(null);
+      const { data: authData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ORG_HELP_QUERY_TIMEOUT_MS,
+            "org.help.load_data.auth timeout",
+          ),
+        {
+          maxRetries: ORG_HELP_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
         const userId = authData.user?.id;
 
         if (!userId) {
@@ -210,10 +239,26 @@ export default function OrgHelp() {
           return;
         }
 
-        const [generalRes, faqSettingsRes] = await Promise.all([
-          supabase.from("system_settings").select("value").eq("key", "general_settings").maybeSingle(),
-          supabase.from("system_settings").select("value").eq("key", "faq_settings").maybeSingle(),
-        ]);
+        const [generalRes, faqSettingsRes] = await withExponentialBackoff(
+          () =>
+            Promise.all([
+              withTimeout(
+                supabase.from("system_settings").select("value").eq("key", "general_settings").maybeSingle(),
+                ORG_HELP_QUERY_TIMEOUT_MS,
+                "org.help.load_data.system_settings.general timeout",
+              ),
+              withTimeout(
+                supabase.from("system_settings").select("value").eq("key", "faq_settings").maybeSingle(),
+                ORG_HELP_QUERY_TIMEOUT_MS,
+                "org.help.load_data.system_settings.faq timeout",
+              ),
+            ]),
+          {
+            maxRetries: ORG_HELP_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
 
         if (generalRes.data?.value && typeof generalRes.data.value === "object") {
           const v = generalRes.data.value as unknown as GeneralSettingsValue;
@@ -222,19 +267,43 @@ export default function OrgHelp() {
           }
         }
 
-        const tenantId = await resolveOrgTenantId();
+        const tenantId = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              resolveOrgTenantId(),
+              ORG_HELP_QUERY_TIMEOUT_MS,
+              "org.help.load_data.resolve_tenant timeout",
+            ),
+          {
+            maxRetries: ORG_HELP_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
 
         try {
           if (!tenantId) {
             setSubscriptionStatus("unknown");
           } else {
-            const { data: subscriptionRow, error: subscriptionError } = await supabase
-              .from("subscriptions")
-              .select("status")
-              .eq("tenant_id", tenantId)
-              .order("created_at", { ascending: false })
-              .limit(1)
-              .maybeSingle();
+            const { data: subscriptionRow, error: subscriptionError } = await withExponentialBackoff(
+              () =>
+                withTimeout(
+                  supabase
+                    .from("subscriptions")
+                    .select("status")
+                    .eq("tenant_id", tenantId)
+                    .order("created_at", { ascending: false })
+                    .limit(1)
+                    .maybeSingle(),
+                  ORG_HELP_QUERY_TIMEOUT_MS,
+                  "org.help.check_subscription timeout",
+                ),
+              {
+                maxRetries: ORG_HELP_QUERY_RETRY_MAX,
+                shouldRetry: isRetryableError,
+                onRetry: () => setIsRetrying(true),
+              },
+            );
             if (subscriptionError) throw subscriptionError;
             if (subscriptionRow?.status) {
               setSubscriptionStatus(subscriptionRow.status as SubscriptionStatus);
@@ -258,12 +327,24 @@ export default function OrgHelp() {
           return;
         }
 
-        const { data: tenantFaqs, error: tenantErr } = await supabase
-          .from("faqs")
-          .select("id, category, question, answer, sort_order")
-          .eq("tenant_id", tenantId)
-          .eq("is_active", true)
-          .order("sort_order", { ascending: true, nullsFirst: false });
+        const { data: tenantFaqs, error: tenantErr } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("faqs")
+                .select("id, category, question, answer, sort_order")
+                .eq("tenant_id", tenantId)
+                .eq("is_active", true)
+                .order("sort_order", { ascending: true, nullsFirst: false }),
+              ORG_HELP_QUERY_TIMEOUT_MS,
+              "org.help.load_data.tenant_faq timeout",
+            ),
+          {
+            maxRetries: ORG_HELP_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
 
         if (tenantErr) throw tenantErr;
 
@@ -276,12 +357,24 @@ export default function OrgHelp() {
         }));
 
         if (finalFaqs.length === 0) {
-          const { data: globalFaqs, error: globalErr } = await supabase
-            .from("faqs")
-            .select("id, category, question, answer, sort_order")
-            .is("tenant_id", null)
-            .eq("is_active", true)
-            .order("sort_order", { ascending: true, nullsFirst: false });
+          const { data: globalFaqs, error: globalErr } = await withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase
+                  .from("faqs")
+                  .select("id, category, question, answer, sort_order")
+                  .is("tenant_id", null)
+                  .eq("is_active", true)
+                  .order("sort_order", { ascending: true, nullsFirst: false }),
+                ORG_HELP_QUERY_TIMEOUT_MS,
+                "org.help.load_data.global_faq timeout",
+              ),
+            {
+              maxRetries: ORG_HELP_QUERY_RETRY_MAX,
+              shouldRetry: isRetryableError,
+              onRetry: () => setIsRetrying(true),
+            },
+          );
 
           if (globalErr) throw globalErr;
           finalFaqs = (globalFaqs || []).map((f) => ({
@@ -294,15 +387,19 @@ export default function OrgHelp() {
         }
 
         setFaqs(finalFaqs.length > 0 ? finalFaqs : DUMMY_FAQS);
-      } catch (error) {
-        const errorRef = reportError(error, "org.help.load_data");
-        toast.error(appendErrorReference("Gagal memuat pusat bantuan", errorRef));
-        setFaqs(DUMMY_FAQS);
-      } finally {
-        setIsLoading(false);
-      }
-    };
+    } catch (error) {
+      const errorRef = reportError(error, "org.help.load_data");
+      const message = appendErrorReference("Gagal memuat pusat bantuan", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setFaqs(DUMMY_FAQS);
+    } finally {
+      setIsLoading(false);
+      setIsRetrying(false);
+    }
+  };
 
+  useEffect(() => {
     void loadData();
   }, []);
 
@@ -394,6 +491,25 @@ export default function OrgHelp() {
             )}
           </CardContent>
         </Card>
+        {loadError && (
+          <Card className="border-destructive/40">
+            <CardContent className="pt-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-destructive">{loadError}</p>
+                <Button type="button" variant="outline" size="sm" onClick={() => void loadData()}>
+                  Coba Lagi
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        {isRetrying && (
+          <Card className="border-amber-300/60 bg-amber-50">
+            <CardContent className="pt-4">
+              <p className="text-sm text-amber-800">Sedang mencoba ulang koneksi data pusat bantuan...</p>
+            </CardContent>
+          </Card>
+        )}
 
         {activeTab === "faq" && (
           <>

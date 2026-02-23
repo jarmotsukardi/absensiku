@@ -23,6 +23,11 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { toast } from "sonner";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 interface Stats {
   totalTenants: number;
@@ -64,6 +69,8 @@ const DASHBOARD_STATS_CACHE_KEY = "admin.dashboard.widgets.stats.v1";
 const DASHBOARD_STATS_CACHE_TTL_MS = 60 * 1000;
 const DASHBOARD_AUTO_REFRESH_MS = 2 * 60 * 1000;
 const DASHBOARD_COUNT_MODE = "planned" as const;
+const DASHBOARD_WIDGETS_READ_TIMEOUT_MS = 12000;
+const DASHBOARD_WIDGETS_MAX_RETRIES = 2;
 
 const DEFAULT_STATS: Stats = {
   totalTenants: 0,
@@ -157,6 +164,7 @@ export function DashboardWidgets() {
   const [snapshotSource, setSnapshotSource] = useState<"fresh" | "cache" | "legacy" | "peak_cache" | null>(null);
   const [snapshotCountMode, setSnapshotCountMode] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
 
   const fetchStats = async (options?: { silent?: boolean; forceRefresh?: boolean }) => {
@@ -167,6 +175,7 @@ export function DashboardWidgets() {
       } else {
         setIsLoading(true);
       }
+      setIsRetrying(false);
       setLoadError(null);
       const today = new Date().toISOString().split('T')[0];
       const nowIso = new Date().toISOString();
@@ -177,10 +186,22 @@ export function DashboardWidgets() {
 
       // Primary path: use server snapshot RPC (cached in DB) to avoid heavy count queries per page load.
       try {
-        const { data: snapshotData, error: snapshotError } = await supabase.rpc("get_admin_dashboard_snapshot", {
-          p_force_refresh: options?.forceRefresh ?? false,
-          p_max_age_seconds: 180,
-        });
+        const { data: snapshotData, error: snapshotError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.rpc("get_admin_dashboard_snapshot", {
+                p_force_refresh: options?.forceRefresh ?? false,
+                p_max_age_seconds: 180,
+              }),
+              DASHBOARD_WIDGETS_READ_TIMEOUT_MS,
+              "Permintaan snapshot dashboard timeout."
+            ),
+          {
+            maxRetries: DASHBOARD_WIDGETS_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (snapshotError) {
           throw snapshotError;
         }
@@ -229,39 +250,43 @@ export function DashboardWidgets() {
         activeSubsNew30Res,
         activeSubsPrev30Res,
         attendanceYesterdayRes,
-      ] = await Promise.all([
-        supabase.from("tenants").select("id", { count: DASHBOARD_COUNT_MODE, head: true }),
-        supabase.from("tenants").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("is_active", true),
-        supabase.from("employees").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("is_active", true),
-        supabase.from("subscriptions").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "active"),
-        supabase.from("subscriptions").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "trial"),
-        supabase.from("subscriptions").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "expired"),
-        supabase.from("attendance_records_partitioned").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("date", today),
-        supabase.from("leave_requests").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "menunggu"),
-        supabase.from("stability_streaks").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "ready_for_invoicing"),
-        supabase.from("invoices").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "PENDING"),
-        supabase.from("invoices").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "AWAITING_VERIFICATION"),
-        supabase
-          .from("invoices")
-          .select("id", { count: DASHBOARD_COUNT_MODE, head: true })
-          .in("status", ["PENDING", "AWAITING_VERIFICATION"])
-          .lt("due_date", today),
-        supabase
-          .from("cron_job_logs")
-          .select("id", { count: DASHBOARD_COUNT_MODE, head: true })
-          .gte("started_at", dayAgoIso)
-          .or("status.ilike.%fail%,status.ilike.%error%"),
-        supabase.from("feedback_reports").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "open"),
-        supabase.from("feedback_reports").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "open").eq("feedback_type", "bug"),
-        supabase.from("rate_limit_otp").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).gt("locked_until", nowIso),
-        supabase.from("tenants").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).gte("created_at", thirtyDaysAgoIso),
-        supabase.from("tenants").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).gte("created_at", sixtyDaysAgoIso).lt("created_at", thirtyDaysAgoIso),
-        supabase.from("employees").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).gte("created_at", thirtyDaysAgoIso),
-        supabase.from("employees").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).gte("created_at", sixtyDaysAgoIso).lt("created_at", thirtyDaysAgoIso),
-        supabase.from("subscriptions").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "active").gte("created_at", thirtyDaysAgoIso),
-        supabase.from("subscriptions").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "active").gte("created_at", sixtyDaysAgoIso).lt("created_at", thirtyDaysAgoIso),
-        supabase.from("attendance_records_partitioned").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("date", yesterday),
-      ]);
+      ] = await withTimeout(
+        Promise.all([
+          supabase.from("tenants").select("id", { count: DASHBOARD_COUNT_MODE, head: true }),
+          supabase.from("tenants").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("is_active", true),
+          supabase.from("employees").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("is_active", true),
+          supabase.from("subscriptions").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "active"),
+          supabase.from("subscriptions").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "trial"),
+          supabase.from("subscriptions").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "expired"),
+          supabase.from("attendance_records_partitioned").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("date", today),
+          supabase.from("leave_requests").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "menunggu"),
+          supabase.from("stability_streaks").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "ready_for_invoicing"),
+          supabase.from("invoices").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "PENDING"),
+          supabase.from("invoices").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "AWAITING_VERIFICATION"),
+          supabase
+            .from("invoices")
+            .select("id", { count: DASHBOARD_COUNT_MODE, head: true })
+            .in("status", ["PENDING", "AWAITING_VERIFICATION"])
+            .lt("due_date", today),
+          supabase
+            .from("cron_job_logs")
+            .select("id", { count: DASHBOARD_COUNT_MODE, head: true })
+            .gte("started_at", dayAgoIso)
+            .or("status.ilike.%fail%,status.ilike.%error%"),
+          supabase.from("feedback_reports").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "open"),
+          supabase.from("feedback_reports").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "open").eq("feedback_type", "bug"),
+          supabase.from("rate_limit_otp").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).gt("locked_until", nowIso),
+          supabase.from("tenants").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).gte("created_at", thirtyDaysAgoIso),
+          supabase.from("tenants").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).gte("created_at", sixtyDaysAgoIso).lt("created_at", thirtyDaysAgoIso),
+          supabase.from("employees").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).gte("created_at", thirtyDaysAgoIso),
+          supabase.from("employees").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).gte("created_at", sixtyDaysAgoIso).lt("created_at", thirtyDaysAgoIso),
+          supabase.from("subscriptions").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "active").gte("created_at", thirtyDaysAgoIso),
+          supabase.from("subscriptions").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("status", "active").gte("created_at", sixtyDaysAgoIso).lt("created_at", thirtyDaysAgoIso),
+          supabase.from("attendance_records_partitioned").select("id", { count: DASHBOARD_COUNT_MODE, head: true }).eq("date", yesterday),
+        ]),
+        DASHBOARD_WIDGETS_READ_TIMEOUT_MS,
+        "Permintaan fallback statistik dashboard timeout.",
+      );
 
       const queryErrors = [
         tenantsRes.error,
@@ -354,6 +379,7 @@ export function DashboardWidgets() {
         toast.error(message);
       }
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
       setIsRefreshing(false);
     }
@@ -475,6 +501,11 @@ export function DashboardWidgets() {
       {loadError && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
           {loadError}
+        </div>
+      )}
+      {isRetrying && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+          Sedang mencoba ulang memuat widget dashboard...
         </div>
       )}
       <div className="flex flex-col gap-2 rounded-lg border bg-card px-4 py-3 text-sm text-muted-foreground md:flex-row md:items-center md:justify-between">

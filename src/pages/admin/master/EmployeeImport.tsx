@@ -30,6 +30,11 @@ import {
 } from "lucide-react";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { isRealOfficeCoordinate } from "@/lib/officeCoordinates";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 interface ImportRow {
   rowNum: number;
@@ -54,6 +59,9 @@ interface OfficeOption {
   id: string;
   name: string;
 }
+const ADMIN_EMPLOYEE_IMPORT_READ_TIMEOUT_MS = 12000;
+const ADMIN_EMPLOYEE_IMPORT_WRITE_TIMEOUT_MS = 15000;
+const ADMIN_EMPLOYEE_IMPORT_MAX_RETRIES = 2;
 
 export default function EmployeeImport() {
   const PREVIEW_PAGE_SIZE = 20;
@@ -66,6 +74,7 @@ export default function EmployeeImport() {
   const [isLoading, setIsLoading] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [previewData, setPreviewData] = useState<ImportRow[]>([]);
   const [previewPage, setPreviewPage] = useState(1);
   const [importResult, setImportResult] = useState<{ success: number; failed: number } | null>(null);
@@ -73,17 +82,29 @@ export default function EmployeeImport() {
   // Fetch tenants on component mount
   useEffect(() => {
     void fetchTenants();
-  }, []);
+  }, [fetchTenants]);
 
   const fetchValidOffices = useCallback(async (tenantId: string) => {
     setIsLoadingOffices(true);
     try {
-      const { data, error } = await supabase
-        .from("offices")
-        .select("id, name, latitude, longitude")
-        .eq("tenant_id", tenantId)
-        .eq("is_active", true)
-        .order("name");
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("offices")
+              .select("id, name, latitude, longitude")
+              .eq("tenant_id", tenantId)
+              .eq("is_active", true)
+              .order("name"),
+            ADMIN_EMPLOYEE_IMPORT_READ_TIMEOUT_MS,
+            "Permintaan daftar kantor tenant timeout."
+          ),
+        {
+          maxRetries: ADMIN_EMPLOYEE_IMPORT_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
 
@@ -104,6 +125,7 @@ export default function EmployeeImport() {
       setOffices([]);
       toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsLoadingOffices(false);
     }
   }, []);
@@ -119,14 +141,27 @@ export default function EmployeeImport() {
     void fetchValidOffices(selectedTenant);
   }, [fetchValidOffices, selectedTenant]);
 
-  const fetchTenants = async () => {
+  const fetchTenants = useCallback(async () => {
     try {
+      setIsRetrying(false);
       setLoadError(null);
-      const { data, error } = await supabase
-        .from("tenants")
-        .select("id, name, code")
-        .eq("is_active", true)
-        .order("name");
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("tenants")
+              .select("id, name, code")
+              .eq("is_active", true)
+              .order("name"),
+            ADMIN_EMPLOYEE_IMPORT_READ_TIMEOUT_MS,
+            "Permintaan daftar organisasi timeout."
+          ),
+        {
+          maxRetries: ADMIN_EMPLOYEE_IMPORT_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setTenants(data || []);
@@ -136,8 +171,10 @@ export default function EmployeeImport() {
       setLoadError(message);
       setTenants([]);
       toast.error(message);
+    } finally {
+      setIsRetrying(false);
     }
-  };
+  }, []);
 
   const downloadTemplate = () => {
     // Create CSV template
@@ -217,19 +254,43 @@ export default function EmployeeImport() {
       const parsedRows: ImportRow[] = [];
 
       // Get existing NIKs and emails for validation
-      const { data: existingEmployees } = await supabase
-        .from("employees")
-        .select("nik, email")
-        .eq("tenant_id", selectedTenant);
+      const { data: existingEmployees } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("nik, email")
+              .eq("tenant_id", selectedTenant),
+            ADMIN_EMPLOYEE_IMPORT_READ_TIMEOUT_MS,
+            "Permintaan data pegawai tenant timeout."
+          ),
+        {
+          maxRetries: ADMIN_EMPLOYEE_IMPORT_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       const existingNiks = new Set(existingEmployees?.map(e => e.nik) || []);
       const existingEmails = new Set(existingEmployees?.map(e => e.email?.toLowerCase()) || []);
 
       // Get OPDs for validation
-      const { data: opds } = await supabase
-        .from("opd")
-        .select("code, name")
-        .eq("tenant_id", selectedTenant);
+      const { data: opds } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("opd")
+              .select("code, name")
+              .eq("tenant_id", selectedTenant),
+            ADMIN_EMPLOYEE_IMPORT_READ_TIMEOUT_MS,
+            "Permintaan data OPD tenant timeout."
+          ),
+        {
+          maxRetries: ADMIN_EMPLOYEE_IMPORT_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       const opdCodes = new Set(opds?.map(o => o.code.toUpperCase()) || []);
 
@@ -286,6 +347,7 @@ export default function EmployeeImport() {
       setLoadError(message);
       toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   };
@@ -312,10 +374,22 @@ export default function EmployeeImport() {
 
     try {
       // Get OPDs for this tenant
-      const { data: opds } = await supabase
-        .from("opd")
-        .select("id, code")
-        .eq("tenant_id", selectedTenant);
+      const { data: opds } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("opd")
+              .select("id, code")
+              .eq("tenant_id", selectedTenant),
+            ADMIN_EMPLOYEE_IMPORT_READ_TIMEOUT_MS,
+            "Permintaan data OPD import timeout."
+          ),
+        {
+          maxRetries: ADMIN_EMPLOYEE_IMPORT_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       const opdMap = new Map(opds?.map(o => [o.code.toUpperCase(), o.id]) || []);
 
@@ -323,23 +397,31 @@ export default function EmployeeImport() {
         try {
           const opdId = row.opd_code ? opdMap.get(row.opd_code.toUpperCase()) : null;
 
-          const { error } = await supabase.from("employees").insert({
-            tenant_id: selectedTenant,
-            nik: row.nik,
-            nip: row.nip || null,
-            name: row.name,
-            email: row.email,
-            phone: row.phone || null,
-            position: row.position || null,
-            opd_id: opdId,
-            office_id: selectedOfficeId,
-            is_active: true,
-          });
+          const { error } = await withTimeout(
+            supabase.from("employees").insert({
+              tenant_id: selectedTenant,
+              nik: row.nik,
+              nip: row.nip || null,
+              name: row.name,
+              email: row.email,
+              phone: row.phone || null,
+              position: row.position || null,
+              opd_id: opdId,
+              office_id: selectedOfficeId,
+              is_active: true,
+            }),
+            ADMIN_EMPLOYEE_IMPORT_WRITE_TIMEOUT_MS,
+            "Import satu baris pegawai timeout."
+          );
 
           if (error) throw error;
           success++;
         } catch (error) {
-          console.error("Error importing row:", row, error);
+          reportError(error, "admin.master.employee_import.import.row_failed", {
+            row_num: row.rowNum,
+            nik: row.nik,
+            tenant_id: selectedTenant,
+          });
           failed++;
         }
       }
@@ -361,6 +443,7 @@ export default function EmployeeImport() {
       setLoadError(message);
       toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsImporting(false);
     }
   };
@@ -379,9 +462,27 @@ export default function EmployeeImport() {
   return (
     <SuperAdminLayout title="Import Pegawai" subtitle="Import data pegawai dari file CSV">
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+            Sedang mencoba ulang memuat data import pegawai...
+          </div>
+        )}
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (selectedTenant) {
+                  void fetchValidOffices(selectedTenant);
+                } else {
+                  void fetchTenants();
+                }
+              }}
+            >
+              Coba Lagi
+            </Button>
           </div>
         )}
         {/* Instructions */}

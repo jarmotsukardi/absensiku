@@ -14,6 +14,12 @@ import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 type Office = Tables<"offices">;
 
@@ -41,12 +47,15 @@ interface WorkHour {
   end_time: string;
 }
 const ITEMS_PER_PAGE = 10;
+const ADMIN_WORK_HOURS_READ_TIMEOUT_MS = 12000;
+const ADMIN_WORK_HOURS_MAX_RETRIES = 2;
 
 export default function WorkHoursManagement() {
   const confirmDialog = useConfirmDialog();
   const [workHours, setWorkHours] = useState<WorkHour[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingHour, setEditingHour] = useState<WorkHour | null>(null);
@@ -60,13 +69,26 @@ export default function WorkHoursManagement() {
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
+      setIsRetrying(false);
       setLoadError(null);
       
       // Get offices to extract work hours
-      const { data: officesData, error } = await supabase
-        .from("offices")
-        .select("*")
-        .order("name");
+      const { data: officesData, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("offices")
+              .select("*")
+              .order("name"),
+            ADMIN_WORK_HOURS_READ_TIMEOUT_MS,
+            "Permintaan data kantor timeout."
+          ),
+        {
+          maxRetries: ADMIN_WORK_HOURS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       const typedOffices = (officesData || []) as Office[];
@@ -91,6 +113,7 @@ export default function WorkHoursManagement() {
       setWorkHours([]);
       toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, []);
@@ -266,20 +289,32 @@ export default function WorkHoursManagement() {
                     </div>
                   </div>
                 </div>
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                    Batal
-                  </Button>
-                  <Button type="submit">Simpan</Button>
+                <DialogFooter className={dialogActionBarClassName}>
+                  <DialogActionHint>Jam kerja memengaruhi status hadir, telat, dan lembur.</DialogActionHint>
+                  <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                    <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                      Batal
+                    </Button>
+                    <Button type="submit">Simpan</Button>
+                  </div>
                 </DialogFooter>
               </form>
             </DialogContent>
           </Dialog>
         </div>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+            Sedang mencoba ulang memuat data jam kerja...
+          </div>
+        )}
+
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 

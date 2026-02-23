@@ -35,6 +35,7 @@ import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { isRealOfficeCoordinate } from "@/lib/officeCoordinates";
 import { EmployeeDataTabs } from "@/components/org/employees/EmployeeDataTabs";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 interface ImportRow {
   rowNum: number;
@@ -61,6 +62,8 @@ interface OfficeOption {
 }
 
 export default function OrgEmployeeImport() {
+  const ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS = 15000;
+  const ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX = 1;
   const PREVIEW_PAGE_SIZE = 20;
   const MAX_IMPORT_ROWS = 100;
   const CSV_HEADERS = [
@@ -81,6 +84,7 @@ export default function OrgEmployeeImport() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [previewData, setPreviewData] = useState<ImportRow[]>([]);
   const [previewPage, setPreviewPage] = useState(1);
@@ -129,7 +133,20 @@ export default function OrgEmployeeImport() {
   const fetchUserTenant = async () => {
     setLoadError(null);
     try {
-      const resolvedTenantId = await resolveOrgTenantId();
+      setIsRetrying(false);
+      const resolvedTenantId = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            resolveOrgTenantId(),
+            ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+            "org.employee_import.fetch_user_tenant timeout",
+          ),
+        {
+          maxRetries: ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (!resolvedTenantId) {
         const message = "Tenant organisasi tidak ditemukan. Pastikan akun memiliki akses admin instansi.";
         setTenantId(null);
@@ -143,18 +160,32 @@ export default function OrgEmployeeImport() {
       const message = appendErrorReference("Gagal menentukan tenant import", errorRef);
       setLoadError(message);
       toast.error(message);
+    } finally {
+      setIsRetrying(false);
     }
   };
 
   const fetchValidOffices = useCallback(async (currentTenantId: string) => {
     setIsLoadingOffices(true);
     try {
-      const { data, error } = await supabase
-        .from("offices")
-        .select("id, name, latitude, longitude")
-        .eq("tenant_id", currentTenantId)
-        .eq("is_active", true)
-        .order("name");
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("offices")
+              .select("id, name, latitude, longitude")
+              .eq("tenant_id", currentTenantId)
+              .eq("is_active", true)
+              .order("name"),
+            ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+            "org.employee_import.valid_offices.fetch timeout",
+          ),
+        {
+          maxRetries: ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
 
@@ -177,6 +208,7 @@ export default function OrgEmployeeImport() {
       toast.error(message);
     } finally {
       setIsLoadingOffices(false);
+      setIsRetrying(false);
     }
   }, []);
 
@@ -268,6 +300,7 @@ export default function OrgEmployeeImport() {
     }
 
     setIsLoading(true);
+    setIsRetrying(false);
     setLoadError(null);
     setPreviewData([]);
     setImportResult(null);
@@ -309,19 +342,43 @@ export default function OrgEmployeeImport() {
       const seenEmailsInFile = new Set<string>();
 
       // Get existing NIKs and emails for validation
-      const { data: existingEmployees } = await supabase
-        .from("employees")
-        .select("nik, email")
-        .eq("tenant_id", tenantId);
+      const { data: existingEmployees } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("nik, email")
+              .eq("tenant_id", tenantId),
+            ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+            "org.employee_import.parse_csv.existing_employees timeout",
+          ),
+        {
+          maxRetries: ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       const existingNiks = new Set(existingEmployees?.map(e => e.nik) || []);
       const existingEmails = new Set(existingEmployees?.map(e => e.email?.toLowerCase()) || []);
 
       // Get OPDs for validation
-      const { data: opds } = await supabase
-        .from("opd")
-        .select("code, name")
-        .eq("tenant_id", tenantId);
+      const { data: opds } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("opd")
+              .select("code, name")
+              .eq("tenant_id", tenantId),
+            ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+            "org.employee_import.parse_csv.opd timeout",
+          ),
+        {
+          maxRetries: ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       const opdCodes = new Set(opds?.map(o => o.code.toUpperCase()) || []);
 
@@ -413,6 +470,7 @@ export default function OrgEmployeeImport() {
       toast.error(message);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   };
 
@@ -439,15 +497,28 @@ export default function OrgEmployeeImport() {
 
     setIsImporting(true);
     setLoadError(null);
+    setIsRetrying(false);
     let success = 0;
     let failed = 0;
 
     try {
       // Get OPDs for this tenant
-      const { data: opds } = await supabase
-        .from("opd")
-        .select("id, code")
-        .eq("tenant_id", tenantId);
+      const { data: opds } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("opd")
+              .select("id, code")
+              .eq("tenant_id", tenantId),
+            ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+            "org.employee_import.import.opd timeout",
+          ),
+        {
+          maxRetries: ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       const opdMap = new Map(opds?.map(o => [o.code.toUpperCase(), o.id]) || []);
 
@@ -456,29 +527,44 @@ export default function OrgEmployeeImport() {
           const row = validRows[i];
           const opdId = row.opd_code ? opdMap.get(row.opd_code.toUpperCase()) : null;
 
-          const { error } = await supabase.from("employees").insert({
-            tenant_id: tenantId,
-            nik: row.nik,
-            nip: row.nip || null,
-            name: row.name,
-            gelar_depan: row.gelar_depan || null,
-            gelar_belakang: row.gelar_belakang || null,
-            email: row.email,
-            phone: row.phone || null,
-            whatsapp: row.whatsapp || null,
-            gender: row.gender?.toUpperCase() === "L" ? "L" : row.gender?.toUpperCase() === "P" ? "P" : null,
-            position: row.position || null,
-            golongan: row.golongan || null,
-            opd_id: opdId,
-            office_id: selectedOfficeId,
-            address: row.address || null,
-            is_active: true,
-          });
+          const { error } = await withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase.from("employees").insert({
+                  tenant_id: tenantId,
+                  nik: row.nik,
+                  nip: row.nip || null,
+                  name: row.name,
+                  gelar_depan: row.gelar_depan || null,
+                  gelar_belakang: row.gelar_belakang || null,
+                  email: row.email,
+                  phone: row.phone || null,
+                  whatsapp: row.whatsapp || null,
+                  gender: row.gender?.toUpperCase() === "L" ? "L" : row.gender?.toUpperCase() === "P" ? "P" : null,
+                  position: row.position || null,
+                  golongan: row.golongan || null,
+                  opd_id: opdId,
+                  office_id: selectedOfficeId,
+                  address: row.address || null,
+                  is_active: true,
+                }),
+                ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+                "org.employee_import.import.insert_row timeout",
+              ),
+            {
+              maxRetries: ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+              shouldRetry: isRetryableError,
+            },
+          );
 
           if (error) throw error;
           success++;
         } catch (error) {
-          console.error("Error importing row:", error);
+          reportError(error, "org.employee_import.import.row_failed", {
+            row_num: i + 1,
+            nik: validRows[i]?.nik || null,
+            tenant_id: tenantId,
+          });
           failed++;
         }
       }
@@ -500,6 +586,7 @@ export default function OrgEmployeeImport() {
       toast.error(message);
     } finally {
       setIsImporting(false);
+      setIsRetrying(false);
     }
   };
 
@@ -529,7 +616,35 @@ export default function OrgEmployeeImport() {
         {loadError && (
           <Card className="border-destructive/40">
             <CardContent className="pt-6">
-              <p className="text-sm text-destructive">{loadError}</p>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-destructive">{loadError}</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    void (async () => {
+                      if (!tenantId) {
+                        await fetchUserTenant();
+                        return;
+                      }
+                      await fetchValidOffices(tenantId);
+                      if (file) {
+                        await parseCSV(file);
+                      }
+                    })();
+                  }}
+                >
+                  Coba Lagi
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        {isRetrying && (
+          <Card className="border-amber-300/60 bg-amber-50">
+            <CardContent className="pt-4">
+              <p className="text-sm text-amber-800">Sedang mencoba ulang koneksi data import pegawai...</p>
             </CardContent>
           </Card>
         )}

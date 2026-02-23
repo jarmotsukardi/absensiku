@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { FileSpreadsheet, Download, Search, Filter, ChevronLeft, ChevronRight } from "lucide-react";
+import { FileSpreadsheet, Download, Search, Filter, ChevronLeft, ChevronRight, RotateCcw } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
@@ -18,6 +18,11 @@ import { Calendar } from "@/components/ui/calendar";
 import { CalendarIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 type AttendanceRecord = Tables<"attendance_records">;
 type Employee = Tables<"employees">;
@@ -25,6 +30,8 @@ type OPD = Tables<"opd">;
 type Office = Tables<"offices">;
 
 const ITEMS_PER_PAGE = 20;
+const ADMIN_ATTENDANCE_TIMEOUT_MS = 12000;
+const ADMIN_ATTENDANCE_MAX_RETRIES = 2;
 
 export default function AttendanceReport() {
   const [records, setRecords] = useState<(AttendanceRecord & { employee?: Employee & { opd?: OPD }; office?: Office })[]>([]);
@@ -36,22 +43,36 @@ export default function AttendanceReport() {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
       setLoadError(null);
+      setIsRetrying(false);
       
-      const [opdResult, recordResult] = await Promise.all([
-        supabase.from("opd").select("*").order("name"),
-        supabase
-          .from("attendance_records_partitioned")
-          .select("*")
-          .gte("date", startDate ? format(startDate, "yyyy-MM-dd") : "2024-01-01")
-          .lte("date", endDate ? format(endDate, "yyyy-MM-dd") : "2099-12-31")
-          .order("date", { ascending: false })
-          .limit(1000),
-      ]);
+      const [opdResult, recordResult] = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.all([
+              supabase.from("opd").select("*").order("name"),
+              supabase
+                .from("attendance_records_partitioned")
+                .select("*")
+                .gte("date", startDate ? format(startDate, "yyyy-MM-dd") : "2024-01-01")
+                .lte("date", endDate ? format(endDate, "yyyy-MM-dd") : "2099-12-31")
+                .order("date", { ascending: false })
+                .limit(1000),
+            ]),
+            ADMIN_ATTENDANCE_TIMEOUT_MS,
+            "Permintaan laporan absensi admin timeout."
+          ),
+        {
+          maxRetries: ADMIN_ATTENDANCE_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (opdResult.error) throw opdResult.error;
       if (recordResult.error) throw recordResult.error;
@@ -69,6 +90,7 @@ export default function AttendanceReport() {
       setLoadError(message);
       setRecords([]);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [startDate, endDate]);
@@ -142,6 +164,12 @@ export default function AttendanceReport() {
   return (
     <SuperAdminLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+            Mencoba ulang memuat laporan absensi...
+          </div>
+        )}
+
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Laporan Absensi</h1>
@@ -156,8 +184,12 @@ export default function AttendanceReport() {
         </div>
 
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+              <RotateCcw className="mr-2 h-4 w-4" />
+              Coba Lagi
+            </Button>
           </div>
         )}
 
@@ -169,7 +201,8 @@ export default function AttendanceReport() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+            <div className="rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
               <div className="space-y-2">
                 <Label>OPD</Label>
                 <Select value={filterOpd} onValueChange={setFilterOpd}>
@@ -259,6 +292,7 @@ export default function AttendanceReport() {
                   <Filter className="mr-2 h-4 w-4" />
                   Tampilkan
                 </Button>
+              </div>
               </div>
             </div>
           </CardContent>

@@ -34,6 +34,7 @@ import { Plus, Pencil, Trash2, Loader2, Package, Info, RefreshCw } from "lucide-
 import { toast } from "sonner";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat("id-ID", {
@@ -58,6 +59,8 @@ const getNumericSettingValue = (value: unknown, fallback: number): number => {
 };
 
 export function SubscriptionPackagesManager() {
+  const OP_TIMEOUT_MS = 12000;
+  const OP_RETRY_MAX = 2;
   const confirmDialog = useConfirmDialog();
   const ITEMS_PER_PAGE = 10;
   const { packages, isLoading, createPackage, updatePackage, deletePackage } = useSubscriptionPackages();
@@ -99,12 +102,23 @@ export function SubscriptionPackagesManager() {
     setIsSaving(true);
     try {
       if (editingPackage.id) {
-        await updatePackage(editingPackage.id, editingPackage);
+        await withTimeout(
+          updatePackage(editingPackage.id, editingPackage),
+          OP_TIMEOUT_MS,
+          "Menyimpan perubahan paket terlalu lama",
+        );
       } else {
-        await createPackage(editingPackage);
+        await withTimeout(
+          createPackage(editingPackage),
+          OP_TIMEOUT_MS,
+          "Membuat paket baru terlalu lama",
+        );
       }
       setShowDialog(false);
       setEditingPackage(null);
+    } catch (error) {
+      const errorRef = reportError(error, "admin.billing.packages.save");
+      toast.error(appendErrorReference("Gagal menyimpan paket", errorRef));
     } finally {
       setIsSaving(false);
     }
@@ -141,12 +155,24 @@ export function SubscriptionPackagesManager() {
 
     setIsSyncing(true);
     try {
-      await Promise.all(
-        outOfSync.map(pkg => updatePackage(pkg.id, { base_price_per_month: globalPrice }))
+      await withExponentialBackoff(
+        async () =>
+          withTimeout(
+            Promise.all(
+              outOfSync.map(pkg => updatePackage(pkg.id, { base_price_per_month: globalPrice }))
+            ),
+            OP_TIMEOUT_MS,
+            "Sinkronisasi harga paket terlalu lama",
+          ),
+        {
+          maxRetries: OP_RETRY_MAX,
+          baseDelay: 500,
+          shouldRetry: (err) => isRetryableError(err),
+        },
       );
       toast.success(`${outOfSync.length} paket berhasil disinkronkan`);
-    } catch {
-      const errorRef = reportError(new Error("Sinkronisasi paket gagal"), "admin.billing.packages.sync_all_prices");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.billing.packages.sync_all_prices");
       toast.error(appendErrorReference("Gagal menyinkronkan paket", errorRef));
     } finally {
       setIsSyncing(false);
@@ -179,8 +205,14 @@ export function SubscriptionPackagesManager() {
 
   if (isLoading || isLoadingSettings) {
     return (
-      <div className="flex items-center justify-center h-32">
-        <Loader2 className="h-6 w-6 animate-spin" />
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-10 text-center">
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+        </div>
+        <p className="text-base font-medium text-slate-900">Memuat paket langganan</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Data paket dan konfigurasi billing global sedang disiapkan.
+        </p>
       </div>
     );
   }
@@ -257,8 +289,16 @@ export function SubscriptionPackagesManager() {
           <TableBody>
             {packages.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={11} className="text-center text-muted-foreground">
-                  Belum ada paket langganan
+                <TableCell colSpan={11} className="py-10">
+                  <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
+                    <div className="rounded-full bg-slate-100 p-3">
+                      <Package className="h-5 w-5 text-slate-500" />
+                    </div>
+                    <p className="text-base font-medium text-slate-800">Belum ada paket langganan</p>
+                    <p className="text-sm text-muted-foreground">
+                      Tambahkan paket baru agar organisasi bisa membuat invoice dari penawaran.
+                    </p>
+                  </div>
                 </TableCell>
               </TableRow>
             ) : (

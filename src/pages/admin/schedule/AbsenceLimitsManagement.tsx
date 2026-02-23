@@ -13,14 +13,23 @@ import { toast } from "sonner";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { supabase } from "@/integrations/supabase/client";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import {
   ABSENCE_LIMIT_TEMPLATE_SETTING_KEY,
   DEFAULT_ABSENCE_LIMIT_TEMPLATE,
   normalizeAbsenceLimitTemplate,
   type AbsenceLimitTemplateItem,
 } from "@/lib/absenceLimitTemplates";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 const ITEMS_PER_PAGE = 10;
+const ADMIN_ABSENCE_LIMITS_READ_TIMEOUT_MS = 12000;
+const ADMIN_ABSENCE_LIMITS_WRITE_TIMEOUT_MS = 15000;
+const ADMIN_ABSENCE_LIMITS_MAX_RETRIES = 2;
 
 export default function AbsenceLimitsManagement({ embedded = false }: { embedded?: boolean }) {
   const confirmDialog = useConfirmDialog();
@@ -28,6 +37,7 @@ export default function AbsenceLimitsManagement({ embedded = false }: { embedded
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingLimit, setEditingLimit] = useState<AbsenceLimitTemplateItem | null>(null);
@@ -41,13 +51,26 @@ export default function AbsenceLimitsManagement({ embedded = false }: { embedded
   const fetchTemplate = useCallback(async () => {
     try {
       setIsLoading(true);
+      setIsRetrying(false);
       setLoadError(null);
 
-      const { data, error } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", ABSENCE_LIMIT_TEMPLATE_SETTING_KEY)
-        .maybeSingle();
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("value")
+              .eq("key", ABSENCE_LIMIT_TEMPLATE_SETTING_KEY)
+              .maybeSingle(),
+            ADMIN_ABSENCE_LIMITS_READ_TIMEOUT_MS,
+            "Permintaan template batas absen timeout."
+          ),
+        {
+          maxRetries: ADMIN_ABSENCE_LIMITS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
 
@@ -60,6 +83,7 @@ export default function AbsenceLimitsManagement({ embedded = false }: { embedded
       setLimits([...DEFAULT_ABSENCE_LIMIT_TEMPLATE]);
       toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, []);
@@ -84,17 +108,21 @@ export default function AbsenceLimitsManagement({ embedded = false }: { embedded
         is_active: item.is_active,
       }));
 
-      const { error } = await supabase
-        .from("system_settings")
-        .upsert(
-          {
-            key: ABSENCE_LIMIT_TEMPLATE_SETTING_KEY,
-            value: payload,
-            description: "Template aturan batas absen default untuk tenant/member baru.",
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "key" }
-        );
+      const { error } = await withTimeout(
+        supabase
+          .from("system_settings")
+          .upsert(
+            {
+              key: ABSENCE_LIMIT_TEMPLATE_SETTING_KEY,
+              value: payload,
+              description: "Template aturan batas absen default untuk tenant/member baru.",
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "key" }
+          ),
+        ADMIN_ABSENCE_LIMITS_WRITE_TIMEOUT_MS,
+        "Simpan template batas absen timeout."
+      );
 
       if (error) throw error;
       setLimits(nextLimits);
@@ -300,14 +328,17 @@ export default function AbsenceLimitsManagement({ embedded = false }: { embedded
                       </Button>
                     </div>
                   </div>
-                  <DialogFooter>
-                    <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                      Batal
-                    </Button>
-                    <Button type="submit" disabled={isSaving}>
-                      {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                      Simpan
-                    </Button>
+                  <DialogFooter className={dialogActionBarClassName}>
+                    <DialogActionHint>Aturan ini menjadi default untuk tenant baru.</DialogActionHint>
+                    <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                      <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                        Batal
+                      </Button>
+                      <Button type="submit" disabled={isSaving}>
+                        {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        Simpan
+                      </Button>
+                    </div>
                   </DialogFooter>
                 </form>
               </DialogContent>
@@ -315,9 +346,18 @@ export default function AbsenceLimitsManagement({ embedded = false }: { embedded
           </div>
         </div>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+            Sedang mencoba ulang memuat template batas absen...
+          </div>
+        )}
+
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchTemplate()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 

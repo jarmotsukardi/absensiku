@@ -12,6 +12,8 @@ import { toast } from "sonner";
 import { Loader2, Save, Plus, Trash2, Edit, Link2, Eye, ChevronLeft, ChevronRight } from "lucide-react";
 import { RichTextEditor } from "@/components/editor/RichTextEditor";
 import DOMPurify from "dompurify";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface QuickLink {
   id: string;
@@ -49,11 +51,16 @@ export function QuickLinksSettings() {
 
   const fetchData = async () => {
     try {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "quick_links_settings")
-        .maybeSingle();
+      const { data } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "quick_links_settings")
+            .maybeSingle(),
+        10000,
+        "Load quick links settings timeout"
+      );
 
       if (data?.value && Array.isArray(data.value)) {
         setLinks((data.value as unknown as QuickLink[]).sort((a, b) => a.sort_order - b.sort_order));
@@ -67,7 +74,8 @@ export function QuickLinksSettings() {
         ]);
       }
     } catch (error) {
-      console.error("Error:", error);
+      const errorRef = reportError(error, "admin.settings.quick_links.fetch");
+      toast.error(appendErrorReference("Gagal memuat quick links", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -76,31 +84,53 @@ export function QuickLinksSettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "quick_links_settings")
-        .maybeSingle();
+      const { data: existing } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("id")
+            .eq("key", "quick_links_settings")
+            .maybeSingle(),
+        10000,
+        "Load quick links existing setting timeout"
+      );
 
       const jsonValue = JSON.parse(JSON.stringify(links));
 
       if (existing) {
-        await supabase
-          .from("system_settings")
-          .update({ value: jsonValue, updated_at: new Date().toISOString() })
-          .eq("key", "quick_links_settings");
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .update({ value: jsonValue, updated_at: new Date().toISOString() })
+              .eq("key", "quick_links_settings"),
+          10000,
+          "Update quick links settings timeout"
+        );
+        if (error) throw error;
       } else {
-        await supabase
-          .from("system_settings")
-          .insert({ key: "quick_links_settings", value: jsonValue });
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .insert({ key: "quick_links_settings", value: jsonValue }),
+          10000,
+          "Insert quick links settings timeout"
+        );
+        if (error) throw error;
       }
 
       // Also update footer_settings to sync quick_links
-      const { data: footerData } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "footer_settings")
-        .maybeSingle();
+      const { data: footerData } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "footer_settings")
+            .maybeSingle(),
+        10000,
+        "Load footer settings for quick links sync timeout"
+      );
 
       if (footerData?.value) {
         const footerSettings = JSON.parse(JSON.stringify(footerData.value));
@@ -110,15 +140,22 @@ export function QuickLinksSettings() {
           url: l.link_type === "overlay" ? "#" : l.url,
           content: l.link_type === "overlay" ? l.content : undefined,
         }));
-        await supabase
-          .from("system_settings")
-          .update({ value: footerSettings, updated_at: new Date().toISOString() })
-          .eq("key", "footer_settings");
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .update({ value: footerSettings, updated_at: new Date().toISOString() })
+              .eq("key", "footer_settings"),
+          10000,
+          "Update footer quick links sync timeout"
+        );
+        if (error) throw error;
       }
 
       toast.success("Quick links berhasil disimpan");
-    } catch (err) {
-      toast.error("Gagal menyimpan");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.quick_links.save");
+      toast.error(appendErrorReference("Gagal menyimpan", errorRef));
     } finally {
       setIsSaving(false);
     }

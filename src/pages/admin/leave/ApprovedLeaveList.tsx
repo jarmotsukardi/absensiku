@@ -21,17 +21,25 @@ import { Enums, Tables } from "@/integrations/supabase/types";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 type LeaveRequest = Tables<"leave_requests">;
 type Employee = Tables<"employees">;
 type LeaveType = Enums<"leave_type">;
 type LeaveRequestWithEmployee = LeaveRequest & { employee?: Employee | null };
+const ADMIN_APPROVED_LEAVE_READ_TIMEOUT_MS = 12000;
+const ADMIN_APPROVED_LEAVE_MAX_RETRIES = 2;
 
 export default function ApprovedLeaveList() {
   const ITEMS_PER_PAGE = 15;
   const [requests, setRequests] = useState<LeaveRequestWithEmployee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
@@ -39,6 +47,7 @@ export default function ApprovedLeaveList() {
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
+      setIsRetrying(false);
       setLoadError(null);
       
       let query = supabase
@@ -51,7 +60,19 @@ export default function ApprovedLeaveList() {
         query = query.eq("leave_type", typeFilter as LeaveType);
       }
 
-      const { data, error } = await query;
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query,
+            ADMIN_APPROVED_LEAVE_READ_TIMEOUT_MS,
+            "Permintaan daftar izin/cuti disetujui timeout."
+          ),
+        {
+          maxRetries: ADMIN_APPROVED_LEAVE_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setRequests((data as LeaveRequestWithEmployee[]) || []);
@@ -62,12 +83,13 @@ export default function ApprovedLeaveList() {
       toast.error(message);
       setRequests([]);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [typeFilter]);
 
   useEffect(() => {
-    fetchData();
+    void fetchData();
   }, [fetchData]);
 
   const handleExport = () => {
@@ -116,9 +138,18 @@ export default function ApprovedLeaveList() {
           </Button>
         </div>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+            Sedang mencoba ulang memuat daftar izin/cuti...
+          </div>
+        )}
+
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 

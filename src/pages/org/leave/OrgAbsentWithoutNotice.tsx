@@ -14,6 +14,7 @@ import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 type AttendanceRecord = Tables<"attendance_records_partitioned">;
 type EmployeeSummary = {
@@ -28,55 +29,103 @@ type AbsentRecord = AttendanceRecord & {
 
 export default function OrgAbsentWithoutNotice() {
   const ITEMS_PER_PAGE = 15;
+  const ABSENT_WITHOUT_NOTICE_QUERY_TIMEOUT_MS = 15000;
+  const ABSENT_WITHOUT_NOTICE_QUERY_RETRY_MAX = 1;
   const [records, setRecords] = useState<AbsentRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const initTenant = async () => {
-      try {
-        setTenantId(await resolveOrgTenantId());
-      } catch (error) {
-        const errorRef = reportError(error, "org.absent_without_notice.resolve_tenant");
-        setLoadError(appendErrorReference("Gagal menentukan tenant organisasi", errorRef));
-        setTenantId(null);
-      }
-    };
-    void initTenant();
+  const initializeTenant = useCallback(async () => {
+    try {
+      const resolvedTenantId = await withTimeout(
+        resolveOrgTenantId(),
+        ABSENT_WITHOUT_NOTICE_QUERY_TIMEOUT_MS,
+        "org.absent_without_notice.resolve_tenant timeout",
+      );
+      setTenantId(resolvedTenantId);
+      setLoadError(null);
+    } catch (error) {
+      const errorRef = reportError(error, "org.absent_without_notice.resolve_tenant");
+      setLoadError(appendErrorReference("Gagal menentukan tenant organisasi", errorRef));
+      setTenantId(null);
+    }
   }, []);
 
+  useEffect(() => {
+    void initializeTenant();
+  }, [initializeTenant]);
+
   const fetchData = useCallback(async () => {
+    setIsLoading(true);
     setLoadError(null);
     try {
+      setIsRetrying(false);
       if (!tenantId) {
         setRecords([]);
         return;
       }
-      const employeeIds = await getTenantEmployeeIds(tenantId);
+      const employeeIds = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            getTenantEmployeeIds(tenantId),
+            ABSENT_WITHOUT_NOTICE_QUERY_TIMEOUT_MS,
+            "org.absent_without_notice.fetch.employee_ids timeout",
+          ),
+        {
+          maxRetries: ABSENT_WITHOUT_NOTICE_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (employeeIds.length === 0) {
         setRecords([]);
         return;
       }
 
       // Fetch dari tabel partitioned - tanpa join karena partitioned table
-      const { data: attendanceData, error } = await supabase
-        .from("attendance_records_partitioned")
-        .select("*")
-        .in("employee_id", employeeIds)
-        .eq("status", "tidak_hadir")
-        .order("date", { ascending: false });
+      const { data: attendanceData, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("attendance_records_partitioned")
+              .select("*")
+              .in("employee_id", employeeIds)
+              .eq("status", "tidak_hadir")
+              .order("date", { ascending: false }),
+            ABSENT_WITHOUT_NOTICE_QUERY_TIMEOUT_MS,
+            "org.absent_without_notice.fetch.attendance timeout",
+          ),
+        {
+          maxRetries: ABSENT_WITHOUT_NOTICE_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
 
       // Fetch employees data untuk join manual
       const matchedEmployeeIds = [...new Set((attendanceData || []).map((record) => record.employee_id))];
-      const { data: employeesData } = await supabase
-        .from("employees")
-        .select("id, name, nip, opd(code)")
-        .in("id", matchedEmployeeIds);
+      const { data: employeesData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("id, name, nip, opd(code)")
+              .in("id", matchedEmployeeIds),
+            ABSENT_WITHOUT_NOTICE_QUERY_TIMEOUT_MS,
+            "org.absent_without_notice.fetch.employees timeout",
+          ),
+        {
+          maxRetries: ABSENT_WITHOUT_NOTICE_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       // Manual join
       const recordsWithEmployee: AbsentRecord[] = (attendanceData || []).map((record) => ({
@@ -92,6 +141,7 @@ export default function OrgAbsentWithoutNotice() {
       toast.error(message);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   }, [tenantId]);
 
@@ -103,6 +153,13 @@ export default function OrgAbsentWithoutNotice() {
     }
     void fetchData();
   }, [tenantId, fetchData]);
+
+  const handleRetryLoad = async () => {
+    await initializeTenant();
+    if (tenantId) {
+      await fetchData();
+    }
+  };
 
   const filteredRecords = records.filter((record) =>
     (record.employees?.name || "").toLowerCase().includes(searchTerm.toLowerCase())
@@ -136,10 +193,18 @@ export default function OrgAbsentWithoutNotice() {
 
         {loadError && (
           <Card className="border-destructive/40">
-            <CardContent className="pt-6">
+            <CardContent className="flex items-center justify-between gap-3 pt-6">
               <p className="text-sm text-destructive">{loadError}</p>
+              <Button size="sm" variant="outline" onClick={handleRetryLoad} className="border-destructive/30 text-destructive hover:bg-destructive/10">
+                Coba Lagi
+              </Button>
             </CardContent>
           </Card>
+        )}
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            Sedang mencoba ulang koneksi data...
+          </div>
         )}
 
         <Card>

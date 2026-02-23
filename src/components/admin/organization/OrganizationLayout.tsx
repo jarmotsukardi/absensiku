@@ -40,16 +40,75 @@ type OrgAccessLevel = "admin" | "operator";
 const ACCESS_CHECK_TIMEOUT_MS = 12000;
 const ACCESS_LOADING_WATCHDOG_MS = 20000;
 const ORG_ACTIVE_TENANT_STORAGE_KEY = "org_active_tenant_id";
+const ORG_ACCESS_CACHE_KEY = "org_access_cache_v1";
+const ORG_ACCESS_CACHE_TTL_MS = 3 * 60 * 1000;
+
+interface OrgAccessCacheEntry {
+  checkedAt: number;
+  tenantId: string;
+  accessLevel: OrgAccessLevel;
+  tenantName: string;
+  tenantType: string;
+  tenantLogoUrl?: string | null;
+}
+
+const readOrgAccessCache = (): OrgAccessCacheEntry | null => {
+  try {
+    const raw = sessionStorage.getItem(ORG_ACCESS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as OrgAccessCacheEntry;
+    if (!parsed?.checkedAt || Date.now() - parsed.checkedAt > ORG_ACCESS_CACHE_TTL_MS) {
+      return null;
+    }
+    if (!parsed.tenantId || !parsed.accessLevel) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+
+const writeOrgAccessCache = (entry: Omit<OrgAccessCacheEntry, "checkedAt">) => {
+  try {
+    sessionStorage.setItem(
+      ORG_ACCESS_CACHE_KEY,
+      JSON.stringify({
+        ...entry,
+        checkedAt: Date.now(),
+      }),
+    );
+  } catch {
+    // Ignore storage failures.
+  }
+};
+
+const clearOrgAccessCache = () => {
+  try {
+    sessionStorage.removeItem(ORG_ACCESS_CACHE_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+};
 
 export function OrganizationLayout({ children }: OrganizationLayoutProps) {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const queryTenantId = searchParams.get("tenant_id");
-  const [isLoading, setIsLoading] = useState(true);
-  const [tenant, setTenant] = useState<TenantInfo | null>(null);
-  const [activeTenantId, setActiveTenantId] = useState<string | null>(null);
-  const [accessLevel, setAccessLevel] = useState<OrgAccessLevel>("admin");
+  const cachedAccess = readOrgAccessCache();
+  const [isLoading, setIsLoading] = useState(!cachedAccess);
+  const [tenant, setTenant] = useState<TenantInfo | null>(
+    cachedAccess
+      ? {
+          name: cachedAccess.tenantName,
+          organization_type: cachedAccess.tenantType,
+          logo_url: cachedAccess.tenantLogoUrl || null,
+        }
+      : null,
+  );
+  const [activeTenantId, setActiveTenantId] = useState<string | null>(cachedAccess?.tenantId || null);
+  const [accessLevel, setAccessLevel] = useState<OrgAccessLevel>(cachedAccess?.accessLevel || "operator");
   const [menuUserInfo, setMenuUserInfo] = useState<MenuUserInfo>({
     name: "Pengguna",
     email: "-",
@@ -58,13 +117,14 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
 
   const isOperatorAllowedPath = useCallback((pathname: string) => {
     const allowedPrefixes = [
-      "/org",
       "/org/dashboard",
       "/org/leave",
       "/org/reports",
       "/org/help",
       "/org/profile",
     ];
+
+    if (pathname === "/org") return true;
 
     if (pathname === "/org/settings/admin-operator") return false;
     if (pathname.startsWith("/org/master")) return false;
@@ -93,6 +153,7 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
       );
       
       if (!user) {
+        clearOrgAccessCache();
         // Tidak ada session - redirect ke login tanpa pesan error
         navigate("/org/login", { replace: true });
         return;
@@ -119,11 +180,13 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
       if (rolesError) throw rolesError;
 
       const isSuperAdmin = roles?.some((r) => r.role === "super_admin");
+      const hasAdminInstansiRole = roles?.some((r) => r.role === "admin_instansi") || false;
+      const hasOperatorRole = roles?.some((r) => r.role === "atasan") || false;
+      const hasPegawaiRole = roles?.some((r) => r.role === "pegawai") || false;
       const adminInstansiRole = roles?.find((r) => r.role === "admin_instansi" && r.tenant_id);
       const operatorRole = roles?.find((r) => r.role === "atasan" && r.tenant_id);
-      const isOperator = roles?.some((r) => r.role === "atasan");
-      const isPegawai = roles?.some((r) => r.role === "pegawai");
-      const roleLabel = adminInstansiRole || isSuperAdmin ? "Admin Organisasi" : "Operator";
+      const hasAdminAccess = isSuperAdmin || hasAdminInstansiRole;
+      const roleLabel = hasAdminAccess ? "Admin Organisasi" : hasOperatorRole ? "Operator" : "Pegawai";
       setMenuUserInfo({
         name: metadataName || roleLabel,
         email: user.email || "-",
@@ -135,7 +198,18 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
         operatorRole?.tenant_id ||
         null;
 
-      if (!resolvedTenantId && (isOperator || isPegawai)) {
+      if (!resolvedTenantId && (hasAdminInstansiRole || hasOperatorRole)) {
+        try {
+          const cachedTenantId = sessionStorage.getItem(ORG_ACTIVE_TENANT_STORAGE_KEY);
+          if (cachedTenantId) {
+            resolvedTenantId = cachedTenantId;
+          }
+        } catch {
+          // Ignore storage failures.
+        }
+      }
+
+      if (!resolvedTenantId && (hasAdminInstansiRole || hasOperatorRole)) {
         const { data: employeeRow, error: employeeError } = await withTimeout(
           Promise.resolve(
             supabase
@@ -153,7 +227,7 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
 
       if (resolvedTenantId) {
         setActiveTenantId(resolvedTenantId);
-        setAccessLevel(adminInstansiRole || isSuperAdmin ? "admin" : "operator");
+        setAccessLevel(hasAdminAccess ? "admin" : "operator");
         try {
           sessionStorage.setItem(ORG_ACTIVE_TENANT_STORAGE_KEY, resolvedTenantId);
         } catch {
@@ -175,19 +249,40 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
         if (tenantError) throw tenantError;
 
         if (tenantData) {
-          setTenant({
+          const nextTenant: TenantInfo = {
             name: tenantData.name,
             organization_type: getOrganizationTypeLabel(tenantData.organization_type || ""),
             logo_url: tenantData.logo_url || null,
+          };
+          setTenant(nextTenant);
+          writeOrgAccessCache({
+            tenantId: resolvedTenantId,
+            accessLevel: hasAdminAccess ? "admin" : "operator",
+            tenantName: nextTenant.name,
+            tenantType: nextTenant.organization_type,
+            tenantLogoUrl: nextTenant.logo_url || null,
           });
         } else {
-          setTenant({ name: "Organisasi", organization_type: "Admin Organisasi", logo_url: null });
+          const fallbackTenant: TenantInfo = {
+            name: "Organisasi",
+            organization_type: "Admin Organisasi",
+            logo_url: null,
+          };
+          setTenant(fallbackTenant);
+          writeOrgAccessCache({
+            tenantId: resolvedTenantId,
+            accessLevel: hasAdminAccess ? "admin" : "operator",
+            tenantName: fallbackTenant.name,
+            tenantType: fallbackTenant.organization_type,
+            tenantLogoUrl: null,
+          });
         }
         setIsLoading(false);
         return;
       }
 
       if (isSuperAdmin) {
+        clearOrgAccessCache();
         setAccessLevel("admin");
         setActiveTenantId(null);
         try {
@@ -201,7 +296,8 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
       }
 
       // Bukan admin - redirect ke halaman yang sesuai tanpa logout
-      if (isPegawai) {
+      clearOrgAccessCache();
+      if (hasPegawaiRole) {
         toast.info("Anda dialihkan ke dashboard pegawai.");
         navigate("/employee/dashboard", { replace: true });
       } else {
@@ -209,6 +305,7 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
         navigate("/employee/dashboard", { replace: true });
       }
     } catch (error) {
+      clearOrgAccessCache();
       setActiveTenantId(null);
       try {
         sessionStorage.removeItem(ORG_ACTIVE_TENANT_STORAGE_KEY);
@@ -250,6 +347,9 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
     toast.info("Akses operator dibatasi ke modul operasional.");
     navigate("/org/leave/requests", { replace: true });
   }, [accessLevel, isLoading, isOperatorAllowedPath, location.pathname, navigate]);
+
+  const isOperatorBlockedPath =
+    !isLoading && accessLevel === "operator" && !isOperatorAllowedPath(location.pathname);
 
   const getOrganizationTypeLabel = (type: string) => {
     const types: Record<string, string> = {
@@ -296,6 +396,10 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
 
   const headerAvatarLabel = tenant?.name || menuUserInfo.name;
   const headerAvatarUrl = tenant?.logo_url || menuUserInfo.avatarUrl;
+  const shouldRenderHardRequestNotifications =
+    location.pathname !== "/org/billing" &&
+    !location.pathname.startsWith("/org/billing/") &&
+    (accessLevel === "admin" || isOperatorAllowedPath(location.pathname));
 
   if (isLoading) {
     return (
@@ -386,7 +490,26 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
               </DropdownMenu>
             </div>
           </header>
-          <div className="p-6">{children}</div>
+          <div className="p-6">
+            {isOperatorBlockedPath ? (
+              <div className="mx-auto max-w-xl rounded-xl border border-amber-200 bg-amber-50/70 p-5">
+                <h2 className="text-base font-semibold text-amber-900">Akses Halaman Dibatasi</h2>
+                <p className="mt-2 text-sm text-amber-800">
+                  Role Operator hanya dapat mengakses modul operasional seperti Permohonan, Laporan Permohonan,
+                  Bantuan, dan Profil.
+                </p>
+                <Button
+                  className="mt-4"
+                  size="sm"
+                  onClick={() => navigate("/org/leave/requests", { replace: true })}
+                >
+                  Buka Halaman yang Diizinkan
+                </Button>
+              </div>
+            ) : (
+              children
+            )}
+          </div>
         </main>
       </div>
       <FloatingWhatsApp
@@ -395,7 +518,9 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
         panelTitle="Dukungan Admin"
         panelSubtitle="Layanan pelanggan & bantuan teknis"
       />
-      <HardRequestNotifications tenantId={activeTenantId} />
+      {shouldRenderHardRequestNotifications ? (
+        <HardRequestNotifications tenantId={activeTenantId} />
+      ) : null}
     </SidebarProvider>
   );
 }

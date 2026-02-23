@@ -12,6 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import { Textarea } from "@/components/ui/textarea";
 import { Star, Bug, Lightbulb, Download, Search, MessageSquare, CheckCircle2, Loader2, Printer, ShieldAlert, Ticket } from "lucide-react";
 import { toast } from "sonner";
@@ -20,6 +21,7 @@ import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import {
   Pagination,
   PaginationContent,
@@ -78,6 +80,8 @@ const normalizeFeedbackSettings = (raw: unknown): FeedbackBugSettings => {
 
 export default function FeedbackManagement() {
   const PAGE_SIZE = 20;
+  const ADMIN_FEEDBACK_QUERY_TIMEOUT_MS = 15000;
+  const ADMIN_FEEDBACK_QUERY_RETRY_MAX = 1;
   const location = useLocation();
   const isTicketRoute = location.pathname === "/admin/help/tickets";
   const [feedbacks, setFeedbacks] = useState<FeedbackItem[]>([]);
@@ -99,6 +103,7 @@ export default function FeedbackManagement() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   // Stats
   const [stats, setStats] = useState({ total: 0, avgRating: 0, openIssues: 0 });
@@ -130,34 +135,74 @@ export default function FeedbackManagement() {
 
   const fetchAccessRole = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      setIsRetrying(false);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+            "admin.feedback.fetch_access_role.get_user timeout",
+          ),
+        {
+          maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (!user) {
         setIsSuperAdminUser(false);
         return;
       }
 
-      const { data, error } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", user.id)
-        .eq("role", "super_admin")
-        .maybeSingle();
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("user_roles")
+              .select("role")
+              .eq("user_id", user.id)
+              .eq("role", "super_admin")
+              .maybeSingle(),
+            ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+            "admin.feedback.fetch_access_role.query timeout",
+          ),
+        {
+          maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setIsSuperAdminUser(Boolean(data));
     } catch (error) {
       reportError(error, "admin.feedback.fetch_access_role");
       setIsSuperAdminUser(false);
+    } finally {
+      setIsRetrying(false);
     }
   };
 
   const fetchFeedbackSettings = async () => {
     try {
-      const { data, error } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "feedback_bug_settings")
-        .maybeSingle();
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("value")
+              .eq("key", "feedback_bug_settings")
+              .maybeSingle(),
+            ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+            "admin.feedback.fetch_settings timeout",
+          ),
+        {
+          maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setFeedbackSettings(normalizeFeedbackSettings(data?.value));
@@ -171,6 +216,8 @@ export default function FeedbackManagement() {
         bugs_enabled: true,
         suggestions_enabled: true,
       });
+    } finally {
+      setIsRetrying(false);
     }
   };
 
@@ -231,6 +278,7 @@ export default function FeedbackManagement() {
     setIsLoading(true);
     setLoadError(null);
     try {
+      setIsRetrying(false);
       const pagedQuery = applyFeedbackFilters(
         supabase
         .from("feedback_reports")
@@ -270,15 +318,63 @@ export default function FeedbackManagement() {
         { data: ratingRows, error: ratingRowsError },
         { data: statsRows, error: statsRpcError },
       ] = await Promise.all([
-        pagedQuery,
-        openIssueCountQuery,
-        ratingRowsQuery,
-        supabase.rpc("get_feedback_stats_filtered", {
-          p_reporter_role: reporterRoleFilter,
-          p_feedback_type: feedbackTypeFilter,
-          p_rating: ratingFilter,
-          p_search: searchFilter,
-        }),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              pagedQuery,
+              ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+              "admin.feedback.fetch_reports.paged timeout",
+            ),
+          {
+            maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              openIssueCountQuery,
+              ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+              "admin.feedback.fetch_reports.open_issue_count timeout",
+            ),
+          {
+            maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              ratingRowsQuery,
+              ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+              "admin.feedback.fetch_reports.rating_rows timeout",
+            ),
+          {
+            maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.rpc("get_feedback_stats_filtered", {
+                p_reporter_role: reporterRoleFilter,
+                p_feedback_type: feedbackTypeFilter,
+                p_rating: ratingFilter,
+                p_search: searchFilter,
+              }),
+              ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+              "admin.feedback.fetch_reports.stats_rpc timeout",
+            ),
+          {
+            maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
       ]);
 
       if (error) throw error;
@@ -325,6 +421,7 @@ export default function FeedbackManagement() {
       setStats({ total: 0, avgRating: 0, openIssues: 0 });
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   }, [activeTab, applyFeedbackFilters, currentPage, filterRating, filterType, isTicketRoute, searchQuery]);
 
@@ -352,16 +449,41 @@ export default function FeedbackManagement() {
     if (!selectedFeedback) return;
     setIsResolving(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const { error } = await supabase.from("feedback_reports")
-        .update({
-          status: "resolved",
-          resolved_at: new Date().toISOString(),
-          resolved_by: user?.id,
-          resolution_notes: resolutionNotes,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", selectedFeedback.id);
+      setIsRetrying(false);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+            "admin.feedback.resolve.get_user timeout",
+          ),
+        {
+          maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.from("feedback_reports")
+              .update({
+                status: "resolved",
+                resolved_at: new Date().toISOString(),
+                resolved_by: user?.id,
+                resolution_notes: resolutionNotes,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", selectedFeedback.id),
+            ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+            "admin.feedback.resolve.update timeout",
+          ),
+        {
+          maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
 
       toast.success("Feedback ditandai selesai");
@@ -375,6 +497,7 @@ export default function FeedbackManagement() {
       toast.error(appendErrorReference("Gagal mengupdate feedback", errorRef));
     } finally {
       setIsResolving(false);
+      setIsRetrying(false);
     }
   };
 
@@ -386,7 +509,19 @@ export default function FeedbackManagement() {
       .order("created_at", { ascending: false })
     );
 
-    const { data, error } = await query;
+    const { data, error } = await withExponentialBackoff(
+      () =>
+        withTimeout(
+          query,
+          ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+          "admin.feedback.fetch_all_filtered timeout",
+        ),
+      {
+        maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+        shouldRetry: isRetryableError,
+        onRetry: () => setIsRetrying(true),
+      }
+    );
     if (error) throw error;
     return (data || []) as FeedbackItem[];
   };
@@ -623,20 +758,32 @@ export default function FeedbackManagement() {
           </div>
         </CardHeader>
         <CardContent>
+          {isRetrying && (
+            <div className="mb-4 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              Sedang mencoba ulang koneksi data feedback...
+            </div>
+          )}
           {loadError && (
             <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {loadError}
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <span>{loadError}</span>
+                <Button type="button" variant="outline" size="sm" onClick={() => void fetchFeedbacks()}>
+                  Coba Lagi
+                </Button>
+              </div>
             </div>
           )}
           <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-4">
-            <TabsList>
-              <TabsTrigger value="all">Semua</TabsTrigger>
-              <TabsTrigger value="admin">Admin Organisasi</TabsTrigger>
-              <TabsTrigger value="pegawai">Pegawai</TabsTrigger>
-            </TabsList>
+            <div className="overflow-x-auto pb-1">
+              <TabsList className="min-w-max h-auto gap-1.5 rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+                <TabsTrigger value="all" className="whitespace-nowrap">Semua</TabsTrigger>
+                <TabsTrigger value="admin" className="whitespace-nowrap">Admin Organisasi</TabsTrigger>
+                <TabsTrigger value="pegawai" className="whitespace-nowrap">Pegawai</TabsTrigger>
+              </TabsList>
+            </div>
           </Tabs>
 
-          <div className="flex flex-col sm:flex-row gap-3 mb-4">
+          <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-white/80 p-3 shadow-sm sm:flex-row sm:items-center">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
@@ -647,14 +794,14 @@ export default function FeedbackManagement() {
               />
             </div>
             <Select value={filterRating} onValueChange={setFilterRating}>
-              <SelectTrigger className="w-[140px]"><SelectValue placeholder="Rating" /></SelectTrigger>
+              <SelectTrigger className="w-full sm:w-[160px]"><SelectValue placeholder="Rating" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Semua Rating</SelectItem>
                 {[1, 2, 3, 4, 5].map(r => <SelectItem key={r} value={r.toString()}>⭐ {r}</SelectItem>)}
               </SelectContent>
             </Select>
             <Select value={filterType} onValueChange={(value) => setFilterType(value as FeedbackTypeFilter)}>
-              <SelectTrigger className="w-[140px]"><SelectValue placeholder="Tipe" /></SelectTrigger>
+              <SelectTrigger className="w-full sm:w-[170px]"><SelectValue placeholder="Tipe" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Semua Tipe</SelectItem>
                 <SelectItem value="bug">Bug</SelectItem>
@@ -799,10 +946,13 @@ export default function FeedbackManagement() {
               )}
             </div>
           )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSelectedFeedback(null)}>Tutup</Button>
+          <DialogFooter className={dialogActionBarClassName}>
+            <DialogActionHint>
+              Gunakan resolusi singkat dan jelas agar riwayat penanganan mudah diaudit.
+            </DialogActionHint>
+            <Button variant="outline" className="bg-white" onClick={() => setSelectedFeedback(null)}>Tutup</Button>
             {selectedFeedback?.status === "open" && (
-              <Button onClick={handleResolve} disabled={isResolving}>
+              <Button className="min-w-[170px]" onClick={handleResolve} disabled={isResolving}>
                 {isResolving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
                 Tandai Resolved
               </Button>

@@ -16,6 +16,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 interface WorkUnit {
   id: string;
@@ -45,12 +51,16 @@ const INSTITUTION_TYPES = [
 ];
 
 const ITEMS_PER_PAGE = 10;
+const WORK_UNITS_READ_TIMEOUT_MS = 12000;
+const WORK_UNITS_WRITE_TIMEOUT_MS = 15000;
+const WORK_UNITS_MAX_RETRIES = 2;
 
 export default function OrgWorkUnitsManagement() {
   const confirmDialog = useConfirmDialog();
   const [workUnits, setWorkUnits] = useState<WorkUnit[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -69,24 +79,49 @@ export default function OrgWorkUnitsManagement() {
     setIsLoading(true);
     try {
       setLoadError(null);
+      setIsRetrying(false);
       // Fetch OPD list
-      const { data: opdData, error: opdError } = await supabase
-        .from("opd")
-        .select("id, name, code")
-        .eq("is_active", true)
-        .order("name");
+      const { data: opdData, error: opdError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("opd")
+              .select("id, name, code")
+              .eq("is_active", true)
+              .order("name"),
+            WORK_UNITS_READ_TIMEOUT_MS,
+            "Permintaan data OPD timeout."
+          ),
+        {
+          maxRetries: WORK_UNITS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (opdError) throw opdError;
       setOpdList(opdData || []);
 
       // Fetch work units with OPD info
-      const { data: workUnitsData, error: workUnitsError } = await supabase
-        .from("work_units")
-        .select(`
-          *,
-          opd:opd_id (name, code)
-        `)
-        .order("name");
+      const { data: workUnitsData, error: workUnitsError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("work_units")
+              .select(`
+                *,
+                opd:opd_id (name, code)
+              `)
+              .order("name"),
+            WORK_UNITS_READ_TIMEOUT_MS,
+            "Permintaan data satuan kerja timeout."
+          ),
+        {
+          maxRetries: WORK_UNITS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (workUnitsError) throw workUnitsError;
       setWorkUnits(workUnitsData || []);
@@ -98,6 +133,7 @@ export default function OrgWorkUnitsManagement() {
       setWorkUnits([]);
       setOpdList([]);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   };
@@ -112,14 +148,22 @@ export default function OrgWorkUnitsManagement() {
 
     try {
       // Get tenant_id from current user
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user } } = await withTimeout(
+        supabase.auth.getUser(),
+        WORK_UNITS_WRITE_TIMEOUT_MS,
+        "Permintaan user auth timeout."
+      );
       if (!user) throw new Error("User tidak ditemukan");
 
-      const { data: employeeData, error: empError } = await supabase
-        .from("employees")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      const { data: employeeData, error: empError } = await withTimeout(
+        supabase
+          .from("employees")
+          .select("tenant_id")
+          .eq("user_id", user.id)
+          .maybeSingle(),
+        WORK_UNITS_WRITE_TIMEOUT_MS,
+        "Permintaan tenant pegawai timeout."
+      );
 
       if (empError) throw empError;
       if (!employeeData) throw new Error("Data pegawai tidak ditemukan");
@@ -135,17 +179,25 @@ export default function OrgWorkUnitsManagement() {
       };
 
       if (editingUnit) {
-        const { error } = await supabase
-          .from("work_units")
-          .update(payload)
-          .eq("id", editingUnit.id);
+        const { error } = await withTimeout(
+          supabase
+            .from("work_units")
+            .update(payload)
+            .eq("id", editingUnit.id),
+          WORK_UNITS_WRITE_TIMEOUT_MS,
+          "Update satuan kerja timeout."
+        );
 
         if (error) throw error;
         toast.success("Satuan kerja berhasil diperbarui");
       } else {
-        const { error } = await supabase
-          .from("work_units")
-          .insert(payload);
+        const { error } = await withTimeout(
+          supabase
+            .from("work_units")
+            .insert(payload),
+          WORK_UNITS_WRITE_TIMEOUT_MS,
+          "Tambah satuan kerja timeout."
+        );
 
         if (error) throw error;
         toast.success("Satuan kerja berhasil ditambahkan");
@@ -190,10 +242,14 @@ export default function OrgWorkUnitsManagement() {
     }
 
     try {
-      const { error } = await supabase
-        .from("work_units")
-        .delete()
-        .eq("id", id);
+      const { error } = await withTimeout(
+        supabase
+          .from("work_units")
+          .delete()
+          .eq("id", id),
+        WORK_UNITS_WRITE_TIMEOUT_MS,
+        "Hapus satuan kerja timeout."
+      );
 
       if (error) throw error;
       toast.success("Satuan kerja berhasil dihapus");
@@ -206,10 +262,14 @@ export default function OrgWorkUnitsManagement() {
 
   const handleToggleStatus = async (id: string, currentStatus: boolean) => {
     try {
-      const { error } = await supabase
-        .from("work_units")
-        .update({ is_active: !currentStatus })
-        .eq("id", id);
+      const { error } = await withTimeout(
+        supabase
+          .from("work_units")
+          .update({ is_active: !currentStatus })
+          .eq("id", id),
+        WORK_UNITS_WRITE_TIMEOUT_MS,
+        "Ubah status satuan kerja timeout."
+      );
 
       if (error) throw error;
       toast.success("Status berhasil diperbarui");
@@ -258,6 +318,12 @@ export default function OrgWorkUnitsManagement() {
   return (
     <OrganizationLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+            Mencoba ulang memuat data satuan kerja...
+          </div>
+        )}
+
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Building2 className="h-6 w-6" />
@@ -267,8 +333,11 @@ export default function OrgWorkUnitsManagement() {
         </div>
 
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 
@@ -364,13 +433,16 @@ export default function OrgWorkUnitsManagement() {
                   <Label htmlFor="is_active">Status Aktif</Label>
                 </div>
               </div>
-              <DialogFooter>
-                <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                  Batal
-                </Button>
-                <Button type="submit" disabled={isLoading}>
-                  {isLoading ? "Menyimpan..." : "Simpan"}
-                </Button>
+              <DialogFooter className={dialogActionBarClassName}>
+                <DialogActionHint>Periksa OPD dan tipe institusi sebelum menyimpan satuan kerja.</DialogActionHint>
+                <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                    Batal
+                  </Button>
+                  <Button type="submit" disabled={isLoading}>
+                    {isLoading ? "Menyimpan..." : "Simpan"}
+                  </Button>
+                </div>
               </DialogFooter>
             </form>
           </DialogContent>
@@ -385,8 +457,9 @@ export default function OrgWorkUnitsManagement() {
                   Total {filteredUnits.length} satuan kerja
                 </CardDescription>
               </div>
-              <div className="flex flex-col sm:flex-row gap-2">
-                <div className="relative">
+              <div className="w-full rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm md:w-auto">
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <div className="relative">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     placeholder="Cari satuan kerja..."
@@ -399,6 +472,7 @@ export default function OrgWorkUnitsManagement() {
                   <Plus className="h-4 w-4 mr-2" />
                   Tambah
                 </Button>
+                </div>
               </div>
             </div>
           </CardHeader>

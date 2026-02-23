@@ -17,9 +17,16 @@ import {
     Save,
     Loader2,
     ShieldCheck,
-    Crown
+    Crown,
+    RotateCcw
 } from "lucide-react";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+    isRetryableError,
+    withExponentialBackoff,
+    withTimeout,
+} from "@/lib/attendanceResilience";
 
 interface AdminEmployeeRow {
     id: string;
@@ -34,10 +41,16 @@ const getErrorMessage = (error: unknown): string => {
     return "Terjadi kesalahan";
 };
 
+const ADMIN_PROFILE_READ_TIMEOUT_MS = 12000;
+const ADMIN_PROFILE_WRITE_TIMEOUT_MS = 15000;
+const ADMIN_PROFILE_MAX_RETRIES = 2;
+
 export default function AdminProfile() {
     const [session, setSession] = useState<Session | null>(null);
     const [user, setUser] = useState<User | null>(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [isRetrying, setIsRetrying] = useState(false);
+    const [loadError, setLoadError] = useState<string | null>(null);
     const [phoneNumber, setPhoneNumber] = useState("");
     const [isSavingPhone, setIsSavingPhone] = useState(false);
 
@@ -48,10 +61,36 @@ export default function AdminProfile() {
     const [showNewPassword, setShowNewPassword] = useState(false);
     const [isChangingPassword, setIsChangingPassword] = useState(false);
 
-    useEffect(() => {
-        const hydrateProfile = async (incomingSession?: Session | null) => {
-            const currentSession = incomingSession ?? (await supabase.auth.getSession()).data.session;
-            const { data: authUserData } = await supabase.auth.getUser();
+    const hydrateProfile = async (incomingSession?: Session | null) => {
+        try {
+            setLoadError(null);
+            setIsRetrying(false);
+            const currentSession = incomingSession ?? (await withExponentialBackoff(
+                () =>
+                    withTimeout(
+                        supabase.auth.getSession(),
+                        ADMIN_PROFILE_READ_TIMEOUT_MS,
+                        "Permintaan session auth timeout."
+                    ),
+                {
+                    maxRetries: ADMIN_PROFILE_MAX_RETRIES,
+                    shouldRetry: isRetryableError,
+                    onRetry: () => setIsRetrying(true),
+                }
+            )).data.session;
+            const { data: authUserData } = await withExponentialBackoff(
+                () =>
+                    withTimeout(
+                        supabase.auth.getUser(),
+                        ADMIN_PROFILE_READ_TIMEOUT_MS,
+                        "Permintaan user auth timeout."
+                    ),
+                {
+                    maxRetries: ADMIN_PROFILE_MAX_RETRIES,
+                    shouldRetry: isRetryableError,
+                    onRetry: () => setIsRetrying(true),
+                }
+            );
             const currentUser = authUserData?.user ?? currentSession?.user ?? null;
             setSession(currentSession);
             setUser(currentUser);
@@ -67,40 +106,80 @@ export default function AdminProfile() {
                 if (currentUser?.id) {
                     const settingKey = `super_admin_recovery_phone_${currentUser.id}`;
 
-                    const { data: byUserRows } = await supabase
-                        .from("employees")
-                        .select("id, email, phone, whatsapp, user_id")
-                        .eq("user_id", currentUser.id)
-                        .order("updated_at", { ascending: false })
-                        .limit(1);
+                    const { data: byUserRows } = await withExponentialBackoff(
+                        () =>
+                            withTimeout(
+                                supabase
+                                    .from("employees")
+                                    .select("id, email, phone, whatsapp, user_id")
+                                    .eq("user_id", currentUser.id)
+                                    .order("updated_at", { ascending: false })
+                                    .limit(1),
+                                ADMIN_PROFILE_READ_TIMEOUT_MS,
+                                "Permintaan employee by user timeout."
+                            ),
+                        {
+                            maxRetries: ADMIN_PROFILE_MAX_RETRIES,
+                            shouldRetry: isRetryableError,
+                            onRetry: () => setIsRetrying(true),
+                        }
+                    );
 
                     let employee = (byUserRows?.[0] || null) as AdminEmployeeRow | null;
 
                     if (!employee && currentUser.email) {
-                        const { data: byEmailRows } = await supabase
-                            .from("employees")
-                            .select("id, email, phone, whatsapp, user_id")
-                            .ilike("email", currentUser.email)
-                            .order("updated_at", { ascending: false })
-                            .limit(1);
+                        const { data: byEmailRows } = await withExponentialBackoff(
+                            () =>
+                                withTimeout(
+                                    supabase
+                                        .from("employees")
+                                        .select("id, email, phone, whatsapp, user_id")
+                                        .ilike("email", currentUser.email)
+                                        .order("updated_at", { ascending: false })
+                                        .limit(1),
+                                    ADMIN_PROFILE_READ_TIMEOUT_MS,
+                                    "Permintaan employee by email timeout."
+                                ),
+                            {
+                                maxRetries: ADMIN_PROFILE_MAX_RETRIES,
+                                shouldRetry: isRetryableError,
+                                onRetry: () => setIsRetrying(true),
+                            }
+                        );
                         employee = (byEmailRows?.[0] || null) as AdminEmployeeRow | null;
 
                         if (employee && !employee.user_id) {
-                            await supabase
-                                .from("employees")
-                                .update({ user_id: currentUser.id })
-                                .eq("id", employee.id);
+                            await withTimeout(
+                                supabase
+                                    .from("employees")
+                                    .update({ user_id: currentUser.id })
+                                    .eq("id", employee.id),
+                                ADMIN_PROFILE_WRITE_TIMEOUT_MS,
+                                "Update user_id employee timeout."
+                            );
                         }
                     }
 
                     resolvedPhone = employee?.phone || employee?.whatsapp || metadataPhone;
 
                     if (!resolvedPhone) {
-                        const { data: systemSettingRow } = await supabase
-                            .from("system_settings")
-                            .select("value")
-                            .eq("key", settingKey)
-                            .maybeSingle();
+                        const { data: systemSettingRow } = await withExponentialBackoff(
+                            () =>
+                                withTimeout(
+                                    supabase
+                                        .from("system_settings")
+                                        .select("value")
+                                        .eq("key", settingKey)
+                                        .maybeSingle(),
+                                    ADMIN_PROFILE_READ_TIMEOUT_MS,
+                                    "Permintaan system setting recovery phone timeout."
+                                ),
+                            {
+                                maxRetries: ADMIN_PROFILE_MAX_RETRIES,
+                                shouldRetry: isRetryableError,
+                                onRetry: () => setIsRetrying(true),
+                            }
+                        );
                         const savedPhone = (
                             (systemSettingRow?.value as { phone?: string; whatsapp?: string } | null)?.phone ||
                             (systemSettingRow?.value as { phone?: string; whatsapp?: string } | null)?.whatsapp ||
@@ -115,8 +194,18 @@ export default function AdminProfile() {
 
             setPhoneNumber(resolvedPhone || "");
             setIsLoading(false);
-        };
+        } catch (error) {
+            const errorRef = reportError(error, "admin.profile.hydrate");
+            const message = appendErrorReference("Gagal memuat profil admin", errorRef);
+            setLoadError(message);
+            toast.error(message);
+            setIsLoading(false);
+        } finally {
+            setIsRetrying(false);
+        }
+    };
 
+    useEffect(() => {
         void hydrateProfile();
 
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
@@ -140,9 +229,13 @@ export default function AdminProfile() {
         setIsChangingPassword(true);
 
         try {
-            const { error } = await supabase.auth.updateUser({
-                password: newPassword,
-            });
+            const { error } = await withTimeout(
+                supabase.auth.updateUser({
+                    password: newPassword,
+                }),
+                ADMIN_PROFILE_WRITE_TIMEOUT_MS,
+                "Update password timeout."
+            );
 
             if (error) throw error;
 
@@ -151,7 +244,8 @@ export default function AdminProfile() {
             setNewPassword("");
             setConfirmPassword("");
         } catch (error: unknown) {
-            toast.error("Gagal mengubah password", {
+            const errorRef = reportError(error, "admin.profile.change_password");
+            toast.error(appendErrorReference("Gagal mengubah password", errorRef), {
                 description: getErrorMessage(error),
             });
         } finally {
@@ -181,29 +275,41 @@ export default function AdminProfile() {
             const existingMetadata = user?.user_metadata && typeof user.user_metadata === "object"
                 ? user.user_metadata
                 : {};
-            const { error } = await supabase.auth.updateUser({
-                data: {
-                    ...existingMetadata,
-                    phone: normalizedPhone,
-                    whatsapp: normalizedPhone,
-                },
-            });
+            const { error } = await withTimeout(
+                supabase.auth.updateUser({
+                    data: {
+                        ...existingMetadata,
+                        phone: normalizedPhone,
+                        whatsapp: normalizedPhone,
+                    },
+                }),
+                ADMIN_PROFILE_WRITE_TIMEOUT_MS,
+                "Update metadata phone timeout."
+            );
 
             if (error) throw error;
 
             if (user?.id) {
-                const { data: byUserUpdated, error: updateByUserError } = await supabase
-                    .from("employees")
-                    .update({ phone: normalizedPhone, whatsapp: normalizedPhone })
-                    .eq("user_id", user.id)
-                    .select("id, email");
+                const { data: byUserUpdated, error: updateByUserError } = await withTimeout(
+                    supabase
+                        .from("employees")
+                        .update({ phone: normalizedPhone, whatsapp: normalizedPhone })
+                        .eq("user_id", user.id)
+                        .select("id, email"),
+                    ADMIN_PROFILE_WRITE_TIMEOUT_MS,
+                    "Update phone employee by user timeout."
+                );
                 if (updateByUserError) throw updateByUserError;
 
                 if ((!byUserUpdated || byUserUpdated.length === 0) && user.email) {
-                    const { error: updateByEmailError } = await supabase
-                        .from("employees")
-                        .update({ phone: normalizedPhone, whatsapp: normalizedPhone, user_id: user.id })
-                        .ilike("email", user.email);
+                    const { error: updateByEmailError } = await withTimeout(
+                        supabase
+                            .from("employees")
+                            .update({ phone: normalizedPhone, whatsapp: normalizedPhone, user_id: user.id })
+                            .ilike("email", user.email),
+                        ADMIN_PROFILE_WRITE_TIMEOUT_MS,
+                        "Update phone employee by email timeout."
+                    );
                     if (updateByEmailError) throw updateByEmailError;
                 }
             }
@@ -214,44 +320,61 @@ export default function AdminProfile() {
                     whatsapp: normalizedPhone,
                     saved_at: new Date().toISOString(),
                 };
-                const { data: existingSetting, error: checkSettingError } = await supabase
-                    .from("system_settings")
-                    .select("id")
-                    .eq("key", settingKey)
-                    .maybeSingle();
+                const { data: existingSetting, error: checkSettingError } = await withTimeout(
+                    supabase
+                        .from("system_settings")
+                        .select("id")
+                        .eq("key", settingKey)
+                        .maybeSingle(),
+                    ADMIN_PROFILE_WRITE_TIMEOUT_MS,
+                    "Check recovery phone setting timeout."
+                );
                 if (checkSettingError) throw checkSettingError;
 
                 if (existingSetting?.id) {
-                    const { error: updateSettingError } = await supabase
-                        .from("system_settings")
-                        .update({
-                            value: settingPayload,
-                            updated_by: user?.id || null,
-                            updated_at: new Date().toISOString(),
-                        })
-                        .eq("key", settingKey);
+                    const { error: updateSettingError } = await withTimeout(
+                        supabase
+                            .from("system_settings")
+                            .update({
+                                value: settingPayload,
+                                updated_by: user?.id || null,
+                                updated_at: new Date().toISOString(),
+                            })
+                            .eq("key", settingKey),
+                        ADMIN_PROFILE_WRITE_TIMEOUT_MS,
+                        "Update recovery phone setting timeout."
+                    );
                     if (updateSettingError) throw updateSettingError;
                 } else {
-                    const { error: insertSettingError } = await supabase
-                        .from("system_settings")
-                        .insert({
-                            key: settingKey,
-                            description: "Nomor recovery super admin",
-                            value: settingPayload,
-                            updated_by: user?.id || null,
-                        });
+                    const { error: insertSettingError } = await withTimeout(
+                        supabase
+                            .from("system_settings")
+                            .insert({
+                                key: settingKey,
+                                description: "Nomor recovery super admin",
+                                value: settingPayload,
+                                updated_by: user?.id || null,
+                            }),
+                        ADMIN_PROFILE_WRITE_TIMEOUT_MS,
+                        "Insert recovery phone setting timeout."
+                    );
                     if (insertSettingError) throw insertSettingError;
                 }
             }
 
-            const { data: userData } = await supabase.auth.getUser();
+            const { data: userData } = await withTimeout(
+                supabase.auth.getUser(),
+                ADMIN_PROFILE_READ_TIMEOUT_MS,
+                "Refresh auth user timeout."
+            );
             if (userData.user) {
                 setUser(userData.user);
             }
 
             toast.success("No HP super admin berhasil disimpan");
         } catch (error: unknown) {
-            toast.error("Gagal menyimpan No HP", {
+            const errorRef = reportError(error, "admin.profile.save_phone");
+            toast.error(appendErrorReference("Gagal menyimpan No HP", errorRef), {
                 description: getErrorMessage(error),
             });
         } finally {
@@ -275,6 +398,22 @@ export default function AdminProfile() {
             subtitle="Kelola informasi akun Super Admin Anda"
         >
             <div className="max-w-xl space-y-4">
+                {isRetrying && (
+                    <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+                        Mencoba ulang memuat profil admin...
+                    </div>
+                )}
+
+                {loadError && (
+                    <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+                        <span>{loadError}</span>
+                        <Button variant="outline" size="sm" onClick={() => void hydrateProfile(session)}>
+                            <RotateCcw className="mr-2 h-4 w-4" />
+                            Coba Lagi
+                        </Button>
+                    </div>
+                )}
+
                 {/* Profile Info */}
                 <Card>
                     <CardHeader>

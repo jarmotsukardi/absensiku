@@ -37,7 +37,7 @@ export function LeaveRequestTabs() {
         navigate(LEAVE_TABS.find((tab) => tab.value === value)?.path || "/org/leave/requests")
       }
     >
-      <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto p-1">
+      <TabsList className="h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
         {LEAVE_TABS.map((tab) => (
           <TabsTrigger key={tab.value} value={tab.value} className="whitespace-nowrap">
             {tab.label}

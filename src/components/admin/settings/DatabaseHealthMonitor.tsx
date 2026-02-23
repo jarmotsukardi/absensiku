@@ -6,6 +6,8 @@ import { Progress } from "@/components/ui/progress";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { supabase } from "@/integrations/supabase/client";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { toast } from "sonner";
 import {
   Activity,
@@ -36,6 +38,8 @@ interface HealthCheck {
 }
 
 export function DatabaseHealthMonitor() {
+  const DB_HEALTH_OP_TIMEOUT_MS = 12000;
+  const DB_HEALTH_OP_RETRY_MAX = 1;
   const ITEMS_PER_PAGE = 10;
   const [isLoading, setIsLoading] = useState(false);
   const [partitionStats, setPartitionStats] = useState<PartitionStat[]>([]);
@@ -49,7 +53,18 @@ export function DatabaseHealthMonitor() {
 
     try {
       // 1. Check partition stats
-      const { data: partitions, error: partitionError } = await supabase.rpc("get_partition_stats");
+      const { data: partitions, error: partitionError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () => supabase.rpc("get_partition_stats"),
+            DB_HEALTH_OP_TIMEOUT_MS,
+            "Health check partisi timeout"
+          ),
+        {
+          maxRetries: DB_HEALTH_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        }
+      );
       
       if (partitionError) {
         checks.push({
@@ -69,31 +84,63 @@ export function DatabaseHealthMonitor() {
       }
 
       // 2. Check employee count vs subscription limits
-      const { count: employeeCount } = await supabase
-        .from("employees")
-        .select("*", { count: "exact", head: true })
-        .eq("is_active", true);
+      const [{ count: employeeCount, error: employeeError }, { count: tenantCount, error: tenantError }] =
+        await Promise.all([
+          withTimeout(
+            () =>
+              supabase
+                .from("employees")
+                .select("*", { count: "exact", head: true })
+                .eq("is_active", true),
+            10000,
+            "Health check employees timeout"
+          ),
+          withTimeout(
+            () =>
+              supabase
+                .from("tenants")
+                .select("*", { count: "exact", head: true })
+                .eq("is_active", true),
+            10000,
+            "Health check tenants timeout"
+          ),
+        ]);
 
-      const { count: tenantCount } = await supabase
-        .from("tenants")
-        .select("*", { count: "exact", head: true })
-        .eq("is_active", true);
-
-      checks.push({
-        name: "Data Pegawai",
-        status: "healthy",
-        message: `${employeeCount?.toLocaleString() || 0} pegawai aktif`,
-        value: `${tenantCount || 0} organisasi`
-      });
+      if (employeeError || tenantError) {
+        checks.push({
+          name: "Data Pegawai",
+          status: "warning",
+          message: "Sebagian metrik pegawai/organisasi tidak dapat dimuat",
+          value: `Pegawai: ${employeeCount?.toLocaleString() || 0}, Org: ${tenantCount || 0}`,
+        });
+      } else {
+        checks.push({
+          name: "Data Pegawai",
+          status: "healthy",
+          message: `${employeeCount?.toLocaleString() || 0} pegawai aktif`,
+          value: `${tenantCount || 0} organisasi`
+        });
+      }
 
       // 3. Check for orphaned records
-      const { data: orphanedEmployees } = await supabase
-        .from("employees")
-        .select("id")
-        .is("office_id", null)
-        .eq("is_active", true);
+      const { data: orphanedEmployees, error: orphanedError } = await withTimeout(
+        () =>
+          supabase
+            .from("employees")
+            .select("id")
+            .is("office_id", null)
+            .eq("is_active", true),
+        10000,
+        "Health check integritas data timeout"
+      );
 
-      if (orphanedEmployees && orphanedEmployees.length > 0) {
+      if (orphanedError) {
+        checks.push({
+          name: "Integritas Data",
+          status: "warning",
+          message: "Tidak dapat memeriksa data orphan pegawai",
+        });
+      } else if (orphanedEmployees && orphanedEmployees.length > 0) {
         checks.push({
           name: "Integritas Data",
           status: "warning",
@@ -109,25 +156,43 @@ export function DatabaseHealthMonitor() {
 
       // 4. Check recent attendance activity
       const today = new Date().toISOString().split("T")[0];
-      const { count: todayAttendance } = await supabase
-        .from("attendance_records_partitioned")
-        .select("*", { count: "exact", head: true })
-        .eq("date", today);
+      const { count: todayAttendance, error: todayAttendanceError } = await withTimeout(
+        () =>
+          supabase
+            .from("attendance_records_partitioned")
+            .select("*", { count: "exact", head: true })
+            .eq("date", today),
+        10000,
+        "Health check absensi hari ini timeout"
+      );
 
       checks.push({
         name: "Aktivitas Hari Ini",
-        status: "healthy",
-        message: `${todayAttendance?.toLocaleString() || 0} record absensi hari ini`
+        status: todayAttendanceError ? "warning" : "healthy",
+        message: todayAttendanceError
+          ? "Tidak dapat memuat aktivitas absensi hari ini"
+          : `${todayAttendance?.toLocaleString() || 0} record absensi hari ini`
       });
 
       // 5. Check subscription status
-      const { data: expiredSubs } = await supabase
-        .from("subscriptions")
-        .select("id")
-        .lt("end_date", today)
-        .eq("status", "active");
+      const { data: expiredSubs, error: expiredSubsError } = await withTimeout(
+        () =>
+          supabase
+            .from("subscriptions")
+            .select("id")
+            .lt("end_date", today)
+            .eq("status", "active"),
+        10000,
+        "Health check subscription timeout"
+      );
 
-      if (expiredSubs && expiredSubs.length > 0) {
+      if (expiredSubsError) {
+        checks.push({
+          name: "Subscription",
+          status: "warning",
+          message: "Tidak dapat memeriksa status subscription",
+        });
+      } else if (expiredSubs && expiredSubs.length > 0) {
         checks.push({
           name: "Subscription",
           status: "warning",
@@ -142,9 +207,26 @@ export function DatabaseHealthMonitor() {
       }
 
       // 6. Check GPS cleanup logs
-      const { data: cleanupLogs } = await supabase.rpc("get_gps_cleanup_logs", { limit_count: 1 });
+      const { data: cleanupLogs, error: cleanupLogsError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () => supabase.rpc("get_gps_cleanup_logs", { limit_count: 1 }),
+            10000,
+            "Health check GPS cleanup timeout"
+          ),
+        {
+          maxRetries: DB_HEALTH_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        }
+      );
       
-      if (cleanupLogs && cleanupLogs.length > 0) {
+      if (cleanupLogsError) {
+        checks.push({
+          name: "GPS Cleanup",
+          status: "warning",
+          message: "Tidak dapat memuat riwayat cleanup GPS",
+        });
+      } else if (cleanupLogs && cleanupLogs.length > 0) {
         const lastCleanup = new Date(cleanupLogs[0].executed_at);
         const daysSinceCleanup = Math.floor((Date.now() - lastCleanup.getTime()) / (1000 * 60 * 60 * 24));
         
@@ -168,8 +250,8 @@ export function DatabaseHealthMonitor() {
       setLastChecked(new Date());
       toast.success("Health check selesai");
     } catch (error) {
-      console.error("Health check error:", error);
-      toast.error("Gagal menjalankan health check");
+      const errorRef = reportError(error, "admin.settings.database_health.run");
+      toast.error(appendErrorReference("Gagal menjalankan health check", errorRef));
     } finally {
       setIsLoading(false);
     }

@@ -91,6 +91,12 @@ export interface FinancialTransaction {
   [key: string]: unknown;
 }
 
+const MANUAL_VERIFICATION_STATUSES = [
+  "AWAITING_VERIFICATION",
+  "AWAITING_VERIFICATION_FULL",
+  "PENDING_VERIFICATION_PARTIAL",
+] as const;
+
 export function useBillingSettings() {
   const [settings, setSettings] = useState<BillingSetting[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -231,6 +237,7 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchInvoices = useCallback(async () => {
+    setIsLoading(true);
     try {
       let query = supabase
         .from("invoices")
@@ -486,6 +493,46 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
   };
 
   return { invoices, isLoading, verifyPayment, refetch: fetchInvoices };
+}
+
+export function useManualVerificationInvoices(filters?: { tenantId?: string }) {
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  const fetchInvoices = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      let query = supabase
+        .from("invoices")
+        .select(`
+          *,
+          tenant:tenants(id, name, code)
+        `)
+        .in("status", [...MANUAL_VERIFICATION_STATUSES])
+        .order("created_at", { ascending: false });
+
+      if (filters?.tenantId) {
+        query = query.eq("tenant_id", filters.tenantId);
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+      setInvoices(data || []);
+    } catch (error) {
+      reportError(error, "admin.billing.invoices.manual_verification.fetch", {
+        tenant_id: filters?.tenantId || null,
+      });
+      console.error("Error fetching manual verification invoices:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [filters?.tenantId]);
+
+  useEffect(() => {
+    fetchInvoices();
+  }, [fetchInvoices]);
+
+  return { invoices, isLoading, refetch: fetchInvoices };
 }
 
 export function useFinancialLedger(dateRange?: { start: string; end: string }) {

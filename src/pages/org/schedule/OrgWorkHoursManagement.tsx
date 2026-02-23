@@ -14,8 +14,10 @@ import { Plus, Pencil, Trash2, Timer, RotateCcw, CircleHelp } from "lucide-react
 import { toast } from "sonner";
 import { Pagination, PaginationContent, PaginationItem, PaginationLink, PaginationNext, PaginationPrevious } from "@/components/ui/pagination";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 
 interface WorkHour {
   id: string;
@@ -46,12 +48,15 @@ const daysOfWeek = [
   { value: 6, label: "Sabtu" },
   { value: 7, label: "Minggu" },
 ];
+const ORG_WORK_HOURS_QUERY_TIMEOUT_MS = 12000;
+const ORG_WORK_HOURS_QUERY_RETRY_MAX = 2;
 
 export default function OrgWorkHoursManagement() {
   const confirmDialog = useConfirmDialog();
   const [workHours, setWorkHours] = useState<WorkHour[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [isApplyingTemplate, setIsApplyingTemplate] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -72,19 +77,43 @@ export default function OrgWorkHoursManagement() {
   const itemsPerPage = 15;
 
   useEffect(() => {
-    fetchData();
+    void fetchData();
   }, []);
 
   const getCurrentTenantId = async (): Promise<string | null> => {
-    const { data: { user } } = await supabase.auth.getUser();
+    const { data: { user } } = await withExponentialBackoff(
+      () =>
+        withTimeout(
+          supabase.auth.getUser(),
+          ORG_WORK_HOURS_QUERY_TIMEOUT_MS,
+          "org.schedule.work_hours.get_tenant.auth timeout"
+        ),
+      {
+        maxRetries: ORG_WORK_HOURS_QUERY_RETRY_MAX,
+        shouldRetry: isRetryableError,
+        onRetry: () => setIsRetrying(true),
+      }
+    );
     if (!user) return null;
 
-    const { data: roleData, error: roleError } = await supabase
-      .from("user_roles")
-      .select("tenant_id")
-      .eq("user_id", user.id)
-      .eq("role", "admin_instansi")
-      .maybeSingle();
+    const { data: roleData, error: roleError } = await withExponentialBackoff(
+      () =>
+        withTimeout(
+          supabase
+            .from("user_roles")
+            .select("tenant_id")
+            .eq("user_id", user.id)
+            .eq("role", "admin_instansi")
+            .maybeSingle(),
+          ORG_WORK_HOURS_QUERY_TIMEOUT_MS,
+          "org.schedule.work_hours.get_tenant.role timeout"
+        ),
+      {
+        maxRetries: ORG_WORK_HOURS_QUERY_RETRY_MAX,
+        shouldRetry: isRetryableError,
+        onRetry: () => setIsRetrying(true),
+      }
+    );
 
     if (roleError) throw roleError;
     return roleData?.tenant_id || null;
@@ -93,11 +122,24 @@ export default function OrgWorkHoursManagement() {
   const fetchData = async () => {
     try {
       setLoadError(null);
-      const { data, error } = await supabase
-        .from("work_hours")
-        .select("*")
-        .order("institution_type", { ascending: true })
-        .order("day_of_week", { ascending: true });
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("work_hours")
+              .select("*")
+              .order("institution_type", { ascending: true })
+              .order("day_of_week", { ascending: true }),
+            ORG_WORK_HOURS_QUERY_TIMEOUT_MS,
+            "org.schedule.work_hours.fetch_data timeout"
+          ),
+        {
+          maxRetries: ORG_WORK_HOURS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setWorkHours((data as WorkHour[]) || []);
@@ -126,30 +168,54 @@ export default function OrgWorkHoursManagement() {
       }
 
       if (isEditing) {
-        const { error } = await supabase
-          .from("work_hours")
-          .update({
-            institution_type: formData.institution_type,
-            day_of_week: formData.day_of_week,
-            time_in: formData.time_in,
-            time_out: formData.time_out,
-            late_tolerance_minutes: formData.late_tolerance_minutes,
-          })
-          .eq("id", formData.id);
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("work_hours")
+                .update({
+                  institution_type: formData.institution_type,
+                  day_of_week: formData.day_of_week,
+                  time_in: formData.time_in,
+                  time_out: formData.time_out,
+                  late_tolerance_minutes: formData.late_tolerance_minutes,
+                })
+                .eq("id", formData.id),
+              ORG_WORK_HOURS_QUERY_TIMEOUT_MS,
+              "org.schedule.work_hours.update timeout"
+            ),
+          {
+            maxRetries: ORG_WORK_HOURS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (error) throw error;
         toast.success("Jam kerja berhasil diperbarui");
       } else {
-        const { error } = await supabase
-          .from("work_hours")
-          .insert({
-            tenant_id: tenantId,
-            institution_type: formData.institution_type,
-            day_of_week: formData.day_of_week,
-            time_in: formData.time_in,
-            time_out: formData.time_out,
-            late_tolerance_minutes: formData.late_tolerance_minutes,
-            is_active: true,
-          });
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("work_hours")
+                .insert({
+                  tenant_id: tenantId,
+                  institution_type: formData.institution_type,
+                  day_of_week: formData.day_of_week,
+                  time_in: formData.time_in,
+                  time_out: formData.time_out,
+                  late_tolerance_minutes: formData.late_tolerance_minutes,
+                  is_active: true,
+                }),
+              ORG_WORK_HOURS_QUERY_TIMEOUT_MS,
+              "org.schedule.work_hours.insert timeout"
+            ),
+          {
+            maxRetries: ORG_WORK_HOURS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (error) {
           if (error.code === "23505") {
             toast.error("Jam kerja untuk hari ini sudah ada");
@@ -162,7 +228,7 @@ export default function OrgWorkHoursManagement() {
 
       setIsDialogOpen(false);
       resetForm();
-      fetchData();
+      void fetchData();
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.schedule.work_hours.save", {
         work_hour_id: formData.id || null,
@@ -288,10 +354,23 @@ export default function OrgWorkHoursManagement() {
     }
 
     try {
-      const { error } = await supabase.from("work_hours").delete().eq("id", id);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.from("work_hours").delete().eq("id", id),
+            ORG_WORK_HOURS_QUERY_TIMEOUT_MS,
+            "org.schedule.work_hours.delete timeout"
+          ),
+        {
+          maxRetries: ORG_WORK_HOURS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
       toast.success("Jam kerja berhasil dihapus");
-      fetchData();
+      void fetchData();
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.schedule.work_hours.delete", { work_hour_id: id });
       toast.error(appendErrorReference("Gagal menghapus jam kerja", errorRef));
@@ -435,17 +514,28 @@ export default function OrgWorkHoursManagement() {
                   />
                 </div>
               </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
-                <Button onClick={handleSubmit}>{isEditing ? "Simpan" : "Tambah"}</Button>
+              <DialogFooter className={dialogActionBarClassName}>
+                <DialogActionHint>Pengaturan jam kerja memengaruhi status hadir, telat, dan lembur.</DialogActionHint>
+                <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                  <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
+                  <Button onClick={handleSubmit}>{isEditing ? "Simpan" : "Tambah"}</Button>
+                </div>
               </DialogFooter>
             </DialogContent>
           </Dialog>
         </div>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang memuat data jam kerja...
+          </div>
+        )}
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void fetchData()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 

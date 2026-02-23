@@ -8,6 +8,8 @@ import { Switch } from "@/components/ui/switch";
 import { Save, Loader2, HeartHandshake, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface SegmentItem {
   title: string;
@@ -71,18 +73,24 @@ export function TargetSegmentSettings() {
 
   const fetchSettings = async () => {
     try {
-      const { data, error } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "target_segment_settings")
-        .maybeSingle();
+      const { data, error } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "target_segment_settings")
+            .maybeSingle(),
+        10000,
+        "Load target segment settings timeout"
+      );
 
       if (error) throw error;
       if (data?.value) {
         setConfig({ ...defaultConfig, ...(data.value as Partial<TargetSegmentConfig>) });
       }
     } catch (error) {
-      console.error("Error fetching target segment settings:", error);
+      const errorRef = reportError(error, "admin.settings.target_segment.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan target segment", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -93,35 +101,50 @@ export function TargetSegmentSettings() {
     try {
       const configValue = JSON.parse(JSON.stringify(config));
       
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "target_segment_settings")
-        .maybeSingle();
+      const { data: existing } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("id")
+            .eq("key", "target_segment_settings")
+            .maybeSingle(),
+        10000,
+        "Load target segment existing setting timeout"
+      );
 
       if (existing) {
-        const { error } = await supabase
-          .from("system_settings")
-          .update({
-            value: configValue,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("key", "target_segment_settings");
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .update({
+                value: configValue,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("key", "target_segment_settings"),
+          10000,
+          "Update target segment settings timeout"
+        );
         if (error) throw error;
       } else {
-        const { error } = await supabase
-          .from("system_settings")
-          .insert([{
-            key: "target_segment_settings",
-            value: configValue,
-          }]);
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .insert([{
+                key: "target_segment_settings",
+                value: configValue,
+              }]),
+          10000,
+          "Insert target segment settings timeout"
+        );
         if (error) throw error;
       }
 
       toast.success("Pengaturan berhasil disimpan");
     } catch (error) {
-      console.error("Error saving settings:", error);
-      toast.error("Gagal menyimpan pengaturan");
+      const errorRef = reportError(error, "admin.settings.target_segment.save");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan", errorRef));
     } finally {
       setIsSaving(false);
     }

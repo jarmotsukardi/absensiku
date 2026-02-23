@@ -11,6 +11,11 @@ import { Building2, User, Phone, MapPin, FileText, Upload, Loader2, CheckCircle2
 import { LogoUploader } from "@/components/common/LogoUploader";
 import { autoSeedOrganizationData } from "@/hooks/useAutoSeedOrganization";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+
+const ORG_PROFILE_SETUP_QUERY_TIMEOUT_MS = 12000;
+const ORG_PROFILE_SETUP_QUERY_RETRY_MAX = 2;
 
 export default function OrgProfileSetup() {
   const navigate = useNavigate();
@@ -24,21 +29,49 @@ export default function OrgProfileSetup() {
     address: "",
     npwp: "",
   });
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const checkAndLoadProfile = useCallback(async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      setIsRetrying(false);
+      setLoadError(null);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ORG_PROFILE_SETUP_QUERY_TIMEOUT_MS,
+            "org.profile_setup.load.auth timeout"
+          ),
+        {
+          maxRetries: ORG_PROFILE_SETUP_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (!user) {
         navigate("/org/login");
         return;
       }
 
       // Get user's tenant
-      const { data: employee } = await supabase
-        .from("employees")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .single();
+      const { data: employee } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("tenant_id")
+              .eq("user_id", user.id)
+              .single(),
+            ORG_PROFILE_SETUP_QUERY_TIMEOUT_MS,
+            "org.profile_setup.load.employee timeout"
+          ),
+        {
+          maxRetries: ORG_PROFILE_SETUP_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (!employee?.tenant_id) {
         toast.error("Organisasi tidak ditemukan");
@@ -49,11 +82,23 @@ export default function OrgProfileSetup() {
       setTenantId(employee.tenant_id);
 
       // Load existing tenant data
-      const { data: tenant } = await supabase
-        .from("tenants")
-        .select("pic_name, pic_whatsapp, logo_url, address, npwp")
-        .eq("id", employee.tenant_id)
-        .single();
+      const { data: tenant } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("tenants")
+              .select("pic_name, pic_whatsapp, logo_url, address, npwp")
+              .eq("id", employee.tenant_id)
+              .single(),
+            ORG_PROFILE_SETUP_QUERY_TIMEOUT_MS,
+            "org.profile_setup.load.tenant timeout"
+          ),
+        {
+          maxRetries: ORG_PROFILE_SETUP_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (tenant) {
         // Check if profile is already complete
@@ -71,7 +116,10 @@ export default function OrgProfileSetup() {
         });
       }
     } catch (error) {
-      console.error("Error loading profile:", error);
+      const errorRef = reportError(error, "org.profile_setup.load");
+      const message = appendErrorReference("Gagal memuat profil organisasi", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -97,16 +145,29 @@ export default function OrgProfileSetup() {
     setIsSaving(true);
 
     try {
-      const { error } = await supabase
-        .from("tenants")
-        .update({
-          pic_name: formData.pic_name,
-          pic_whatsapp: formData.pic_whatsapp,
-          logo_url: formData.logo_url || null,
-          address: formData.address,
-          npwp: formData.npwp || null,
-        })
-        .eq("id", tenantId);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("tenants")
+              .update({
+                pic_name: formData.pic_name,
+                pic_whatsapp: formData.pic_whatsapp,
+                logo_url: formData.logo_url || null,
+                address: formData.address,
+                npwp: formData.npwp || null,
+              })
+              .eq("id", tenantId),
+            ORG_PROFILE_SETUP_QUERY_TIMEOUT_MS,
+            "org.profile_setup.save timeout"
+          ),
+        {
+          maxRetries: ORG_PROFILE_SETUP_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
 
@@ -116,9 +177,8 @@ export default function OrgProfileSetup() {
       toast.success("Profil organisasi berhasil disimpan!");
       navigate("/org/onboarding");
     } catch (error: unknown) {
-      console.error("Error saving profile:", error);
-      const errorMessage = error instanceof Error ? error.message : "Gagal menyimpan profil";
-      toast.error(errorMessage);
+      const errorRef = reportError(error, "org.profile_setup.save");
+      toast.error(appendErrorReference("Gagal menyimpan profil", errorRef));
     } finally {
       setIsSaving(false);
     }
@@ -150,6 +210,16 @@ export default function OrgProfileSetup() {
         </CardHeader>
 
         <CardContent>
+          {isRetrying && (
+            <div className="mb-4 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              Sedang mencoba ulang memuat profil organisasi...
+            </div>
+          )}
+          {loadError && (
+            <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              {loadError}
+            </div>
+          )}
           <form onSubmit={handleSubmit} className="space-y-6">
             <div className="space-y-2">
               <Label className="flex items-center gap-2">

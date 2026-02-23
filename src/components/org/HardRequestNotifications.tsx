@@ -21,7 +21,6 @@ import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
-import { getTenantEmployeeIds } from "@/lib/orgTenantContext";
 
 type RequestType = "leave" | "wfh" | "overtime" | "flexible" | "mutation";
 
@@ -174,52 +173,55 @@ function isTransientNetworkError(error: unknown): boolean {
   );
 }
 
-async function fetchPendingCount(tenantId: string, requestType: RequestType, employeeIds: string[]): Promise<number> {
+async function fetchPendingCount(tenantId: string, requestType: RequestType): Promise<number> {
   switch (requestType) {
     case "leave": {
-      if (employeeIds.length === 0) return 0;
       const { count, error } = await supabase
         .from("leave_requests")
-        .select("id", { count: "exact", head: true })
-        .in("employee_id", employeeIds)
-        .eq("status", "menunggu");
+        .select("id, employees!leave_requests_employee_id_fkey!inner(id)", { count: "exact" })
+        .eq("employees.tenant_id", tenantId)
+        .eq("status", "menunggu")
+        .limit(1);
       if (error) throw error;
       return count || 0;
     }
     case "wfh": {
-      if (employeeIds.length === 0) return 0;
       const { count, error } = await supabase
         .from("wfh_requests")
-        .select("id", { count: "exact", head: true })
-        .in("employee_id", employeeIds)
-        .eq("status", "menunggu");
+        .select("id, employees!wfh_requests_employee_id_fkey!inner(id)", { count: "exact" })
+        .eq("employees.tenant_id", tenantId)
+        .eq("status", "menunggu")
+        .limit(1);
       if (error) throw error;
       return count || 0;
     }
     case "overtime": {
       const { count, error } = await supabase
         .from("overtime_requests")
-        .select("id", { count: "exact", head: true })
+        .select("id", { count: "exact" })
         .eq("tenant_id", tenantId)
-        .in("status", ["pending", "menunggu"]);
+        .in("status", ["pending", "menunggu"])
+        .limit(1);
       if (error) throw error;
       return count || 0;
     }
     case "flexible": {
       const { count, error } = await supabase
         .from("flexible_attendance_requests")
-        .select("id", { count: "exact", head: true })
+        .select("id", { count: "exact" })
         .eq("tenant_id", tenantId)
-        .eq("status", "menunggu");
+        .eq("status", "menunggu")
+        .limit(1);
       if (error) throw error;
       return count || 0;
     }
     case "mutation": {
       const { count, error } = await supabase
         .from("mutation_requests")
-        .select("id", { count: "exact", head: true })
+        .select("id", { count: "exact" })
         .eq("tenant_id", tenantId)
-        .eq("status", "menunggu");
+        .eq("status", "menunggu")
+        .limit(1);
       if (error) throw error;
       return count || 0;
     }
@@ -228,14 +230,13 @@ async function fetchPendingCount(tenantId: string, requestType: RequestType, emp
   }
 }
 
-async function fetchLatestSubmissions(tenantId: string, requestType: RequestType, employeeIds: string[]): Promise<RecentSubmission[]> {
+async function fetchLatestSubmissions(tenantId: string, requestType: RequestType): Promise<RecentSubmission[]> {
   switch (requestType) {
     case "leave": {
-      if (employeeIds.length === 0) return [];
       const { data, error } = await supabase
         .from("leave_requests")
-        .select("id, employee_id, created_at")
-        .in("employee_id", employeeIds)
+        .select("id, employee_id, created_at, employees!leave_requests_employee_id_fkey!inner(id)")
+        .eq("employees.tenant_id", tenantId)
         .eq("status", "menunggu")
         .order("created_at", { ascending: false })
         .limit(5);
@@ -243,11 +244,10 @@ async function fetchLatestSubmissions(tenantId: string, requestType: RequestType
       return (data || []).map((row) => ({ ...row, requestType }));
     }
     case "wfh": {
-      if (employeeIds.length === 0) return [];
       const { data, error } = await supabase
         .from("wfh_requests")
-        .select("id, employee_id, created_at")
-        .in("employee_id", employeeIds)
+        .select("id, employee_id, created_at, employees!wfh_requests_employee_id_fkey!inner(id)")
+        .eq("employees.tenant_id", tenantId)
         .eq("status", "menunggu")
         .order("created_at", { ascending: false })
         .limit(5);
@@ -332,27 +332,11 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
           return;
         }
 
-        let employeeIds: string[] = [];
-        let employeeIdFetchAccessRestricted = false;
-        let employeeIdFetchNetworkTransient = false;
-        try {
-          employeeIds = await getTenantEmployeeIds(tenantId);
-        } catch (employeeIdError) {
-          employeeIdFetchAccessRestricted = isAccessRestrictedError(employeeIdError);
-          employeeIdFetchNetworkTransient = isTransientNetworkError(employeeIdError);
-          if (!employeeIdFetchAccessRestricted && !employeeIdFetchNetworkTransient) {
-            reportError(employeeIdError, "org.hard_request_notifications.fetch_employee_ids", {
-              tenant_id: tenantId,
-            });
-          }
-          employeeIds = [];
-        }
-
         const perType = await Promise.all(
           REQUEST_ORDER.map(async (type) => {
             const [countResult, latestResult] = await Promise.allSettled([
-              fetchPendingCount(tenantId, type, employeeIds),
-              fetchLatestSubmissions(tenantId, type, employeeIds),
+              fetchPendingCount(tenantId, type),
+              fetchLatestSubmissions(tenantId, type),
             ]);
 
             if (countResult.status === "rejected") {
@@ -374,12 +358,10 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
 
             const accessRestricted =
               (countResult.status === "rejected" && isAccessRestrictedError(countResult.reason)) ||
-              (latestResult.status === "rejected" && isAccessRestrictedError(latestResult.reason)) ||
-              (employeeIdFetchAccessRestricted && (type === "leave" || type === "wfh"));
+              (latestResult.status === "rejected" && isAccessRestrictedError(latestResult.reason));
             const networkTransient =
               (countResult.status === "rejected" && isTransientNetworkError(countResult.reason)) ||
-              (latestResult.status === "rejected" && isTransientNetworkError(latestResult.reason)) ||
-              (employeeIdFetchNetworkTransient && (type === "leave" || type === "wfh"));
+              (latestResult.status === "rejected" && isTransientNetworkError(latestResult.reason));
 
             return {
               type,
@@ -387,9 +369,7 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
               latest: latestResult.status === "fulfilled" ? latestResult.value || [] : [],
               hasError:
                 countResult.status === "rejected" ||
-                latestResult.status === "rejected" ||
-                (employeeIdFetchAccessRestricted && (type === "leave" || type === "wfh")) ||
-                (employeeIdFetchNetworkTransient && (type === "leave" || type === "wfh")),
+                latestResult.status === "rejected",
               accessRestricted,
               networkTransient,
             };

@@ -7,6 +7,8 @@ import { Loader2, Save, Info, Eye } from "lucide-react";
 import { RichTextEditor } from "@/components/editor/RichTextEditor";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import DOMPurify from "dompurify";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 export function AboutPageSettings() {
   const [content, setContent] = useState<string>("");
@@ -20,11 +22,16 @@ export function AboutPageSettings() {
 
   const fetchData = async () => {
     try {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "about_page_content")
-        .maybeSingle();
+      const { data } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "about_page_content")
+            .maybeSingle(),
+        10000,
+        "Load about page settings timeout"
+      );
 
       if (data?.value && typeof data.value === "object" && "content" in data.value) {
         setContent((data.value as { content: string }).content || "");
@@ -59,7 +66,8 @@ export function AboutPageSettings() {
         `.trim());
       }
     } catch (error) {
-      console.error("Error:", error);
+      const errorRef = reportError(error, "admin.settings.about_page.fetch");
+      toast.error(appendErrorReference("Gagal memuat konten halaman Tentang", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -68,28 +76,46 @@ export function AboutPageSettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "about_page_content")
-        .maybeSingle();
+      const { data: existing } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("id")
+            .eq("key", "about_page_content")
+            .maybeSingle(),
+        10000,
+        "Load about page existing setting timeout"
+      );
 
       const jsonValue = { content };
 
       if (existing) {
-        await supabase
-          .from("system_settings")
-          .update({ value: jsonValue, updated_at: new Date().toISOString() })
-          .eq("key", "about_page_content");
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .update({ value: jsonValue, updated_at: new Date().toISOString() })
+              .eq("key", "about_page_content"),
+          10000,
+          "Update about page setting timeout"
+        );
+        if (error) throw error;
       } else {
-        await supabase
-          .from("system_settings")
-          .insert({ key: "about_page_content", value: jsonValue });
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .insert({ key: "about_page_content", value: jsonValue }),
+          10000,
+          "Insert about page setting timeout"
+        );
+        if (error) throw error;
       }
 
       toast.success("Konten halaman Tentang berhasil disimpan");
-    } catch (err) {
-      toast.error("Gagal menyimpan");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.about_page.save");
+      toast.error(appendErrorReference("Gagal menyimpan", errorRef));
     } finally {
       setIsSaving(false);
     }

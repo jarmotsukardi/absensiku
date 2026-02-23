@@ -12,6 +12,11 @@ import { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
+import {
   Pagination,
   PaginationContent,
   PaginationItem,
@@ -23,6 +28,9 @@ import {
 type Employee = Tables<"employees">;
 type OPD = Tables<"opd">;
 const ITEMS_PER_PAGE = 15;
+const ADMIN_INACTIVE_EMP_READ_TIMEOUT_MS = 12000;
+const ADMIN_INACTIVE_EMP_WRITE_TIMEOUT_MS = 15000;
+const ADMIN_INACTIVE_EMP_MAX_RETRIES = 2;
 
 export default function InactiveEmployees() {
   const confirmDialog = useConfirmDialog();
@@ -32,10 +40,12 @@ export default function InactiveEmployees() {
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
+      setIsRetrying(false);
       setLoadError(null);
       const from = (currentPage - 1) * ITEMS_PER_PAGE;
       const to = from + ITEMS_PER_PAGE - 1;
@@ -49,9 +59,21 @@ export default function InactiveEmployees() {
         query = query.or(`name.ilike.%${escaped}%,nip.ilike.%${escaped}%,email.ilike.%${escaped}%`);
       }
 
-      const { data, error, count } = await query
-        .order("name")
-        .range(from, to);
+      const { data, error, count } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query
+              .order("name")
+              .range(from, to),
+            ADMIN_INACTIVE_EMP_READ_TIMEOUT_MS,
+            "Permintaan data pegawai non-aktif timeout."
+          ),
+        {
+          maxRetries: ADMIN_INACTIVE_EMP_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setEmployees(data || []);
@@ -64,6 +86,7 @@ export default function InactiveEmployees() {
       setEmployees([]);
       setTotalEmployees(0);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [currentPage, searchTerm]);
@@ -85,10 +108,14 @@ export default function InactiveEmployees() {
 
     try {
       setLoadError(null);
-      const { error } = await supabase
-        .from("employees")
-        .update({ is_active: true })
-        .eq("id", id);
+      const { error } = await withTimeout(
+        supabase
+          .from("employees")
+          .update({ is_active: true })
+          .eq("id", id),
+        ADMIN_INACTIVE_EMP_WRITE_TIMEOUT_MS,
+        "Aktivasi ulang pegawai timeout."
+      );
 
       if (error) throw error;
       toast.success("Pegawai berhasil diaktifkan kembali");
@@ -128,9 +155,18 @@ export default function InactiveEmployees() {
           </p>
         </div>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+            Sedang mencoba ulang memuat pegawai non-aktif...
+          </div>
+        )}
+
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 

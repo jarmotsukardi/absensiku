@@ -8,6 +8,8 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Loader2, Save, Smartphone, Plus, Trash2, Download } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface AppDownloadSettings {
   enabled: boolean;
@@ -49,17 +51,23 @@ export function AppDownloadSettings() {
 
   const fetchSettings = async () => {
     try {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "app_download_settings")
-        .maybeSingle();
+      const { data } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "app_download_settings")
+            .maybeSingle(),
+        10000,
+        "Load app download settings timeout"
+      );
 
       if (data?.value) {
         setSettings({ ...defaultSettings, ...(data.value as Partial<AppDownloadSettings>) });
       }
     } catch (error) {
-      console.error("Error:", error);
+      const errorRef = reportError(error, "admin.settings.app_download.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan unduh aplikasi", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -68,28 +76,46 @@ export function AppDownloadSettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "app_download_settings")
-        .maybeSingle();
+      const { data: existing } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("id")
+            .eq("key", "app_download_settings")
+            .maybeSingle(),
+        10000,
+        "Load app download existing setting timeout"
+      );
 
       const jsonValue = JSON.parse(JSON.stringify(settings));
 
       if (existing) {
-        await supabase
-          .from("system_settings")
-          .update({ value: jsonValue, updated_at: new Date().toISOString() })
-          .eq("key", "app_download_settings");
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .update({ value: jsonValue, updated_at: new Date().toISOString() })
+              .eq("key", "app_download_settings"),
+          10000,
+          "Update app download setting timeout"
+        );
+        if (error) throw error;
       } else {
-        await supabase
-          .from("system_settings")
-          .insert({ key: "app_download_settings", value: jsonValue });
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .insert({ key: "app_download_settings", value: jsonValue }),
+          10000,
+          "Insert app download setting timeout"
+        );
+        if (error) throw error;
       }
 
       toast.success("Pengaturan unduh aplikasi berhasil disimpan");
-    } catch (err) {
-      toast.error("Gagal menyimpan");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.app_download.save");
+      toast.error(appendErrorReference("Gagal menyimpan", errorRef));
     } finally {
       setIsSaving(false);
     }

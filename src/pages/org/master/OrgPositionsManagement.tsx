@@ -16,6 +16,12 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { toast } from "@/hooks/use-toast";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 interface Position {
   id: string;
@@ -45,6 +51,9 @@ interface FormData {
 }
 
 const ITEMS_PER_PAGE = 15;
+const POSITIONS_READ_TIMEOUT_MS = 12000;
+const POSITIONS_WRITE_TIMEOUT_MS = 15000;
+const POSITIONS_MAX_RETRIES = 2;
 
 export default function OrgPositionsManagement() {
   const [positions, setPositions] = useState<Position[]>([]);
@@ -62,6 +71,7 @@ export default function OrgPositionsManagement() {
   const [deletingPosition, setDeletingPosition] = useState<Position | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [formData, setFormData] = useState<FormData>({
     name: "",
     work_unit_id: "",
@@ -72,6 +82,7 @@ export default function OrgPositionsManagement() {
     setIsLoading(true);
     setLoadError(null);
     try {
+      setIsRetrying(false);
       let query = supabase
         .from('positions')
         .select(`
@@ -89,9 +100,21 @@ export default function OrgPositionsManagement() {
       const from = (currentPage - 1) * ITEMS_PER_PAGE;
       const to = from + ITEMS_PER_PAGE - 1;
 
-      const { data, error, count } = await query
-        .order('name')
-        .range(from, to);
+      const { data, error, count } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query
+              .order('name')
+              .range(from, to),
+            POSITIONS_READ_TIMEOUT_MS,
+            "Permintaan data jabatan timeout."
+          ),
+        {
+          maxRetries: POSITIONS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setPositions(data as unknown as Position[] || []);
@@ -106,23 +129,39 @@ export default function OrgPositionsManagement() {
       setLoadError(message);
       toast({ title: "Error", description: message, variant: "destructive" });
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [currentPage, searchTerm, selectedWorkUnit]);
 
   const fetchWorkUnits = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from('work_units')
-        .select('id, name, opd_id')
-        .eq('is_active', true)
-        .order('name');
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from('work_units')
+              .select('id, name, opd_id')
+              .eq('is_active', true)
+              .order('name'),
+            POSITIONS_READ_TIMEOUT_MS,
+            "Permintaan daftar satuan kerja timeout."
+          ),
+        {
+          maxRetries: POSITIONS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setWorkUnits(data || []);
     } catch (error) {
       const errorRef = reportError(error, "org.positions.fetch_work_units");
       setLoadError(appendErrorReference("Gagal memuat daftar satuan kerja", errorRef));
+    } finally {
+      setIsRetrying(false);
     }
   }, []);
 
@@ -173,39 +212,56 @@ export default function OrgPositionsManagement() {
     try {
       if (editingPosition) {
         // Update
-        const { error } = await supabase
-          .from('positions')
-          .update({
-            name: formData.name.trim(),
-            work_unit_id: formData.work_unit_id || null,
-            is_active: formData.is_active,
-          })
-          .eq('id', editingPosition.id);
+        const { error } = await withTimeout(
+          supabase
+            .from('positions')
+            .update({
+              name: formData.name.trim(),
+              work_unit_id: formData.work_unit_id || null,
+              is_active: formData.is_active,
+            })
+            .eq('id', editingPosition.id),
+          POSITIONS_WRITE_TIMEOUT_MS,
+          "Update jabatan timeout."
+        );
 
         if (error) throw error;
         toast({ title: "Berhasil", description: "Jabatan berhasil diperbarui" });
       } else {
         // Get tenant_id from current user
-        const { data: { user } } = await supabase.auth.getUser();
+        const { data: { user } } = await withTimeout(
+          supabase.auth.getUser(),
+          POSITIONS_WRITE_TIMEOUT_MS,
+          "Permintaan user auth timeout."
+        );
         if (!user) throw new Error("User not authenticated");
 
-        const { data: employee } = await supabase
-          .from('employees')
-          .select('tenant_id')
-          .eq('user_id', user.id)
-          .single();
+        const { data: employee, error: employeeError } = await withTimeout(
+          supabase
+            .from('employees')
+            .select('tenant_id')
+            .eq('user_id', user.id)
+            .single(),
+          POSITIONS_WRITE_TIMEOUT_MS,
+          "Permintaan tenant pegawai timeout."
+        );
+        if (employeeError) throw employeeError;
 
         if (!employee) throw new Error("Employee not found");
 
         // Insert
-        const { error } = await supabase
-          .from('positions')
-          .insert({
-            name: formData.name.trim(),
-            work_unit_id: formData.work_unit_id || null,
-            is_active: formData.is_active,
-            tenant_id: employee.tenant_id,
-          });
+        const { error } = await withTimeout(
+          supabase
+            .from('positions')
+            .insert({
+              name: formData.name.trim(),
+              work_unit_id: formData.work_unit_id || null,
+              is_active: formData.is_active,
+              tenant_id: employee.tenant_id,
+            }),
+          POSITIONS_WRITE_TIMEOUT_MS,
+          "Tambah jabatan timeout."
+        );
 
         if (error) throw error;
         toast({ title: "Berhasil", description: "Jabatan berhasil ditambahkan" });
@@ -230,10 +286,14 @@ export default function OrgPositionsManagement() {
 
     setIsSubmitting(true);
     try {
-      const { error } = await supabase
-        .from('positions')
-        .delete()
-        .eq('id', deletingPosition.id);
+      const { error } = await withTimeout(
+        supabase
+          .from('positions')
+          .delete()
+          .eq('id', deletingPosition.id),
+        POSITIONS_WRITE_TIMEOUT_MS,
+        "Hapus jabatan timeout."
+      );
 
       if (error) throw error;
       toast({ title: "Berhasil", description: "Jabatan berhasil dihapus" });
@@ -254,6 +314,12 @@ export default function OrgPositionsManagement() {
   return (
     <OrganizationLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+            Mencoba ulang memuat data jabatan...
+          </div>
+        )}
+
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -270,8 +336,11 @@ export default function OrgPositionsManagement() {
 
         {loadError && (
           <Card className="border-destructive/40">
-            <CardContent className="pt-6">
+            <CardContent className="flex flex-col gap-2 pt-6 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-destructive">{loadError}</p>
+              <Button variant="outline" size="sm" onClick={() => void fetchPositions()}>
+                Coba Lagi
+              </Button>
             </CardContent>
           </Card>
         )}
@@ -285,8 +354,9 @@ export default function OrgPositionsManagement() {
           </CardHeader>
           <CardContent className="space-y-4">
             {/* Filters */}
-            <div className="flex flex-col sm:flex-row gap-4">
-              <div className="relative flex-1">
+            <div className="rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder="Cari jabatan..."
@@ -315,6 +385,7 @@ export default function OrgPositionsManagement() {
                 <RotateCcw className="h-4 w-4 mr-2" />
                 Reset
               </Button>
+              </div>
             </div>
 
             {/* Table */}
@@ -454,13 +525,16 @@ export default function OrgPositionsManagement() {
               />
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
-              Batal
-            </Button>
-            <Button onClick={handleSubmit} disabled={isSubmitting}>
-              {isSubmitting ? "Menyimpan..." : "Simpan"}
-            </Button>
+          <DialogFooter className={dialogActionBarClassName}>
+            <DialogActionHint>Pastikan relasi OPD/unit kerja jabatan sudah sesuai.</DialogActionHint>
+            <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+              <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
+                Batal
+              </Button>
+              <Button onClick={handleSubmit} disabled={isSubmitting}>
+                {isSubmitting ? "Menyimpan..." : "Simpan"}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

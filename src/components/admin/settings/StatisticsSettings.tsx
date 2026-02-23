@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Loader2, Save, BarChart3 } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface StatisticsSettings {
   title: string;
@@ -46,18 +48,24 @@ export function StatisticsSettings() {
 
   const fetchSettings = async () => {
     try {
-      const { data, error } = await supabase
-        .from("homepage_sections")
-        .select("settings")
-        .eq("section_key", "statistics")
-        .maybeSingle();
+      const { data, error } = await withTimeout(
+        () =>
+          supabase
+            .from("homepage_sections")
+            .select("settings")
+            .eq("section_key", "statistics")
+            .maybeSingle(),
+        10000,
+        "Load statistics settings timeout"
+      );
 
       if (error) throw error;
       if (data?.settings && typeof data.settings === 'object' && !Array.isArray(data.settings)) {
         setSettings({ ...defaultSettings, ...(data.settings as Record<string, unknown>) as Partial<StatisticsSettings> });
       }
     } catch (error) {
-      console.error("Error fetching statistics settings:", error);
+      const errorRef = reportError(error, "admin.settings.statistics.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan statistik", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -66,18 +74,24 @@ export function StatisticsSettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const { error } = await supabase
-        .from("homepage_sections")
-        .update({ 
-          settings: JSON.parse(JSON.stringify(settings)) as Json,
-          updated_at: new Date().toISOString()
-        })
-        .eq("section_key", "statistics");
+      const { error } = await withTimeout(
+        () =>
+          supabase
+            .from("homepage_sections")
+            .update({ 
+              settings: JSON.parse(JSON.stringify(settings)) as Json,
+              updated_at: new Date().toISOString()
+            })
+            .eq("section_key", "statistics"),
+        10000,
+        "Save statistics settings timeout"
+      );
 
       if (error) throw error;
       toast.success("Pengaturan statistik berhasil disimpan");
     } catch (error) {
-      toast.error("Gagal menyimpan pengaturan");
+      const errorRef = reportError(error, "admin.settings.statistics.save");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan", errorRef));
     } finally {
       setIsSaving(false);
     }

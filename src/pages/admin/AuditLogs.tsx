@@ -25,6 +25,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { format, startOfMonth, endOfMonth, subMonths } from "date-fns";
 import { id } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { toast } from "sonner";
 import {
@@ -84,6 +85,8 @@ const tableLabels: Record<string, string> = {
 };
 
 const ITEMS_PER_PAGE = 20;
+const AUDIT_LOGS_QUERY_TIMEOUT_MS = 12000;
+const AUDIT_LOGS_QUERY_RETRY_MAX = 2;
 
 // Buat opsi bulan untuk 12 bulan terakhir
 const getMonthOptions = () => {
@@ -108,6 +111,7 @@ export default function AuditLogs() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   const monthOptions = getMonthOptions();
 
@@ -115,6 +119,7 @@ export default function AuditLogs() {
     setIsLoading(true);
     setLoadError(null);
     try {
+      setIsRetrying(false);
       // Parse month filter
       const [year, month] = monthFilter.split("-").map(Number);
       const startDate = startOfMonth(new Date(year, month - 1));
@@ -133,25 +138,41 @@ export default function AuditLogs() {
         searchParts.push(`record_id.eq.${escapedQuery}`);
       }
 
-      let countQuery = supabase
-        .from("audit_logs")
-        .select("id", { count: "exact", head: true })
-        .gte("created_at", startDate.toISOString())
-        .lte("created_at", endDate.toISOString());
+      const buildCountQuery = () => {
+        let countQuery = supabase
+          .from("audit_logs")
+          .select("id", { count: "exact", head: true })
+          .gte("created_at", startDate.toISOString())
+          .lte("created_at", endDate.toISOString());
 
-      if (actionFilter !== "all") {
-        countQuery = countQuery.eq("action", actionFilter);
-      }
+        if (actionFilter !== "all") {
+          countQuery = countQuery.eq("action", actionFilter);
+        }
 
-      if (tableFilter !== "all") {
-        countQuery = countQuery.eq("table_name", tableFilter);
-      }
+        if (tableFilter !== "all") {
+          countQuery = countQuery.eq("table_name", tableFilter);
+        }
 
-      if (escapedQuery) {
-        countQuery = countQuery.or(searchParts.join(","));
-      }
+        if (escapedQuery) {
+          countQuery = countQuery.or(searchParts.join(","));
+        }
 
-      const { count, error: countError } = await countQuery;
+        return countQuery;
+      };
+
+      const { count, error: countError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            buildCountQuery(),
+            AUDIT_LOGS_QUERY_TIMEOUT_MS,
+            "admin.audit_logs.fetch.count timeout"
+          ),
+        {
+          maxRetries: AUDIT_LOGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (countError) throw countError;
 
       const safeCount = count || 0;
@@ -161,31 +182,47 @@ export default function AuditLogs() {
       const from = (currentPage - 1) * ITEMS_PER_PAGE;
       const to = from + ITEMS_PER_PAGE - 1;
 
-      let dataQuery = supabase
-        .from("audit_logs")
-        .select(`
-          *,
-          employee:employees!audit_logs_employee_id_fkey(name, email),
-          tenant:tenants!audit_logs_tenant_id_fkey(name)
-        `)
-        .gte("created_at", startDate.toISOString())
-        .lte("created_at", endDate.toISOString())
-        .order("created_at", { ascending: false })
-        .range(from, to);
+      const buildDataQuery = () => {
+        let dataQuery = supabase
+          .from("audit_logs")
+          .select(`
+            *,
+            employee:employees!audit_logs_employee_id_fkey(name, email),
+            tenant:tenants!audit_logs_tenant_id_fkey(name)
+          `)
+          .gte("created_at", startDate.toISOString())
+          .lte("created_at", endDate.toISOString())
+          .order("created_at", { ascending: false })
+          .range(from, to);
 
-      if (actionFilter !== "all") {
-        dataQuery = dataQuery.eq("action", actionFilter);
-      }
+        if (actionFilter !== "all") {
+          dataQuery = dataQuery.eq("action", actionFilter);
+        }
 
-      if (tableFilter !== "all") {
-        dataQuery = dataQuery.eq("table_name", tableFilter);
-      }
+        if (tableFilter !== "all") {
+          dataQuery = dataQuery.eq("table_name", tableFilter);
+        }
 
-      if (escapedQuery) {
-        dataQuery = dataQuery.or(searchParts.join(","));
-      }
+        if (escapedQuery) {
+          dataQuery = dataQuery.or(searchParts.join(","));
+        }
 
-      const { data, error } = await dataQuery;
+        return dataQuery;
+      };
+
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            buildDataQuery(),
+            AUDIT_LOGS_QUERY_TIMEOUT_MS,
+            "admin.audit_logs.fetch.data timeout"
+          ),
+        {
+          maxRetries: AUDIT_LOGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setLogs((data as unknown as AuditLog[]) || []);
@@ -242,8 +279,9 @@ export default function AuditLogs() {
         {/* Filters */}
         <Card>
           <CardContent className="pt-6">
-            <div className="flex flex-col md:flex-row gap-4">
-              <div className="relative flex-1">
+            <div className="rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center">
+                <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder="Cari aktivitas..."
@@ -285,9 +323,10 @@ export default function AuditLogs() {
                   ))}
                 </SelectContent>
               </Select>
-              <Button variant="outline" size="icon" onClick={fetchLogs} disabled={isLoading}>
+              <Button variant="outline" size="icon" onClick={() => void fetchLogs()} disabled={isLoading}>
                 <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
               </Button>
+              </div>
             </div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <Button
@@ -308,9 +347,17 @@ export default function AuditLogs() {
           </CardContent>
         </Card>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang memuat audit log...
+          </div>
+        )}
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void fetchLogs()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 

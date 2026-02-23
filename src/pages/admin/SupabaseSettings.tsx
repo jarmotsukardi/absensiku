@@ -20,7 +20,9 @@ import { FullBackupManager } from "@/components/admin/settings/FullBackupManager
 import { MigrationWizard } from "@/components/admin/settings/MigrationWizard";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { supabase } from "@/integrations/supabase/client";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { debugLog } from "@/lib/debugLog";
+import { withTimeout } from "@/lib/attendanceResilience";
 import { toast } from "sonner";
 import { 
   Database, 
@@ -524,19 +526,32 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
   const currentUrl = import.meta.env.VITE_SUPABASE_URL || "";
   const currentAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || "";
 
-  const copyToClipboard = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success(`${label} berhasil disalin`);
+  const copyToClipboard = async (text: string, label: string) => {
+    try {
+      await withTimeout(() => navigator.clipboard.writeText(text), 5000);
+      toast.success(`${label} berhasil disalin`);
+    } catch (error) {
+      const errorRef = reportError(error, "admin.supabase_settings.copy_clipboard", { label });
+      toast.error(appendErrorReference(`Gagal menyalin ${label}`, errorRef));
+    }
   };
 
   const fetchDatabaseStats = async () => {
     setIsLoading(true);
     try {
-      const [tenantsRes, employeesRes, attendanceRes] = await Promise.all([
-        supabase.from("tenants").select("id", { count: "exact", head: true }),
-        supabase.from("employees").select("id", { count: "exact", head: true }),
-        supabase.from("attendance_records_partitioned").select("id", { count: "exact", head: true })
-      ]);
+      const [tenantsRes, employeesRes, attendanceRes] = await withTimeout(
+        () =>
+          Promise.all([
+            supabase.from("tenants").select("id", { count: "exact", head: true }),
+            supabase.from("employees").select("id", { count: "exact", head: true }),
+            supabase.from("attendance_records_partitioned").select("id", { count: "exact", head: true }),
+          ]),
+        15000,
+      );
+
+      if (tenantsRes.error) throw tenantsRes.error;
+      if (employeesRes.error) throw employeesRes.error;
+      if (attendanceRes.error) throw attendanceRes.error;
 
       setDbStats({
         tenants: tenantsRes.count || 0,
@@ -546,8 +561,8 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
       
       toast.success("Statistik database berhasil dimuat");
     } catch (error) {
-      console.error("Error fetching stats:", error);
-      toast.error("Gagal memuat statistik database");
+      const errorRef = reportError(error, "admin.supabase_settings.fetch_stats");
+      toast.error(appendErrorReference("Gagal memuat statistik database", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -577,10 +592,10 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
       
       const safeTableName = tableMap[tableName] || "tenants";
       
-      const { data, error } = await supabase
-        .from(safeTableName)
-        .select("*")
-        .limit(10000);
+      const { data, error } = await withTimeout(
+        () => supabase.from(safeTableName).select("*").limit(10000),
+        20000,
+      );
 
       if (error) throw error;
 
@@ -597,8 +612,10 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
 
       toast.success(`Data ${tableName} berhasil diekspor`);
     } catch (error) {
-      console.error("Export error:", error);
-      toast.error(`Gagal mengekspor data ${tableName}`);
+      const errorRef = reportError(error, "admin.supabase_settings.export_table", {
+        table_name: tableName,
+      });
+      toast.error(appendErrorReference(`Gagal mengekspor data ${tableName}`, errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -620,22 +637,42 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
         subscriptionsData,
         userRolesData,
         leaveRequestsData,
-        workShiftsData
-      ] = await Promise.all([
-        supabase.from("tenants").select("*").limit(10000),
-        supabase.from("employees").select("*").limit(10000),
-        supabase.from("offices").select("*").limit(10000),
-        supabase.from("opd").select("*").limit(10000),
-        supabase.from("work_units").select("*").limit(10000),
-        supabase.from("positions").select("*").limit(10000),
-        supabase.from("work_hours").select("*").limit(10000),
-        supabase.from("work_holidays").select("*").limit(10000),
-        supabase.from("absence_limits").select("*").limit(10000),
-        supabase.from("subscriptions").select("*").limit(10000),
-        supabase.from("user_roles").select("*").limit(10000),
-        supabase.from("leave_requests").select("*").limit(10000),
-        supabase.from("work_shifts").select("*").limit(10000)
-      ]);
+        workShiftsData,
+      ] = await withTimeout(
+        () =>
+          Promise.all([
+            supabase.from("tenants").select("*").limit(10000),
+            supabase.from("employees").select("*").limit(10000),
+            supabase.from("offices").select("*").limit(10000),
+            supabase.from("opd").select("*").limit(10000),
+            supabase.from("work_units").select("*").limit(10000),
+            supabase.from("positions").select("*").limit(10000),
+            supabase.from("work_hours").select("*").limit(10000),
+            supabase.from("work_holidays").select("*").limit(10000),
+            supabase.from("absence_limits").select("*").limit(10000),
+            supabase.from("subscriptions").select("*").limit(10000),
+            supabase.from("user_roles").select("*").limit(10000),
+            supabase.from("leave_requests").select("*").limit(10000),
+            supabase.from("work_shifts").select("*").limit(10000),
+          ]),
+        30000,
+      );
+
+      const queryError =
+        tenantsData.error ||
+        employeesData.error ||
+        officesData.error ||
+        opdData.error ||
+        workUnitsData.error ||
+        positionsData.error ||
+        workHoursData.error ||
+        workHolidaysData.error ||
+        absenceLimitsData.error ||
+        subscriptionsData.error ||
+        userRolesData.error ||
+        leaveRequestsData.error ||
+        workShiftsData.error;
+      if (queryError) throw queryError;
 
       const allData = {
         tenants: tenantsData.data || [],
@@ -666,8 +703,8 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
 
       toast.success("Backup lengkap berhasil dibuat");
     } catch (error) {
-      console.error("Full export error:", error);
-      toast.error("Gagal membuat backup lengkap");
+      const errorRef = reportError(error, "admin.supabase_settings.export_full_backup");
+      toast.error(appendErrorReference("Gagal membuat backup lengkap", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -694,10 +731,11 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
 
     try {
       // Check employees without tenant
-      const { data: orphanEmployees } = await supabase
-        .from("employees")
-        .select("id, name, tenant_id")
-        .is("tenant_id", null);
+      const { data: orphanEmployees, error: orphanEmployeesError } = await withTimeout(
+        () => supabase.from("employees").select("id, name, tenant_id").is("tenant_id", null),
+        15000,
+      );
+      if (orphanEmployeesError) throw orphanEmployeesError;
       
       if (orphanEmployees && orphanEmployees.length > 0) {
         issues.push(`${orphanEmployees.length} pegawai tidak memiliki tenant_id`);
@@ -706,11 +744,12 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
       }
 
       // Check employees without office
-      const { data: noOfficeEmployees } = await supabase
-        .from("employees")
-        .select("id, name")
-        .is("office_id", null)
-        .eq("is_active", true);
+      const { data: noOfficeEmployees, error: noOfficeEmployeesError } = await withTimeout(
+        () =>
+          supabase.from("employees").select("id, name").is("office_id", null).eq("is_active", true),
+        15000,
+      );
+      if (noOfficeEmployeesError) throw noOfficeEmployeesError;
       
       if (noOfficeEmployees && noOfficeEmployees.length > 0) {
         issues.push(`${noOfficeEmployees.length} pegawai aktif tidak memiliki office_id`);
@@ -719,8 +758,17 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
       }
 
       // Check tenants without subscription
-      const { data: tenants } = await supabase.from("tenants").select("id");
-      const { data: subscriptions } = await supabase.from("subscriptions").select("tenant_id");
+      const [{ data: tenants, error: tenantsError }, { data: subscriptions, error: subscriptionsError }] =
+        await withTimeout(
+          () =>
+            Promise.all([
+              supabase.from("tenants").select("id"),
+              supabase.from("subscriptions").select("tenant_id"),
+            ]),
+          15000,
+        );
+      if (tenantsError) throw tenantsError;
+      if (subscriptionsError) throw subscriptionsError;
       
       const tenantsWithSub = new Set(subscriptions?.map(s => s.tenant_id) || []);
       const tenantsWithoutSub = tenants?.filter(t => !tenantsWithSub.has(t.id)) || [];
@@ -732,10 +780,11 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
       }
 
       // Check user_roles without valid user
-      const { data: rolesWithoutUser } = await supabase
-        .from("user_roles")
-        .select("id, user_id")
-        .is("user_id", null);
+      const { data: rolesWithoutUser, error: rolesWithoutUserError } = await withTimeout(
+        () => supabase.from("user_roles").select("id, user_id").is("user_id", null),
+        15000,
+      );
+      if (rolesWithoutUserError) throw rolesWithoutUserError;
       
       if (rolesWithoutUser && rolesWithoutUser.length > 0) {
         issues.push(`${rolesWithoutUser.length} user_roles tidak memiliki user_id`);
@@ -744,7 +793,11 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
       }
 
       // Check duplicate NIK
-      const { data: employees } = await supabase.from("employees").select("nik, tenant_id");
+      const { data: employees, error: employeesError } = await withTimeout(
+        () => supabase.from("employees").select("nik, tenant_id"),
+        15000,
+      );
+      if (employeesError) throw employeesError;
       const nikMap = new Map<string, number>();
       employees?.forEach(e => {
         const key = `${e.tenant_id}-${e.nik}`;
@@ -766,8 +819,8 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
         toast.warning(`Validasi selesai - ${issues.length} masalah ditemukan`);
       }
     } catch (error) {
-      console.error("Validation error:", error);
-      toast.error("Gagal menjalankan validasi");
+      const errorRef = reportError(error, "admin.supabase_settings.run_validation");
+      toast.error(appendErrorReference("Gagal menjalankan validasi", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -822,15 +875,22 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
         
         setImportFileName(file.name);
       } catch (error) {
-        console.error("JSON parse error:", error);
+        const errorRef = reportError(error, "admin.supabase_settings.import_parse_json", {
+          file_name: file.name,
+          file_size: file.size,
+        });
         if (loadingToast) toast.dismiss(loadingToast);
-        toast.error("File JSON tidak valid atau rusak");
+        toast.error(appendErrorReference("File JSON tidak valid atau rusak", errorRef));
       }
     };
     
     reader.onerror = () => {
+      const errorRef = reportError(new Error("FileReader readAsText failed"), "admin.supabase_settings.import_read_file", {
+        file_name: file.name,
+        file_size: file.size,
+      });
       if (loadingToast) toast.dismiss(loadingToast);
-      toast.error("Gagal membaca file");
+      toast.error(appendErrorReference("Gagal membaca file", errorRef));
     };
     
     reader.readAsText(file);
@@ -849,40 +909,40 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
   const content = (
     <>
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-        <TabsList className="flex flex-wrap gap-1 h-auto p-1">
-          <TabsTrigger value="info" className="gap-2">
+        <TabsList className="min-w-max h-auto flex-nowrap gap-1.5 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+          <TabsTrigger value="info" className="gap-2 whitespace-nowrap">
             <Server className="h-4 w-4" />
             <span className="hidden sm:inline">Info</span>
           </TabsTrigger>
-          <TabsTrigger value="health" className="gap-2">
+          <TabsTrigger value="health" className="gap-2 whitespace-nowrap">
             <Activity className="h-4 w-4" />
             <span className="hidden sm:inline">Health</span>
           </TabsTrigger>
-          <TabsTrigger value="backup" className="gap-2">
+          <TabsTrigger value="backup" className="gap-2 whitespace-nowrap">
             <Download className="h-4 w-4" />
             <span className="hidden sm:inline">Export</span>
           </TabsTrigger>
-          <TabsTrigger value="import" className="gap-2">
+          <TabsTrigger value="import" className="gap-2 whitespace-nowrap">
             <Upload className="h-4 w-4" />
             <span className="hidden sm:inline">Import</span>
           </TabsTrigger>
-          <TabsTrigger value="schema" className="gap-2">
+          <TabsTrigger value="schema" className="gap-2 whitespace-nowrap">
             <FileCode className="h-4 w-4" />
             <span className="hidden sm:inline">Schema</span>
           </TabsTrigger>
-          <TabsTrigger value="rls" className="gap-2">
+          <TabsTrigger value="rls" className="gap-2 whitespace-nowrap">
             <Shield className="h-4 w-4" />
             <span className="hidden sm:inline">RLS</span>
           </TabsTrigger>
-          <TabsTrigger value="migrate" className="gap-2">
+          <TabsTrigger value="migrate" className="gap-2 whitespace-nowrap">
             <Plug className="h-4 w-4" />
             <span className="hidden sm:inline">Migrasi</span>
           </TabsTrigger>
-          <TabsTrigger value="validate" className="gap-2">
+          <TabsTrigger value="validate" className="gap-2 whitespace-nowrap">
             <RefreshCw className="h-4 w-4" />
             <span className="hidden sm:inline">Validasi</span>
           </TabsTrigger>
-          <TabsTrigger value="checklist" className="gap-2">
+          <TabsTrigger value="checklist" className="gap-2 whitespace-nowrap">
             <ListChecks className="h-4 w-4" />
             <span className="hidden sm:inline">Checklist</span>
           </TabsTrigger>

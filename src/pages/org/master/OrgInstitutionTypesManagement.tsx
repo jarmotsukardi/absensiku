@@ -10,6 +10,11 @@ import { OrganizationLayout } from "@/components/admin/organization/Organization
 import { toast } from "sonner";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 interface InstitutionType {
   id: string;
@@ -36,9 +41,13 @@ const getIcon = (iconType: string) => {
   }
 };
 
+const INSTITUTION_TYPES_READ_TIMEOUT_MS = 12000;
+const INSTITUTION_TYPES_MAX_RETRIES = 2;
+
 export default function OrgInstitutionTypesManagement() {
   const [institutionTypes, setInstitutionTypes] = useState<InstitutionType[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -51,10 +60,23 @@ export default function OrgInstitutionTypesManagement() {
   const fetchInstitutionTypes = async () => {
     setLoadError(null);
     try {
-      const { data, error } = await supabase
-        .from("institution_types")
-        .select("*")
-        .order("sort_order", { ascending: true });
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("institution_types")
+              .select("*")
+              .order("sort_order", { ascending: true }),
+            INSTITUTION_TYPES_READ_TIMEOUT_MS,
+            "Permintaan data jenis instansi timeout."
+          ),
+        {
+          maxRetries: INSTITUTION_TYPES_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setInstitutionTypes(data || []);
@@ -64,6 +86,7 @@ export default function OrgInstitutionTypesManagement() {
       setLoadError(message);
       toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   };
@@ -85,6 +108,12 @@ export default function OrgInstitutionTypesManagement() {
   return (
     <OrganizationLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+            Mencoba ulang memuat daftar jenis instansi...
+          </div>
+        )}
+
         <div>
           <h1 className="text-2xl font-bold text-foreground">Jenis Instansi</h1>
           <p className="text-muted-foreground">
@@ -108,8 +137,14 @@ export default function OrgInstitutionTypesManagement() {
 
         {loadError && (
           <Card className="border-destructive/40">
-            <CardContent className="pt-6">
+            <CardContent className="flex flex-col gap-2 pt-6 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-destructive">{loadError}</p>
+              <button
+                className="inline-flex h-9 items-center justify-center rounded-md border px-3 text-sm"
+                onClick={() => void fetchInstitutionTypes()}
+              >
+                Coba Lagi
+              </button>
             </CardContent>
           </Card>
         )}

@@ -15,9 +15,11 @@ import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { SearchableSelect, SearchableSelectOption } from "@/components/ui/searchable-select";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { EmployeeDataTabs } from "@/components/org/employees/EmployeeDataTabs";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 
 type Employee = Tables<"employees">;
 type OPD = Tables<"opd">;
@@ -62,6 +64,8 @@ const GOLONGAN_OPTIONS = [
 ];
 
 const ITEMS_PER_PAGE = 10;
+const ORG_ACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS = 12000;
+const ORG_ACTIVE_EMPLOYEES_QUERY_RETRY_MAX = 2;
 
 export default function OrgActiveEmployees() {
   const confirmDialog = useConfirmDialog();
@@ -81,6 +85,7 @@ export default function OrgActiveEmployees() {
   const [isEditing, setIsEditing] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [formData, setFormData] = useState({
     id: "",
     nip: "",
@@ -108,12 +113,25 @@ export default function OrgActiveEmployees() {
   const fetchMasterData = async () => {
     setLoadError(null);
     try {
-      const [opdsRes, officesRes, workUnitsRes, positionsRes] = await Promise.all([
-        supabase.from("opd").select("*").eq("is_active", true).order("name"),
-        supabase.from("offices").select("*").eq("is_active", true).order("name"),
-        supabase.from("work_units").select("*").eq("is_active", true).order("name"),
-        supabase.from("positions").select("*").eq("is_active", true).order("name"),
-      ]);
+      setIsRetrying(false);
+      const [opdsRes, officesRes, workUnitsRes, positionsRes] = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.all([
+              supabase.from("opd").select("*").eq("is_active", true).order("name"),
+              supabase.from("offices").select("*").eq("is_active", true).order("name"),
+              supabase.from("work_units").select("*").eq("is_active", true).order("name"),
+              supabase.from("positions").select("*").eq("is_active", true).order("name"),
+            ]),
+            ORG_ACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS,
+            "org.employees.active.fetch_master_data timeout"
+          ),
+        {
+          maxRetries: ORG_ACTIVE_EMPLOYEES_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (opdsRes.error) throw opdsRes.error;
       if (officesRes.error) throw officesRes.error;
@@ -135,6 +153,7 @@ export default function OrgActiveEmployees() {
     setLoadError(null);
     setIsLoading(true);
     try {
+      setIsRetrying(false);
       let query = supabase
         .from("employees")
         .select("*, opd(*), office:office_id(*), work_unit:work_unit_id(*), position_rel:position_id(*)", { count: "exact" })
@@ -152,7 +171,19 @@ export default function OrgActiveEmployees() {
 
       const from = (currentPage - 1) * ITEMS_PER_PAGE;
       const to = from + ITEMS_PER_PAGE - 1;
-      const { data, error, count } = await query.order("name").range(from, to);
+      const { data, error, count } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query.order("name").range(from, to),
+            ORG_ACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS,
+            "org.employees.active.fetch timeout"
+          ),
+        {
+          maxRetries: ORG_ACTIVE_EMPLOYEES_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
 
       setEmployees((data || []) as EmployeeWithRelations[]);
@@ -254,14 +285,39 @@ export default function OrgActiveEmployees() {
     }
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      setIsRetrying(false);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ORG_ACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS,
+            "org.employees.active.save.auth timeout"
+          ),
+        {
+          maxRetries: ORG_ACTIVE_EMPLOYEES_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (!user) return;
 
-      const { data: roleData } = await supabase
-        .from("user_roles")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .single();
+      const { data: roleData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("user_roles")
+              .select("tenant_id")
+              .eq("user_id", user.id)
+              .single(),
+            ORG_ACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS,
+            "org.employees.active.save.role timeout"
+          ),
+        {
+          maxRetries: ORG_ACTIVE_EMPLOYEES_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (!roleData?.tenant_id) {
         toast.error("Tenant tidak ditemukan");
@@ -292,22 +348,47 @@ export default function OrgActiveEmployees() {
       };
 
       if (isEditing) {
-        const { error } = await supabase.from("employees").update(payload).eq("id", formData.id);
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("employees").update(payload).eq("id", formData.id),
+              ORG_ACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS,
+              "org.employees.active.update timeout"
+            ),
+          {
+            maxRetries: ORG_ACTIVE_EMPLOYEES_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (error) throw error;
         toast.success("Pegawai berhasil diperbarui");
       } else {
-        const { error } = await supabase.from("employees").insert(payload);
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("employees").insert(payload),
+              ORG_ACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS,
+              "org.employees.active.insert timeout"
+            ),
+          {
+            maxRetries: ORG_ACTIVE_EMPLOYEES_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (error) throw error;
         toast.success("Pegawai berhasil ditambahkan");
       }
 
       setIsDialogOpen(false);
       resetForm();
-      fetchData();
+      void fetchData();
     } catch (error: unknown) {
-      console.error("Error saving employee:", error);
-      const errorMessage = error instanceof Error ? error.message : "Gagal menyimpan pegawai";
-      toast.error(errorMessage);
+      const errorRef = reportError(error, "org.employees.active.save", {
+        employee_id: formData.id || null,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan pegawai", errorRef));
     }
   };
 
@@ -412,9 +493,20 @@ export default function OrgActiveEmployees() {
       if (!employeeData?.tenant_id) throw new Error("Tenant not found");
 
       // Coba link langsung jika user sudah registrasi (panggil RPC)
-      const { data: linkedUserId, error: linkError } = await supabase.rpc(
-        "admin_link_employee_user",
-        { p_employee_id: emp.id, p_user_email: emp.email }
+      const { data: linkedUserId, error: linkError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc(
+              "admin_link_employee_user",
+              { p_employee_id: emp.id, p_user_email: emp.email }
+            ),
+            12000,
+            "Menghubungkan akun pegawai terlalu lama",
+          ),
+        {
+          maxRetries: 1,
+          shouldRetry: isRetryableError,
+        },
       );
 
       if (!linkError && linkedUserId) {
@@ -446,21 +538,29 @@ export default function OrgActiveEmployees() {
       setActivationDialog({ open: true, employee: emp, inviteCode });
       toast.success("Kode undangan berhasil dibuat");
     } catch (error: unknown) {
-      console.error("Error creating invitation:", error);
+      const errorRef = reportError(error, "org.active_employees.create_invitation", {
+        employee_id: emp.id,
+        employee_email: emp.email,
+      });
       const errorMessage = error instanceof Error ? error.message : "Gagal membuat kode undangan";
-      toast.error(errorMessage);
+      toast.error(appendErrorReference(errorMessage, errorRef));
     } finally {
       setIsActivating(false);
     }
   };
 
-  const copyInviteLink = () => {
+  const copyInviteLink = async () => {
     if (activationDialog.inviteCode) {
       const link = `${window.location.origin}/employee/login?invite=${activationDialog.inviteCode}`;
-      navigator.clipboard.writeText(link);
-      setCopied(true);
-      toast.success("Link undangan disalin!");
-      setTimeout(() => setCopied(false), 2000);
+      try {
+        await withTimeout(() => navigator.clipboard.writeText(link), 5000);
+        setCopied(true);
+        toast.success("Link undangan disalin!");
+        setTimeout(() => setCopied(false), 2000);
+      } catch (error) {
+        const errorRef = reportError(error, "org.active_employees.copy_invite_link");
+        toast.error(appendErrorReference("Gagal menyalin link undangan", errorRef));
+      }
     }
   };
 
@@ -490,9 +590,11 @@ export default function OrgActiveEmployees() {
       if (error) throw error;
       toast.success(`Device ID untuk ${emp.name} berhasil direset. Pegawai mendapat 1 kesempatan reset baru.`);
     } catch (error: unknown) {
-      console.error("Error resetting device:", error);
+      const errorRef = reportError(error, "org.active_employees.reset_device_id", {
+        employee_id: emp.id,
+      });
       const errorMessage = error instanceof Error ? error.message : "Gagal reset device ID";
-      toast.error(errorMessage);
+      toast.error(appendErrorReference(errorMessage, errorRef));
     }
   };
 
@@ -749,19 +851,34 @@ export default function OrgActiveEmployees() {
                   )}
                 </div>
               </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
-                <Button onClick={handleSubmit}>{isEditing ? "Simpan" : "Tambah"}</Button>
+              <DialogFooter className={dialogActionBarClassName}>
+                <DialogActionHint>Pastikan data pegawai sudah benar sebelum disimpan.</DialogActionHint>
+                <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                  <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
+                  <Button onClick={handleSubmit}>{isEditing ? "Simpan" : "Tambah"}</Button>
+                </div>
               </DialogFooter>
             </DialogContent>
           </Dialog>
         </div>
         <EmployeeDataTabs />
 
+        {isRetrying && (
+          <Card className="border-amber-300/60 bg-amber-50">
+            <CardContent className="pt-6 text-sm text-amber-800">
+              Sedang mencoba ulang memuat data pegawai aktif...
+            </CardContent>
+          </Card>
+        )}
         {loadError && (
           <Card className="border-destructive/40">
             <CardContent className="pt-6">
-              <p className="text-sm text-destructive">{loadError}</p>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm text-destructive">{loadError}</p>
+                <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void fetchData()}>
+                  Coba Lagi
+                </Button>
+              </div>
             </CardContent>
           </Card>
         )}
@@ -775,9 +892,9 @@ export default function OrgActiveEmployees() {
           </CardHeader>
           <CardContent>
             {/* Filter Section */}
-            <div className="flex flex-col gap-4 mb-4">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-                <div className="relative flex-1 max-w-sm">
+            <div className="mb-4 rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="relative flex-1 sm:max-w-sm">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
                     placeholder="Cari nama, email, NIP..."
@@ -786,10 +903,10 @@ export default function OrgActiveEmployees() {
                     className="pl-10"
                   />
                 </div>
-                <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
                   <Filter className="h-4 w-4 text-muted-foreground" />
                   <Select value={filterOpd} onValueChange={setFilterOpd}>
-                    <SelectTrigger className="w-[180px]">
+                    <SelectTrigger className="w-full sm:w-[180px]">
                       <SelectValue placeholder="Filter OPD" />
                     </SelectTrigger>
                     <SelectContent>
@@ -800,7 +917,7 @@ export default function OrgActiveEmployees() {
                     </SelectContent>
                   </Select>
                   <Select value={filterWorkUnit} onValueChange={setFilterWorkUnit}>
-                    <SelectTrigger className="w-[180px]">
+                    <SelectTrigger className="w-full sm:w-[180px]">
                       <SelectValue placeholder="Filter Unit Kerja" />
                     </SelectTrigger>
                     <SelectContent>
@@ -811,7 +928,7 @@ export default function OrgActiveEmployees() {
                     </SelectContent>
                   </Select>
                   <Select value={filterCategory} onValueChange={setFilterCategory}>
-                    <SelectTrigger className="w-[140px]">
+                    <SelectTrigger className="w-full sm:w-[140px]">
                       <SelectValue placeholder="Kategori" />
                     </SelectTrigger>
                     <SelectContent>
@@ -822,7 +939,7 @@ export default function OrgActiveEmployees() {
                     </SelectContent>
                   </Select>
                   <Select value={filterAccountStatus} onValueChange={setFilterAccountStatus}>
-                    <SelectTrigger className="w-[150px]">
+                    <SelectTrigger className="w-full sm:w-[150px]">
                       <SelectValue placeholder="Status Akun" />
                     </SelectTrigger>
                     <SelectContent>
@@ -1024,10 +1141,13 @@ export default function OrgActiveEmployees() {
                 Undangan berlaku selama 7 hari. Pegawai dapat mendaftar menggunakan kode ini di halaman login pegawai.
               </p>
             </div>
-            <DialogFooter>
-              <Button onClick={() => setActivationDialog({ open: false, employee: null, inviteCode: null })}>
-                Tutup
-              </Button>
+            <DialogFooter className={dialogActionBarClassName}>
+              <DialogActionHint>Salin link undangan sebelum menutup dialog ini.</DialogActionHint>
+              <div className="flex w-full justify-end">
+                <Button onClick={() => setActivationDialog({ open: false, employee: null, inviteCode: null })}>
+                  Tutup
+                </Button>
+              </div>
             </DialogFooter>
           </DialogContent>
         </Dialog>

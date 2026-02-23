@@ -21,6 +21,7 @@ import {
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { CheckCircle2, Loader2, RefreshCcw, Sparkles, Wand2 } from "lucide-react";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 const EMPTY_COUNTS: OrgOnboardingCounts = {
   opd: 0,
@@ -47,9 +48,13 @@ const MODULE_LINKS: Array<{
 ];
 
 export default function OrgOnboardingSetup() {
+  const ORG_ONBOARDING_QUERY_TIMEOUT_MS = 15000;
+  const ORG_ONBOARDING_QUERY_RETRY_MAX = 1;
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(true);
   const [isApplying, setIsApplying] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [counts, setCounts] = useState<OrgOnboardingCounts>(EMPTY_COUNTS);
   const [templateLabel, setTemplateLabel] = useState<string>("Template Setup Awal");
@@ -64,7 +69,21 @@ export default function OrgOnboardingSetup() {
   const refreshData = useCallback(async () => {
     try {
       setIsLoading(true);
-      const resolvedTenantId = await resolveOrgTenantId();
+      setIsRetrying(false);
+      setLoadError(null);
+      const resolvedTenantId = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            resolveOrgTenantId(),
+            ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+            "org.onboarding.refresh.resolve_tenant timeout",
+          ),
+        {
+          maxRetries: ORG_ONBOARDING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (!resolvedTenantId) {
         toast.error("Tenant organisasi tidak ditemukan. Silakan login ulang.");
         navigate("/org/login", { replace: true });
@@ -72,19 +91,38 @@ export default function OrgOnboardingSetup() {
       }
       setTenantId(resolvedTenantId);
 
-      const [{ template, updatedAt }, tenantCounts] = await Promise.all([
-        loadOrgOnboardingTemplate(),
-        fetchOrgOnboardingCounts(resolvedTenantId),
-      ]);
+      const [{ template, updatedAt }, tenantCounts] = await withExponentialBackoff(
+        () =>
+          Promise.all([
+            withTimeout(
+              loadOrgOnboardingTemplate(),
+              ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+              "org.onboarding.refresh.load_template timeout",
+            ),
+            withTimeout(
+              fetchOrgOnboardingCounts(resolvedTenantId),
+              ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+              "org.onboarding.refresh.fetch_counts timeout",
+            ),
+          ]),
+        {
+          maxRetries: ORG_ONBOARDING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       setTemplateLabel(template.label);
       setTemplateUpdatedAt(updatedAt);
       setCounts(tenantCounts);
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.onboarding.fetch_data");
-      toast.error(appendErrorReference("Gagal memuat data onboarding organisasi", errorRef));
+      const message = appendErrorReference("Gagal memuat data onboarding organisasi", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   }, [navigate]);
 
@@ -100,22 +138,59 @@ export default function OrgOnboardingSetup() {
 
     try {
       setIsApplying(true);
-      const { data: userData, error: userError } = await supabase.auth.getUser();
+      setIsRetrying(false);
+      const { data: userData, error: userError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+            "org.onboarding.apply.get_user timeout",
+          ),
+        {
+          maxRetries: ORG_ONBOARDING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (userError) throw userError;
       const userId = userData.user?.id || null;
 
       let actorEmployeeId: string | null = null;
       if (userId) {
-        const { data: employeeData } = await supabase
-          .from("employees")
-          .select("id")
-          .eq("tenant_id", tenantId)
-          .eq("user_id", userId)
-          .maybeSingle();
+        const { data: employeeData } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("employees")
+                .select("id")
+                .eq("tenant_id", tenantId)
+                .eq("user_id", userId)
+                .maybeSingle(),
+              ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+              "org.onboarding.apply.actor_employee timeout",
+            ),
+          {
+            maxRetries: ORG_ONBOARDING_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
         actorEmployeeId = employeeData?.id || null;
       }
 
-      const result = await applyOrgOnboardingTemplateToTenant(tenantId, { actorEmployeeId });
+      const result = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            applyOrgOnboardingTemplateToTenant(tenantId, { actorEmployeeId }),
+            ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+            "org.onboarding.apply.template timeout",
+          ),
+        {
+          maxRetries: ORG_ONBOARDING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       setApplyResult(result);
       setCounts(result.counts_after);
 
@@ -130,6 +205,7 @@ export default function OrgOnboardingSetup() {
       toast.error(appendErrorReference("Gagal menerapkan template onboarding", errorRef));
     } finally {
       setIsApplying(false);
+      setIsRetrying(false);
     }
   };
 
@@ -185,6 +261,25 @@ export default function OrgOnboardingSetup() {
             </div>
           </CardContent>
         </Card>
+        {loadError && (
+          <Card className="border-destructive/40">
+            <CardContent className="pt-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-destructive">{loadError}</p>
+                <Button type="button" variant="outline" size="sm" onClick={() => void refreshData()}>
+                  Coba Lagi
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        {isRetrying && (
+          <Card className="border-amber-300/60 bg-amber-50">
+            <CardContent className="pt-4">
+              <p className="text-sm text-amber-800">Sedang mencoba ulang koneksi data setup awal...</p>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>

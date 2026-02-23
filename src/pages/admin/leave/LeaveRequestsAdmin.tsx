@@ -21,17 +21,26 @@ import { Enums, Tables } from "@/integrations/supabase/types";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 type LeaveRequest = Tables<"leave_requests">;
 type Employee = Tables<"employees">;
 type RequestStatus = Enums<"request_status">;
 type LeaveRequestWithEmployee = LeaveRequest & { employee?: Employee | null };
+const ADMIN_LEAVE_REQUESTS_READ_TIMEOUT_MS = 12000;
+const ADMIN_LEAVE_REQUESTS_WRITE_TIMEOUT_MS = 15000;
+const ADMIN_LEAVE_REQUESTS_MAX_RETRIES = 2;
 
 export default function LeaveRequestsAdmin() {
   const ITEMS_PER_PAGE = 15;
   const [requests, setRequests] = useState<LeaveRequestWithEmployee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("menunggu");
   const [currentPage, setCurrentPage] = useState(1);
@@ -39,6 +48,7 @@ export default function LeaveRequestsAdmin() {
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
+      setIsRetrying(false);
       setLoadError(null);
       
       let query = supabase
@@ -50,7 +60,19 @@ export default function LeaveRequestsAdmin() {
         query = query.eq("status", statusFilter as RequestStatus);
       }
 
-      const { data, error } = await query;
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query,
+            ADMIN_LEAVE_REQUESTS_READ_TIMEOUT_MS,
+            "Permintaan data permohonan cuti timeout."
+          ),
+        {
+          maxRetries: ADMIN_LEAVE_REQUESTS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setRequests((data as LeaveRequestWithEmployee[]) || []);
@@ -63,27 +85,36 @@ export default function LeaveRequestsAdmin() {
       setRequests([]);
       toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [statusFilter]);
 
   useEffect(() => {
-    fetchData();
+    void fetchData();
   }, [fetchData]);
 
   const getCurrentEmployeeId = useCallback(async () => {
     const {
       data: { user },
       error: authError,
-    } = await supabase.auth.getUser();
+    } = await withTimeout(
+      supabase.auth.getUser(),
+      ADMIN_LEAVE_REQUESTS_WRITE_TIMEOUT_MS,
+      "Permintaan user auth timeout."
+    );
     if (authError) throw authError;
     if (!user) throw new Error("Sesi login tidak valid. Silakan login ulang.");
 
-    const { data: currentEmployee, error: employeeError } = await supabase
-      .from("employees")
-      .select("id")
-      .eq("user_id", user.id)
-      .single();
+    const { data: currentEmployee, error: employeeError } = await withTimeout(
+      supabase
+        .from("employees")
+        .select("id")
+        .eq("user_id", user.id)
+        .single(),
+      ADMIN_LEAVE_REQUESTS_WRITE_TIMEOUT_MS,
+      "Permintaan profil pegawai timeout."
+    );
     if (employeeError) throw employeeError;
     return currentEmployee?.id ?? null;
   }, []);
@@ -92,14 +123,18 @@ export default function LeaveRequestsAdmin() {
     try {
       const currentEmployeeId = await getCurrentEmployeeId();
 
-      const { error } = await supabase
-        .from("leave_requests")
-        .update({ 
-          status: "disetujui", 
-          approved_by: currentEmployeeId,
-          approved_at: new Date().toISOString()
-        })
-        .eq("id", id);
+      const { error } = await withTimeout(
+        supabase
+          .from("leave_requests")
+          .update({ 
+            status: "disetujui", 
+            approved_by: currentEmployeeId,
+            approved_at: new Date().toISOString()
+          })
+          .eq("id", id),
+        ADMIN_LEAVE_REQUESTS_WRITE_TIMEOUT_MS,
+        "Persetujuan permohonan cuti timeout."
+      );
 
       if (error) throw error;
       toast.success("Permohonan cuti disetujui");
@@ -115,13 +150,17 @@ export default function LeaveRequestsAdmin() {
     if (!reason) return;
 
     try {
-      const { error } = await supabase
-        .from("leave_requests")
-        .update({ 
-          status: "ditolak", 
-          rejection_reason: reason 
-        })
-        .eq("id", id);
+      const { error } = await withTimeout(
+        supabase
+          .from("leave_requests")
+          .update({ 
+            status: "ditolak", 
+            rejection_reason: reason 
+          })
+          .eq("id", id),
+        ADMIN_LEAVE_REQUESTS_WRITE_TIMEOUT_MS,
+        "Penolakan permohonan cuti timeout."
+      );
 
       if (error) throw error;
       toast.success("Permohonan cuti ditolak");
@@ -184,9 +223,18 @@ export default function LeaveRequestsAdmin() {
           </p>
         </div>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+            Sedang mencoba ulang memuat data permohonan...
+          </div>
+        )}
+
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 
