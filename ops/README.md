@@ -65,6 +65,54 @@ npm run e2e:install
 npm run e2e:pw
 ```
 
+## Docker Hybrid (Direkomendasikan)
+
+Mode ini menjaga app utama tetap lokal (`npm run dev`), sementara service pendukung dijalankan di Docker.
+
+Naikkan service:
+
+```bash
+npm run docker:up
+npm run docker:ps
+```
+
+Lihat log realtime:
+
+```bash
+npm run docker:logs
+```
+
+Hentikan service:
+
+```bash
+npm run docker:down
+```
+
+Reset total volume (destruktif untuk data local dev):
+
+```bash
+npm run docker:reset
+```
+
+Jalankan migration/seed local DB:
+
+```bash
+npm run db:migrate
+npm run db:seed
+```
+
+Catatan:
+- Migration local dibaca dari `docker/postgres/migrations/*.sql`.
+- Seed default dibaca dari `docker/postgres/seed.sql` (bisa override: `npm run db:seed -- --file path/to/file.sql`).
+
+Mode sinkronisasi Supabase migration (agar DB Docker lebih mendekati schema utama):
+
+```bash
+npm run db:migrate:all        # jalankan local bootstrap + seluruh supabase/migrations
+npm run db:migrate:supabase   # jalankan hanya supabase/migrations
+npm run db:migrate:sync       # mirror file supabase/migrations ke docker/postgres/migrations/supabase
+```
+
 ## Observability Baseline
 
 - Frontend:
