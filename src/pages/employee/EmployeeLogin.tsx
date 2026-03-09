@@ -16,8 +16,14 @@ import { DesktopBlockedMessage } from "@/components/employee/DesktopBlockedMessa
 import { SessionLoadingScreen } from "@/components/employee/SessionLoadingScreen";
 import { MapPin, Mail, Lock, Loader2, RefreshCw, UserPlus, ArrowLeft, CheckCircle2, Eye, EyeOff, AlertTriangle, Phone, MapPinIcon, User, Building2, Key } from "lucide-react";
 import { ForgotPasswordDialog } from "@/components/auth/ForgotPasswordDialog";
+import { supabasePublishableKey, supabaseUrl } from "@/integrations/supabase/env";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import {
+  buildEmployeeDashboardUrl,
+  buildOrgRegisterPath,
+  EMPLOYEE_DASHBOARD_PATH,
+} from "@/lib/employeeAuthRoutes";
 
 // Konstanta untuk optimasi performa
 const DEBOUNCE_MS = 1000;
@@ -259,7 +265,7 @@ export default function EmployeeLogin() {
         return;
       }
 
-      navigate("/employee/dashboard", { replace: true });
+      navigate(EMPLOYEE_DASHBOARD_PATH, { replace: true });
     },
     [navigate, toast],
   );
@@ -285,7 +291,7 @@ export default function EmployeeLogin() {
           reportError(error, "employee.login.restore_session_role_check", {
             user_id: sessionManagement.session?.user?.id || null,
           });
-          navigate("/employee/dashboard", { replace: true });
+          navigate(EMPLOYEE_DASHBOARD_PATH, { replace: true });
         });
       } else {
         setShowLoadingScreen(false);
@@ -315,7 +321,7 @@ export default function EmployeeLogin() {
             title: "Terjadi Kesalahan",
             description: appendErrorReference("Gagal memverifikasi role akun.", errorRef),
           });
-          navigate("/employee/dashboard", { replace: true });
+          navigate(EMPLOYEE_DASHBOARD_PATH, { replace: true });
         });
       }
     });
@@ -619,12 +625,12 @@ export default function EmployeeLogin() {
 
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-password-otp`,
+        `${supabaseUrl}/functions/v1/send-password-otp`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "apikey": supabasePublishableKey,
           },
           body: JSON.stringify({ email: forgotEmail.trim(), whatsapp: forgotWhatsapp.trim() }),
         }
@@ -683,12 +689,12 @@ export default function EmployeeLogin() {
     try {
       const otpValue = otpInputRef.current?.getValue() || "";
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-password-otp`,
+        `${supabaseUrl}/functions/v1/verify-password-otp`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "apikey": supabasePublishableKey,
           },
           body: JSON.stringify({ 
             email: forgotEmail.trim(),
@@ -727,12 +733,12 @@ export default function EmployeeLogin() {
     setIsLoading(true);
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-password-otp`,
+        `${supabaseUrl}/functions/v1/send-password-otp`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "apikey": supabasePublishableKey,
           },
           body: JSON.stringify({ email: forgotEmail.trim(), whatsapp: forgotWhatsapp.trim() }),
         }
@@ -783,12 +789,12 @@ export default function EmployeeLogin() {
 
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-registration-otp`,
+        `${supabaseUrl}/functions/v1/send-registration-otp`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "apikey": supabasePublishableKey,
           },
           body: JSON.stringify({ email: selfRegEmail.trim() }),
         }
@@ -861,12 +867,12 @@ export default function EmployeeLogin() {
     try {
       const otpValue = selfRegOtpRef.current?.getValue() || "";
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-registration-otp`,
+        `${supabaseUrl}/functions/v1/verify-registration-otp`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "apikey": supabasePublishableKey,
           },
           body: JSON.stringify({
             email: selfRegEmail.trim(),
@@ -907,12 +913,12 @@ export default function EmployeeLogin() {
     setIsLoading(true);
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-registration-otp`,
+        `${supabaseUrl}/functions/v1/send-registration-otp`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "apikey": supabasePublishableKey,
           },
           body: JSON.stringify({ email: selfRegEmail.trim() }),
         }
@@ -1028,7 +1034,7 @@ export default function EmployeeLogin() {
         email: finalEmail,
         password: registerPassword,
         options: {
-          emailRedirectTo: `${window.location.origin}/employee/dashboard`,
+          emailRedirectTo: buildEmployeeDashboardUrl(),
           data: { name: finalName },
         },
       });
@@ -1788,7 +1794,7 @@ export default function EmployeeLogin() {
             <Button
               onClick={() => {
                 setShowOrgRegisterDialog(false);
-                navigate("/org/login?mode=register");
+                navigate(buildOrgRegisterPath());
               }}
               className="w-full sm:w-auto"
             >

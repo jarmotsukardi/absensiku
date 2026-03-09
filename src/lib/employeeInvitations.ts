@@ -1,5 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { Json, Tables, TablesInsert } from "@/integrations/supabase/types";
+import { buildEmployeeLoginPath, buildEmployeeLoginUrl } from "@/lib/employeeAuthRoutes";
 
 export type EmployeeInvitationRow = Pick<
   Tables<"employee_invitations">,
@@ -154,9 +155,9 @@ export async function ensureIndividualEmployeeInvitation(
 
 export function buildInvitationLink(invitationCode: string): string {
   if (typeof window === "undefined") {
-    return `/employee/login?invite=${invitationCode}`;
+    return buildEmployeeLoginPath(invitationCode);
   }
-  return `${window.location.origin}/employee/login?invite=${invitationCode}`;
+  return buildEmployeeLoginUrl(invitationCode);
 }
 
 export function deriveEmployeeInvitationDeliveryStatus(

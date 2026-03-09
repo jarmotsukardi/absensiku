@@ -9,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { MapPin, Lock, ArrowLeft, Loader2, CheckCircle2, Eye, EyeOff, AlertCircle } from "lucide-react";
 import { z } from "zod";
 import { cn } from "@/lib/utils";
+import { EMPLOYEE_LOGIN_PATH } from "@/lib/employeeAuthRoutes";
 
 const passwordSchema = z.object({
   password: z
@@ -160,7 +161,7 @@ export default function ResetPassword() {
         // Sign out and redirect to login
         setTimeout(async () => {
           await supabase.auth.signOut();
-          navigate("/employee/login");
+          navigate(EMPLOYEE_LOGIN_PATH);
         }, 3000);
       }
     } catch (error) {
@@ -202,7 +203,7 @@ export default function ResetPassword() {
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
-              <Link to="/employee/login">
+              <Link to={EMPLOYEE_LOGIN_PATH}>
                 <Button className="w-full" variant="outline">
                   Kembali ke Login
                 </Button>
@@ -223,7 +224,7 @@ export default function ResetPassword() {
 
       <div className="w-full max-w-md relative z-10">
         <Link
-          to="/employee/login"
+          to={EMPLOYEE_LOGIN_PATH}
           className="inline-flex items-center gap-2 text-primary-foreground/70 hover:text-primary-foreground mb-6 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
@@ -253,7 +254,7 @@ export default function ResetPassword() {
                 <p className="text-muted-foreground mb-4">
                   Anda akan diarahkan ke halaman login dalam beberapa detik...
                 </p>
-                <Link to="/employee/login">
+                <Link to={EMPLOYEE_LOGIN_PATH}>
                   <Button className="w-full">
                     Ke Halaman Login
                   </Button>
