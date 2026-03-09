@@ -13,6 +13,7 @@ interface SuperAdminLayoutProps {
   children: React.ReactNode;
   title?: string;
   subtitle?: string;
+  workspaceMode?: "absensi" | "hr" | "payroll";
 }
 
 const ACCESS_CHECK_TIMEOUT_MS = 12000;
@@ -49,7 +50,12 @@ const clearCachedSuperAdminAccess = () => {
   }
 };
 
-export function SuperAdminLayout({ children, title, subtitle }: SuperAdminLayoutProps) {
+export function SuperAdminLayout({
+  children,
+  title,
+  subtitle,
+  workspaceMode = "absensi",
+}: SuperAdminLayoutProps) {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(() => !getCachedSuperAdminAccess());
   const [isSuperAdmin, setIsSuperAdmin] = useState(() => getCachedSuperAdminAccess());
@@ -197,9 +203,9 @@ export function SuperAdminLayout({ children, title, subtitle }: SuperAdminLayout
     return (
       <SidebarProvider>
         <div className="min-h-screen flex w-full">
-          <SuperAdminSidebar />
+          <SuperAdminSidebar workspaceMode={workspaceMode} />
           <SidebarInset>
-            <SuperAdminHeader title={title} subtitle={subtitle} />
+            <SuperAdminHeader title={title} subtitle={subtitle} workspaceMode={workspaceMode} />
             <main className="flex-1 p-6">
               <div className="min-h-[320px] flex flex-col items-center justify-center gap-4">
                 <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary" />
@@ -216,9 +222,9 @@ export function SuperAdminLayout({ children, title, subtitle }: SuperAdminLayout
     return (
       <SidebarProvider>
         <div className="min-h-screen flex w-full">
-          <SuperAdminSidebar />
+          <SuperAdminSidebar workspaceMode={workspaceMode} />
           <SidebarInset>
-            <SuperAdminHeader title={title} subtitle={subtitle} />
+            <SuperAdminHeader title={title} subtitle={subtitle} workspaceMode={workspaceMode} />
             <main className="flex-1 p-6">
               <div className="mx-auto mt-16 max-w-xl rounded-xl border border-amber-200 bg-amber-50/80 p-5">
                 <h2 className="text-base font-semibold text-amber-900">Akses Super Admin Diperlukan</h2>
@@ -239,9 +245,9 @@ export function SuperAdminLayout({ children, title, subtitle }: SuperAdminLayout
   return (
     <SidebarProvider>
       <div className="min-h-screen flex w-full">
-        <SuperAdminSidebar />
+        <SuperAdminSidebar workspaceMode={workspaceMode} />
         <SidebarInset>
-          <SuperAdminHeader title={title} subtitle={subtitle} />
+          <SuperAdminHeader title={title} subtitle={subtitle} workspaceMode={workspaceMode} />
           <main className="flex-1 p-6">
             {children}
           </main>
