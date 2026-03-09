@@ -8,6 +8,8 @@ import { HelmetProvider } from "react-helmet-async";
 import { PersistentNotificationDialog } from "@/components/common/PersistentNotificationDialog";
 import { ConfirmDialogProvider } from "@/components/common/ConfirmDialogProvider";
 import { AndroidBackButtonHandler } from "@/hooks/useAndroidBackButton";
+import { PayrollRouteGuard } from "@/components/org/payroll/PayrollRouteGuard";
+import { AndroidSessionSync } from "@/components/employee/AndroidSessionSync";
 
 const queryClient = new QueryClient();
 const Index = lazy(() => import("./pages/Index"));
@@ -50,6 +52,7 @@ const OrgOnboardingSetup = lazy(() => import("./pages/org/OrgOnboardingSetup"));
 const OrgOPDManagement = lazy(() => import("./pages/org/master/OrgOPDManagement"));
 const OrgEmployeeInvitations = lazy(() => import("./pages/org/OrgEmployeeInvitations"));
 const EmployeeLogin = lazy(() => import("./pages/employee/EmployeeLogin"));
+const EmployeeNativeBootstrap = lazy(() => import("./pages/employee/EmployeeNativeBootstrap"));
 const EmployeeDashboardNew = lazy(() => import("./pages/employee/EmployeeDashboardNew"));
 const EmployeeDashboardReadonly = lazy(() => import("./pages/dashboard/EmployeeDashboardReadonly"));
 const EmployeeProfile = lazy(() => import("./pages/employee/EmployeeProfile"));
@@ -100,12 +103,74 @@ const OrgAuditLog = lazy(() => import("./pages/org/OrgAuditLog"));
 const OrgMutationRequests = lazy(() => import("./pages/org/employees/OrgMutationRequests"));
 const OrgOvertimeRequests = lazy(() => import("./pages/org/leave/OrgOvertimeRequests"));
 const OrgOvertimeSettings = lazy(() => import("./pages/org/schedule/OrgOvertimeSettings"));
+const OrgHRHome = lazy(() => import("./pages/org/hr/OrgHRHome"));
+const OrgHREmployees = lazy(() => import("./pages/org/hr/OrgHREmployees"));
+const OrgHRStructure = lazy(() => import("./pages/org/hr/OrgHRStructure"));
+const OrgHRPositionGrade = lazy(() => import("./pages/org/hr/OrgHRPositionGrade"));
+const OrgPayrollHome = lazy(() => import("./pages/org/payroll/OrgPayrollHome"));
+const OrgHRContracts = lazy(() => import("./pages/org/hr/OrgHRContracts"));
+const OrgHRDocuments = lazy(() => import("./pages/org/hr/OrgHRDocuments"));
+const OrgHRReports = lazy(() => import("./pages/org/hr/OrgHRReports"));
+const OrgHRAttendanceInsights = lazy(() => import("./pages/org/hr/OrgHRAttendanceInsights"));
+const OrgHRSettings = lazy(() => import("./pages/org/hr/OrgHRSettings"));
+const OrgHRFAQ = lazy(() => import("./pages/org/hr/OrgHRFAQ"));
+const OrgHRSupport = lazy(() => import("./pages/org/hr/OrgHRSupport"));
+const OrgHRTickets = lazy(() => import("./pages/org/hr/OrgHRTickets"));
+const OrgHRErrorLogs = lazy(() => import("./pages/org/hr/OrgHRErrorLogs"));
+const OrgHRRecruitmentJobs = lazy(() => import("./pages/org/hr/OrgHRRecruitmentJobs"));
+const OrgHRRecruitmentCandidates = lazy(() => import("./pages/org/hr/OrgHRRecruitmentCandidates"));
+const OrgHRRecruitmentInterviews = lazy(() => import("./pages/org/hr/OrgHRRecruitmentInterviews"));
+const OrgHRRecruitmentOffers = lazy(() => import("./pages/org/hr/OrgHRRecruitmentOffers"));
+const OrgHRPriorityWorkspace = lazy(() => import("./pages/org/hr/OrgHRPriorityWorkspace"));
+const OrgHROrganizationWorkspace = lazy(() => import("./pages/org/hr/OrgHROrganizationWorkspace"));
+const OrgHROperationalWorkspace = lazy(() => import("./pages/org/hr/OrgHROperationalWorkspace"));
+const OrgHRGovernanceWorkspace = lazy(() => import("./pages/org/hr/OrgHRGovernanceWorkspace"));
+const OrgHRSectionBridge = lazy(() => import("./pages/org/hr/OrgHRSectionBridge"));
+const OrgPayrollPolicies = lazy(() => import("./pages/org/payroll/OrgPayrollPolicies"));
+const OrgPayrollPeriods = lazy(() => import("./pages/org/payroll/OrgPayrollPeriods"));
+const OrgPayrollValidation = lazy(() => import("./pages/org/payroll/OrgPayrollValidation"));
+const OrgPayrollEmployees = lazy(() => import("./pages/org/payroll/OrgPayrollEmployees"));
+const OrgPayrollOrgGrade = lazy(() => import("./pages/org/payroll/OrgPayrollOrgGrade"));
+const OrgPayrollIncomeComponents = lazy(() => import("./pages/org/payroll/OrgPayrollIncomeComponents"));
+const OrgPayrollDeductionComponents = lazy(() => import("./pages/org/payroll/OrgPayrollDeductionComponents"));
+const OrgPayrollVariableInput = lazy(() => import("./pages/org/payroll/OrgPayrollVariableInput"));
+const OrgPayrollRunEngine = lazy(() => import("./pages/org/payroll/OrgPayrollRunEngine"));
+const OrgPayrollApproval = lazy(() => import("./pages/org/payroll/OrgPayrollApproval"));
+const OrgPayrollSlips = lazy(() => import("./pages/org/payroll/OrgPayrollSlips"));
+const OrgPayrollPayment = lazy(() => import("./pages/org/payroll/OrgPayrollPayment"));
+const OrgPayrollTaxCompliance = lazy(() => import("./pages/org/payroll/OrgPayrollTaxCompliance"));
+const OrgPayrollReports = lazy(() => import("./pages/org/payroll/OrgPayrollReports"));
+const OrgPayrollAuditLog = lazy(() => import("./pages/org/payroll/OrgPayrollAuditLog"));
+const OrgPayrollErrorLog = lazy(() => import("./pages/org/payroll/OrgPayrollErrorLog"));
+const OrgPayrollSettings = lazy(() => import("./pages/org/payroll/OrgPayrollSettings"));
+const OrgPayrollHelp = lazy(() => import("./pages/org/payroll/OrgPayrollHelp"));
+const OrgPayrollRoles = lazy(() => import("./pages/org/payroll/OrgPayrollRoles"));
+const OrgPayrollIntegrations = lazy(() => import("./pages/org/payroll/OrgPayrollIntegrations"));
 const FeedbackManagement = lazy(() => import("./pages/admin/FeedbackManagement"));
 const StreakMonitoring = lazy(() => import("./pages/admin/StreakMonitoring"));
 const AdminInstitutionTypesManagement = lazy(() => import("./pages/admin/InstitutionTypesManagement"));
 const AttendanceStressTest = lazy(() => import("./pages/admin/AttendanceStressTest"));
 const AttendanceReport = lazy(() => import("./pages/admin/reports/AttendanceReport"));
 const RecapReport = lazy(() => import("./pages/admin/reports/RecapReport"));
+const AdminHRDashboard = lazy(() => import("./pages/admin/hr/AdminHRDashboard"));
+const AdminHRTenants = lazy(() => import("./pages/admin/hr/AdminHRTenants"));
+const AdminHRPolicies = lazy(() => import("./pages/admin/hr/AdminHRPolicies"));
+const AdminHRErrorLogs = lazy(() => import("./pages/admin/hr/AdminHRErrorLogs"));
+const AdminHRAudit = lazy(() => import("./pages/admin/hr/AdminHRAudit"));
+const AdminHRSettings = lazy(() => import("./pages/admin/hr/AdminHRSettings"));
+const AdminHRProfile = lazy(() => import("./pages/admin/hr/AdminHRProfile"));
+const AdminHRHelp = lazy(() => import("./pages/admin/hr/AdminHRHelp"));
+const AdminHRFAQ = lazy(() => import("./pages/admin/hr/AdminHRFAQ"));
+const AdminHRSupport = lazy(() => import("./pages/admin/hr/AdminHRSupport"));
+const AdminHRTickets = lazy(() => import("./pages/admin/hr/AdminHRTickets"));
+const AdminHRSectionBridge = lazy(() => import("./pages/admin/hr/AdminHRSectionBridge"));
+const AdminPayrollDashboard = lazy(() => import("./pages/admin/payroll/AdminPayrollDashboard"));
+const AdminPayrollTenants = lazy(() => import("./pages/admin/payroll/AdminPayrollTenants"));
+const AdminPayrollMonitoring = lazy(() => import("./pages/admin/payroll/AdminPayrollMonitoring"));
+const AdminPayrollErrorLogs = lazy(() => import("./pages/admin/payroll/AdminPayrollErrorLogs"));
+const AdminPayrollAudit = lazy(() => import("./pages/admin/payroll/AdminPayrollAudit"));
+const AdminPayrollIntegrations = lazy(() => import("./pages/admin/payroll/AdminPayrollIntegrations"));
+const AdminPayrollSettings = lazy(() => import("./pages/admin/payroll/AdminPayrollSettings"));
 const DatabaseManagement = lazy(() => import("./pages/admin/DatabaseManagement"));
 const TrialSettings = lazy(() => import("./pages/admin/TrialSettings"));
 const SupabaseSettings = lazy(() => import("./pages/admin/SupabaseSettings"));
@@ -128,6 +193,7 @@ const App = () => (
           <Sonner />
           <BrowserRouter>
             <AndroidBackButtonHandler />
+            <AndroidSessionSync />
             <Suspense fallback={<RouteLoadingFallback />}>
               <Routes>
               <Route path="/" element={<Index />} />
@@ -186,6 +252,28 @@ const App = () => (
               <Route path="/admin/help/tickets" element={<FeedbackManagement />} />
               <Route path="/admin/streak-monitoring" element={<StreakMonitoring />} />
               <Route path="/admin/log-errors" element={<ErrorLogs />} />
+              <Route path="/admin/hr" element={<AdminHRDashboard />} />
+              <Route path="/admin/hr/tenants" element={<AdminHRTenants />} />
+              <Route path="/admin/hr/policies" element={<AdminHRPolicies />} />
+              <Route path="/admin/hr/error-logs" element={<AdminHRErrorLogs />} />
+              <Route path="/admin/hr/audit" element={<AdminHRAudit />} />
+              <Route path="/admin/hr/settings" element={<AdminHRSettings />} />
+              <Route path="/admin/hr/sections/:sectionKey" element={<AdminHRSectionBridge />} />
+              <Route path="/admin/hr/profile" element={<AdminHRProfile />} />
+              <Route path="/admin/hr/faq" element={<Navigate to="/admin/hr/help/faq" replace />} />
+              <Route path="/admin/hr/support" element={<Navigate to="/admin/hr/help/support" replace />} />
+              <Route path="/admin/hr/tickets" element={<Navigate to="/admin/hr/help/tickets" replace />} />
+              <Route path="/admin/hr/help" element={<AdminHRHelp />} />
+              <Route path="/admin/hr/help/faq" element={<AdminHRFAQ />} />
+              <Route path="/admin/hr/help/support" element={<AdminHRSupport />} />
+              <Route path="/admin/hr/help/tickets" element={<AdminHRTickets />} />
+              <Route path="/admin/payroll" element={<AdminPayrollDashboard />} />
+              <Route path="/admin/payroll/tenants" element={<AdminPayrollTenants />} />
+              <Route path="/admin/payroll/monitoring" element={<AdminPayrollMonitoring />} />
+              <Route path="/admin/payroll/error-logs" element={<AdminPayrollErrorLogs />} />
+              <Route path="/admin/payroll/audit" element={<AdminPayrollAudit />} />
+              <Route path="/admin/payroll/integrations" element={<AdminPayrollIntegrations />} />
+              <Route path="/admin/payroll/settings" element={<AdminPayrollSettings />} />
               <Route path="/admin/master/opd" element={<OPDManagement />} />
               <Route path="/admin/master/opd-admins" element={<OPDAdminsManagement />} />
               <Route path="/admin/master/employee-import" element={<EmployeeImport />} />
@@ -246,6 +334,94 @@ const App = () => (
               <Route path="/org/subscription" element={<Navigate to="/org/billing" replace />} />
               <Route path="/org/activation" element={<Navigate to="/org/billing" replace />} />
               <Route path="/org/billing" element={<OrgBilling />} />
+              <Route path="/org/hr" element={<OrgHRHome />} />
+              <Route path="/org/hr/employees" element={<OrgHREmployees />} />
+              <Route path="/org/hr/structure" element={<OrgHRStructure />} />
+              <Route path="/org/hr/position-grade" element={<OrgHRPositionGrade />} />
+              <Route path="/org/hr/contracts" element={<OrgHRContracts />} />
+              <Route path="/org/hr/documents" element={<OrgHRDocuments />} />
+              <Route path="/org/hr/reports" element={<OrgHRReports />} />
+              <Route path="/org/hr/attendance-insights" element={<OrgHRAttendanceInsights />} />
+              <Route path="/org/hr/settings" element={<OrgHRSettings />} />
+              <Route path="/org/hr/help" element={<Navigate to="/org/hr/help/faq" replace />} />
+              <Route path="/org/hr/help/faq" element={<OrgHRFAQ />} />
+              <Route path="/org/hr/help/support" element={<OrgHRSupport />} />
+              <Route path="/org/hr/help/tickets" element={<OrgHRTickets />} />
+              <Route path="/org/hr/help/error-logs" element={<OrgHRErrorLogs />} />
+              <Route path="/org/hr/notifications" element={<OrgHROperationalWorkspace />} />
+              <Route path="/org/hr/dashboard-notifications" element={<OrgHROperationalWorkspace />} />
+              <Route path="/org/hr/activity-log" element={<OrgHROperationalWorkspace />} />
+              <Route path="/org/hr/dashboard-activity" element={<OrgHROperationalWorkspace />} />
+              <Route path="/org/hr/company" element={<OrgHROrganizationWorkspace />} />
+              <Route path="/org/hr/departments" element={<OrgHROrganizationWorkspace />} />
+              <Route path="/org/hr/divisions" element={<OrgHROrganizationWorkspace />} />
+              <Route path="/org/hr/work-locations" element={<OrgHROrganizationWorkspace />} />
+              <Route path="/org/hr/work-calendar" element={<OrgHROrganizationWorkspace />} />
+              <Route path="/org/hr/employee-status" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/job-history" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/onboarding" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/offboarding" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/work-hours" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/shifts" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/national-holidays" element={<OrgHROperationalWorkspace />} />
+              <Route path="/org/hr/late-settings" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/attendance-integrations" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/attendance-recap" element={<OrgHROperationalWorkspace />} />
+              <Route path="/org/hr/leave-types" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/leave-quota" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/leave-approval" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/leave-recap" element={<OrgHROperationalWorkspace />} />
+              <Route path="/org/hr/leave-validity" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/kpi" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/performance-periods" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/performance-forms" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/review-360" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/evaluation-results" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/training-data" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/certifications" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/skill-matrix" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/document-templates" element={<OrgHRGovernanceWorkspace />} />
+              <Route path="/org/hr/warning-letters" element={<OrgHRGovernanceWorkspace />} />
+              <Route path="/org/hr/contract-templates" element={<OrgHRGovernanceWorkspace />} />
+              <Route path="/org/hr/digital-signature" element={<OrgHRGovernanceWorkspace />} />
+              <Route path="/org/hr/users" element={<OrgHRGovernanceWorkspace />} />
+              <Route path="/org/hr/roles" element={<OrgHRGovernanceWorkspace />} />
+              <Route path="/org/hr/permissions" element={<OrgHRGovernanceWorkspace />} />
+              <Route path="/org/hr/approval-hierarchy" element={<OrgHRGovernanceWorkspace />} />
+              <Route path="/org/hr/general-settings" element={<OrgHRGovernanceWorkspace />} />
+              <Route path="/org/hr/branding" element={<OrgHRGovernanceWorkspace />} />
+              <Route path="/org/hr/import-export" element={<OrgHRGovernanceWorkspace />} />
+              <Route path="/org/hr/backup" element={<OrgHRGovernanceWorkspace />} />
+              <Route path="/org/hr/recruitment/jobs" element={<OrgHRRecruitmentJobs />} />
+              <Route path="/org/hr/recruitment/candidates" element={<OrgHRRecruitmentCandidates />} />
+              <Route path="/org/hr/recruitment/interviews" element={<OrgHRRecruitmentInterviews />} />
+              <Route path="/org/hr/recruitment/offers" element={<OrgHRRecruitmentOffers />} />
+              <Route path="/org/hr/ess/requests" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/ess/leave-requests" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/ess/attendance" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/ess/documents" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr/ess/profile" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/payroll" element={<PayrollRouteGuard permission="payroll.workspace.view"><OrgPayrollHome /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/employees" element={<PayrollRouteGuard permission="payroll.master.manage"><OrgPayrollEmployees /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/org-grade" element={<PayrollRouteGuard permission="payroll.master.manage"><OrgPayrollOrgGrade /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/income-components" element={<PayrollRouteGuard permission="payroll.master.manage"><OrgPayrollIncomeComponents /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/deduction-components" element={<PayrollRouteGuard permission="payroll.master.manage"><OrgPayrollDeductionComponents /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/policies" element={<PayrollRouteGuard permission="payroll.policy.manage"><OrgPayrollPolicies /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/periods" element={<PayrollRouteGuard permission="payroll.period.manage"><OrgPayrollPeriods /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/variable-input" element={<PayrollRouteGuard permission="payroll.variable.manage"><OrgPayrollVariableInput /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/validation" element={<PayrollRouteGuard permission="payroll.validation.manage"><OrgPayrollValidation /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/run-engine" element={<PayrollRouteGuard permission="payroll.run.manage"><OrgPayrollRunEngine /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/approval" element={<PayrollRouteGuard permission="payroll.approval.manage"><OrgPayrollApproval /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/slips" element={<PayrollRouteGuard permission="payroll.slips.manage"><OrgPayrollSlips /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/payment" element={<PayrollRouteGuard permission="payroll.payment.manage"><OrgPayrollPayment /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/tax-compliance" element={<PayrollRouteGuard permission="payroll.tax.manage"><OrgPayrollTaxCompliance /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/reports" element={<PayrollRouteGuard permission="payroll.reports.view"><OrgPayrollReports /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/audit-log" element={<PayrollRouteGuard permission="payroll.audit.view"><OrgPayrollAuditLog /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/error-log" element={<PayrollRouteGuard permission="payroll.audit.view"><OrgPayrollErrorLog /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/settings" element={<PayrollRouteGuard permission="payroll.integration.manage"><OrgPayrollSettings /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/help" element={<PayrollRouteGuard permission="payroll.workspace.view"><OrgPayrollHelp /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/roles" element={<PayrollRouteGuard permission="payroll.roles.manage"><OrgPayrollRoles /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/integrations" element={<PayrollRouteGuard permission="payroll.integration.manage"><OrgPayrollIntegrations /></PayrollRouteGuard>} />
               <Route path="/org/profile/setup" element={<OrgProfileSetup />} />
               <Route path="/org/invitations" element={<OrgEmployeeInvitations />} />
               <Route path="/org/landing-settings" element={<Navigate to="/org/settings?tab=landing" replace />} />
@@ -259,6 +435,7 @@ const App = () => (
               {/* Employee Routes */}
               <Route path="/employee" element={<Navigate to="/employee/login" replace />} />
               <Route path="/employee/login" element={<EmployeeLogin />} />
+              <Route path="/employee/native-bootstrap" element={<EmployeeNativeBootstrap />} />
               <Route path="/employee/dashboard" element={<EmployeeDashboardNew />} />
               <Route path="/employee/profile" element={<EmployeeProfile />} />
               <Route path="/employee/help" element={<EmployeeHelp />} />
