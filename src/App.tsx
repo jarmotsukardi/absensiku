@@ -8,6 +8,7 @@ import { HelmetProvider } from "react-helmet-async";
 import { PersistentNotificationDialog } from "@/components/common/PersistentNotificationDialog";
 import { ConfirmDialogProvider } from "@/components/common/ConfirmDialogProvider";
 import { AndroidBackButtonHandler } from "@/hooks/useAndroidBackButton";
+import { AndroidSessionSync } from "@/components/employee/AndroidSessionSync";
 
 const queryClient = new QueryClient();
 const Index = lazy(() => import("./pages/Index"));
@@ -50,6 +51,7 @@ const OrgOnboardingSetup = lazy(() => import("./pages/org/OrgOnboardingSetup"));
 const OrgOPDManagement = lazy(() => import("./pages/org/master/OrgOPDManagement"));
 const OrgEmployeeInvitations = lazy(() => import("./pages/org/OrgEmployeeInvitations"));
 const EmployeeLogin = lazy(() => import("./pages/employee/EmployeeLogin"));
+const EmployeeNativeBootstrap = lazy(() => import("./pages/employee/EmployeeNativeBootstrap"));
 const EmployeeDashboardNew = lazy(() => import("./pages/employee/EmployeeDashboardNew"));
 const EmployeeDashboardReadonly = lazy(() => import("./pages/dashboard/EmployeeDashboardReadonly"));
 const EmployeeProfile = lazy(() => import("./pages/employee/EmployeeProfile"));
@@ -128,6 +130,7 @@ const App = () => (
           <Sonner />
           <BrowserRouter>
             <AndroidBackButtonHandler />
+            <AndroidSessionSync />
             <Suspense fallback={<RouteLoadingFallback />}>
               <Routes>
               <Route path="/" element={<Index />} />
@@ -259,6 +262,7 @@ const App = () => (
               {/* Employee Routes */}
               <Route path="/employee" element={<Navigate to="/employee/login" replace />} />
               <Route path="/employee/login" element={<EmployeeLogin />} />
+              <Route path="/employee/native-bootstrap" element={<EmployeeNativeBootstrap />} />
               <Route path="/employee/dashboard" element={<EmployeeDashboardNew />} />
               <Route path="/employee/profile" element={<EmployeeProfile />} />
               <Route path="/employee/help" element={<EmployeeHelp />} />
