@@ -281,6 +281,7 @@ export default function OrgActiveEmployees() {
                 .select("id, email, status, is_used, expires_at, invitation_code, created_at")
                 .eq("tenant_id", tenantId)
                 .eq("invitation_type", "individual")
+                .is("archived_at", null)
                 .order("created_at", { ascending: false })
                 .limit(500),
               ORG_ACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS,

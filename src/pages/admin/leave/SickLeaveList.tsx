@@ -126,7 +126,7 @@ export default function SickLeaveList() {
           </div>
           <Button variant="outline" onClick={handleExport}>
             <Download className="mr-2 h-4 w-4" />
-            Export Excel
+            Ekspor Excel
           </Button>
         </div>
 

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type PropsWithChildren } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import {
   getAndroidBridge,
@@ -6,7 +6,7 @@ import {
   serializeSessionForAndroid,
 } from "@/lib/androidBridge";
 
-export function AndroidSessionSync() {
+export function AndroidSessionSync({ children }: PropsWithChildren) {
   useEffect(() => {
     const bridge = getAndroidBridge();
     if (!bridge) return;
@@ -56,5 +56,5 @@ export function AndroidSessionSync() {
     return () => subscription.unsubscribe();
   }, []);
 
-  return null;
+  return <>{children}</>;
 }

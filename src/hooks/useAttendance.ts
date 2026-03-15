@@ -27,6 +27,8 @@ import { loadScalabilityConfig } from "@/lib/scalabilityConfig";
 import { useAttendanceSync } from "./useAttendanceSync";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { buildAttendanceClientContext } from "@/lib/attendanceClientContext";
+import { reconcileTodayAttendance } from "@/lib/attendanceRecordSync";
+import { DEFAULT_TIMEZONE, getCurrentDateStringInTimezone } from "@/lib/timezone";
 
 type AttendanceRecord = Tables<"attendance_records">;
 type Office = Tables<"offices">;
@@ -152,7 +154,11 @@ function entryToOptimisticRecord(entry: AttendanceEntry): AttendanceRecord {
 
 // ==================== MAIN HOOK ====================
 
-export function useAttendance(employeeId: string | null, officeId: string | null) {
+export function useAttendance(
+  employeeId: string | null,
+  officeId: string | null,
+  timezone: string = DEFAULT_TIMEZONE
+) {
   const [todayAttendance, setTodayAttendance] = useState<AttendanceRecord | null>(null);
   const [monthlyStats, setMonthlyStats] = useState<AttendanceStats>({
     hadir: 0, terlambat: 0, pulang_cepat: 0, terlambat_pulang_cepat: 0,
@@ -166,10 +172,15 @@ export function useAttendance(employeeId: string | null, officeId: string | null
   });
 
   const abortRef = useRef<AbortController | null>(null);
-  const today = new Date().toISOString().split("T")[0];
+  const todayAttendanceRef = useRef<AttendanceRecord | null>(null);
+  const today = getCurrentDateStringInTimezone(timezone || DEFAULT_TIMEZONE);
 
   // Background sync hook (re-hydration, online detection, auto-sync)
-  const { syncStats, isOnline, wasOffline, triggerSync } = useAttendanceSync(employeeId);
+  const { syncStats, isOnline, wasOffline, triggerSync } = useAttendanceSync(employeeId, today, timezone);
+
+  useEffect(() => {
+    todayAttendanceRef.current = todayAttendance;
+  }, [todayAttendance]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -180,11 +191,14 @@ export function useAttendance(employeeId: string | null, officeId: string | null
   useEffect(() => {
     if (!employeeId) return;
     const loadCache = async () => {
-      const cached = await getCachedTodayRecord(employeeId);
-      if (cached) setTodayAttendance(cached);
+      const cached = await getCachedTodayRecord(employeeId, today);
+      if (cached) {
+        todayAttendanceRef.current = cached as AttendanceRecord;
+        setTodayAttendance(cached as AttendanceRecord);
+      }
     };
     loadCache();
-  }, [employeeId]);
+  }, [employeeId, today]);
 
   // ==================== FETCH ====================
   const fetchAttendance = useCallback(async () => {
@@ -201,8 +215,13 @@ export function useAttendance(employeeId: string | null, officeId: string | null
         .maybeSingle();
 
       if (!todayError) {
-        setTodayAttendance(todayData);
-        await cacheTodayRecord(employeeId, todayData);
+        const nextTodayAttendance = reconcileTodayAttendance(
+          todayData,
+          todayAttendanceRef.current
+        );
+        todayAttendanceRef.current = nextTodayAttendance;
+        setTodayAttendance(nextTodayAttendance);
+        await cacheTodayRecord(employeeId, nextTodayAttendance, today);
       }
 
       // Monthly stats via RPC
@@ -335,7 +354,7 @@ export function useAttendance(employeeId: string | null, officeId: string | null
       return { success: false, message: "Anda sudah melakukan absen masuk hari ini" };
     }
 
-    const existingBuffer = await hasCheckInToday(employeeId);
+    const existingBuffer = await hasCheckInToday(employeeId, today);
     if (existingBuffer && existingBuffer.syncStatus !== 'failed') {
       return { success: false, message: "Absen masuk sedang diproses" };
     }
@@ -373,7 +392,7 @@ export function useAttendance(employeeId: string | null, officeId: string | null
 
     const optimisticRecord = entryToOptimisticRecord(entry);
     setTodayAttendance(optimisticRecord);
-    await cacheTodayRecord(employeeId, optimisticRecord);
+    await cacheTodayRecord(employeeId, optimisticRecord, today);
 
     setPendingState({ status: 'buffered', type: 'check_in', message: 'Data absensi tersimpan di perangkat', syncStatus: 'pending' });
 
@@ -459,7 +478,7 @@ export function useAttendance(employeeId: string | null, officeId: string | null
         check_in_time: result.check_in_time || now.toISOString(),
       };
       setTodayAttendance(confirmedRecord);
-      await cacheTodayRecord(employeeId, confirmedRecord);
+      await cacheTodayRecord(employeeId, confirmedRecord, today);
 
       setPendingState({ status: 'success', type: 'check_in', message: result.message, syncStatus: 'synced' });
       setTimeout(() => setPendingState({ status: 'idle', type: null, message: '' }), 3000);
@@ -506,7 +525,7 @@ export function useAttendance(employeeId: string | null, officeId: string | null
     }
 
     if (todayAttendance.id.startsWith('idb-') || todayAttendance.id.startsWith('buffer-') || todayAttendance.id.startsWith('pending-')) {
-      const bufferCheckIn = await hasCheckInToday(employeeId);
+      const bufferCheckIn = await hasCheckInToday(employeeId, today);
       if (bufferCheckIn && bufferCheckIn.syncStatus !== 'synced') {
         return { success: false, message: "Absen masuk masih menunggu sinkronisasi" };
       }
@@ -516,7 +535,7 @@ export function useAttendance(employeeId: string | null, officeId: string | null
       return { success: false, message: "Anda sudah melakukan absen pulang hari ini" };
     }
 
-    const existingBuffer = await hasCheckOutToday(employeeId);
+    const existingBuffer = await hasCheckOutToday(employeeId, today);
     if (existingBuffer && existingBuffer.syncStatus !== 'failed') {
       return { success: false, message: "Absen pulang sedang diproses" };
     }
@@ -561,7 +580,7 @@ export function useAttendance(employeeId: string | null, officeId: string | null
       check_out_distance_meters: Math.round(distance),
     };
     setTodayAttendance(optimisticRecord);
-    await cacheTodayRecord(employeeId, optimisticRecord);
+    await cacheTodayRecord(employeeId, optimisticRecord, today);
 
     setPendingState({ status: 'buffered', type: 'check_out', message: 'Data tersimpan di perangkat', syncStatus: 'pending' });
 
@@ -623,7 +642,7 @@ export function useAttendance(employeeId: string | null, officeId: string | null
         });
         recordFailure();
         setTodayAttendance(previousRecord);
-        await cacheTodayRecord(employeeId, previousRecord);
+        await cacheTodayRecord(employeeId, previousRecord, today);
         setPendingState({ status: 'error', type: 'check_out', message: result.message, syncStatus: 'failed' });
         setTimeout(() => setPendingState({ status: 'idle', type: null, message: '' }), 5000);
         return { success: false, message: result.message };
@@ -646,7 +665,7 @@ export function useAttendance(employeeId: string | null, officeId: string | null
         status: (result.status as AttendanceRecord['status']) || todayAttendance.status,
       };
       setTodayAttendance(confirmedRecord);
-      await cacheTodayRecord(employeeId, confirmedRecord);
+      await cacheTodayRecord(employeeId, confirmedRecord, today);
 
       setPendingState({ status: 'success', type: 'check_out', message: result.message, syncStatus: 'synced' });
       setTimeout(() => setPendingState({ status: 'idle', type: null, message: '' }), 3000);

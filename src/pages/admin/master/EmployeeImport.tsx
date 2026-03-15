@@ -191,10 +191,10 @@ export default function EmployeeImport() {
     const exampleRow = [
       "1234567890123456",
       "199001012020011001",
-      "John Doe",
-      "john@example.com",
+      "Budi Santoso",
+      "budi@example.com",
       "081234567890",
-      "Staff",
+      "Staf",
       "DISKOMINFO"
     ];
 
@@ -411,7 +411,7 @@ export default function EmployeeImport() {
               is_active: true,
             }),
             ADMIN_EMPLOYEE_IMPORT_WRITE_TIMEOUT_MS,
-            "Import satu baris pegawai timeout."
+            "Impor satu baris pegawai timeout."
           );
 
           if (error) throw error;
@@ -427,7 +427,7 @@ export default function EmployeeImport() {
       }
 
       setImportResult({ success, failed });
-      toast.success(`Import selesai: ${success} berhasil, ${failed} gagal`);
+      toast.success(`Impor selesai: ${success} berhasil, ${failed} gagal`);
       
       // Reset form after successful import
       if (failed === 0) {
@@ -460,11 +460,11 @@ export default function EmployeeImport() {
   );
 
   return (
-    <SuperAdminLayout title="Import Pegawai" subtitle="Import data pegawai dari file CSV">
+    <SuperAdminLayout title="Impor Pegawai" subtitle="Impor data pegawai dari file CSV">
       <div className="space-y-6">
         {isRetrying && (
           <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
-            Sedang mencoba ulang memuat data import pegawai...
+            Sedang mencoba ulang memuat data impor pegawai...
           </div>
         )}
         {loadError && (
@@ -488,44 +488,44 @@ export default function EmployeeImport() {
         {/* Instructions */}
         <Alert>
           <Info className="h-4 w-4" />
-          <AlertTitle>Panduan Import</AlertTitle>
+          <AlertTitle>Panduan Impor</AlertTitle>
           <AlertDescription>
             <ol className="list-decimal list-inside mt-2 space-y-1 text-sm">
-              <li>Download template CSV dan isi dengan data pegawai</li>
-              <li>Pilih organisasi tujuan import</li>
+              <li>Unduh templat CSV dan isi dengan data pegawai</li>
+              <li>Pilih organisasi tujuan impor</li>
               <li>Pilih lokasi kerja valid (koordinat real) untuk mapping pegawai</li>
               <li>Upload file CSV yang sudah diisi</li>
-              <li>Periksa preview data dan pastikan tidak ada error</li>
-              <li>Klik tombol Import untuk memproses data</li>
+              <li>Periksa pratinjau data dan pastikan tidak ada error</li>
+              <li>Klik tombol Impor untuk memproses data</li>
             </ol>
           </AlertDescription>
         </Alert>
 
-        {/* Template Download */}
+        {/* Unduh Templat */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <FileSpreadsheet className="h-5 w-5" />
-              Template Import
+              Templat Impor
             </CardTitle>
             <CardDescription>
-              Download template dan isi dengan data pegawai yang akan diimport
+              Unduh templat dan isi dengan data pegawai yang akan diimpor
             </CardDescription>
           </CardHeader>
           <CardContent>
             <Button onClick={downloadTemplate} variant="outline">
               <Download className="h-4 w-4 mr-2" />
-              Download Template CSV
+              Unduh Templat CSV
             </Button>
           </CardContent>
         </Card>
 
-        {/* Upload Section */}
+        {/* Bagian Unggah */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Upload className="h-5 w-5" />
-              Upload File
+              Unggah File
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -595,7 +595,7 @@ export default function EmployeeImport() {
           </CardContent>
         </Card>
 
-        {/* Preview Section */}
+        {/* Bagian Pratinjau */}
         {isLoading ? (
           <Card>
             <CardContent className="py-10">
@@ -608,7 +608,7 @@ export default function EmployeeImport() {
         ) : previewData.length > 0 ? (
           <Card>
             <CardHeader>
-              <CardTitle>Preview Data</CardTitle>
+              <CardTitle>Pratinjau Data</CardTitle>
               <CardDescription className="flex items-center gap-4">
                 <span className="flex items-center gap-1">
                   <CheckCircle2 className="h-4 w-4 text-green-500" />
@@ -734,12 +734,12 @@ export default function EmployeeImport() {
                   {isImporting ? (
                     <>
                       <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Mengimport...
+                      Mengimpor...
                     </>
                   ) : (
                     <>
                       <Upload className="h-4 w-4 mr-2" />
-                      Import {validCount} Data Valid
+                      Impor {validCount} Data Valid
                     </>
                   )}
                 </Button>
@@ -748,11 +748,11 @@ export default function EmployeeImport() {
           </Card>
         ) : null}
 
-        {/* Import Result */}
+        {/* Hasil Impor */}
         {importResult && (
           <Alert variant={importResult.failed > 0 ? "destructive" : "default"}>
             <AlertCircle className="h-4 w-4" />
-            <AlertTitle>Hasil Import</AlertTitle>
+            <AlertTitle>Hasil Impor</AlertTitle>
             <AlertDescription>
               <p>Berhasil: {importResult.success} pegawai</p>
               {importResult.failed > 0 && <p>Gagal: {importResult.failed} pegawai</p>}

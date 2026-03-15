@@ -1,5 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { Json, Tables, TablesInsert } from "@/integrations/supabase/types";
+import { clearRpcUnavailableMark, isRpcMarkedUnavailable, isRpcMissingFunctionError, markRpcUnavailable } from "@/lib/rpcAvailability";
+import { buildEmployeeLoginPath, buildEmployeeLoginUrl } from "@/lib/employeeAuthRoutes";
 
 export type EmployeeInvitationRow = Pick<
   Tables<"employee_invitations">,
@@ -70,6 +72,7 @@ export async function findLatestIndividualInvitationByEmail(
     .select("id, email, status, is_used, expires_at, invitation_code, created_at")
     .eq("tenant_id", tenantId)
     .eq("invitation_type", "individual")
+    .is("archived_at", null)
     .ilike("email", normalizedEmail)
     .order("created_at", { ascending: false })
     .limit(1)
@@ -154,9 +157,9 @@ export async function ensureIndividualEmployeeInvitation(
 
 export function buildInvitationLink(invitationCode: string): string {
   if (typeof window === "undefined") {
-    return `/employee/login?invite=${invitationCode}`;
+    return buildEmployeeLoginPath(invitationCode);
   }
-  return `${window.location.origin}/employee/login?invite=${invitationCode}`;
+  return buildEmployeeLoginUrl(invitationCode);
 }
 
 export function deriveEmployeeInvitationDeliveryStatus(
@@ -175,6 +178,11 @@ export function deriveEmployeeInvitationDeliveryStatus(
 export async function logEmployeeInvitationFlowAudit(
   input: LogEmployeeInvitationFlowAuditInput
 ): Promise<string | null> {
+  const rpcName = "log_employee_invitation_flow_audit";
+  if (isRpcMarkedUnavailable(rpcName)) {
+    return null;
+  }
+
   const { data, error } = await supabase.rpc("log_employee_invitation_flow_audit", {
     p_tenant_id: input.tenantId,
     p_invitation_id: input.invitationId,
@@ -182,6 +190,13 @@ export async function logEmployeeInvitationFlowAudit(
     p_payload: (input.payload ?? {}) as Json,
   });
 
-  if (error) throw error;
+  if (error) {
+    if (isRpcMissingFunctionError(error)) {
+      markRpcUnavailable(rpcName, error.message);
+      return null;
+    }
+    throw error;
+  }
+  clearRpcUnavailableMark(rpcName);
   return data ?? null;
 }

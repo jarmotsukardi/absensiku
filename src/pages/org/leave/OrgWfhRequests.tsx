@@ -26,6 +26,7 @@ import type { Tables } from "@/integrations/supabase/types";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { logAuditIfEnabled } from "@/lib/auditLoggingPolicy";
 import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
@@ -164,12 +165,39 @@ export default function OrgWfhRequests() {
     if (!employee?.id) return;
     setIsSubmitting(true);
     try {
+      const targetRequest = requests.find((item) => item.id === id) || null;
       const { error } = await supabase
         .from("wfh_requests")
         .update({ status: "disetujui", approved_by: employee.id, approved_at: new Date().toISOString() })
         .eq("id", id);
 
       if (error) throw error;
+
+      if (tenantId && targetRequest) {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        await logAuditIfEnabled({
+          tenantId,
+          payload: {
+            tenant_id: tenantId,
+            employee_id: targetRequest.employee_id,
+            user_id: user?.id || null,
+            table_name: "wfh_requests",
+            action: "wfh_request_approved",
+            record_id: targetRequest.id,
+            old_values: {
+              status: targetRequest.status,
+              request_date: targetRequest.request_date,
+            },
+            new_values: {
+              status: "disetujui",
+              request_date: targetRequest.request_date,
+              approved_by: employee.id,
+            },
+          },
+        });
+      }
 
       toast.success("Pengajuan WFH disetujui");
       void fetchRequests();
@@ -185,12 +213,40 @@ export default function OrgWfhRequests() {
     if (!employee?.id || !selectedRequest) return;
     setIsSubmitting(true);
     try {
+      const targetRequest = requests.find((item) => item.id === selectedRequest) || null;
       const { error } = await supabase
         .from("wfh_requests")
         .update({ status: "ditolak", approved_by: employee.id, approved_at: new Date().toISOString(), rejection_reason: rejectionReason })
         .eq("id", selectedRequest);
 
       if (error) throw error;
+
+      if (tenantId && targetRequest) {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        await logAuditIfEnabled({
+          tenantId,
+          payload: {
+            tenant_id: tenantId,
+            employee_id: targetRequest.employee_id,
+            user_id: user?.id || null,
+            table_name: "wfh_requests",
+            action: "wfh_request_rejected",
+            record_id: targetRequest.id,
+            old_values: {
+              status: targetRequest.status,
+              request_date: targetRequest.request_date,
+            },
+            new_values: {
+              status: "ditolak",
+              request_date: targetRequest.request_date,
+              approved_by: employee.id,
+              rejection_reason: rejectionReason,
+            },
+          },
+        });
+      }
 
       toast.success("Pengajuan WFH ditolak");
       setRejectDialogOpen(false);

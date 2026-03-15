@@ -23,6 +23,7 @@ import {
   withExponentialBackoff,
   withTimeout,
 } from "@/lib/attendanceResilience";
+import { GlossaryPanel } from "@/components/common/GlossaryPanel";
 
 type AttendanceRecord = Tables<"attendance_records">;
 type Employee = Tables<"employees">;
@@ -126,7 +127,7 @@ export default function AttendanceReport() {
     link.click();
     document.body.removeChild(link);
     
-    toast.success("Laporan berhasil diexport");
+    toast.success("Laporan berhasil diekspor");
   };
 
   const getStatusBadge = (status: string | null) => {
@@ -174,13 +175,16 @@ export default function AttendanceReport() {
           <div>
             <h1 className="text-3xl font-bold tracking-tight">Laporan Absensi</h1>
             <p className="text-muted-foreground">
-              Lihat dan export laporan kehadiran pegawai
+              Lihat dan ekspor laporan kehadiran pegawai
             </p>
           </div>
           <Button onClick={handleExport} disabled={filteredRecords.length === 0}>
             <Download className="mr-2 h-4 w-4" />
-            Export Excel
+            Ekspor Excel
           </Button>
+        </div>
+        <div className="flex justify-end">
+          <GlossaryPanel defaultCategory="absensi" />
         </div>
 
         {loadError && (

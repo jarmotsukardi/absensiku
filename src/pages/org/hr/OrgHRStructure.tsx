@@ -7,6 +7,7 @@ import { Building2, MapPin, Network, FolderTree } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { useHrPageAccess } from "@/hooks/useHrPageAccess";
 import { toast } from "sonner";
 
 type NamedRow = {
@@ -21,6 +22,7 @@ export default function OrgHRStructure() {
   const [workUnitRows, setWorkUnitRows] = useState<NamedRow[]>([]);
   const [officeRows, setOfficeRows] = useState<NamedRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const { access, isLoading: isLoadingAccess } = useHrPageAccess("/org/hr/structure");
 
   const fetchData = useCallback(async () => {
     setIsLoading(true);
@@ -30,14 +32,14 @@ export default function OrgHRStructure() {
       const [opdRes, unitRes, officeRes] = await Promise.all([
         supabase.from("opd").select("id, name, code, is_active").eq("tenant_id", tenantId).order("name", { ascending: true }).limit(50),
         supabase.from("work_units").select("id, name, code, is_active").eq("tenant_id", tenantId).order("name", { ascending: true }).limit(50),
-        supabase.from("offices").select("id, name, code, is_active").eq("tenant_id", tenantId).order("name", { ascending: true }).limit(50),
+        supabase.from("offices").select("id, name, is_active").eq("tenant_id", tenantId).order("name", { ascending: true }).limit(50),
       ]);
       if (opdRes.error) throw opdRes.error;
       if (unitRes.error) throw unitRes.error;
       if (officeRes.error) throw officeRes.error;
       setOpdRows((opdRes.data || []) as NamedRow[]);
       setWorkUnitRows((unitRes.data || []) as NamedRow[]);
-      setOfficeRows((officeRes.data || []) as NamedRow[]);
+      setOfficeRows(((officeRes.data || []) as Array<Omit<NamedRow, "code">>).map((item) => ({ ...item, code: null })));
     } catch (error) {
       const ref = reportError(error, "org.hr.structure.fetch");
       toast.error(appendErrorReference("Gagal memuat struktur organisasi HR", ref));
@@ -66,10 +68,13 @@ export default function OrgHRStructure() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">HR Structure</Badge>
+          <Badge variant="outline">Organisasi</Badge>
           <h1 className="text-2xl font-semibold tracking-tight">Struktur Organisasi</h1>
           <p className="text-sm text-muted-foreground">
-            Kendalikan hierarki organisasi untuk kebutuhan HR.
+            Kelola struktur organisasi, satuan kerja, dan lokasi kerja untuk kebutuhan HR tenant.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Capability halaman: {isLoadingAccess ? "memverifikasi..." : access.canConfigure ? "admin dapat kelola struktur dan konfigurasi" : access.canEdit ? "admin dapat kelola struktur" : "monitoring hanya-baca"}
           </p>
         </div>
 

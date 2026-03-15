@@ -28,6 +28,7 @@ import {
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { logAuditIfEnabled } from "@/lib/auditLoggingPolicy";
 import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
@@ -61,6 +62,10 @@ interface MutationRequest {
   requested_changes: Record<string, Json | undefined>;
   original_data: Record<string, Json | undefined>;
   reason: string;
+  document_reference_number?: string | null;
+  document_reference_date?: string | null;
+  document_reference_issuer?: string | null;
+  document_reference_notes?: string | null;
   status: MutationStatus;
   rejection_reason: string | null;
   created_at: string;
@@ -124,40 +129,18 @@ export default function OrgMutationRequests() {
     try {
       setLoadError(null);
       setIsRetrying(false);
-      const { data: { user } } = await withTimeout(
-        supabase.auth.getUser(),
-        MUTATION_REQUEST_QUERY_TIMEOUT_MS,
-        "org.mutation_requests.fetch_employees.auth timeout",
-      );
-      if (!user) return;
+      if (!tenantId) {
+        setEmployees([]);
+        return;
+      }
       
-      const { data: emp } = await withExponentialBackoff(
-        () =>
-          withTimeout(
-            supabase
-              .from("employees")
-              .select("tenant_id")
-              .eq("user_id", user.id)
-              .single(),
-            MUTATION_REQUEST_QUERY_TIMEOUT_MS,
-            "org.mutation_requests.fetch_employees.context timeout",
-          ),
-        {
-          maxRetries: MUTATION_REQUEST_QUERY_RETRY_MAX,
-          shouldRetry: isRetryableError,
-          onRetry: () => setIsRetrying(true),
-        },
-      );
-      
-      if (!emp?.tenant_id) return;
-      
-      const { data } = await withExponentialBackoff(
+      const { data, error } = await withExponentialBackoff(
         () =>
           withTimeout(
             supabase
               .from("employees")
               .select("id, name, nip, opd:opd_id(id, name), work_unit:work_unit_id(id, name), offices:office_id(id, name), tenant_id, opd_id, work_unit_id, office_id")
-              .eq("tenant_id", emp.tenant_id)
+              .eq("tenant_id", tenantId)
               .eq("is_active", true)
               .order("name"),
             MUTATION_REQUEST_QUERY_TIMEOUT_MS,
@@ -169,6 +152,7 @@ export default function OrgMutationRequests() {
           onRetry: () => setIsRetrying(true),
         },
       );
+      if (error) throw error;
       
       setEmployees((data || []) as EmployeeOption[]);
     } catch (error: unknown) {
@@ -180,12 +164,13 @@ export default function OrgMutationRequests() {
     } finally {
       setIsRetrying(false);
     }
-  }, []);
+  }, [tenantId]);
   
   const handleOpenAddMutation = () => {
     setSelectedEmployeeId("");
     setSelectedEmployee(null);
     setShowAddMutationDialog(true);
+    void fetchEmployees();
   };
   
   const handleEmployeeSelect = (employeeId: string) => {
@@ -332,6 +317,9 @@ export default function OrgMutationRequests() {
   const handleApprove = async (request: MutationRequest) => {
     setIsProcessing(true);
     try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       // Update status pengajuan
       const { error: updateError } = await supabase
         .from("mutation_requests")
@@ -382,6 +370,42 @@ export default function OrgMutationRequests() {
         });
       }
 
+      if (tenantId) {
+        await logAuditIfEnabled({
+          tenantId,
+          payload: [
+            {
+              tenant_id: tenantId,
+              employee_id: request.employee_id,
+              user_id: user?.id || null,
+              table_name: "mutation_requests",
+              action: "mutation_request_approved",
+              record_id: request.id,
+              old_values: {
+                status: request.status,
+                mutation_type: request.mutation_type,
+                requested_changes: request.requested_changes,
+              },
+              new_values: {
+                status: "disetujui",
+                mutation_type: request.mutation_type,
+                requested_changes: request.requested_changes,
+              },
+            },
+            {
+              tenant_id: tenantId,
+              employee_id: request.employee_id,
+              user_id: user?.id || null,
+              table_name: "employees",
+              action: "employee_mutation_applied",
+              record_id: request.employee_id,
+              old_values: request.original_data,
+              new_values: updateData,
+            },
+          ],
+        });
+      }
+
       toast.success("Pengajuan mutasi disetujui");
       setShowDetailDialog(false);
       void fetchData();
@@ -402,6 +426,9 @@ export default function OrgMutationRequests() {
 
     setIsProcessing(true);
     try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       const { error } = await supabase
         .from("mutation_requests")
         .update({
@@ -429,6 +456,31 @@ export default function OrgMutationRequests() {
           type: "error",
           related_id: selectedRequest.id,
           related_type: "mutation_request",
+        });
+      }
+
+      if (tenantId) {
+        await logAuditIfEnabled({
+          tenantId,
+          payload: {
+            tenant_id: tenantId,
+            employee_id: selectedRequest.employee_id,
+            user_id: user?.id || null,
+            table_name: "mutation_requests",
+            action: "mutation_request_rejected",
+            record_id: selectedRequest.id,
+            old_values: {
+              status: selectedRequest.status,
+              mutation_type: selectedRequest.mutation_type,
+              requested_changes: selectedRequest.requested_changes,
+            },
+            new_values: {
+              status: "ditolak",
+              mutation_type: selectedRequest.mutation_type,
+              requested_changes: selectedRequest.requested_changes,
+              rejection_reason: rejectionReason,
+            },
+          },
         });
       }
 
@@ -491,7 +543,9 @@ export default function OrgMutationRequests() {
     (req) =>
       (req.employees?.name || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
       (req.employees?.nip || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
-      req.reason.toLowerCase().includes(searchTerm.toLowerCase())
+      req.reason.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (req.document_reference_number || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (req.document_reference_issuer || "").toLowerCase().includes(searchTerm.toLowerCase())
   );
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
@@ -590,7 +644,15 @@ export default function OrgMutationRequests() {
                         <TableCell>
                           <Badge variant="outline">{getMutationTypeLabel(request.mutation_type)}</Badge>
                         </TableCell>
-                        <TableCell className="max-w-[200px] truncate">{request.reason}</TableCell>
+                        <TableCell className="max-w-[240px]">
+                          <div className="truncate">{request.reason}</div>
+                          {request.document_reference_number ? (
+                            <div className="text-xs text-muted-foreground truncate">
+                              Ref: {request.document_reference_number}
+                              {request.document_reference_issuer ? ` • ${request.document_reference_issuer}` : ""}
+                            </div>
+                          ) : null}
+                        </TableCell>
                         <TableCell>
                           {format(new Date(request.created_at), "dd MMM yyyy", { locale: localeId })}
                         </TableCell>
@@ -685,6 +747,39 @@ export default function OrgMutationRequests() {
                   <span className="text-sm text-muted-foreground">Alasan</span>
                   <p className="mt-1">{selectedRequest.reason}</p>
                 </div>
+
+                {(selectedRequest.document_reference_number ||
+                  selectedRequest.document_reference_date ||
+                  selectedRequest.document_reference_issuer ||
+                  selectedRequest.document_reference_notes) && (
+                  <div className="border-t pt-4 space-y-2">
+                    <h4 className="font-medium">Referensi Dokumen</h4>
+                    {selectedRequest.document_reference_number ? (
+                      <p className="text-sm">
+                        <span className="text-muted-foreground">Nomor dokumen:</span>{" "}
+                        {selectedRequest.document_reference_number}
+                      </p>
+                    ) : null}
+                    {selectedRequest.document_reference_date ? (
+                      <p className="text-sm">
+                        <span className="text-muted-foreground">Tanggal dokumen:</span>{" "}
+                        {format(new Date(selectedRequest.document_reference_date), "dd MMM yyyy", { locale: localeId })}
+                      </p>
+                    ) : null}
+                    {selectedRequest.document_reference_issuer ? (
+                      <p className="text-sm">
+                        <span className="text-muted-foreground">Penerbit:</span>{" "}
+                        {selectedRequest.document_reference_issuer}
+                      </p>
+                    ) : null}
+                    {selectedRequest.document_reference_notes ? (
+                      <p className="text-sm">
+                        <span className="text-muted-foreground">Catatan referensi:</span>{" "}
+                        {selectedRequest.document_reference_notes}
+                      </p>
+                    ) : null}
+                  </div>
+                )}
 
                 <div className="border-t pt-4">
                   <h4 className="font-medium mb-3">Perubahan yang Diajukan</h4>
@@ -792,12 +887,26 @@ export default function OrgMutationRequests() {
                   searchPlaceholder="Ketik nama atau NIP..."
                   emptyMessage="Pegawai tidak ditemukan"
                 />
+                {employees.length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Data pegawai aktif belum tersedia. Pastikan tenant memiliki pegawai aktif lalu klik Coba Lagi.
+                  </p>
+                )}
               </div>
             </div>
             <DialogFooter className={dialogActionBarClassName}>
               <DialogActionHint>Pilih pegawai terlebih dahulu untuk melanjutkan proses mutasi.</DialogActionHint>
               <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
                 <Button variant="outline" className="w-full sm:w-auto bg-white" onClick={() => setShowAddMutationDialog(false)}>Batal</Button>
+                <Button
+                  variant="outline"
+                  className="w-full sm:w-auto bg-white"
+                  onClick={() => void fetchEmployees()}
+                  disabled={isRetrying}
+                >
+                  {isRetrying ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                  Coba Lagi
+                </Button>
                 <Button
                   className="w-full sm:w-auto"
                   disabled={!selectedEmployee}

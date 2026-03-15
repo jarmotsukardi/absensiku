@@ -1,12 +1,18 @@
-import { useEffect, useMemo, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgHRContextLink } from "@/components/org/hr/OrgHRContextLink";
+import { useLocation } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { supabase } from "@/integrations/supabase/client";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { useHrPageAccess } from "@/hooks/useHrPageAccess";
+import { getHrRoutePolicy } from "@/lib/hrRouteAccess";
+import { getHrRouteStatusBadgeLabel, getHrRouteStatusDescription } from "@/lib/hrRouteStatusPresentation";
+import { Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 type PriorityGroup = "lifecycle" | "attendance_policy" | "leave_policy" | "performance_training" | "ess";
@@ -29,7 +35,69 @@ type SummaryCounters = {
   leaveApproved: number;
 };
 
+type OperationalBlock = {
+  title: string;
+  description: string;
+  items: Array<{
+    label: string;
+    value: string;
+    note: string;
+  }>;
+};
+
+type SourceReferenceBlock = {
+  title: string;
+  description: string;
+  items: Array<{
+    label: string;
+    note: string;
+    href?: string;
+    hrefLabel?: string;
+  }>;
+};
+
+type ExecutionNoticeBlock = {
+  title: string;
+  description: string;
+  ctaLabel: string;
+  ctaPath: string;
+};
+
+type OperationalRouteBlock = {
+  title: string;
+  description: string;
+  items: Array<{
+    label: string;
+    path: string;
+    note: string;
+    metric?: string;
+    priorityLabel?: string;
+    emphasis?: "primary" | "secondary";
+  }>;
+};
+
+type DecisionGuideBlock = {
+  title: string;
+  description: string;
+  items: Array<{
+    condition: string;
+    actionLabel: string;
+    actionPath: string;
+    note: string;
+  }>;
+};
+
+type RecommendedAction = {
+  label: string;
+  note: string;
+  path: string;
+  urgency: "tinggi" | "sedang" | "rendah";
+  summary: string;
+};
+
 const CHECKLIST_STORAGE_KEY = "org_hr_priority_checklist_v1";
+const AUTO_REFRESH_STORAGE_KEY = "org_hr_priority_auto_refresh_v1";
+const AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
 const ROUTE_CONFIG: Record<string, PriorityConfig> = {
   "/org/hr/employee-status": {
@@ -45,7 +113,7 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
     links: [
       { label: "Data Karyawan", path: "/org/hr/employees" },
       { label: "Kontrak Kerja", path: "/org/hr/contracts" },
-      { label: "Riwayat Jabatan", path: "/org/hr/job-history" },
+      { label: "Data Pegawai", path: "/org/hr/employees" },
     ],
   },
   "/org/hr/job-history": {
@@ -65,7 +133,7 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
     ],
   },
   "/org/hr/onboarding": {
-    title: "Onboarding",
+    title: "Proses Masuk Pegawai",
     domain: "Manajemen Karyawan",
     group: "lifecycle",
     description: "Kelola pipeline onboarding pegawai baru dari kandidat hingga aktivasi.",
@@ -81,7 +149,7 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
     ],
   },
   "/org/hr/offboarding": {
-    title: "Offboarding",
+    title: "Proses Keluar Pegawai",
     domain: "Manajemen Karyawan",
     group: "lifecycle",
     description: "Kelola proses offboarding agar penonaktifan pegawai tetap terdokumentasi.",
@@ -91,9 +159,9 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
       "Dokumen akhir offboarding tersimpan",
     ],
     links: [
-      { label: "Status Kepegawaian", path: "/org/hr/employee-status" },
+      { label: "Data Pegawai", path: "/org/hr/employees" },
       { label: "Dokumen HR", path: "/org/hr/documents" },
-      { label: "Audit Aktivitas", path: "/org/hr/activity-log" },
+      { label: "Pengaturan HR", path: "/org/hr/settings" },
     ],
   },
   "/org/hr/work-hours": {
@@ -102,18 +170,18 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
     group: "attendance_policy",
     description: "Atur baseline jam kerja untuk perhitungan kehadiran dan keterlambatan.",
     checklist: [
-      "Template jam kerja tersedia sesuai unit",
+      "Templat jam kerja tersedia sesuai unit",
       "Aturan toleransi keterlambatan ditetapkan",
       "Sinkronisasi jam kerja ke dashboard kehadiran",
     ],
     links: [
-      { label: "Shift", path: "/org/hr/shifts" },
-      { label: "Analitik Kehadiran", path: "/org/hr/attendance-insights" },
-      { label: "Rekap Absensi", path: "/org/hr/attendance-recap" },
+      { label: "Pola Shift", path: "/org/hr/shifts" },
+      { label: "Laporan HR", path: "/org/hr/reports" },
+      { label: "Tiket HR", path: "/org/hr/help/tickets" },
     ],
   },
   "/org/hr/shifts": {
-    title: "Shift",
+    title: "Pola Shift",
     domain: "Absensi & Kehadiran",
     group: "attendance_policy",
     description: "Kelola pola shift agar distribusi jam kerja per tim konsisten.",
@@ -125,7 +193,7 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
     links: [
       { label: "Jam Kerja", path: "/org/hr/work-hours" },
       { label: "Pengaturan Keterlambatan", path: "/org/hr/late-settings" },
-      { label: "Rekap Absensi", path: "/org/hr/attendance-recap" },
+      { label: "Laporan HR", path: "/org/hr/reports" },
     ],
   },
   "/org/hr/late-settings": {
@@ -140,8 +208,8 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
     ],
     links: [
       { label: "Jam Kerja", path: "/org/hr/work-hours" },
-      { label: "Shift", path: "/org/hr/shifts" },
-      { label: "Analitik Kehadiran", path: "/org/hr/attendance-insights" },
+      { label: "Pola Shift", path: "/org/hr/shifts" },
+      { label: "Laporan HR", path: "/org/hr/reports" },
     ],
   },
   "/org/hr/attendance-integrations": {
@@ -155,8 +223,8 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
       "Log error integrasi termonitor",
     ],
     links: [
-      { label: "Analitik Kehadiran", path: "/org/hr/attendance-insights" },
-      { label: "Log Error HR", path: "/org/hr/help/error-logs" },
+      { label: "Laporan HR", path: "/org/hr/reports" },
+      { label: "FAQ HR", path: "/org/hr/help/faq" },
       { label: "Tiket HR", path: "/org/hr/help/tickets" },
     ],
   },
@@ -171,9 +239,9 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
       "Jenis cuti terhubung ke kuota",
     ],
     links: [
-      { label: "Kuota Cuti", path: "/org/hr/leave-quota" },
-      { label: "Alur Persetujuan", path: "/org/hr/leave-approval" },
-      { label: "Rekap Cuti", path: "/org/hr/leave-recap" },
+      { label: "Laporan HR", path: "/org/hr/reports" },
+      { label: "Pengaturan HR", path: "/org/hr/settings" },
+      { label: "Tiket HR", path: "/org/hr/help/tickets" },
     ],
   },
   "/org/hr/leave-quota": {
@@ -187,25 +255,41 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
       "Validasi pemotongan saldo otomatis",
     ],
     links: [
-      { label: "Jenis Cuti", path: "/org/hr/leave-types" },
-      { label: "Masa Berlaku", path: "/org/hr/leave-validity" },
-      { label: "Rekap Cuti", path: "/org/hr/leave-recap" },
+      { label: "Laporan HR", path: "/org/hr/reports" },
+      { label: "Pengaturan HR", path: "/org/hr/settings" },
+      { label: "Tiket HR", path: "/org/hr/help/tickets" },
     ],
   },
   "/org/hr/leave-approval": {
     title: "Alur Persetujuan Cuti",
     domain: "Cuti & Izin",
     group: "leave_policy",
-    description: "Atur approval flow cuti agar SLA persetujuan dapat dipantau.",
+    description: "Atur alur persetujuan cuti agar SLA persetujuan dapat dipantau.",
     checklist: [
-      "Hierarki approver terdefinisi",
+      "Hierarki penyetuju terdefinisi",
       "SLA persetujuan terukur",
-      "Eskalasi approval tersedia",
+      "Eskalasi persetujuan tersedia",
     ],
     links: [
-      { label: "Kuota Cuti", path: "/org/hr/leave-quota" },
-      { label: "Hierarki Persetujuan", path: "/org/hr/approval-hierarchy" },
-      { label: "Rekap Cuti", path: "/org/hr/leave-recap" },
+      { label: "Pengaturan HR", path: "/org/hr/settings" },
+      { label: "Laporan HR", path: "/org/hr/reports" },
+      { label: "Tiket HR", path: "/org/hr/help/tickets" },
+    ],
+  },
+  "/org/hr/mutation-approval": {
+    title: "Persetujuan Mutasi",
+    domain: "Manajemen Karyawan",
+    group: "lifecycle",
+    description: "Proses pengajuan mutasi dan perubahan data pegawai dari perspektif HR.",
+    checklist: [
+      "Usulan mutasi tervalidasi terhadap struktur dan jabatan aktif",
+      "Keputusan persetujuan atau penolakan terdokumentasi",
+      "Dampak mutasi ke lifecycle pegawai ditinjau",
+    ],
+    links: [
+      { label: "Riwayat Jabatan", path: "/org/hr/job-history" },
+      { label: "Struktur Organisasi", path: "/org/hr/structure" },
+      { label: "Proses Keluar Pegawai", path: "/org/hr/offboarding" },
     ],
   },
   "/org/hr/leave-validity": {
@@ -219,14 +303,14 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
       "Peringatan sebelum kuota hangus tersedia",
     ],
     links: [
-      { label: "Jenis Cuti", path: "/org/hr/leave-types" },
-      { label: "Kuota Cuti", path: "/org/hr/leave-quota" },
-      { label: "Notifikasi", path: "/org/hr/notifications" },
+      { label: "Laporan HR", path: "/org/hr/reports" },
+      { label: "Pengaturan HR", path: "/org/hr/settings" },
+      { label: "FAQ HR", path: "/org/hr/help/faq" },
     ],
   },
   "/org/hr/kpi": {
     title: "KPI",
-    domain: "Performance Management",
+    domain: "Manajemen Kinerja",
     group: "performance_training",
     description: "Konfigurasi KPI sebagai dasar evaluasi kinerja pegawai.",
     checklist: [
@@ -242,7 +326,7 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
   },
   "/org/hr/performance-periods": {
     title: "Periode Penilaian",
-    domain: "Performance Management",
+    domain: "Manajemen Kinerja",
     group: "performance_training",
     description: "Kelola periode evaluasi agar siklus penilaian berjalan tertib.",
     checklist: [
@@ -253,16 +337,16 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
     links: [
       { label: "KPI", path: "/org/hr/kpi" },
       { label: "Form Penilaian", path: "/org/hr/performance-forms" },
-      { label: "360 Review", path: "/org/hr/review-360" },
+      { label: "Ulasan 360", path: "/org/hr/review-360" },
     ],
   },
   "/org/hr/performance-forms": {
     title: "Form Penilaian",
-    domain: "Performance Management",
+    domain: "Manajemen Kinerja",
     group: "performance_training",
     description: "Bangun template form penilaian yang konsisten lintas tim.",
     checklist: [
-      "Template pertanyaan sesuai level jabatan",
+      "Templat pertanyaan sesuai level jabatan",
       "Skala penilaian konsisten",
       "Wajib isi/kondisional tervalidasi",
     ],
@@ -273,8 +357,8 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
     ],
   },
   "/org/hr/review-360": {
-    title: "360 Review",
-    domain: "Performance Management",
+    title: "Ulasan 360",
+    domain: "Manajemen Kinerja",
     group: "performance_training",
     description: "Konfigurasi evaluasi multi-penilai untuk memperkaya hasil performa.",
     checklist: [
@@ -290,7 +374,7 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
   },
   "/org/hr/evaluation-results": {
     title: "Hasil Evaluasi",
-    domain: "Performance Management",
+    domain: "Manajemen Kinerja",
     group: "performance_training",
     description: "Pantau hasil evaluasi untuk keputusan pengembangan SDM.",
     checklist: [
@@ -300,13 +384,13 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
     ],
     links: [
       { label: "KPI", path: "/org/hr/kpi" },
-      { label: "Data Training", path: "/org/hr/training-data" },
+      { label: "Data Pelatihan", path: "/org/hr/training-data" },
       { label: "Sertifikasi", path: "/org/hr/certifications" },
     ],
   },
   "/org/hr/training-data": {
-    title: "Data Training",
-    domain: "Training & Development",
+    title: "Data Pelatihan",
+    domain: "Pelatihan & Pengembangan",
     group: "performance_training",
     description: "Kelola program training internal untuk peningkatan kompetensi.",
     checklist: [
@@ -322,7 +406,7 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
   },
   "/org/hr/certifications": {
     title: "Sertifikasi",
-    domain: "Training & Development",
+    domain: "Pelatihan & Pengembangan",
     group: "performance_training",
     description: "Pantau kepemilikan dan masa berlaku sertifikasi pegawai.",
     checklist: [
@@ -331,14 +415,14 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
       "Kebutuhan perpanjangan termonitor",
     ],
     links: [
-      { label: "Data Training", path: "/org/hr/training-data" },
+      { label: "Data Pelatihan", path: "/org/hr/training-data" },
       { label: "Matriks Kompetensi", path: "/org/hr/skill-matrix" },
       { label: "Notifikasi", path: "/org/hr/notifications" },
     ],
   },
   "/org/hr/skill-matrix": {
     title: "Matriks Kompetensi",
-    domain: "Training & Development",
+    domain: "Pelatihan & Pengembangan",
     group: "performance_training",
     description: "Peta kompetensi tim untuk identifikasi gap keterampilan.",
     checklist: [
@@ -347,7 +431,7 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
       "Rencana pengembangan terhubung ke training",
     ],
     links: [
-      { label: "Data Training", path: "/org/hr/training-data" },
+      { label: "Data Pelatihan", path: "/org/hr/training-data" },
       { label: "Hasil Evaluasi", path: "/org/hr/evaluation-results" },
       { label: "Data Karyawan", path: "/org/hr/employees" },
     ],
@@ -359,11 +443,13 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
     description: "Portal pengajuan mandiri karyawan untuk kebutuhan HR harian.",
     checklist: [
       "Daftar pengajuan aktif tersedia",
-      "Status approval real-time",
+      "Status persetujuan real-time",
       "Riwayat pengajuan terdokumentasi",
     ],
     links: [
       { label: "Cuti & Izin Saya", path: "/org/hr/ess/leave-requests" },
+      { label: "WFH Pegawai", path: "/org/hr/ess/wfh-requests" },
+      { label: "Lembur Pegawai", path: "/org/hr/ess/overtime-requests" },
       { label: "Kehadiran Saya", path: "/org/hr/ess/attendance" },
       { label: "Profil Saya", path: "/org/hr/ess/profile" },
     ],
@@ -375,13 +461,61 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
     description: "Pengajuan cuti/izin mandiri pegawai dengan pelacakan status.",
     checklist: [
       "Pengajuan cuti/izin tersubmit dari ESS",
-      "Status approval terlihat jelas",
+      "Status persetujuan terlihat jelas",
       "Saldo cuti pribadi terupdate",
     ],
     links: [
       { label: "Pengajuan Saya", path: "/org/hr/ess/requests" },
       { label: "Jenis Cuti", path: "/org/hr/leave-types" },
       { label: "Kuota Cuti", path: "/org/hr/leave-quota" },
+    ],
+  },
+  "/org/hr/ess/wfh-requests": {
+    title: "WFH Pegawai",
+    domain: "ESS",
+    group: "ess",
+    description: "Persetujuan pengajuan kerja dari rumah dari kanal pegawai dalam konteks HR.",
+    checklist: [
+      "Request WFH yang menunggu terlihat",
+      "Keputusan persetujuan tercatat dengan jelas",
+      "Alasan dan tanggal pengajuan mudah ditinjau",
+    ],
+    links: [
+      { label: "Pengajuan Saya", path: "/org/hr/ess/requests" },
+      { label: "Jam Kerja", path: "/org/hr/work-hours" },
+      { label: "Analitik Kehadiran HR", path: "/org/hr/attendance-insights" },
+    ],
+  },
+  "/org/hr/ess/flexible-attendance": {
+    title: "Absensi Khusus",
+    domain: "ESS",
+    group: "ess",
+    description: "Persetujuan pengajuan absensi fleksibel atau non-standar dari pegawai.",
+    checklist: [
+      "Permohonan absensi khusus dapat ditinjau per alasan",
+      "Status persetujuan dan penolakan terlihat jelas",
+      "Kebijakan kehadiran tetap menjadi rujukan utama",
+    ],
+    links: [
+      { label: "Pengajuan Saya", path: "/org/hr/ess/requests" },
+      { label: "Jam Kerja", path: "/org/hr/work-hours" },
+      { label: "Pengaturan Keterlambatan", path: "/org/hr/late-settings" },
+    ],
+  },
+  "/org/hr/ess/overtime-requests": {
+    title: "Lembur Pegawai",
+    domain: "ESS",
+    group: "ess",
+    description: "Persetujuan pengajuan lembur pegawai dari kanal self-service.",
+    checklist: [
+      "Nomor pengajuan dan total jam lembur terlihat",
+      "Antrean persetujuan lembur dapat diproses dari HR",
+      "Riwayat lembur tenant tetap tercatat di engine yang sama",
+    ],
+    links: [
+      { label: "Pengajuan Saya", path: "/org/hr/ess/requests" },
+      { label: "Pengaturan Lembur", path: "/org/schedule/overtime" },
+      { label: "Laporan HR", path: "/org/hr/reports" },
     ],
   },
   "/org/hr/ess/attendance": {
@@ -397,7 +531,7 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
     links: [
       { label: "Pengajuan Saya", path: "/org/hr/ess/requests" },
       { label: "Jam Kerja", path: "/org/hr/work-hours" },
-      { label: "Analitik Kehadiran", path: "/org/hr/attendance-insights" },
+      { label: "Laporan HR", path: "/org/hr/reports" },
     ],
   },
   "/org/hr/ess/documents": {
@@ -413,7 +547,7 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
     links: [
       { label: "Pengajuan Saya", path: "/org/hr/ess/requests" },
       { label: "Dokumen HR", path: "/org/hr/documents" },
-      { label: "Digital Signature", path: "/org/hr/digital-signature" },
+      { label: "Pengaturan HR", path: "/org/hr/settings" },
     ],
   },
   "/org/hr/ess/profile": {
@@ -429,7 +563,7 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
     links: [
       { label: "Pengajuan Saya", path: "/org/hr/ess/requests" },
       { label: "Dokumen Saya", path: "/org/hr/ess/documents" },
-      { label: "Bantuan HR", path: "/org/hr/help/support" },
+      { label: "Tiket HR", path: "/org/hr/help/tickets" },
     ],
   },
 };
@@ -444,20 +578,424 @@ const initialSummaryCounters: SummaryCounters = {
 };
 
 function groupBadgeLabel(group: PriorityGroup): string {
-  if (group === "lifecycle") return "Prioritas 1 • Lifecycle";
+  if (group === "lifecycle") return "Prioritas 1 • Siklus Kerja Pegawai";
   if (group === "attendance_policy") return "Prioritas 2 • Kehadiran";
   if (group === "leave_policy") return "Prioritas 3 • Cuti";
-  if (group === "performance_training") return "Prioritas 4 • Performance & Training";
+  if (group === "performance_training") return "Prioritas 4 • Kinerja & Pelatihan";
   return "Prioritas 5 • ESS";
+}
+
+function buildOperationalBlock(pathname: string, summary: SummaryCounters): OperationalBlock | null {
+  if (pathname === "/org/hr/onboarding") {
+    const inactiveEmployees = Math.max(summary.employees - summary.activeEmployees, 0);
+    return {
+      title: "Status Kerja Minimum Onboarding",
+      description: "Halaman ini belum menjadi alur kerja final, tetapi sinyal operasionalnya sudah bisa dipantau dari undangan proses masuk, kandidat ATS, dan kesiapan aktivasi pegawai.",
+      items: [
+        {
+          label: "Undangan proses masuk",
+          value: `${summary.invitationsPending} menunggu`,
+          note: "Ambil dari pipeline `employee_invitations` yang belum dipakai.",
+        },
+        {
+          label: "Aktivasi pegawai",
+          value: `${summary.activeEmployees} aktif`,
+          note: "Pegawai aktif menjadi indikator hasil akhir onboarding yang sudah selesai.",
+        },
+        {
+          label: "Pegawai belum aktif",
+          value: `${inactiveEmployees}`,
+          note: "Perlu dipisahkan dari kasus offboarding agar follow-up onboarding tidak tercampur.",
+        },
+      ],
+    };
+  }
+
+  if (pathname === "/org/hr/offboarding") {
+    const inactiveEmployees = Math.max(summary.employees - summary.activeEmployees, 0);
+    return {
+      title: "Status Kerja Minimum Offboarding",
+      description: "Halaman ini belum menjadi alur kerja final, tetapi sinyal operasionalnya sudah bisa dipantau dari pegawai nonaktif, dokumen HR, dan kebutuhan penonaktifan akses.",
+      items: [
+        {
+          label: "Pegawai nonaktif",
+          value: `${inactiveEmployees}`,
+          note: "Menjadi backlog utama untuk penutupan lifecycle, arsip, dan tindak lanjut akses.",
+        },
+        {
+          label: "Pegawai aktif",
+          value: `${summary.activeEmployees}`,
+          note: "Menjadi pembanding agar kasus offboarding tidak tertukar dengan tenaga kerja aktif.",
+        },
+        {
+          label: "Dokumen akhir",
+          value: "diarsipkan lewat Dokumen HR",
+          note: "Belum ada area kerja final; gunakan dokumen HR dan data pegawai nonaktif sebagai kontrol minimum.",
+        },
+      ],
+    };
+  }
+
+  return null;
+}
+
+function buildSourceReferenceBlock(pathname: string): SourceReferenceBlock | null {
+  if (pathname === "/org/hr/onboarding") {
+    return {
+      title: "Sumber Data Saat Ini",
+      description: "Gunakan halaman ini untuk memantau transisi. Eksekusi operasional utama masih tersebar di halaman sumber data berikut.",
+      items: [
+        {
+          label: "employee_invitations",
+          note: "Menjadi sumber utama undangan proses masuk yang belum dipakai atau masih menunggu.",
+          href: "/org/invitations",
+          hrefLabel: "Buka Undangan Pegawai",
+        },
+        {
+          label: "Kandidat ATS",
+          note: "Konversi kandidat diterima ke proses masuk masih terjadi dari alur kandidat, bukan dari halaman proses masuk final.",
+          href: "/org/hr/recruitment/candidates",
+          hrefLabel: "Buka Kandidat ATS",
+        },
+        {
+          label: "employees",
+          note: "Aktivasi akhir tetap tercermin di data pegawai aktif setelah onboarding selesai.",
+          href: "/org/hr/employees",
+          hrefLabel: "Buka Data Pegawai",
+        },
+      ],
+    };
+  }
+
+  if (pathname === "/org/hr/offboarding") {
+    return {
+      title: "Sumber Data Saat Ini",
+      description: "Gunakan halaman ini untuk memantau transisi. Eksekusi operasional utama proses keluar masih harus merujuk ke data pegawai, arsip, dan kontrol akses yang terpisah.",
+      items: [
+        {
+          label: "employees.is_active = false",
+          note: "Pegawai nonaktif menjadi sinyal paling nyata bahwa kasus offboarding perlu ditindaklanjuti.",
+          href: "/org/employees/inactive",
+          hrefLabel: "Buka Pegawai Nonaktif",
+        },
+        {
+          label: "Dokumen HR",
+          note: "Dokumen akhir, surat terminasi, dan arsip manual masih dikendalikan dari repository dokumen HR.",
+          href: "/org/hr/documents",
+          hrefLabel: "Buka Dokumen HR",
+        },
+        {
+          label: "Pengaturan dan tiket HR",
+          note: "Kasus penonaktifan akses dan koordinasi lintas unit masih perlu dicatat dari pengaturan HR atau tiket HR.",
+          href: "/org/hr/help/tickets",
+          hrefLabel: "Buka Tiket HR",
+        },
+      ],
+    };
+  }
+
+  return null;
+}
+
+function buildExecutionNoticeBlock(pathname: string): ExecutionNoticeBlock | null {
+  if (pathname === "/org/hr/onboarding") {
+    return {
+      title: "Pemantauan Transisi, Bukan Pusat Eksekusi",
+      description:
+        "Gunakan halaman ini untuk membaca kesiapan proses masuk. Eksekusi utama tetap dilakukan dari undangan pegawai, kandidat ATS, dan tindak lanjut aktivasi di data pegawai.",
+      ctaLabel: "Buka Undangan Pegawai",
+      ctaPath: "/org/invitations",
+    };
+  }
+
+  if (pathname === "/org/hr/offboarding") {
+    return {
+      title: "Pemantauan Transisi, Bukan Pusat Eksekusi",
+      description:
+        "Gunakan halaman ini untuk membaca backlog proses keluar. Eksekusi utama tetap dilakukan dari pegawai nonaktif, arsip dokumen, dan koordinasi tindak lanjut akses.",
+      ctaLabel: "Buka Pegawai Nonaktif",
+      ctaPath: "/org/employees/inactive",
+    };
+  }
+
+  return null;
+}
+
+function buildOperationalRouteBlock(pathname: string, summary: SummaryCounters): OperationalRouteBlock | null {
+  if (pathname === "/org/hr/onboarding") {
+    const inactiveEmployees = Math.max(summary.employees - summary.activeEmployees, 0);
+    return {
+      title: "Halaman Operasional Utama",
+      description: "Gunakan halaman berikut untuk eksekusi kerja proses masuk yang nyata. Halaman HR ini hanya menjadi lapisan pemantauan transisi.",
+      items: [
+        {
+          label: "Undangan Pegawai",
+          path: "/org/invitations",
+          note: "Tempat utama menerbitkan, memantau, dan menindaklanjuti undangan onboarding.",
+          metric: `${summary.invitationsPending} menunggu`,
+          priorityLabel: "Buka lebih dulu",
+          emphasis: "primary",
+        },
+        {
+          label: "Kandidat ATS",
+          path: "/org/hr/recruitment/candidates",
+          note: "Gunakan saat konversi kandidat diterima ke proses masuk masih dilakukan dari alur rekrutmen.",
+          priorityLabel: "Rujukan kedua",
+          emphasis: "secondary",
+        },
+        {
+          label: "Data Pegawai",
+          path: "/org/hr/employees",
+          note: "Gunakan untuk verifikasi hasil akhir aktivasi dan follow-up pegawai yang sudah masuk sistem.",
+          metric: `${inactiveEmployees} belum aktif/transisi`,
+          priorityLabel: "Verifikasi hasil",
+          emphasis: "secondary",
+        },
+      ],
+    };
+  }
+
+  if (pathname === "/org/hr/offboarding") {
+    const inactiveEmployees = Math.max(summary.employees - summary.activeEmployees, 0);
+    return {
+      title: "Halaman Operasional Utama",
+      description: "Gunakan halaman berikut untuk eksekusi kerja proses keluar yang nyata. Halaman HR ini hanya menjadi lapisan pemantauan transisi.",
+      items: [
+        {
+          label: "Pegawai Nonaktif",
+          path: "/org/employees/inactive",
+          note: "Tempat utama membaca backlog penonaktifan pegawai dan memastikan kasus offboarding tidak tercecer.",
+          metric: `${inactiveEmployees} backlog`,
+          priorityLabel: "Buka lebih dulu",
+          emphasis: "primary",
+        },
+        {
+          label: "Dokumen HR",
+          path: "/org/hr/documents",
+          note: "Gunakan untuk arsip dokumen akhir, surat terminasi, dan jejak administrasi manual.",
+          priorityLabel: "Arsip administrasi",
+          emphasis: "secondary",
+        },
+        {
+          label: "Tiket HR",
+          path: "/org/hr/help/tickets",
+          note: "Gunakan untuk koordinasi lintas unit jika ada akses, aset, atau persetujuan yang belum tuntas.",
+          metric: `${summary.activeEmployees} pegawai aktif`,
+          priorityLabel: "Koordinasi lanjutan",
+          emphasis: "secondary",
+        },
+      ],
+    };
+  }
+
+  return null;
+}
+
+function buildDecisionGuideBlock(pathname: string, summary: SummaryCounters): DecisionGuideBlock | null {
+  if (pathname === "/org/hr/onboarding") {
+    const inactiveEmployees = Math.max(summary.employees - summary.activeEmployees, 0);
+    return {
+      title: "Panduan Keputusan Cepat",
+      description: "Gunakan panduan ini untuk menentukan rute eksekusi tanpa membaca seluruh halaman terlebih dahulu.",
+      items: [
+        {
+          condition: `Jika masih ada ${summary.invitationsPending} undangan menunggu atau calon pegawai belum menerima akses`,
+          actionLabel: "Buka Undangan Pegawai",
+          actionPath: "/org/invitations",
+          note: "Ini tetap menjadi titik kerja utama untuk follow-up onboarding awal.",
+        },
+        {
+          condition: "Jika kandidat hired belum dikonversi ke onboarding",
+          actionLabel: "Buka Kandidat ATS",
+          actionPath: "/org/hr/recruitment/candidates",
+          note: "Gunakan rute ini selama konversi onboarding masih bergantung pada flow ATS.",
+        },
+        {
+          condition: `Jika perlu mengecek hasil akhir aktivasi atau ${inactiveEmployees} pegawai masih transisi`,
+          actionLabel: "Buka Data Pegawai",
+          actionPath: "/org/hr/employees",
+          note: "Gunakan untuk verifikasi akhir bahwa pegawai benar-benar masuk ke sistem HR aktif.",
+        },
+      ],
+    };
+  }
+
+  if (pathname === "/org/hr/offboarding") {
+    const inactiveEmployees = Math.max(summary.employees - summary.activeEmployees, 0);
+    return {
+      title: "Panduan Keputusan Cepat",
+      description: "Gunakan panduan ini untuk menentukan rute eksekusi tanpa membaca seluruh halaman terlebih dahulu.",
+      items: [
+        {
+          condition: `Jika ada ${inactiveEmployees} backlog pegawai nonaktif yang perlu dipastikan tidak tercecer`,
+          actionLabel: "Buka Pegawai Nonaktif",
+          actionPath: "/org/employees/inactive",
+          note: "Ini tetap menjadi titik kerja utama untuk membaca backlog offboarding saat ini.",
+        },
+        {
+          condition: "Jika dokumen akhir, surat terminasi, atau arsip administrasi perlu dilengkapi",
+          actionLabel: "Buka Dokumen HR",
+          actionPath: "/org/hr/documents",
+          note: "Gunakan rute ini untuk kontrol administrasi akhir sebelum kasus dianggap selesai.",
+        },
+        {
+          condition: "Jika penutupan akses, aset, atau koordinasi lintas unit masih menggantung",
+          actionLabel: "Buka Tiket HR",
+          actionPath: "/org/hr/help/tickets",
+          note: "Gunakan tiket untuk memastikan tindak lanjut tidak hilang di luar halaman monitoring.",
+        },
+      ],
+    };
+  }
+
+  return null;
+}
+
+function buildRecommendedAction(pathname: string, summary: SummaryCounters): RecommendedAction | null {
+  if (pathname === "/org/hr/onboarding") {
+    const inactiveEmployees = Math.max(summary.employees - summary.activeEmployees, 0);
+    if (summary.invitationsPending > 0) {
+      return {
+        label: "Prioritaskan Undangan Pegawai",
+        note: `${summary.invitationsPending} undangan masih menunggu. Selesaikan ini lebih dulu sebelum mengejar verifikasi akhir proses masuk.`,
+        path: "/org/invitations",
+        urgency: "tinggi",
+        summary: "Fokus hari ini: masih ada undangan onboarding yang belum selesai.",
+      };
+    }
+    if (inactiveEmployees > 0) {
+      return {
+        label: "Verifikasi Data Pegawai",
+        note: `${inactiveEmployees} pegawai masih terlihat sebagai transisi/belum aktif. Pastikan hasil akhir aktivasi sudah benar.`,
+        path: "/org/hr/employees",
+        urgency: "sedang",
+        summary: "Fokus hari ini: verifikasi hasil aktivasi dan status transisi pegawai.",
+      };
+    }
+    return {
+      label: "Periksa Kandidat ATS",
+      note: "Tidak ada undangan menunggu yang menonjol. Pastikan tidak ada kandidat diterima yang belum dikonversi ke proses masuk.",
+      path: "/org/hr/recruitment/candidates",
+      urgency: "rendah",
+      summary: "Fokus hari ini: cek pipeline kandidat agar tidak ada proses masuk yang tertahan di ATS.",
+    };
+  }
+
+  if (pathname === "/org/hr/offboarding") {
+    const inactiveEmployees = Math.max(summary.employees - summary.activeEmployees, 0);
+    if (inactiveEmployees > 0) {
+      return {
+        label: "Prioritaskan Pegawai Nonaktif",
+        note: `${inactiveEmployees} backlog nonaktif perlu dipastikan tidak tercecer sebelum arsip dan koordinasi lanjutan ditutup.`,
+        path: "/org/employees/inactive",
+        urgency: "tinggi",
+        summary: "Fokus hari ini: backlog pegawai nonaktif masih perlu ditutup dengan rapi.",
+      };
+    }
+    return {
+      label: "Periksa Dokumen HR",
+      note: "Backlog nonaktif tidak menonjol. Pastikan arsip administrasi akhir dan dokumen terminasi tetap lengkap.",
+      path: "/org/hr/documents",
+      urgency: "rendah",
+      summary: "Fokus hari ini: pastikan arsip administrasi akhir tetap lengkap.",
+    };
+  }
+
+  return null;
+}
+
+function getUrgencyLabel(urgency: RecommendedAction["urgency"]): string {
+  if (urgency === "tinggi") return "Urgensi Tinggi";
+  if (urgency === "sedang") return "Urgensi Sedang";
+  return "Urgensi Rendah";
+}
+
+function getUrgencyCardClassName(urgency: RecommendedAction["urgency"]): string {
+  if (urgency === "tinggi") return "border-rose-300 bg-rose-50/70";
+  if (urgency === "sedang") return "border-amber-300 bg-amber-50/70";
+  return "border-emerald-300 bg-emerald-50/70";
+}
+
+function getSummaryFreshness(lastUpdatedAt: Date | null): {
+  label: string;
+  tone: "fresh" | "stale" | "unknown";
+} {
+  if (!lastUpdatedAt) {
+    return { label: "Belum dimuat", tone: "unknown" };
+  }
+
+  const diffMs = Date.now() - lastUpdatedAt.getTime();
+  if (diffMs >= 5 * 60 * 1000) {
+    return { label: "Perlu refresh", tone: "stale" };
+  }
+
+  return { label: "Masih segar", tone: "fresh" };
+}
+
+function getSummaryFreshnessBadgeClassName(tone: "fresh" | "stale" | "unknown"): string {
+  if (tone === "fresh") return "border-emerald-300 bg-emerald-50 text-emerald-700";
+  if (tone === "stale") return "border-amber-300 bg-amber-50 text-amber-700";
+  return "border-slate-300 bg-slate-50 text-slate-700";
+}
+
+function formatLastUpdatedRelative(lastUpdatedAt: Date | null): string {
+  if (!lastUpdatedAt) return "belum dimuat";
+
+  const diffMs = Date.now() - lastUpdatedAt.getTime();
+  const diffSeconds = Math.max(Math.floor(diffMs / 1000), 0);
+  if (diffSeconds < 15) return "baru saja";
+  if (diffSeconds < 60) return `${diffSeconds} detik lalu`;
+
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  if (diffMinutes < 60) return `${diffMinutes} menit lalu`;
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours} jam lalu`;
+
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays} hari lalu`;
+}
+
+function formatTimeUntilNextRefresh(nextAutoRefreshAt: Date | null): string {
+  if (!nextAutoRefreshAt) return "-";
+
+  const diffMs = nextAutoRefreshAt.getTime() - Date.now();
+  if (diffMs <= 0) return "sebentar lagi";
+
+  const diffSeconds = Math.floor(diffMs / 1000);
+  if (diffSeconds < 60) return `${diffSeconds} detik lagi`;
+
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  const remainingSeconds = diffSeconds % 60;
+  return `${diffMinutes}m ${remainingSeconds}s lagi`;
 }
 
 export default function OrgHRPriorityWorkspace() {
   const location = useLocation();
   const config = ROUTE_CONFIG[location.pathname];
+  const routePolicy = getHrRoutePolicy(location.pathname);
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [isLoadingSummary, setIsLoadingSummary] = useState(true);
   const [summary, setSummary] = useState<SummaryCounters>(initialSummaryCounters);
+  const [lastSummaryUpdatedAt, setLastSummaryUpdatedAt] = useState<Date | null>(null);
+  const [freshnessTick, setFreshnessTick] = useState(0);
+  const [isAutoRefreshEnabled, setIsAutoRefreshEnabled] = useState(false);
+  const [nextAutoRefreshAt, setNextAutoRefreshAt] = useState<Date | null>(null);
+  const [isPageVisible, setIsPageVisible] = useState(() => document.visibilityState === "visible");
+  const [lastRefreshErrorRef, setLastRefreshErrorRef] = useState<string | null>(null);
   const [checkedMap, setCheckedMap] = useState<Record<string, boolean>>({});
+  const { access, isLoading: isLoadingAccess } = useHrPageAccess(location.pathname);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      setIsPageVisible(document.visibilityState === "visible");
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
 
   useEffect(() => {
     if (!config) return;
@@ -467,6 +1005,16 @@ export default function OrgHRPriorityWorkspace() {
       setCheckedMap(raw ? (JSON.parse(raw) as Record<string, boolean>) : {});
     } catch {
       setCheckedMap({});
+    }
+  }, [config, location.pathname]);
+
+  useEffect(() => {
+    if (!config) return;
+    const key = `${AUTO_REFRESH_STORAGE_KEY}:${location.pathname}`;
+    try {
+      setIsAutoRefreshEnabled(localStorage.getItem(key) === "true");
+    } catch {
+      setIsAutoRefreshEnabled(false);
     }
   }, [config, location.pathname]);
 
@@ -480,17 +1028,24 @@ export default function OrgHRPriorityWorkspace() {
     }
   };
 
+  const persistAutoRefresh = (next: boolean) => {
+    const key = `${AUTO_REFRESH_STORAGE_KEY}:${location.pathname}`;
+    setIsAutoRefreshEnabled(next);
+    try {
+      localStorage.setItem(key, String(next));
+    } catch {
+      // Ignore storage failure.
+    }
+  };
+
   const checklistProgress = useMemo(() => {
     if (!config) return { done: 0, total: 0 };
     const done = config.checklist.filter((item) => checkedMap[item]).length;
     return { done, total: config.checklist.length };
   }, [checkedMap, config]);
 
-  useEffect(() => {
-    if (!config) return;
-    let cancelled = false;
-
-    const loadSummary = async () => {
+  const loadSummary = useCallback(
+    async (cancelledRef?: { current: boolean }) => {
       setIsLoadingSummary(true);
       try {
         const resolvedTenantId = tenantId || (await resolveOrgTenantId());
@@ -533,7 +1088,7 @@ export default function OrgHRPriorityWorkspace() {
           leaveApprovedRes.error;
         if (queryError) throw queryError;
 
-        if (cancelled) return;
+        if (cancelledRef?.current) return;
         setSummary({
           employees: employeesRes.count ?? 0,
           activeEmployees: activeEmployeesRes.count ?? 0,
@@ -542,33 +1097,88 @@ export default function OrgHRPriorityWorkspace() {
           leavePending: leavePendingRes.count ?? 0,
           leaveApproved: leaveApprovedRes.count ?? 0,
         });
+        const refreshedAt = new Date();
+        setLastSummaryUpdatedAt(refreshedAt);
+        setLastRefreshErrorRef(null);
+        if (isAutoRefreshEnabled) {
+          setNextAutoRefreshAt(new Date(refreshedAt.getTime() + AUTO_REFRESH_INTERVAL_MS));
+        } else {
+          setNextAutoRefreshAt(null);
+        }
       } catch (error) {
         const ref = reportError(error, "org.hr.priority_workspace.summary_fetch", {
           pathname: location.pathname,
         });
-        if (!cancelled) {
+        if (!cancelledRef?.current) {
+          setLastRefreshErrorRef(ref);
           toast.error(appendErrorReference("Gagal memuat ringkasan prioritas HR", ref));
-          setSummary(initialSummaryCounters);
+          if (isAutoRefreshEnabled && isPageVisible) {
+            setNextAutoRefreshAt(new Date(Date.now() + AUTO_REFRESH_INTERVAL_MS));
+          }
         }
       } finally {
-        if (!cancelled) setIsLoadingSummary(false);
+        if (!cancelledRef?.current) setIsLoadingSummary(false);
       }
-    };
+    },
+    [isAutoRefreshEnabled, isPageVisible, location.pathname, tenantId],
+  );
 
-    void loadSummary();
+  useEffect(() => {
+    if (!config) return;
+    const cancelledRef = { current: false };
+
+    void loadSummary(cancelledRef);
     return () => {
-      cancelled = true;
+      cancelledRef.current = true;
     };
-  }, [config, location.pathname, tenantId]);
+  }, [config, loadSummary]);
+
+  useEffect(() => {
+    if (!lastSummaryUpdatedAt) return;
+    const timer = window.setInterval(() => {
+      setFreshnessTick((value) => value + 1);
+    }, 30_000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [lastSummaryUpdatedAt]);
+
+  useEffect(() => {
+    if (!config || !isAutoRefreshEnabled || !isPageVisible) return;
+    setNextAutoRefreshAt(new Date(Date.now() + AUTO_REFRESH_INTERVAL_MS));
+    const timer = window.setInterval(() => {
+      void loadSummary();
+    }, AUTO_REFRESH_INTERVAL_MS);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [config, isAutoRefreshEnabled, isPageVisible, loadSummary]);
+
+  useEffect(() => {
+    if (isAutoRefreshEnabled) return;
+    setNextAutoRefreshAt(null);
+  }, [isAutoRefreshEnabled]);
+
+  useEffect(() => {
+    if (!isAutoRefreshEnabled) return;
+    if (isPageVisible) {
+      setNextAutoRefreshAt(new Date(Date.now() + AUTO_REFRESH_INTERVAL_MS));
+      if (lastSummaryUpdatedAt && Date.now() - lastSummaryUpdatedAt.getTime() >= AUTO_REFRESH_INTERVAL_MS) {
+        void loadSummary();
+      }
+      return;
+    }
+    setNextAutoRefreshAt(null);
+  }, [isAutoRefreshEnabled, isPageVisible, lastSummaryUpdatedAt, loadSummary]);
 
   if (!config) {
     return (
       <OrganizationLayout>
         <div className="space-y-2">
-          <Badge variant="outline">HR Prioritas</Badge>
-          <h1 className="text-2xl font-semibold tracking-tight">Halaman Prioritas Tidak Ditemukan</h1>
+          <Badge variant="outline">Transisi HR</Badge>
+          <h1 className="text-2xl font-semibold tracking-tight">Halaman Transisi Tidak Ditemukan</h1>
           <p className="text-sm text-muted-foreground">
-            Route ini belum masuk cakupan prioritas 1-5. Gunakan menu HR lain di sidebar.
+            Rute ini belum masuk cakupan transisi internal HR. Gunakan menu HR utama di sidebar.
           </p>
         </div>
       </OrganizationLayout>
@@ -576,63 +1186,390 @@ export default function OrgHRPriorityWorkspace() {
   }
 
   const summaryCards = (() => {
+    if (location.pathname === "/org/hr/onboarding") {
+      const inactiveEmployees = Math.max(summary.employees - summary.activeEmployees, 0);
+      return [
+        { label: "Undangan Menunggu", value: summary.invitationsPending, note: "Pipeline onboarding dari undangan aktif" },
+        { label: "Pegawai Aktif", value: summary.activeEmployees, note: "Hasil akhir aktivasi onboarding" },
+        { label: "Belum Aktif / Transisi", value: inactiveEmployees, note: "Butuh follow-up agar tidak menggantung" },
+      ];
+    }
+    if (location.pathname === "/org/hr/offboarding") {
+      const inactiveEmployees = Math.max(summary.employees - summary.activeEmployees, 0);
+      return [
+        { label: "Pegawai Nonaktif", value: inactiveEmployees, note: "Backlog utama offboarding" },
+        { label: "Pegawai Aktif", value: summary.activeEmployees, note: "Pembanding populasi aktif" },
+        { label: "Total Pegawai", value: summary.employees, note: "Cakupan lifecycle saat ini" },
+      ];
+    }
     if (config.group === "lifecycle") {
       return [
         { label: "Total Pegawai", value: summary.employees, note: "Data pegawai tenant" },
         { label: "Pegawai Aktif", value: summary.activeEmployees, note: "Status aktif saat ini" },
-        { label: "Undangan Pending", value: summary.invitationsPending, note: "Pipeline onboarding" },
+        { label: "Undangan Menunggu", value: summary.invitationsPending, note: "Pipeline onboarding" },
       ];
     }
     if (config.group === "attendance_policy") {
       return [
-        { label: "Template Jam Kerja", value: summary.workHours, note: "Baseline jam kerja" },
+        { label: "Templat Jam Kerja", value: summary.workHours, note: "Baseline jam kerja" },
         { label: "Pegawai Aktif", value: summary.activeEmployees, note: "Target kebijakan kehadiran" },
-        { label: "Cuti Pending", value: summary.leavePending, note: "Dampak ke jadwal kehadiran" },
+        { label: "Cuti Menunggu", value: summary.leavePending, note: "Dampak ke jadwal kehadiran" },
       ];
     }
     if (config.group === "leave_policy") {
       return [
-        { label: "Cuti Pending", value: summary.leavePending, note: "Menunggu approval" },
-        { label: "Cuti Disetujui", value: summary.leaveApproved, note: "Sudah selesai approval" },
+        { label: "Cuti Menunggu", value: summary.leavePending, note: "Menunggu persetujuan" },
+        { label: "Cuti Disetujui", value: summary.leaveApproved, note: "Sudah selesai persetujuan" },
         { label: "Pegawai Aktif", value: summary.activeEmployees, note: "Basis kuota cuti" },
       ];
     }
     if (config.group === "performance_training") {
       return [
         { label: "Pegawai Aktif", value: summary.activeEmployees, note: "Peserta evaluasi/training" },
-        { label: "Undangan Pending", value: summary.invitationsPending, note: "Kesiapan onboarding talent baru" },
+        { label: "Undangan Menunggu", value: summary.invitationsPending, note: "Kesiapan onboarding talent baru" },
         { label: "Cuti Disetujui", value: summary.leaveApproved, note: "Konteks beban tim" },
       ];
     }
     return [
       { label: "Pegawai Aktif", value: summary.activeEmployees, note: "Pengguna ESS aktif" },
-      { label: "Cuti Pending", value: summary.leavePending, note: "Permintaan ESS berjalan" },
-      { label: "Template Jam Kerja", value: summary.workHours, note: "Dasar kehadiran ESS" },
+      { label: "Cuti Menunggu", value: summary.leavePending, note: "Permintaan ESS berjalan" },
+      { label: "Templat Jam Kerja", value: summary.workHours, note: "Dasar kehadiran ESS" },
     ];
+  })();
+  const operationalBlock = buildOperationalBlock(location.pathname, summary);
+  const sourceReferenceBlock = buildSourceReferenceBlock(location.pathname);
+  const executionNoticeBlock = buildExecutionNoticeBlock(location.pathname);
+  const operationalRouteBlock = buildOperationalRouteBlock(location.pathname, summary);
+  const decisionGuideBlock = buildDecisionGuideBlock(location.pathname, summary);
+  const recommendedAction = buildRecommendedAction(location.pathname, summary);
+  const summaryFreshness = getSummaryFreshness(lastSummaryUpdatedAt);
+  const lastUpdatedRelative = formatLastUpdatedRelative(lastSummaryUpdatedAt);
+  const nextAutoRefreshRelative = formatTimeUntilNextRefresh(nextAutoRefreshAt);
+  const hasValidSummary = lastSummaryUpdatedAt !== null;
+  const canRenderSummaryValues = isLoadingSummary || hasValidSummary;
+  void freshnessTick;
+  const nextActions = (() => {
+    if (location.pathname === "/org/hr/onboarding") {
+      return [
+        "Gunakan kandidat ATS atau undangan pegawai untuk memastikan calon pegawai sudah punya jalur aktivasi yang jelas.",
+        "Pantau undangan menunggu dan selesaikan tindak lanjut sebelum pegawai dipindahkan ke backlog umum.",
+        "Gunakan tiket HR jika ada hambatan aktivasi akun, dokumen awal, atau koordinasi lintas tim.",
+      ];
+    }
+    if (location.pathname === "/org/hr/offboarding") {
+      return [
+        "Gunakan tab pegawai nonaktif sebagai backlog awal untuk memastikan kasus offboarding tidak tercecer.",
+        "Arsipkan dokumen akhir dan catat kebutuhan serah terima sebelum penutupan akses dianggap selesai.",
+        "Gunakan pengaturan HR dan tiket HR untuk kasus yang masih butuh kontrol akses atau koordinasi lintas unit.",
+      ];
+    }
+    return [];
   })();
 
   return (
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">{groupBadgeLabel(config.group)}</Badge>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="outline">{groupBadgeLabel(config.group)}</Badge>
+            <Badge variant="secondary">{getHrRouteStatusBadgeLabel(routePolicy.status)}</Badge>
+          </div>
           <h1 className="text-2xl font-semibold tracking-tight">{config.title}</h1>
-          <p className="text-sm text-muted-foreground">{config.description}</p>
+          <p className="text-sm text-muted-foreground">
+            {config.description} Halaman ini dipertahankan untuk pemetaan prioritas internal, bukan sebagai halaman produksi utama.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Kemampuan halaman: {isLoadingAccess ? "memverifikasi..." : access.canEdit ? "admin dapat kelola checklist transisi internal" : access.canView ? "pemantauan transisi baca saja" : "akses dibatasi"}
+          </p>
+          <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
+            <span>
+              Terakhir diperbarui:{" "}
+              {lastSummaryUpdatedAt
+                ? lastSummaryUpdatedAt.toLocaleTimeString("id-ID", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  })
+                : "belum dimuat"}
+            </span>
+            <span>({lastUpdatedRelative})</span>
+            <span
+              className={`inline-flex rounded-full border px-2 py-1 text-[11px] font-medium ${getSummaryFreshnessBadgeClassName(summaryFreshness.tone)}`}
+            >
+              {summaryFreshness.label}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8"
+              onClick={() => void loadSummary()}
+              disabled={isLoadingSummary}
+            >
+              {isLoadingSummary ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="mr-2 h-3.5 w-3.5" />}
+              Muat Ulang
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8"
+              onClick={() => persistAutoRefresh(!isAutoRefreshEnabled)}
+            >
+              {isAutoRefreshEnabled ? "Pembaruan otomatis aktif" : "Pembaruan otomatis mati"}
+            </Button>
+            {isAutoRefreshEnabled ? (
+              <span>
+                {isPageVisible ? `Muat ulang berikutnya: ${nextAutoRefreshRelative}` : "Pembaruan otomatis dijeda saat tab tidak aktif"}
+              </span>
+            ) : null}
+          </div>
+          {lastRefreshErrorRef ? (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-rose-700">
+              <span>
+                {hasValidSummary
+                  ? `Muat ulang terakhir gagal. Halaman masih menampilkan ringkasan terakhir yang berhasil dimuat. Ref: ${lastRefreshErrorRef}`
+                  : `Muat ulang terakhir gagal dan belum ada ringkasan valid yang berhasil dimuat. Ref: ${lastRefreshErrorRef}`}
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                onClick={() => void loadSummary()}
+                disabled={isLoadingSummary}
+              >
+                {isLoadingSummary ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-2 h-3 w-3" />}
+                Coba muat ulang lagi
+              </Button>
+            </div>
+          ) : null}
+          {hasValidSummary && summaryFreshness.tone === "stale" ? (
+            <div className="flex flex-wrap items-center gap-2 text-xs text-amber-700">
+              <span>Data monitoring sudah mulai usang. Muat ulang disarankan sebelum Anda membuka rute sumber untuk mengambil keputusan.</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                onClick={() => void loadSummary()}
+                disabled={isLoadingSummary}
+              >
+                {isLoadingSummary ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-2 h-3 w-3" />}
+                Muat ulang sekarang
+              </Button>
+            </div>
+          ) : null}
+          {hasValidSummary && recommendedAction ? (
+            <p className="text-xs text-muted-foreground">
+              {isLoadingSummary ? "Menyusun fokus tindakan harian..." : recommendedAction.summary}
+            </p>
+          ) : null}
+          {hasValidSummary && recommendedAction ? (
+            <div className={`rounded-md border p-3 text-sm ${getUrgencyCardClassName(recommendedAction.urgency)}`}>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-medium">{recommendedAction.label}</p>
+                <Badge variant="secondary">{getUrgencyLabel(recommendedAction.urgency)}</Badge>
+              </div>
+              <p className="mt-1 text-muted-foreground">{isLoadingSummary ? "Menyusun rekomendasi tindakan..." : recommendedAction.note}</p>
+              <OrgHRContextLink
+                to={recommendedAction.path}
+                className="mt-2 inline-flex text-sm font-medium text-primary underline-offset-4 hover:underline"
+              >
+                Buka rute yang direkomendasikan
+              </OrgHRContextLink>
+            </div>
+          ) : null}
+          {operationalRouteBlock ? (
+            <div className="flex flex-wrap gap-2 pt-2">
+              {operationalRouteBlock.items.map((item) => (
+                <OrgHRContextLink
+                  key={`quick-${item.path}`}
+                  to={item.path}
+                  className={`inline-flex rounded-md border px-3 py-2 text-sm font-medium transition-colors hover:bg-muted/40 ${
+                    item.emphasis === "primary" ? "border-primary/50 bg-primary/5" : ""
+                  }`}
+                >
+                  <span>{item.label}</span>
+                  {hasValidSummary && item.metric ? <span className="ml-2 text-xs text-muted-foreground">{item.metric}</span> : null}
+                </OrgHRContextLink>
+              ))}
+            </div>
+          ) : null}
         </div>
 
-        <section className="grid gap-3 md:grid-cols-3">
-          {summaryCards.map((item) => (
-            <Card key={item.label}>
-              <CardHeader className="pb-2">
-                <CardDescription>{item.label}</CardDescription>
-                <CardTitle className="text-2xl">{isLoadingSummary ? "..." : item.value}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-xs text-muted-foreground">{item.note}</p>
-              </CardContent>
-            </Card>
-          ))}
-        </section>
+        <Card className="border-dashed">
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">{getHrRouteStatusDescription(routePolicy.status)}</p>
+          </CardContent>
+        </Card>
+
+        {executionNoticeBlock ? (
+          <Card className="border-amber-300 bg-amber-50/60">
+            <CardHeader>
+              <CardTitle className="text-base">{executionNoticeBlock.title}</CardTitle>
+              <CardDescription className="text-foreground/80">{executionNoticeBlock.description}</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <OrgHRContextLink
+                to={executionNoticeBlock.ctaPath}
+                className="inline-flex rounded-md border border-amber-400 bg-background px-3 py-2 text-sm font-medium transition-colors hover:bg-amber-100"
+              >
+                {executionNoticeBlock.ctaLabel}
+              </OrgHRContextLink>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {!isLoadingSummary && !hasValidSummary ? (
+          <Card className="border-rose-300 bg-rose-50/40">
+            <CardHeader>
+              <CardTitle>Ringkasan Belum Tersedia</CardTitle>
+              <CardDescription>
+                Area kerja internal ini belum memiliki ringkasan valid yang berhasil dimuat. Gunakan muat ulang atau buka halaman sumber operasional
+                untuk verifikasi manual.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100"
+                onClick={() => void loadSummary()}
+                disabled={isLoadingSummary}
+              >
+                <RefreshCw className="mr-2 h-3.5 w-3.5" />
+                Coba muat ulang lagi
+              </Button>
+              {sourceReferenceBlock?.items
+                .filter((item) => item.href && item.hrefLabel)
+                .slice(0, 2)
+                .map((item) => (
+                  <OrgHRContextLink
+                    key={`fallback-source-${item.label}`}
+                    to={item.href!}
+                    className="inline-flex rounded-md border px-3 py-2 text-sm font-medium transition-colors hover:bg-muted/40"
+                  >
+                    {item.hrefLabel}
+                  </OrgHRContextLink>
+                ))}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {canRenderSummaryValues ? (
+          <section className="grid gap-3 md:grid-cols-3">
+            {summaryCards.map((item) => (
+              <Card key={item.label}>
+                <CardHeader className="pb-2">
+                  <CardDescription>{item.label}</CardDescription>
+                  <CardTitle className="text-2xl">{isLoadingSummary ? "..." : item.value}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-xs text-muted-foreground">{item.note}</p>
+                </CardContent>
+              </Card>
+            ))}
+          </section>
+        ) : null}
+
+        {canRenderSummaryValues && operationalBlock ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>{operationalBlock.title}</CardTitle>
+              <CardDescription>{operationalBlock.description}</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3 md:grid-cols-3">
+              {operationalBlock.items.map((item) => (
+                <div key={item.label} className="rounded-md border p-3">
+                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{item.label}</p>
+                  <p className="mt-2 text-lg font-semibold">{isLoadingSummary ? "..." : item.value}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{item.note}</p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {sourceReferenceBlock ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>{sourceReferenceBlock.title}</CardTitle>
+              <CardDescription>{sourceReferenceBlock.description}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {sourceReferenceBlock.items.map((item) => (
+                <div key={item.label} className="rounded-md border p-3">
+                  <p className="text-sm font-medium">{item.label}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{item.note}</p>
+                  {item.href && item.hrefLabel ? (
+                    <OrgHRContextLink
+                      to={item.href}
+                      className="mt-2 inline-flex text-sm font-medium text-primary underline-offset-4 hover:underline"
+                    >
+                      {item.hrefLabel}
+                    </OrgHRContextLink>
+                  ) : null}
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {operationalRouteBlock ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>{operationalRouteBlock.title}</CardTitle>
+              <CardDescription>{operationalRouteBlock.description}</CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3 md:grid-cols-3">
+              {operationalRouteBlock.items.map((item) => (
+                <OrgHRContextLink
+                  key={item.path}
+                  to={item.path}
+                  className={`rounded-md border p-4 transition-colors hover:bg-muted/40 ${
+                    item.emphasis === "primary" ? "border-primary/40 bg-primary/5" : ""
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">{item.label}</p>
+                      {item.priorityLabel ? (
+                        <p className="text-xs uppercase tracking-wide text-muted-foreground">{item.priorityLabel}</p>
+                      ) : null}
+                    </div>
+                    {hasValidSummary && item.metric ? <span className="text-xs text-muted-foreground">{item.metric}</span> : null}
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">{item.note}</p>
+                </OrgHRContextLink>
+              ))}
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {decisionGuideBlock ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>{decisionGuideBlock.title}</CardTitle>
+              <CardDescription>{decisionGuideBlock.description}</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {decisionGuideBlock.items.map((item) => (
+                <div key={`${item.actionPath}-${item.condition}`} className="rounded-md border p-4">
+                  <p className="text-sm font-medium">{item.condition}</p>
+                  <p className="mt-1 text-sm text-muted-foreground">{item.note}</p>
+                  <OrgHRContextLink
+                    to={item.actionPath}
+                    className="mt-3 inline-flex rounded-md border px-3 py-2 text-sm font-medium transition-colors hover:bg-muted/40"
+                  >
+                    {item.actionLabel}
+                  </OrgHRContextLink>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        ) : null}
 
         <Card>
           <CardHeader>
@@ -648,6 +1585,7 @@ export default function OrgHRPriorityWorkspace() {
                 <label key={item} className="flex items-start gap-3 rounded-md border p-3 text-sm">
                   <Checkbox
                     checked={checked}
+                    disabled={isLoadingAccess || !access.canEdit}
                     onCheckedChange={(value) => {
                       persistChecklist({
                         ...checkedMap,
@@ -662,6 +1600,25 @@ export default function OrgHRPriorityWorkspace() {
           </CardContent>
         </Card>
 
+        {nextActions.length > 0 ? (
+          <Card>
+            <CardHeader>
+              <CardTitle>Langkah Operasional Minimum</CardTitle>
+              <CardDescription>
+                Gunakan alur ini untuk menjaga halaman internal tetap berguna sampai alur kerja final tersedia.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {nextActions.map((item, index) => (
+                <div key={item} className="rounded-md border p-3 text-sm">
+                  <p className="font-medium">Langkah {index + 1}</p>
+                  <p className="mt-1 text-muted-foreground">{item}</p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        ) : null}
+
         <Card>
           <CardHeader>
             <CardTitle>Relasi Modul</CardTitle>
@@ -669,9 +1626,9 @@ export default function OrgHRPriorityWorkspace() {
           </CardHeader>
           <CardContent className="space-y-2">
             {config.links.map((item) => (
-              <div key={item.path} className="rounded-md border p-3 text-sm">
+              <OrgHRContextLink key={item.path} to={item.path} className="block rounded-md border p-3 text-sm transition-colors hover:bg-muted/40">
                 {item.label}
-              </div>
+              </OrgHRContextLink>
             ))}
           </CardContent>
         </Card>

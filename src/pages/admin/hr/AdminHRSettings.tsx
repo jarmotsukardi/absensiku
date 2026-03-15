@@ -36,6 +36,7 @@ import {
   type HrTicketPolicySettings,
   type HrTicketRole,
 } from "@/lib/hrTicketPolicySettings";
+import { getHrRoutePolicy } from "@/lib/hrRouteAccess";
 import { toast } from "sonner";
 
 type TenantRow = {
@@ -47,11 +48,25 @@ type TenantRow = {
 
 type TenantModuleState = Record<string, OrgWorkspaceModules>;
 type TenantTicketPolicyState = Record<string, HrTicketPolicySettings>;
+type HrCoverageLevel = "Penuh" | "Acuan Bawaan" | "Pemantauan";
 
 interface HrWorkspaceDefaults {
   hr_default_enabled: boolean;
   payroll_default_enabled: boolean;
 }
+
+const getCoverageStatusLabel = (orgPath: string): string => {
+  const policy = getHrRoutePolicy(orgPath);
+  if (policy.status === "redirect") return "Alias";
+  if (policy.status === "internal") return "Internal";
+  if (policy.status === "tunda") return "Tunda";
+  return "Aktif";
+};
+
+const getCoverageStatusVariant = (orgPath: string): "default" | "secondary" | "outline" => {
+  const policy = getHrRoutePolicy(orgPath);
+  return policy.status === "tampil" ? "secondary" : "outline";
+};
 
 const DEFAULTS_KEY = "hr_workspace_defaults_v1";
 const ALERT_DEFAULTS_KEY = "hr_error_alert_defaults_v1";
@@ -121,18 +136,37 @@ type HrCoverageItem = {
   subMenu: string;
   orgPath: string;
   adminPath: string;
-  coverage: "Penuh" | "Baseline" | "Monitoring";
+  coverage: HrCoverageLevel;
+};
+
+const getCoverageLevelLabel = (orgPath: string, coverage: HrCoverageLevel): string => {
+  const policy = getHrRoutePolicy(orgPath);
+  if (policy.status === "redirect") return "Jembatan";
+  if (policy.status === "internal") return "Internal";
+  if (policy.status === "tunda") return "Tunda";
+  return coverage;
+};
+
+const getCoverageLevelVariant = (
+  orgPath: string,
+  coverage: HrCoverageLevel
+): "default" | "secondary" | "outline" => {
+  const policy = getHrRoutePolicy(orgPath);
+  if (policy.status === "tampil") {
+    return coverage === "Penuh" ? "secondary" : "outline";
+  }
+  return "outline";
 };
 
 const HR_SETTINGS_COVERAGE: Array<{ domain: string; items: HrCoverageItem[] }> = [
   {
-    domain: "1. Ringkasan Platform",
+    domain: "1. Ringkasan Sistem",
     items: [
-      { menu: "Dashboard", subMenu: "Ringkasan Karyawan", orgPath: "/org/hr", adminPath: "/admin/hr", coverage: "Monitoring" },
-      { menu: "Dashboard", subMenu: "Statistik Kehadiran", orgPath: "/org/hr/attendance-insights", adminPath: "/admin/hr", coverage: "Monitoring" },
-      { menu: "Dashboard", subMenu: "Status Cuti", orgPath: "/org/hr/reports", adminPath: "/admin/hr", coverage: "Monitoring" },
-      { menu: "Dashboard", subMenu: "Notifikasi", orgPath: "/org/hr/dashboard-notifications", adminPath: "/admin/hr/settings#alert-defaults", coverage: "Baseline" },
-      { menu: "Dashboard", subMenu: "Aktivitas Terbaru", orgPath: "/org/hr/dashboard-activity", adminPath: "/admin/hr/audit", coverage: "Monitoring" },
+      { menu: "Ringkasan", subMenu: "Ringkasan Karyawan", orgPath: "/org/hr", adminPath: "/admin/hr", coverage: "Pemantauan" },
+      { menu: "Ringkasan", subMenu: "Statistik Kehadiran", orgPath: "/org/hr/attendance-insights", adminPath: "/admin/hr", coverage: "Pemantauan" },
+      { menu: "Ringkasan", subMenu: "Status Cuti", orgPath: "/org/hr/reports", adminPath: "/admin/hr", coverage: "Pemantauan" },
+      { menu: "Ringkasan", subMenu: "Notifikasi", orgPath: "/org/hr/dashboard-notifications", adminPath: "/admin/hr/settings#alert-defaults", coverage: "Acuan Bawaan" },
+      { menu: "Ringkasan", subMenu: "Aktivitas Terbaru", orgPath: "/org/hr/dashboard-activity", adminPath: "/admin/hr/audit", coverage: "Pemantauan" },
     ],
   },
   {
@@ -150,111 +184,111 @@ const HR_SETTINGS_COVERAGE: Array<{ domain: string; items: HrCoverageItem[] }> =
   {
     domain: "3. Manajemen Karyawan",
     items: [
-      { menu: "Manajemen Karyawan", subMenu: "Data Karyawan", orgPath: "/org/hr/employees", adminPath: "/admin/hr/tenants", coverage: "Monitoring" },
-      { menu: "Manajemen Karyawan", subMenu: "Kontrak Kerja", orgPath: "/org/hr/contracts", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Manajemen Karyawan", subMenu: "Status Kepegawaian", orgPath: "/org/hr/employee-status", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Manajemen Karyawan", subMenu: "Riwayat Jabatan", orgPath: "/org/hr/job-history", adminPath: "/admin/hr/audit", coverage: "Monitoring" },
-      { menu: "Manajemen Karyawan", subMenu: "Dokumen Karyawan", orgPath: "/org/hr/documents", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Manajemen Karyawan", subMenu: "Onboarding", orgPath: "/org/hr/onboarding", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Manajemen Karyawan", subMenu: "Offboarding", orgPath: "/org/hr/offboarding", adminPath: "/admin/hr/policies", coverage: "Baseline" },
+      { menu: "Manajemen Karyawan", subMenu: "Data Karyawan", orgPath: "/org/hr/employees", adminPath: "/admin/hr/tenants", coverage: "Pemantauan" },
+      { menu: "Manajemen Karyawan", subMenu: "Kontrak Kerja", orgPath: "/org/hr/contracts", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Manajemen Karyawan", subMenu: "Status Kepegawaian", orgPath: "/org/hr/employee-status", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Manajemen Karyawan", subMenu: "Riwayat Jabatan", orgPath: "/org/hr/job-history", adminPath: "/admin/hr/audit", coverage: "Pemantauan" },
+      { menu: "Manajemen Karyawan", subMenu: "Dokumen Karyawan", orgPath: "/org/hr/documents", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Manajemen Karyawan", subMenu: "Proses Masuk Pegawai", orgPath: "/org/hr/onboarding", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Manajemen Karyawan", subMenu: "Proses Keluar Pegawai", orgPath: "/org/hr/offboarding", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
     ],
   },
   {
     domain: "4. Manajemen Kehadiran",
     items: [
-      { menu: "Attendance", subMenu: "Jam Kerja", orgPath: "/org/hr/work-hours", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Attendance", subMenu: "Shift", orgPath: "/org/hr/shifts", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Attendance", subMenu: "Hari Libur Nasional", orgPath: "/org/hr/national-holidays", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Attendance", subMenu: "Pengaturan Keterlambatan", orgPath: "/org/hr/late-settings", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Attendance", subMenu: "Integrasi Absensi", orgPath: "/org/hr/attendance-integrations", adminPath: "/admin/hr/settings#workspace-tenant", coverage: "Penuh" },
-      { menu: "Attendance", subMenu: "Rekap Absensi", orgPath: "/org/hr/attendance-recap", adminPath: "/admin/hr", coverage: "Monitoring" },
+      { menu: "Kehadiran", subMenu: "Jam Kerja", orgPath: "/org/hr/work-hours", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Kehadiran", subMenu: "Pola Shift", orgPath: "/org/hr/shifts", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Kehadiran", subMenu: "Hari Libur Nasional", orgPath: "/org/hr/reports", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Kehadiran", subMenu: "Pengaturan Keterlambatan", orgPath: "/org/hr/late-settings", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Kehadiran", subMenu: "Integrasi Absensi", orgPath: "/org/hr/attendance-integrations", adminPath: "/admin/hr/settings#workspace-tenant", coverage: "Penuh" },
+      { menu: "Kehadiran", subMenu: "Rekap Absensi", orgPath: "/org/hr/attendance-recap", adminPath: "/admin/hr", coverage: "Pemantauan" },
     ],
   },
   {
     domain: "5. Cuti & Izin",
     items: [
-      { menu: "Leave", subMenu: "Jenis Cuti", orgPath: "/org/hr/leave-types", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Leave", subMenu: "Kuota Cuti", orgPath: "/org/hr/leave-quota", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Leave", subMenu: "Approval Flow", orgPath: "/org/hr/leave-approval", adminPath: "/admin/hr/settings#ticket-defaults", coverage: "Penuh" },
-      { menu: "Leave", subMenu: "Rekap Cuti", orgPath: "/org/hr/leave-recap", adminPath: "/admin/hr/audit", coverage: "Monitoring" },
-      { menu: "Leave", subMenu: "Pengaturan Masa Berlaku", orgPath: "/org/hr/leave-validity", adminPath: "/admin/hr/policies", coverage: "Baseline" },
+      { menu: "Cuti", subMenu: "Jenis Cuti", orgPath: "/org/hr/leave-types", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Cuti", subMenu: "Kuota Cuti", orgPath: "/org/hr/leave-quota", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Cuti", subMenu: "Alur Persetujuan", orgPath: "/org/hr/leave-approval", adminPath: "/admin/hr/settings#ticket-defaults", coverage: "Penuh" },
+      { menu: "Cuti", subMenu: "Rekap Cuti", orgPath: "/org/hr/leave-recap", adminPath: "/admin/hr/audit", coverage: "Pemantauan" },
+      { menu: "Cuti", subMenu: "Pengaturan Masa Berlaku", orgPath: "/org/hr/leave-validity", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
     ],
   },
   {
     domain: "6. Manajemen Kinerja",
     items: [
-      { menu: "Performance", subMenu: "KPI", orgPath: "/org/hr/kpi", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Performance", subMenu: "Periode Penilaian", orgPath: "/org/hr/performance-periods", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Performance", subMenu: "Form Penilaian", orgPath: "/org/hr/performance-forms", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Performance", subMenu: "360 Review", orgPath: "/org/hr/review-360", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Performance", subMenu: "Hasil Evaluasi", orgPath: "/org/hr/evaluation-results", adminPath: "/admin/hr/audit", coverage: "Monitoring" },
+      { menu: "Kinerja", subMenu: "KPI", orgPath: "/org/hr/kpi", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Kinerja", subMenu: "Periode Penilaian", orgPath: "/org/hr/performance-periods", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Kinerja", subMenu: "Form Penilaian", orgPath: "/org/hr/performance-forms", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Kinerja", subMenu: "Ulasan 360", orgPath: "/org/hr/review-360", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Kinerja", subMenu: "Hasil Evaluasi", orgPath: "/org/hr/evaluation-results", adminPath: "/admin/hr/audit", coverage: "Pemantauan" },
     ],
   },
   {
     domain: "7. Pelatihan & Pengembangan",
     items: [
-      { menu: "Training", subMenu: "Data Training", orgPath: "/org/hr/training-data", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Training", subMenu: "Sertifikasi", orgPath: "/org/hr/certifications", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Training", subMenu: "Skill Matrix", orgPath: "/org/hr/skill-matrix", adminPath: "/admin/hr/policies", coverage: "Baseline" },
+      { menu: "Pelatihan", subMenu: "Data Pelatihan", orgPath: "/org/hr/training-data", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Pelatihan", subMenu: "Sertifikasi", orgPath: "/org/hr/certifications", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Pelatihan", subMenu: "Matriks Keahlian", orgPath: "/org/hr/skill-matrix", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
     ],
   },
   {
     domain: "8. Dokumen & Legal",
     items: [
-      { menu: "Dokumen", subMenu: "Template Dokumen", orgPath: "/org/hr/document-templates", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Dokumen", subMenu: "Surat Peringatan", orgPath: "/org/hr/warning-letters", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Dokumen", subMenu: "Kontrak Template", orgPath: "/org/hr/contract-templates", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Dokumen", subMenu: "Digital Signature", orgPath: "/org/hr/digital-signature", adminPath: "/admin/hr/policies", coverage: "Baseline" },
+      { menu: "Dokumen", subMenu: "Templat Dokumen", orgPath: "/org/hr/document-templates", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Dokumen", subMenu: "Surat Peringatan", orgPath: "/org/hr/warning-letters", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Dokumen", subMenu: "Templat Kontrak", orgPath: "/org/hr/contract-templates", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Dokumen", subMenu: "Tanda Tangan Digital", orgPath: "/org/hr/digital-signature", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
     ],
   },
   {
     domain: "9. Manajemen Pengguna & Akses",
     items: [
-      { menu: "Pengguna & Akses", subMenu: "Manajemen Pengguna", orgPath: "/org/hr/users", adminPath: "/admin/hr/tenants", coverage: "Monitoring" },
+      { menu: "Pengguna & Akses", subMenu: "Manajemen Pengguna", orgPath: "/org/hr/users", adminPath: "/admin/hr/tenants", coverage: "Pemantauan" },
       { menu: "Pengguna & Akses", subMenu: "Manajemen Peran", orgPath: "/org/hr/roles", adminPath: "/admin/hr/settings#ticket-defaults", coverage: "Penuh" },
       { menu: "Pengguna & Akses", subMenu: "Pengaturan Izin", orgPath: "/org/hr/permissions", adminPath: "/admin/hr/settings#ticket-defaults", coverage: "Penuh" },
       { menu: "Pengguna & Akses", subMenu: "Hierarki Persetujuan", orgPath: "/org/hr/approval-hierarchy", adminPath: "/admin/hr/settings#ticket-defaults", coverage: "Penuh" },
-      { menu: "Pengguna & Akses", subMenu: "Log Audit", orgPath: "/org/hr/activity-log", adminPath: "/admin/hr/audit", coverage: "Monitoring" },
+      { menu: "Pengguna & Akses", subMenu: "Log Audit", orgPath: "/org/hr/activity-log", adminPath: "/admin/hr/audit", coverage: "Pemantauan" },
     ],
   },
   {
     domain: "10. Pengaturan Sistem",
     items: [
-      { menu: "Pengaturan Sistem", subMenu: "Pengaturan Workspace HR", orgPath: "/org/hr/settings", adminPath: "/admin/hr/settings#workspace-tenant", coverage: "Penuh" },
+      { menu: "Pengaturan Sistem", subMenu: "Pengaturan Area Kerja HR", orgPath: "/org/hr/settings", adminPath: "/admin/hr/settings#workspace-tenant", coverage: "Penuh" },
       { menu: "Pengaturan Sistem", subMenu: "Pengaturan Umum", orgPath: "/org/hr/general-settings", adminPath: "/admin/hr/settings#workspace-default", coverage: "Penuh" },
-      { menu: "Pengaturan Sistem", subMenu: "Branding", orgPath: "/org/hr/branding", adminPath: "/admin/hr/profile", coverage: "Baseline" },
+      { menu: "Pengaturan Sistem", subMenu: "Branding", orgPath: "/org/hr/branding", adminPath: "/admin/hr/profile", coverage: "Acuan Bawaan" },
       { menu: "Pengaturan Sistem", subMenu: "Email & Notifikasi", orgPath: "/org/hr/notifications", adminPath: "/admin/hr/settings#alert-defaults", coverage: "Penuh" },
-      { menu: "Pengaturan Sistem", subMenu: "Import / Export Data", orgPath: "/org/hr/import-export", adminPath: "/admin/hr/policies", coverage: "Baseline" },
-      { menu: "Pengaturan Sistem", subMenu: "Backup", orgPath: "/org/hr/backup", adminPath: "/admin/hr/policies", coverage: "Baseline" },
+      { menu: "Pengaturan Sistem", subMenu: "Impor / Ekspor Data", orgPath: "/org/hr/import-export", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
+      { menu: "Pengaturan Sistem", subMenu: "Backup", orgPath: "/org/hr/backup", adminPath: "/admin/hr/policies", coverage: "Acuan Bawaan" },
     ],
   },
   {
-    domain: "11. Helpdesk HR",
+    domain: "11. Bantuan HR",
     items: [
-      { menu: "Helpdesk", subMenu: "Ringkasan Bantuan", orgPath: "/org/hr/help", adminPath: "/admin/hr/help/support", coverage: "Monitoring" },
-      { menu: "Helpdesk", subMenu: "FAQ HR", orgPath: "/org/hr/help/faq", adminPath: "/admin/hr/help/faq", coverage: "Penuh" },
-      { menu: "Helpdesk", subMenu: "Bantuan HR", orgPath: "/org/hr/help/support", adminPath: "/admin/hr/help/support", coverage: "Penuh" },
-      { menu: "Helpdesk", subMenu: "Tiket HR", orgPath: "/org/hr/help/tickets", adminPath: "/admin/hr/help/tickets", coverage: "Penuh" },
-      { menu: "Helpdesk", subMenu: "Log Error HR", orgPath: "/org/hr/help/error-logs", adminPath: "/admin/hr/error-logs", coverage: "Monitoring" },
+      { menu: "Bantuan", subMenu: "Ringkasan Bantuan", orgPath: "/org/hr/help", adminPath: "/admin/hr/help/support", coverage: "Pemantauan" },
+      { menu: "Bantuan", subMenu: "FAQ HR", orgPath: "/org/hr/help/faq", adminPath: "/admin/hr/help/faq", coverage: "Penuh" },
+      { menu: "Bantuan", subMenu: "Bantuan HR", orgPath: "/org/hr/help/support", adminPath: "/admin/hr/help/support", coverage: "Penuh" },
+      { menu: "Bantuan", subMenu: "Tiket HR", orgPath: "/org/hr/help/tickets", adminPath: "/admin/hr/help/tickets", coverage: "Penuh" },
+      { menu: "Bantuan", subMenu: "Log Error HR", orgPath: "/org/hr/help/error-logs", adminPath: "/admin/hr/error-logs", coverage: "Pemantauan" },
     ],
   },
   {
     domain: "12. Rekrutmen (ATS)",
     items: [
-      { menu: "Rekrutmen", subMenu: "Lowongan Kerja", orgPath: "/org/hr/recruitment/jobs", adminPath: "/admin/hr/sections/rekrutmen-ats", coverage: "Baseline" },
-      { menu: "Rekrutmen", subMenu: "Kandidat", orgPath: "/org/hr/recruitment/candidates", adminPath: "/admin/hr/sections/rekrutmen-ats", coverage: "Baseline" },
-      { menu: "Rekrutmen", subMenu: "Tahap Interview", orgPath: "/org/hr/recruitment/interviews", adminPath: "/admin/hr/sections/rekrutmen-ats", coverage: "Baseline" },
-      { menu: "Rekrutmen", subMenu: "Penawaran Kerja", orgPath: "/org/hr/recruitment/offers", adminPath: "/admin/hr/sections/rekrutmen-ats", coverage: "Baseline" },
+      { menu: "Rekrutmen", subMenu: "Lowongan Kerja", orgPath: "/org/hr/recruitment/jobs", adminPath: "/admin/hr/sections/rekrutmen-ats", coverage: "Acuan Bawaan" },
+      { menu: "Rekrutmen", subMenu: "Kandidat", orgPath: "/org/hr/recruitment/candidates", adminPath: "/admin/hr/sections/rekrutmen-ats", coverage: "Acuan Bawaan" },
+      { menu: "Rekrutmen", subMenu: "Tahap Interview", orgPath: "/org/hr/recruitment/interviews", adminPath: "/admin/hr/sections/rekrutmen-ats", coverage: "Acuan Bawaan" },
+      { menu: "Rekrutmen", subMenu: "Penawaran Kerja", orgPath: "/org/hr/recruitment/offers", adminPath: "/admin/hr/sections/rekrutmen-ats", coverage: "Acuan Bawaan" },
     ],
   },
   {
     domain: "13. Layanan Mandiri Karyawan (ESS)",
     items: [
-      { menu: "ESS", subMenu: "Pengajuan Saya", orgPath: "/org/hr/ess/requests", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Monitoring" },
-      { menu: "ESS", subMenu: "Cuti dan Izin Saya", orgPath: "/org/hr/ess/leave-requests", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Monitoring" },
-      { menu: "ESS", subMenu: "Kehadiran Saya", orgPath: "/org/hr/ess/attendance", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Monitoring" },
-      { menu: "ESS", subMenu: "Dokumen Saya", orgPath: "/org/hr/ess/documents", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Monitoring" },
-      { menu: "ESS", subMenu: "Profil Saya", orgPath: "/org/hr/ess/profile", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Monitoring" },
+      { menu: "ESS", subMenu: "Pengajuan Saya", orgPath: "/org/hr/ess/requests", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Pemantauan" },
+      { menu: "ESS", subMenu: "Cuti dan Izin Saya", orgPath: "/org/hr/ess/leave-requests", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Pemantauan" },
+      { menu: "ESS", subMenu: "Kehadiran Saya", orgPath: "/org/hr/ess/attendance", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Pemantauan" },
+      { menu: "ESS", subMenu: "Dokumen Saya", orgPath: "/org/hr/ess/documents", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Pemantauan" },
+      { menu: "ESS", subMenu: "Profil Saya", orgPath: "/org/hr/ess/profile", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Pemantauan" },
     ],
   },
 ];
@@ -378,7 +412,7 @@ export default function AdminHRSettings() {
         setTicketDefaultsUpdatedAt(ticketDefaultsRow?.updated_at ?? null);
       } catch (error) {
         const ref = reportError(error, "admin.hr.settings.load");
-        toast.error(appendErrorReference("Gagal memuat pengaturan workspace HR lintas tenant", ref));
+        toast.error(appendErrorReference("Gagal memuat pengaturan area kerja HR lintas tenant", ref));
       } finally {
         setIsLoading(false);
       }
@@ -508,7 +542,7 @@ export default function AdminHRSettings() {
     try {
       await saveTenantHrErrorAlertSettings(tenantId, payload);
       setSavedTenantAlertSettings((prev) => ({ ...prev, [tenantId]: payload }));
-      toast.success("Alert tenant berhasil disimpan.");
+      toast.success("Peringatan tenant berhasil disimpan.");
     } catch (error) {
       const ref = reportError(error, "admin.hr.settings.save_tenant_alert", { tenant_id: tenantId });
       toast.error(appendErrorReference("Gagal menyimpan alert tenant", ref));
@@ -523,10 +557,10 @@ export default function AdminHRSettings() {
     try {
       await saveTenantHrTicketPolicySettings(tenantId, payload);
       setSavedTenantTicketPolicies((prev) => ({ ...prev, [tenantId]: payload }));
-      toast.success("Policy tiket tenant berhasil disimpan.");
+      toast.success("Kebijakan tiket tenant berhasil disimpan.");
     } catch (error) {
       const ref = reportError(error, "admin.hr.settings.save_tenant_ticket_policy", { tenant_id: tenantId });
-      toast.error(appendErrorReference("Gagal menyimpan policy tiket tenant", ref));
+      toast.error(appendErrorReference("Gagal menyimpan kebijakan tiket tenant", ref));
     } finally {
       setIsSavingPolicyTenantId(null);
     }
@@ -543,17 +577,17 @@ export default function AdminHRSettings() {
         {
           key: DEFAULTS_KEY,
           value: defaultSettings,
-          description: "Default aktivasi workspace HR/Payroll untuk tenant baru.",
+          description: "Aktivasi bawaan area kerja HR/Payroll untuk tenant baru.",
           updated_by: user?.id ?? null,
         },
         { onConflict: "key" },
       );
       if (error) throw error;
       setDefaultsUpdatedAt(new Date().toISOString());
-      toast.success("Default global workspace berhasil disimpan.");
+      toast.success("Area kerja bawaan global berhasil disimpan.");
     } catch (error) {
       const ref = reportError(error, "admin.hr.settings.save_defaults");
-      toast.error(appendErrorReference("Gagal menyimpan default global workspace", ref));
+      toast.error(appendErrorReference("Gagal menyimpan area kerja bawaan global", ref));
     } finally {
       setIsSavingDefaults(false);
     }
@@ -578,17 +612,17 @@ export default function AdminHRSettings() {
         {
           key: ALERT_DEFAULTS_KEY,
           value,
-          description: "Baseline alert realtime error kritis HR lintas tenant.",
+          description: "Acuan bawaan alert realtime error kritis HR lintas tenant.",
           updated_by: user?.id ?? null,
         },
         { onConflict: "key" },
       );
       if (error) throw error;
       setAlertDefaultsUpdatedAt(new Date().toISOString());
-      toast.success("Default alert HR berhasil disimpan.");
+      toast.success("Peringatan bawaan HR berhasil disimpan.");
     } catch (error) {
       const ref = reportError(error, "admin.hr.settings.save_alert_defaults");
-      toast.error(appendErrorReference("Gagal menyimpan default alert HR", ref));
+      toast.error(appendErrorReference("Gagal menyimpan alert bawaan HR", ref));
     } finally {
       setIsSavingAlertDefaults(false);
     }
@@ -605,17 +639,17 @@ export default function AdminHRSettings() {
         {
           key: HR_TICKET_POLICY_DEFAULTS_KEY,
           value,
-          description: "Baseline SLA dan role matrix untuk tiket HR lintas tenant.",
+          description: "Acuan bawaan SLA dan matriks peran untuk tiket HR lintas tenant.",
           updated_by: user?.id ?? null,
         },
         { onConflict: "key" },
       );
       if (error) throw error;
       setTicketDefaultsUpdatedAt(new Date().toISOString());
-      toast.success("Baseline policy tiket HR berhasil disimpan.");
+      toast.success("Acuan bawaan kebijakan tiket HR berhasil disimpan.");
     } catch (error) {
       const ref = reportError(error, "admin.hr.settings.save_ticket_defaults");
-      toast.error(appendErrorReference("Gagal menyimpan baseline policy tiket HR", ref));
+      toast.error(appendErrorReference("Gagal menyimpan acuan bawaan kebijakan tiket HR", ref));
     } finally {
       setIsSavingTicketDefaults(false);
     }
@@ -646,7 +680,7 @@ export default function AdminHRSettings() {
       .map((tenant) => tenant.id)
       .filter((tenantId) => selectedTenantIds.has(tenantId));
     if (selected.length === 0) {
-      toast.info("Pilih minimal satu tenant untuk apply baseline alert.");
+      toast.info("Pilih minimal satu tenant untuk menerapkan alert bawaan.");
       return;
     }
 
@@ -662,12 +696,12 @@ export default function AdminHRSettings() {
         for (const tenantId of selected) next[tenantId] = alertDefaults;
         return next;
       });
-      toast.success(`Baseline alert diterapkan ke ${selected.length} tenant.`);
+      toast.success(`Alert bawaan diterapkan ke ${selected.length} tenant.`);
     } catch (error) {
       const ref = reportError(error, "admin.hr.settings.apply_alert_baseline_bulk", {
         tenant_count: selected.length,
       });
-      toast.error(appendErrorReference("Gagal menerapkan baseline alert ke tenant terpilih", ref));
+      toast.error(appendErrorReference("Gagal menerapkan alert bawaan ke tenant terpilih", ref));
     }
   };
 
@@ -676,7 +710,7 @@ export default function AdminHRSettings() {
       .map((tenant) => tenant.id)
       .filter((tenantId) => selectedTenantIds.has(tenantId));
     if (selected.length === 0) {
-      toast.info("Pilih minimal satu tenant untuk apply baseline policy tiket.");
+      toast.info("Pilih minimal satu tenant untuk menerapkan kebijakan tiket bawaan.");
       return;
     }
     try {
@@ -691,12 +725,12 @@ export default function AdminHRSettings() {
         for (const tenantId of selected) next[tenantId] = ticketDefaults;
         return next;
       });
-      toast.success(`Baseline policy tiket diterapkan ke ${selected.length} tenant.`);
+      toast.success(`Kebijakan tiket bawaan diterapkan ke ${selected.length} tenant.`);
     } catch (error) {
       const ref = reportError(error, "admin.hr.settings.apply_ticket_policy_baseline_bulk", {
         tenant_count: selected.length,
       });
-      toast.error(appendErrorReference("Gagal menerapkan baseline policy tiket ke tenant terpilih", ref));
+      toast.error(appendErrorReference("Gagal menerapkan kebijakan tiket bawaan ke tenant terpilih", ref));
     }
   };
 
@@ -705,9 +739,9 @@ export default function AdminHRSettings() {
 
   return (
     <AdminHRPageShell
-      title="Pengaturan HR"
-      subtitle="Konfigurasi modul HR global"
-      description="Control tower superadmin untuk mengatur aktivasi workspace HR/Payroll lintas tenant."
+      title="Pengaturan"
+      subtitle="Konfigurasi global modul HR"
+      description="Pusat kontrol super admin untuk mengatur aktivasi area kerja HR/Payroll lintas tenant."
     >
       <div className="space-y-6">
         <Card id="coverage-map">
@@ -715,9 +749,11 @@ export default function AdminHRSettings() {
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline">Cakupan /org/hr</Badge>
             </div>
-            <CardTitle>Matriks Pengaturan HR Org ke Admin</CardTitle>
+            <CardTitle>Matriks Pengaturan Org ke Admin</CardTitle>
             <CardDescription>
-              Pemetaan menu dan sub menu `/org/hr` ke titik kontrol superadmin `/admin/hr`.
+              Pemetaan menu dan sub menu `/org/hr` ke titik kontrol super admin `/admin/hr`. Kolom peran admin hanya
+              dibaca penuh untuk rute yang sudah aktif; rute alias, internal, dan tunda diturunkan otomatis agar tidak
+              overclaim.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -729,9 +765,10 @@ export default function AdminHRSettings() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Sub Menu /org/hr</TableHead>
-                        <TableHead>Route Org</TableHead>
+                        <TableHead>Rute Org</TableHead>
                         <TableHead>Kontrol Admin</TableHead>
-                        <TableHead>Coverage</TableHead>
+                        <TableHead>Status Rute</TableHead>
+                        <TableHead>Peran Admin</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -745,8 +782,13 @@ export default function AdminHRSettings() {
                             </Button>
                           </TableCell>
                           <TableCell>
-                            <Badge variant={item.coverage === "Penuh" ? "secondary" : "outline"}>
-                              {item.coverage}
+                            <Badge variant={getCoverageStatusVariant(item.orgPath)}>
+                              {getCoverageStatusLabel(item.orgPath)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={getCoverageLevelVariant(item.orgPath, item.coverage)}>
+                              {getCoverageLevelLabel(item.orgPath, item.coverage)}
                             </Badge>
                           </TableCell>
                         </TableRow>
@@ -762,22 +804,22 @@ export default function AdminHRSettings() {
         <Card id="workspace-default">
           <CardHeader>
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline">Default Global</Badge>
+              <Badge variant="outline">Bawaan Global</Badge>
               {defaultsUpdatedAt ? (
                 <Badge variant="secondary">Update terakhir {formatDateTime(defaultsUpdatedAt)}</Badge>
               ) : null}
             </div>
-            <CardTitle>Default Workspace Tenant Baru</CardTitle>
+            <CardTitle>Area Kerja Bawaan Tenant Baru</CardTitle>
             <CardDescription>
-              Nilai ini menjadi baseline ketika tenant belum memiliki pengaturan `org_workspace_modules_v1`.
+              Nilai ini menjadi acuan bawaan ketika tenant belum memiliki pengaturan `org_workspace_modules_v1`.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-3 md:grid-cols-2">
               <div className="flex items-center justify-between rounded-lg border p-4">
                 <div>
-                  <p className="font-medium">HR default aktif</p>
-                  <p className="text-xs text-muted-foreground">Mengaktifkan menu `/org/hr` secara default.</p>
+                  <p className="font-medium">HR bawaan aktif</p>
+                  <p className="text-xs text-muted-foreground">Mengaktifkan menu `/org/hr` secara bawaan.</p>
                 </div>
                 <Switch
                   checked={defaultSettings.hr_default_enabled}
@@ -788,8 +830,8 @@ export default function AdminHRSettings() {
               </div>
               <div className="flex items-center justify-between rounded-lg border p-4">
                 <div>
-                  <p className="font-medium">Payroll default aktif</p>
-                  <p className="text-xs text-muted-foreground">Mengaktifkan menu `/org/payroll` secara default.</p>
+                  <p className="font-medium">Payroll bawaan aktif</p>
+                  <p className="text-xs text-muted-foreground">Mengaktifkan menu `/org/payroll` secara bawaan.</p>
                 </div>
                 <Switch
                   checked={defaultSettings.payroll_default_enabled}
@@ -801,15 +843,15 @@ export default function AdminHRSettings() {
             </div>
             <Button onClick={saveDefaults} disabled={isSavingDefaults || isLoading}>
               <Save className="mr-2 h-4 w-4" />
-              Simpan Default Global
+              Simpan Bawaan Global
             </Button>
           </CardContent>
         </Card>
 
         <Card id="workspace-tenant">
           <CardHeader>
-            <CardTitle>Workspace per Tenant</CardTitle>
-            <CardDescription>Aktif/nonaktifkan workspace HR dan Payroll per tenant organisasi.</CardDescription>
+            <CardTitle>Area Kerja per Tenant</CardTitle>
+            <CardDescription>Aktif/nonaktifkan area kerja HR dan Payroll per tenant organisasi.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-3 md:grid-cols-4">
@@ -843,8 +885,8 @@ export default function AdminHRSettings() {
                   <TableRow>
                     <TableHead>Tenant</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead>Workspace HR</TableHead>
-                    <TableHead>Workspace Payroll</TableHead>
+                    <TableHead>Area Kerja HR</TableHead>
+                    <TableHead>Area Kerja Payroll</TableHead>
                     <TableHead className="text-right">Aksi</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -914,14 +956,14 @@ export default function AdminHRSettings() {
         <Card id="alert-defaults">
           <CardHeader>
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline">HR Alert Settings</Badge>
+              <Badge variant="outline">Pengaturan Peringatan HR</Badge>
               {alertDefaultsUpdatedAt ? (
                 <Badge variant="secondary">Update terakhir {formatDateTime(alertDefaultsUpdatedAt)}</Badge>
               ) : null}
             </div>
-            <CardTitle>Baseline Alert Realtime HR</CardTitle>
+            <CardTitle>Acuan Bawaan Peringatan Realtime HR</CardTitle>
             <CardDescription>
-              Atur baseline alert HR, lalu apply ke tenant terpilih. Tidak ada auto-refresh.
+              Atur alert bawaan HR, lalu terapkan ke tenant terpilih. Tidak ada muat ulang otomatis.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -988,10 +1030,10 @@ export default function AdminHRSettings() {
             <div className="flex flex-wrap gap-2">
               <Button onClick={saveAlertDefaults} disabled={isSavingAlertDefaults || isLoading}>
                 <Save className="mr-2 h-4 w-4" />
-                Simpan Baseline Alert
+                Simpan Acuan Bawaan Peringatan
               </Button>
               <Button variant="outline" onClick={() => void applyAlertBaselineToSelected()} disabled={isLoading}>
-                Apply Baseline ke Tenant Terpilih
+                Terapkan Acuan Bawaan ke Tenant Terpilih
               </Button>
             </div>
           </CardContent>
@@ -1000,20 +1042,20 @@ export default function AdminHRSettings() {
         <Card id="ticket-defaults">
           <CardHeader>
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline">Ticket SLA & Role Matrix</Badge>
+              <Badge variant="outline">SLA Tiket & Matriks Peran</Badge>
               {ticketDefaultsUpdatedAt ? (
                 <Badge variant="secondary">Update terakhir {formatDateTime(ticketDefaultsUpdatedAt)}</Badge>
               ) : null}
             </div>
-            <CardTitle>Baseline Policy Tiket HR</CardTitle>
+            <CardTitle>Acuan Bawaan Kebijakan Tiket HR</CardTitle>
             <CardDescription>
-              Atur SLA default dan role matrix tiket HR untuk fallback ketika tenant belum punya override.
+              Atur SLA bawaan dan matriks peran tiket HR sebagai cadangan ketika tenant belum punya override.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-3 md:grid-cols-3">
               <div className="space-y-2">
-                <Label htmlFor="ticket-default-sla-hours">Default SLA (jam)</Label>
+                <Label htmlFor="ticket-default-sla-hours">SLA Bawaan (jam)</Label>
                 <Input
                   id="ticket-default-sla-hours"
                   type="number"
@@ -1054,10 +1096,10 @@ export default function AdminHRSettings() {
             <div className="flex flex-wrap gap-2">
               <Button onClick={saveTicketDefaults} disabled={isSavingTicketDefaults || isLoading}>
                 <Save className="mr-2 h-4 w-4" />
-                Simpan Baseline Policy Tiket
+                Simpan Acuan Bawaan Kebijakan Tiket
               </Button>
               <Button variant="outline" onClick={() => void applyTicketPolicyBaselineToSelected()} disabled={isLoading}>
-                Apply Policy ke Tenant Terpilih
+                Terapkan Kebijakan ke Tenant Terpilih
               </Button>
             </div>
           </CardContent>
@@ -1065,7 +1107,7 @@ export default function AdminHRSettings() {
 
         <Card id="alert-override">
           <CardHeader>
-            <CardTitle>Override Alert per Tenant</CardTitle>
+            <CardTitle>Override Peringatan per Tenant</CardTitle>
             <CardDescription>Kelola pengaturan alert realtime HR pada tenant tertentu.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -1081,7 +1123,7 @@ export default function AdminHRSettings() {
                       />
                     </TableHead>
                     <TableHead>Tenant</TableHead>
-                    <TableHead>Alert Aktif</TableHead>
+                    <TableHead>Peringatan Aktif</TableHead>
                     <TableHead>Webhook</TableHead>
                     <TableHead>Slack</TableHead>
                     <TableHead>WhatsApp</TableHead>
@@ -1186,8 +1228,8 @@ export default function AdminHRSettings() {
 
         <Card id="ticket-override">
           <CardHeader>
-            <CardTitle>Override Policy Tiket per Tenant</CardTitle>
-            <CardDescription>Atur SLA default dan role matrix tiket HR untuk tenant tertentu.</CardDescription>
+            <CardTitle>Override Kebijakan Tiket per Tenant</CardTitle>
+            <CardDescription>Atur SLA bawaan dan matriks peran tiket HR untuk tenant tertentu.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="rounded-md border overflow-x-auto">
@@ -1195,8 +1237,8 @@ export default function AdminHRSettings() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Tenant</TableHead>
-                    <TableHead>Default SLA (jam)</TableHead>
-                    <TableHead>Role Matrix</TableHead>
+                    <TableHead>SLA Bawaan (jam)</TableHead>
+                    <TableHead>Matriks Peran</TableHead>
                     <TableHead className="text-right">Aksi</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -1204,7 +1246,7 @@ export default function AdminHRSettings() {
                   {isLoading ? (
                     <TableRow>
                       <TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">
-                        Memuat policy tiket tenant...
+                        Memuat kebijakan tiket tenant...
                       </TableCell>
                     </TableRow>
                   ) : filteredTenants.length === 0 ? (

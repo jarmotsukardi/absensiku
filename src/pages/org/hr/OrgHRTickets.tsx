@@ -16,6 +16,7 @@ import type { Database } from "@/integrations/supabase/types";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { sanitizeOrKeyword } from "@/lib/postgrestSearch";
+import { useHrPageAccess } from "@/hooks/useHrPageAccess";
 import {
   DEFAULT_HR_TICKET_POLICY_SETTINGS,
   HR_TICKET_POLICY_DEFAULTS_KEY,
@@ -37,6 +38,7 @@ type TicketMeta = {
   subject?: string;
   category?: Category;
   priority?: Priority;
+  source?: "org_hr_ticket" | "org_help_ticket";
   reference?: string;
   assignee_name?: string;
   due_date?: string;
@@ -153,13 +155,17 @@ const buildLegacyThreadMaps = (tickets: TicketRow[]) => {
   return { commentsByTicketId, auditsByTicketId };
 };
 
+const isHrTicket = (ticket: TicketRow) => {
+  const meta = parseMeta(ticket.browser_info);
+  return meta.source !== "org_help_ticket";
+};
+
 export default function OrgHRTickets() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [rows, setRows] = useState<TicketRow[]>([]);
   const [commentsByTicketId, setCommentsByTicketId] = useState<Record<string, TicketComment[]>>({});
   const [auditsByTicketId, setAuditsByTicketId] = useState<Record<string, TicketStatusAudit[]>>({});
   const [isLoading, setIsLoading] = useState(true);
-  const [ticketRole, setTicketRole] = useState<HrTicketRole>("operator");
   const [ticketPolicy, setTicketPolicy] = useState<HrTicketPolicySettings>(DEFAULT_HR_TICKET_POLICY_SETTINGS);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [statusFilter, setStatusFilter] = useState<TicketStatus>("all");
@@ -178,6 +184,7 @@ export default function OrgHRTickets() {
   const [isHistoryDialogOpen, setIsHistoryDialogOpen] = useState(false);
   const [historyTicket, setHistoryTicket] = useState<TicketRow | null>(null);
   const [commentInput, setCommentInput] = useState("");
+  const { access, isLoading: isLoadingAccess } = useHrPageAccess("/org/hr/help/tickets");
 
   const loadTicketPolicy = useCallback(async (resolvedTenantId: string) => {
     try {
@@ -227,36 +234,6 @@ export default function OrgHRTickets() {
     );
   }, []);
 
-  const loadAccessLevel = useCallback(async () => {
-    try {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user?.id) {
-        setTicketRole("operator");
-        return;
-      }
-      const { data: roleRows, error } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", user.id)
-        .in("role", ["super_admin", "admin_instansi", "atasan"]);
-      if (error) throw error;
-      const roles = (roleRows || []).map((row) => row.role);
-      if (roles.includes("super_admin")) {
-        setTicketRole("super_admin");
-      } else if (roles.includes("admin_instansi")) {
-        setTicketRole("admin_instansi");
-      } else if (roles.includes("atasan")) {
-        setTicketRole("atasan");
-      } else {
-        setTicketRole("operator");
-      }
-    } catch {
-      setTicketRole("operator");
-    }
-  }, []);
-
   const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -291,6 +268,7 @@ export default function OrgHRTickets() {
       const normalizeSearchValue = (value: string | null | undefined) =>
         sanitizeOrKeyword(value || "").toLowerCase();
       const ticketRows = (data || []).filter((item) => {
+        if (!isHrTicket(item)) return false;
         if (!keyword) return true;
         const meta = parseMeta(item.browser_info);
         return [
@@ -375,9 +353,12 @@ export default function OrgHRTickets() {
     void fetchData();
   }, [fetchData]);
 
-  useEffect(() => {
-    void loadAccessLevel();
-  }, [loadAccessLevel]);
+  const ticketRole: HrTicketRole = useMemo(() => {
+    if (access.role === "super_admin") return "super_admin";
+    if (access.role === "admin_instansi") return "admin_instansi";
+    if (access.role === "atasan") return "atasan";
+    return "operator";
+  }, [access.role]);
 
   const metrics = useMemo(() => {
     const open = rows.filter((item) => item.status === "open").length;
@@ -406,12 +387,12 @@ export default function OrgHRTickets() {
     [auditsByTicketId],
   );
 
-  const canCreateTicket = canRolePerform(ticketPolicy, ticketRole, "create");
-  const canAssignTicket = canRolePerform(ticketPolicy, ticketRole, "assign");
-  const canCommentTicket = canRolePerform(ticketPolicy, ticketRole, "comment");
-  const canTakeTicket = canRolePerform(ticketPolicy, ticketRole, "take");
-  const canResolveTicket = canRolePerform(ticketPolicy, ticketRole, "resolve");
-  const canReopenTicket = canRolePerform(ticketPolicy, ticketRole, "reopen");
+  const canCreateTicket = access.canCreate && canRolePerform(ticketPolicy, ticketRole, "create");
+  const canAssignTicket = access.canConfigure && canRolePerform(ticketPolicy, ticketRole, "assign");
+  const canCommentTicket = access.canEdit && canRolePerform(ticketPolicy, ticketRole, "comment");
+  const canTakeTicket = access.canEdit && canRolePerform(ticketPolicy, ticketRole, "take");
+  const canResolveTicket = access.canApprove && canRolePerform(ticketPolicy, ticketRole, "resolve");
+  const canReopenTicket = access.canApprove && canRolePerform(ticketPolicy, ticketRole, "reopen");
 
   const roleLabel = useMemo(() => {
     if (ticketRole === "super_admin") return "Super Admin";
@@ -446,6 +427,7 @@ export default function OrgHRTickets() {
         subject: formState.subject.trim(),
         category: formState.category,
         priority: formState.priority,
+        source: "org_hr_ticket",
         reference: formState.reference.trim() || undefined,
         assignee_name: formState.assignee_name.trim() || undefined,
         due_date: formState.due_date || undefined,
@@ -510,16 +492,23 @@ export default function OrgHRTickets() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      const payload: Database["public"]["Tables"]["feedback_reports"]["Update"] = {
-        status: nextStatus,
-        resolved_at: nextStatus === "resolved" ? new Date().toISOString() : null,
-        resolved_by: nextStatus === "resolved" ? user?.id || null : null,
-      };
-      const { error } = await supabase
-        .from("feedback_reports")
-        .update(payload)
-        .eq("id", item.id);
-      if (error) throw error;
+      if (nextStatus === "in_progress" && ticketRole === "atasan") {
+        const { error } = await supabase.rpc("hr_ticket_take" as never, {
+          p_ticket_id: item.id,
+        } as never);
+        if (error) throw error;
+      } else {
+        const payload: Database["public"]["Tables"]["feedback_reports"]["Update"] = {
+          status: nextStatus,
+          resolved_at: nextStatus === "resolved" ? new Date().toISOString() : null,
+          resolved_by: nextStatus === "resolved" ? user?.id || null : null,
+        };
+        const { error } = await supabase
+          .from("feedback_reports")
+          .update(payload)
+          .eq("id", item.id);
+        if (error) throw error;
+      }
 
       if (item.tenant_id) {
         const { error: auditError } = await supabase.from("hr_ticket_status_audits").insert({
@@ -657,17 +646,20 @@ export default function OrgHRTickets() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">HR Help</Badge>
+          <Badge variant="outline">Bantuan</Badge>
           <h1 className="text-2xl font-semibold tracking-tight">Tiket HR</h1>
           <p className="text-sm text-muted-foreground">
-            Daftar tiket bantuan khusus HR untuk tindak lanjut masalah operasional.
+            Kelola bantuan, eskalasi, dan tindak lanjut operasional HR dengan SLA yang dapat dipantau.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Capability halaman: {isLoadingAccess ? "memverifikasi..." : access.canApprove ? "admin dapat kelola penuh" : access.canEdit ? "operator dapat tindak lanjut terbatas" : "mode baca saja"}
           </p>
         </div>
         <div className="grid gap-4 md:grid-cols-5">
           <StatCard title="Total Tiket" value={metrics.total} />
-          <StatCard title="Open" value={metrics.open} />
-          <StatCard title="In Progress" value={metrics.inProgress} />
-          <StatCard title="Resolved" value={metrics.resolved} />
+          <StatCard title="Terbuka" value={metrics.open} />
+          <StatCard title="Sedang Diproses" value={metrics.inProgress} />
+          <StatCard title="Selesai" value={metrics.resolved} />
           <StatCard title="SLA Overdue" value={metrics.overdue} />
         </div>
 
@@ -681,7 +673,7 @@ export default function OrgHRTickets() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              <Button onClick={() => setIsDialogOpen(true)} disabled={!canCreateTicket}>
+              <Button onClick={() => setIsDialogOpen(true)} disabled={isLoadingAccess || !canCreateTicket}>
                 <Plus className="mr-2 h-4 w-4" />
                 Buat Tiket HR
               </Button>
@@ -691,9 +683,9 @@ export default function OrgHRTickets() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Semua Status</SelectItem>
-                  <SelectItem value="open">Open</SelectItem>
-                  <SelectItem value="in_progress">In Progress</SelectItem>
-                  <SelectItem value="resolved">Resolved</SelectItem>
+                  <SelectItem value="open">Terbuka</SelectItem>
+                  <SelectItem value="in_progress">Sedang Diproses</SelectItem>
+                  <SelectItem value="resolved">Selesai</SelectItem>
                 </SelectContent>
               </Select>
               <div className="relative max-w-sm flex-1">
@@ -763,11 +755,11 @@ export default function OrgHRTickets() {
                           </TableCell>
                           <TableCell>
                             {item.status === "resolved" ? (
-                              <Badge className="bg-emerald-600 hover:bg-emerald-600">Resolved</Badge>
+                              <Badge className="bg-emerald-600 hover:bg-emerald-600">Selesai</Badge>
                             ) : item.status === "in_progress" ? (
-                              <Badge className="bg-blue-600 hover:bg-blue-600">In Progress</Badge>
+                              <Badge className="bg-blue-600 hover:bg-blue-600">Sedang Diproses</Badge>
                             ) : (
-                              <Badge variant="secondary">Open</Badge>
+                              <Badge variant="secondary">Terbuka</Badge>
                             )}
                           </TableCell>
                           <TableCell className="text-xs text-muted-foreground">
@@ -780,23 +772,23 @@ export default function OrgHRTickets() {
                           </TableCell>
                           <TableCell className="text-right">
                             <div className="inline-flex gap-1">
-                              <Button size="sm" variant="outline" onClick={() => openHistoryDialog(item)}>Thread</Button>
-                              <Button size="sm" variant="outline" onClick={() => openAssignmentDialog(item)} disabled={!canAssignTicket}>PIC/SLA</Button>
+                              <Button size="sm" variant="outline" onClick={() => openHistoryDialog(item)} disabled={isLoadingAccess || !access.canView}>Thread</Button>
+                              <Button size="sm" variant="outline" onClick={() => openAssignmentDialog(item)} disabled={isLoadingAccess || !canAssignTicket}>PIC/SLA</Button>
                               {item.status === "resolved" ? (
                                 canReopenTicket ? (
-                                  <Button size="sm" variant="outline" onClick={() => void updateStatus(item, "open")}>Reopen</Button>
+                                  <Button size="sm" variant="outline" onClick={() => void updateStatus(item, "open")} disabled={isLoadingAccess}>Reopen</Button>
                                 ) : null
                               ) : item.status === "in_progress" ? (
                                 <>
                                   {canResolveTicket ? (
-                                    <Button size="sm" onClick={() => void updateStatus(item, "resolved")}>Resolve</Button>
+                                    <Button size="sm" onClick={() => void updateStatus(item, "resolved")} disabled={isLoadingAccess}>Selesaikan</Button>
                                   ) : null}
                                   {canReopenTicket ? (
-                                    <Button size="sm" variant="outline" onClick={() => void updateStatus(item, "open")}>Kembali Open</Button>
+                                  <Button size="sm" variant="outline" onClick={() => void updateStatus(item, "open")} disabled={isLoadingAccess}>Buka Kembali</Button>
                                   ) : null}
                                 </>
                               ) : canTakeTicket ? (
-                                <Button size="sm" onClick={() => void updateStatus(item, "in_progress")}>Take</Button>
+                                <Button size="sm" onClick={() => void updateStatus(item, "in_progress")} disabled={isLoadingAccess}>Tangani</Button>
                               ) : null}
                             </div>
                           </TableCell>
@@ -909,7 +901,7 @@ export default function OrgHRTickets() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsDialogOpen(false)} disabled={isSubmitting}>Batal</Button>
-              <Button onClick={() => void handleCreateTicket()} disabled={isSubmitting}>
+              <Button onClick={() => void handleCreateTicket()} disabled={isSubmitting || isLoadingAccess || !canCreateTicket}>
                 {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Ticket className="mr-2 h-4 w-4" />}
                 Kirim Tiket
               </Button>
@@ -956,7 +948,7 @@ export default function OrgHRTickets() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsAssignmentDialogOpen(false)} disabled={isSubmitting}>Batal</Button>
-              <Button onClick={() => void saveAssignment()} disabled={isSubmitting || !canAssignTicket}>Simpan</Button>
+              <Button onClick={() => void saveAssignment()} disabled={isSubmitting || isLoadingAccess || !canAssignTicket}>Simpan</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -993,10 +985,10 @@ export default function OrgHRTickets() {
                     value={commentInput}
                     onChange={(event) => setCommentInput(event.target.value)}
                     placeholder="Tambah komentar tindak lanjut..."
-                    disabled={!canCommentTicket}
+                    disabled={isLoadingAccess || !canCommentTicket}
                   />
                   <div className="flex justify-end">
-                    <Button size="sm" onClick={() => void addComment()} disabled={isSubmitting || !canCommentTicket}>Tambah Komentar</Button>
+                    <Button size="sm" onClick={() => void addComment()} disabled={isSubmitting || isLoadingAccess || !canCommentTicket}>Tambah Komentar</Button>
                   </div>
                 </div>
 

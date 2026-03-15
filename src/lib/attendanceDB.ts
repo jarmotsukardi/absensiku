@@ -11,6 +11,7 @@
 
 import Dexie, { type EntityTable } from 'dexie';
 import { debugLog } from "@/lib/debugLog";
+import { DEFAULT_TIMEZONE, formatDateKeyInTimezone } from "@/lib/timezone";
 
 // ==================== TYPES ====================
 
@@ -48,9 +49,42 @@ export interface TodayCache {
 }
 
 type JsonObject = Record<string, unknown>;
+const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 const isObject = (value: unknown): value is JsonObject => {
   return typeof value === "object" && value !== null;
+};
+
+const isValidDateKey = (value: unknown): value is string => {
+  return typeof value === "string" && DATE_KEY_PATTERN.test(value);
+};
+
+const resolveAttendanceDateKey = (
+  attendanceDate?: string,
+  record?: unknown,
+  timezone: string = DEFAULT_TIMEZONE,
+): string => {
+  if (isValidDateKey(attendanceDate)) {
+    return attendanceDate;
+  }
+
+  if (isObject(record) && isValidDateKey(record.date)) {
+    return record.date;
+  }
+
+  return formatDateKeyInTimezone(new Date(), timezone);
+};
+
+const resolveDateKeyFromTimestamp = (
+  timestamp: unknown,
+  fallbackDate?: string,
+  timezone: string = DEFAULT_TIMEZONE,
+): string => {
+  if (typeof timestamp === "string" && timestamp.trim()) {
+    return formatDateKeyInTimezone(timestamp, timezone);
+  }
+
+  return resolveAttendanceDateKey(fallbackDate, undefined, timezone);
 };
 
 // ==================== ENCRYPTION (Simple XOR + Base64) ====================
@@ -204,8 +238,8 @@ export async function getPendingEntries(employeeId?: string): Promise<Attendance
 /**
  * Cek apakah ada check-in hari ini di IndexedDB
  */
-export async function hasCheckInToday(employeeId: string): Promise<AttendanceEntry | null> {
-  const today = new Date().toISOString().split('T')[0];
+export async function hasCheckInToday(employeeId: string, attendanceDate?: string): Promise<AttendanceEntry | null> {
+  const today = resolveAttendanceDateKey(attendanceDate);
   const entries = await db.attendanceEntries
     .where('[employeeId+date+type]')
     .equals([employeeId, today, 'check_in'])
@@ -217,8 +251,8 @@ export async function hasCheckInToday(employeeId: string): Promise<AttendanceEnt
 /**
  * Cek apakah ada check-out hari ini di IndexedDB
  */
-export async function hasCheckOutToday(employeeId: string): Promise<AttendanceEntry | null> {
-  const today = new Date().toISOString().split('T')[0];
+export async function hasCheckOutToday(employeeId: string, attendanceDate?: string): Promise<AttendanceEntry | null> {
+  const today = resolveAttendanceDateKey(attendanceDate);
   const entries = await db.attendanceEntries
     .where('[employeeId+date+type]')
     .equals([employeeId, today, 'check_out'])
@@ -279,8 +313,12 @@ export function decryptEntryPayload(entry: AttendanceEntry): JsonObject | null {
 /**
  * Cache today's attendance record ke IndexedDB
  */
-export async function cacheTodayRecord(employeeId: string, record: unknown | null): Promise<void> {
-  const today = new Date().toISOString().split('T')[0];
+export async function cacheTodayRecord(
+  employeeId: string,
+  record: unknown | null,
+  attendanceDate?: string
+): Promise<void> {
+  const today = resolveAttendanceDateKey(attendanceDate, record);
   
   // Delete existing cache for today
   await db.todayCache
@@ -302,8 +340,8 @@ export async function cacheTodayRecord(employeeId: string, record: unknown | nul
 /**
  * Load cached today attendance (untuk instant UI saat app load / re-hydration)
  */
-export async function getCachedTodayRecord(employeeId: string): Promise<JsonObject | null> {
-  const today = new Date().toISOString().split('T')[0];
+export async function getCachedTodayRecord(employeeId: string, attendanceDate?: string): Promise<JsonObject | null> {
+  const today = resolveAttendanceDateKey(attendanceDate);
   
   const cached = await db.todayCache
     .where('[employeeId+date]')
@@ -327,14 +365,14 @@ export async function getCachedTodayRecord(employeeId: string): Promise<JsonObje
  * Re-hydration: saat app dibuka kembali, cek dan return semua pending entries
  * untuk dilanjutkan sync-nya
  */
-export async function rehydratePendingEntries(employeeId: string): Promise<{
+export async function rehydratePendingEntries(employeeId: string, attendanceDate?: string): Promise<{
   pendingCount: number;
   entries: AttendanceEntry[];
   todayCache: JsonObject | null;
 }> {
   await recoverStuckSyncEntries(employeeId);
   const pending = await getPendingEntries(employeeId);
-  const todayCache = await getCachedTodayRecord(employeeId);
+  const todayCache = await getCachedTodayRecord(employeeId, attendanceDate);
 
   return {
     pendingCount: pending.length,
@@ -391,7 +429,10 @@ export async function getEntriesStats(): Promise<Record<SyncStatus, number>> {
 /**
  * Migrasi data dari localStorage buffer lama ke IndexedDB
  */
-export async function migrateFromLocalStorage(): Promise<number> {
+export async function migrateFromLocalStorage(
+  attendanceDate?: string,
+  timezone: string = DEFAULT_TIMEZONE,
+): Promise<number> {
   const BUFFER_KEY = 'attendance_buffer_v1';
   try {
     const raw = localStorage.getItem(BUFFER_KEY);
@@ -430,7 +471,7 @@ export async function migrateFromLocalStorage(): Promise<number> {
       await saveAttendanceEntry({
         employeeId: item.employeeId,
         officeId: item.officeId,
-        date: item.date,
+        date: resolveDateKeyFromTimestamp(item.timestamp, attendanceDate || item.date, timezone),
         type: item.type,
         latitude: item.latitude,
         longitude: item.longitude,

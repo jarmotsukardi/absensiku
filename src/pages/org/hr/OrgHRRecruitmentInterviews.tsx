@@ -8,10 +8,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { TablePaginationFooter } from "@/components/common/TablePaginationFooter";
 import { CalendarCheck2, Plus, Search } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { logAuditIfEnabled } from "@/lib/auditLoggingPolicy";
+import { useHrPageAccess } from "@/hooks/useHrPageAccess";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { toast } from "sonner";
 
 type InterviewMode = "online" | "offline" | "hybrid";
@@ -56,6 +61,21 @@ const INITIAL_FORM: InterviewForm = {
   feedback: "",
 };
 
+const PAGE_SIZE = 10;
+
+function getInterviewModeLabel(mode: InterviewMode): string {
+  if (mode === "online") return "Daring";
+  if (mode === "offline") return "Luring";
+  return "Hibrida";
+}
+
+function getInterviewStatusLabel(status: InterviewStatus): string {
+  if (status === "scheduled") return "Terjadwal";
+  if (status === "completed") return "Selesai";
+  if (status === "cancelled") return "Dibatalkan";
+  return "Dijadwalkan Ulang";
+}
+
 export default function OrgHRRecruitmentInterviews() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [rows, setRows] = useState<InterviewRow[]>([]);
@@ -66,6 +86,9 @@ export default function OrgHRRecruitmentInterviews() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<InterviewForm>(INITIAL_FORM);
   const [isSaving, setIsSaving] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const confirmDialog = useConfirmDialog();
+  const { access, isLoading: isLoadingAccess } = useHrPageAccess("/org/hr/recruitment/interviews");
 
   const fetchData = useCallback(async () => {
     setIsLoading(true);
@@ -75,12 +98,12 @@ export default function OrgHRRecruitmentInterviews() {
       if (!tenantId) setTenantId(resolvedTenantId);
 
       const [interviewsRes, candidatesRes] = await Promise.all([
-        (supabase as any)
+        supabase
           .from("hr_recruitment_interviews")
           .select("id, candidate_id, interview_round, scheduled_at, interviewer_name, mode, status, score")
           .eq("tenant_id", resolvedTenantId)
           .order("created_at", { ascending: false }),
-        (supabase as any)
+        supabase
           .from("hr_recruitment_candidates")
           .select("id, full_name")
           .eq("tenant_id", resolvedTenantId)
@@ -94,7 +117,7 @@ export default function OrgHRRecruitmentInterviews() {
       setCandidates((candidatesRes.data || []) as CandidateOption[]);
     } catch (error) {
       const ref = reportError(error, "org.hr.recruitment.interviews.fetch");
-      toast.error(appendErrorReference("Gagal memuat data interview", ref));
+      toast.error(appendErrorReference("Gagal memuat data wawancara", ref));
       setRows([]);
       setCandidates([]);
     } finally {
@@ -116,14 +139,36 @@ export default function OrgHRRecruitmentInterviews() {
       return `${candidateName} ${row.interview_round} ${row.status} ${row.mode}`.toLowerCase().includes(keyword);
     });
   }, [rows, search, candidateMap]);
+  const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const pagedRows = useMemo(() => {
+    const from = (safePage - 1) * PAGE_SIZE;
+    return filteredRows.slice(from, from + PAGE_SIZE);
+  }, [filteredRows, safePage]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search]);
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
 
   const openCreate = () => {
+    if (!access.canEdit) {
+      toast.error("Aksi tambah wawancara hanya tersedia untuk admin organisasi.");
+      return;
+    }
     setEditingId(null);
     setForm(INITIAL_FORM);
     setDialogOpen(true);
   };
 
   const openEdit = (row: InterviewRow) => {
+    if (!access.canEdit) {
+      toast.error("Aksi ubah wawancara hanya tersedia untuk admin organisasi.");
+      return;
+    }
     setEditingId(row.id);
     setForm({
       candidate_id: row.candidate_id,
@@ -141,6 +186,10 @@ export default function OrgHRRecruitmentInterviews() {
   };
 
   const handleSave = async () => {
+    if (!access.canEdit) {
+      toast.error("Aksi simpan wawancara hanya tersedia untuk admin organisasi.");
+      return;
+    }
     if (!tenantId) {
       toast.error("Tenant organisasi belum ditemukan.");
       return;
@@ -152,6 +201,9 @@ export default function OrgHRRecruitmentInterviews() {
 
     setIsSaving(true);
     try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       const payload = {
         tenant_id: tenantId,
         candidate_id: form.candidate_id,
@@ -164,20 +216,51 @@ export default function OrgHRRecruitmentInterviews() {
         status: form.status,
         score: form.score.trim() ? Number(form.score) : null,
         feedback: form.feedback.trim() || null,
-        updated_by: (await supabase.auth.getUser()).data.user?.id || null,
+        updated_by: user?.id || null,
       };
 
       if (editingId) {
-        const { error } = await (supabase as any).from("hr_recruitment_interviews").update(payload).eq("id", editingId);
+        const previousRow = rows.find((item) => item.id === editingId) || null;
+        const { error } = await supabase
+          .from("hr_recruitment_interviews")
+          .update(payload)
+          .eq("id", editingId)
+          .eq("tenant_id", tenantId);
         if (error) throw error;
+        const { error: auditError } = await logAuditIfEnabled({
+          tenantId,
+          payload: {
+            tenant_id: tenantId,
+            user_id: user?.id || null,
+            action: "ats_interview_update",
+            table_name: "hr_recruitment_interviews",
+            record_id: editingId,
+            old_values: previousRow,
+            new_values: payload,
+          },
+        });
+        if (auditError) throw auditError;
         toast.success("Data interview berhasil diperbarui.");
       } else {
-        const { error } = await (supabase as any).from("hr_recruitment_interviews").insert({
+        const { data: insertedRows, error } = await supabase.from("hr_recruitment_interviews").insert({
           ...payload,
           created_by: payload.updated_by,
-        });
+        }).select("id");
         if (error) throw error;
-        toast.success("Interview berhasil ditambahkan.");
+        const { error: auditError } = await logAuditIfEnabled({
+          tenantId,
+          payload: {
+            tenant_id: tenantId,
+            user_id: user?.id || null,
+            action: "ats_interview_create",
+            table_name: "hr_recruitment_interviews",
+            record_id: insertedRows?.[0]?.id || null,
+            old_values: null,
+            new_values: payload,
+          },
+        });
+        if (auditError) throw auditError;
+        toast.success("Wawancara berhasil ditambahkan.");
       }
 
       setDialogOpen(false);
@@ -186,9 +269,54 @@ export default function OrgHRRecruitmentInterviews() {
       await fetchData();
     } catch (error) {
       const ref = reportError(error, "org.hr.recruitment.interviews.save", { editing_id: editingId });
-      toast.error(appendErrorReference("Gagal menyimpan interview", ref));
+      toast.error(appendErrorReference("Gagal menyimpan wawancara", ref));
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleDelete = async (row: InterviewRow) => {
+    if (!access.canEdit) {
+      toast.error("Aksi hapus wawancara hanya tersedia untuk admin organisasi.");
+      return;
+    }
+    const confirmed = await confirmDialog({
+      title: "Hapus Wawancara",
+      description: `Jadwal wawancara untuk kandidat "${candidateMap.get(row.candidate_id) || row.candidate_id}" akan dihapus.`,
+      confirmText: "Ya, hapus",
+      cancelText: "Batal",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
+
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      const { error } = await supabase
+        .from("hr_recruitment_interviews")
+        .delete()
+        .eq("id", row.id)
+        .eq("tenant_id", tenantId);
+      if (error) throw error;
+      const { error: auditError } = await logAuditIfEnabled({
+        tenantId,
+        payload: {
+          tenant_id: tenantId,
+          user_id: user?.id || null,
+          action: "ats_interview_delete",
+          table_name: "hr_recruitment_interviews",
+          record_id: row.id,
+          old_values: row,
+          new_values: null,
+        },
+      });
+      if (auditError) throw auditError;
+      toast.success("Wawancara berhasil dihapus.");
+      await fetchData();
+    } catch (error) {
+      const ref = reportError(error, "org.hr.recruitment.interviews.delete", { interview_id: row.id });
+      toast.error(appendErrorReference("Gagal menghapus wawancara", ref));
     }
   };
 
@@ -197,22 +325,25 @@ export default function OrgHRRecruitmentInterviews() {
       <div className="space-y-6">
         <div className="space-y-2">
           <Badge variant="outline">Rekrutmen (ATS)</Badge>
-          <h1 className="text-2xl font-semibold tracking-tight">Tahap Interview</h1>
-          <p className="text-sm text-muted-foreground">Kelola jadwal dan hasil interview kandidat.</p>
+          <h1 className="text-2xl font-semibold tracking-tight">Tahap Wawancara</h1>
+          <p className="text-sm text-muted-foreground">Kelola jadwal dan hasil wawancara kandidat.</p>
+          <p className="text-xs text-muted-foreground">
+            Kemampuan halaman: {isLoadingAccess ? "memverifikasi..." : access.canEdit ? "mode kelola" : "mode baca saja"}
+          </p>
         </div>
 
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <CalendarCheck2 className="h-4 w-4" />
-              Manajemen Interview
+              Manajemen Wawancara
             </CardTitle>
-            <CardDescription>CRUD dasar untuk tahap interview ATS.</CardDescription>
+            <CardDescription>CRUD dasar untuk tahap wawancara ATS.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
               <Button onClick={openCreate}>
-                <Plus className="mr-2 h-4 w-4" /> Tambah Interview
+                <Plus className="mr-2 h-4 w-4" /> Tambah Wawancara
               </Button>
               <div className="relative min-w-[240px] flex-1">
                 <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
@@ -220,21 +351,22 @@ export default function OrgHRRecruitmentInterviews() {
                   className="pl-9"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Cari kandidat, ronde, mode, status..."
+                  placeholder="Cari kandidat, ronde, moda, status..."
                 />
               </div>
             </div>
 
             {isLoading ? (
-              <p className="text-sm text-muted-foreground">Memuat data interview...</p>
+              <p className="text-sm text-muted-foreground">Memuat data wawancara...</p>
             ) : (
+              <>
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Kandidat</TableHead>
                     <TableHead>Ronde</TableHead>
                     <TableHead>Jadwal</TableHead>
-                    <TableHead>Interviewer</TableHead>
+                    <TableHead>Pewawancara</TableHead>
                     <TableHead>Mode</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Aksi</TableHead>
@@ -244,26 +376,42 @@ export default function OrgHRRecruitmentInterviews() {
                   {filteredRows.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center text-muted-foreground">
-                        Belum ada data interview.
+                        Belum ada data wawancara.
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredRows.map((row) => (
-                      <TableRow key={row.id}>
+                    pagedRows.map((row) => (
+                      <TableRow key={row.id} data-testid={`org-hr-ats-interview-row-${row.id}`}>
                         <TableCell>{candidateMap.get(row.candidate_id) || row.candidate_id}</TableCell>
                         <TableCell>{row.interview_round}</TableCell>
                         <TableCell>{row.scheduled_at ? new Date(row.scheduled_at).toLocaleString("id-ID") : "-"}</TableCell>
                         <TableCell>{row.interviewer_name || "-"}</TableCell>
-                        <TableCell>{row.mode}</TableCell>
-                        <TableCell>{row.status}</TableCell>
+                        <TableCell>{getInterviewModeLabel(row.mode)}</TableCell>
+                        <TableCell>{getInterviewStatusLabel(row.status)}</TableCell>
                         <TableCell>
-                          <Button size="sm" variant="outline" onClick={() => openEdit(row)}>Edit</Button>
+                          <div className="flex flex-wrap gap-2">
+                            <Button size="sm" variant="outline" onClick={() => openEdit(row)}>Ubah</Button>
+                            <Button size="sm" variant="outline" onClick={() => void handleDelete(row)}>
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              Hapus
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))
                   )}
                 </TableBody>
               </Table>
+              <TablePaginationFooter
+                currentPage={safePage}
+                totalPages={totalPages}
+                totalItems={filteredRows.length}
+                pageSize={PAGE_SIZE}
+                itemLabel="wawancara"
+                onPrevious={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                onNext={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+              />
+              </>
             )}
           </CardContent>
         </Card>
@@ -271,8 +419,8 @@ export default function OrgHRRecruitmentInterviews() {
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>{editingId ? "Edit Interview" : "Tambah Interview"}</DialogTitle>
-              <DialogDescription>Isi data jadwal interview kandidat.</DialogDescription>
+              <DialogTitle>{editingId ? "Ubah Wawancara" : "Tambah Wawancara"}</DialogTitle>
+              <DialogDescription>Isi data jadwal wawancara kandidat.</DialogDescription>
             </DialogHeader>
             <div className="grid gap-3 py-2">
               <div className="space-y-1">
@@ -298,11 +446,11 @@ export default function OrgHRRecruitmentInterviews() {
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1">
-                  <Label htmlFor="interviewer_name">Interviewer</Label>
+                  <Label htmlFor="interviewer_name">Pewawancara</Label>
                   <Input id="interviewer_name" value={form.interviewer_name} onChange={(e) => setForm((p) => ({ ...p, interviewer_name: e.target.value }))} />
                 </div>
                 <div className="space-y-1">
-                  <Label htmlFor="interviewer_email">Email Interviewer</Label>
+                  <Label htmlFor="interviewer_email">Email Pewawancara</Label>
                   <Input id="interviewer_email" value={form.interviewer_email} onChange={(e) => setForm((p) => ({ ...p, interviewer_email: e.target.value }))} />
                 </div>
               </div>
@@ -312,9 +460,9 @@ export default function OrgHRRecruitmentInterviews() {
                   <Select value={form.mode} onValueChange={(value) => setForm((p) => ({ ...p, mode: value as InterviewMode }))}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="online">Online</SelectItem>
-                      <SelectItem value="offline">Offline</SelectItem>
-                      <SelectItem value="hybrid">Hybrid</SelectItem>
+                      <SelectItem value="online">Daring</SelectItem>
+                      <SelectItem value="offline">Luring</SelectItem>
+                      <SelectItem value="hybrid">Hibrida</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -323,10 +471,10 @@ export default function OrgHRRecruitmentInterviews() {
                   <Select value={form.status} onValueChange={(value) => setForm((p) => ({ ...p, status: value as InterviewStatus }))}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="scheduled">Scheduled</SelectItem>
-                      <SelectItem value="completed">Completed</SelectItem>
-                      <SelectItem value="cancelled">Cancelled</SelectItem>
-                      <SelectItem value="rescheduled">Rescheduled</SelectItem>
+                      <SelectItem value="scheduled">Terjadwal</SelectItem>
+                      <SelectItem value="completed">Selesai</SelectItem>
+                      <SelectItem value="cancelled">Dibatalkan</SelectItem>
+                      <SelectItem value="rescheduled">Dijadwalkan Ulang</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Search, Calendar, Download } from "lucide-react";
 import { toast } from "sonner";
@@ -15,6 +16,13 @@ import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  LEAVE_REQUEST_CATEGORY_OPTIONS,
+  type LeaveRequestCategory,
+  getLeaveRequestPresentation,
+  matchesLeaveRequestCategory,
+} from "@/lib/leaveRequestPresentation";
 
 type ApprovedLeaveRequest = Tables<"leave_requests"> & {
   employees: {
@@ -34,6 +42,8 @@ export default function OrgApprovedLeaveList() {
   const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [requestCategoryFilter, setRequestCategoryFilter] =
+    useState<LeaveRequestCategory>("all");
 
   const initializeTenant = useCallback(async () => {
     try {
@@ -135,16 +145,37 @@ export default function OrgApprovedLeaveList() {
     toast.info("Fitur export akan segera tersedia");
   };
 
-  const getLeaveTypeLabel = (type: string) => {
-    const types: Record<string, string> = {
-      izin: "Izin", cuti_tahunan: "Cuti Tahunan", cuti_penting: "Cuti Penting", cuti_lainnya: "Cuti Lainnya",
+  const requestCategoryCounts = useMemo(() => {
+    const counts: Record<LeaveRequestCategory, number> = {
+      all: requests.length,
+      regular: 0,
+      late_permission: 0,
+      early_leave_permission: 0,
     };
-    return types[type] || type;
-  };
 
-  const filteredRequests = requests.filter(req =>
-    (req.employees?.name || "").toLowerCase().includes(searchTerm.toLowerCase())
-  );
+    requests.forEach((request) => {
+      const category = getLeaveRequestPresentation(request).category;
+      counts[category] += 1;
+    });
+    return counts;
+  }, [requests]);
+
+  const filteredRequests = useMemo(() => {
+    const searchNeedle = searchTerm.trim().toLowerCase();
+    return requests.filter((request) => {
+      if (!matchesLeaveRequestCategory(request, requestCategoryFilter)) {
+        return false;
+      }
+      if (!searchNeedle) return true;
+
+      const presentation = getLeaveRequestPresentation(request);
+      return (
+        (request.employees?.name || "").toLowerCase().includes(searchNeedle) ||
+        presentation.reasonText.toLowerCase().includes(searchNeedle) ||
+        presentation.leaveTypeLabel.toLowerCase().includes(searchNeedle)
+      );
+    });
+  }, [requests, requestCategoryFilter, searchTerm]);
   const totalPages = Math.max(1, Math.ceil(filteredRequests.length / ITEMS_PER_PAGE));
   const paginatedRequests = filteredRequests.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
@@ -153,7 +184,7 @@ export default function OrgApprovedLeaveList() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm]);
+  }, [searchTerm, requestCategoryFilter]);
 
   return (
     <OrganizationLayout>
@@ -200,6 +231,18 @@ export default function OrgApprovedLeaveList() {
                 <Input placeholder="Cari..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="pl-10" />
               </div>
             </div>
+            <Tabs
+              value={requestCategoryFilter}
+              onValueChange={(value) => setRequestCategoryFilter(value as LeaveRequestCategory)}
+            >
+              <TabsList className="mb-4 h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-xl border border-border/70 bg-muted/30 p-1.5">
+                {LEAVE_REQUEST_CATEGORY_OPTIONS.map((option) => (
+                  <TabsTrigger key={option.value} value={option.value} className="whitespace-nowrap">
+                    {option.label} ({requestCategoryCounts[option.value]})
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
 
             <Table>
               <TableHeader>
@@ -219,17 +262,40 @@ export default function OrgApprovedLeaveList() {
                 ) : paginatedRequests.length === 0 ? (
                   <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">Tidak ada data</TableCell></TableRow>
                 ) : (
-                  paginatedRequests.map((req, i) => (
+                  paginatedRequests.map((req, i) => {
+                    const presentation = getLeaveRequestPresentation(req);
+                    return (
                     <TableRow key={req.id}>
                       <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + i + 1}</TableCell>
                       <TableCell>{req.employees?.name}</TableCell>
-                      <TableCell>{getLeaveTypeLabel(req.leave_type)}</TableCell>
+                      <TableCell>
+                        {(presentation.isLatePermission || presentation.isEarlyLeavePermission) ? (
+                          <Badge
+                            variant="outline"
+                            className={
+                              presentation.isLatePermission
+                                ? "border-amber-300 bg-amber-50 text-amber-700"
+                                : "border-blue-300 bg-blue-50 text-blue-700"
+                            }
+                          >
+                            {presentation.leaveTypeLabel}
+                          </Badge>
+                        ) : presentation.leaveTypeLabel}
+                      </TableCell>
                       <TableCell>{format(new Date(req.start_date), "d MMM yyyy", { locale: id })}</TableCell>
                       <TableCell>{format(new Date(req.end_date), "d MMM yyyy", { locale: id })}</TableCell>
                       <TableCell>{differenceInDays(new Date(req.end_date), new Date(req.start_date)) + 1} hari</TableCell>
-                      <TableCell className="max-w-[200px] truncate">{req.reason}</TableCell>
+                      <TableCell className="max-w-[260px]">
+                        <p className="truncate text-sm">{presentation.reasonText}</p>
+                        {(presentation.isLatePermission || presentation.isEarlyLeavePermission) && (
+                          <p className="text-xs text-muted-foreground">
+                            {presentation.detailLabel}: {presentation.detailText ?? "-"}
+                          </p>
+                        )}
+                      </TableCell>
                     </TableRow>
-                  ))
+                    );
+                  })
                 )}
               </TableBody>
             </Table>

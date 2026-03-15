@@ -10,6 +10,9 @@ import { Search, RefreshCw, Clock3, CheckCircle2, AlertTriangle, Home } from "lu
 import { supabase } from "@/integrations/supabase/client";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { useHrPageAccess } from "@/hooks/useHrPageAccess";
+import { getHrRoutePolicy } from "@/lib/hrRouteAccess";
+import { getHrRouteStatusBadgeLabel, getHrRouteStatusDescription } from "@/lib/hrRouteStatusPresentation";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { toast } from "sonner";
@@ -54,6 +57,7 @@ const isLateStatus = (status: string | null) => {
 };
 
 export default function OrgHRAttendanceInsights() {
+  const routePolicy = getHrRoutePolicy("/org/hr/attendance-insights");
   const [rows, setRows] = useState<AttendanceRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -67,6 +71,7 @@ export default function OrgHRAttendanceInsights() {
   const [page, setPage] = useState(1);
   const [activeTab, setActiveTab] = useState<"semua" | "terlambat" | "wfh" | "anomali">("semua");
   const pageSize = 20;
+  const { access, isLoading: isLoadingAccess } = useHrPageAccess("/org/hr/attendance-insights");
 
   const fetchData = useCallback(async () => {
     setIsLoading(true);
@@ -80,17 +85,37 @@ export default function OrgHRAttendanceInsights() {
         return;
       }
 
-      const { data, error } = await supabase
-        .from("attendance_records")
-        .select("id, date, status, check_in_time, check_out_time, is_wfh, employees!inner(name, email, tenant_id)")
-        .eq("employees.tenant_id", tenantId)
-        .gte("date", startDate)
-        .lte("date", endDate)
-        .order("date", { ascending: false })
-        .limit(1000);
+      const { data, error } = await supabase.rpc("get_org_hr_attendance_insights" as never, {
+        p_tenant_id: tenantId,
+        p_start_date: startDate,
+        p_end_date: endDate,
+        p_limit: 1000,
+      } as never);
       if (error) throw error;
 
-      setRows((data || []) as AttendanceRow[]);
+      const normalizedRows = ((data || []) as Array<{
+        id: string;
+        date: string;
+        status: string | null;
+        check_in_time: string | null;
+        check_out_time: string | null;
+        is_wfh: boolean | null;
+        employee_name: string | null;
+        employee_email: string | null;
+      }>).map((item) => ({
+        id: item.id,
+        date: item.date,
+        status: item.status,
+        check_in_time: item.check_in_time,
+        check_out_time: item.check_out_time,
+        is_wfh: item.is_wfh,
+        employees: {
+          name: item.employee_name,
+          email: item.employee_email,
+        },
+      }));
+
+      setRows(normalizedRows);
       setPage(1);
     } catch (error) {
       const ref = reportError(error, "org.hr.attendance_insights.fetch");
@@ -221,10 +246,24 @@ export default function OrgHRAttendanceInsights() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">HR x Absensi</Badge>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="outline">HR</Badge>
+            <Badge variant="secondary">{getHrRouteStatusBadgeLabel(routePolicy.status)}</Badge>
+          </div>
           <h1 className="text-2xl font-semibold tracking-tight">Analitik Kehadiran HR</h1>
-          <p className="text-sm text-muted-foreground">Halaman HR ini terhubung langsung ke data absensi tenant.</p>
+          <p className="text-sm text-muted-foreground">
+            Analitik HR berbasis data absensi tenant. Halaman ini termasuk paket produksi HR.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Capability halaman: {isLoadingAccess ? "memverifikasi..." : access.canExport ? "admin dapat analisis dan ekspor" : access.canView ? "analitik internal hanya-baca" : "akses dibatasi"}
+          </p>
         </div>
+
+        <Card className="border-dashed">
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">{getHrRouteStatusDescription(routePolicy.status, "analytics")}</p>
+          </CardContent>
+        </Card>
 
         <div className="grid gap-4 md:grid-cols-6">
           <StatCard title="Total Rekam" value={total} icon={Clock3} />
@@ -246,8 +285,8 @@ export default function OrgHRAttendanceInsights() {
                 <RefreshCw className="mr-2 h-4 w-4" />
                 Muat Ulang
               </Button>
-              <Button size="sm" variant="outline" onClick={handleExportCsv}>
-                Export CSV
+              <Button size="sm" variant="outline" onClick={handleExportCsv} disabled={isLoadingAccess || !access.canExport}>
+                Ekspor CSV
               </Button>
               <select
                 aria-label="Urutan data kehadiran"

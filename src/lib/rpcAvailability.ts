@@ -99,3 +99,60 @@ export const clearRpcUnavailableMark = (rpcName: string) => {
   delete entries[rpcName];
   writeUnavailableMap(entries);
 };
+
+export const clearRpcUnavailableMarks = (rpcNames: string[]) => {
+  if (typeof window === "undefined" || !Array.isArray(rpcNames) || rpcNames.length === 0) return;
+  const entries = readUnavailableMap();
+  let hasChanges = false;
+  for (const rpcName of rpcNames) {
+    if (!rpcName || !entries[rpcName]) continue;
+    delete entries[rpcName];
+    hasChanges = true;
+  }
+  if (hasChanges) {
+    writeUnavailableMap(entries);
+  }
+};
+
+type RpcExecutionResult<T> = {
+  data: T | null;
+  error: unknown | null;
+};
+
+export const executeRpcWithAvailability = async <T>(
+  rpcName: string,
+  execute: () => Promise<RpcExecutionResult<T>>,
+): Promise<RpcExecutionResult<T> & { usedRecovery: boolean }> => {
+  const run = async (usedRecovery: boolean) => {
+    try {
+      const result = await execute();
+      if (result.error) {
+        if (isRpcMissingFunctionError(result.error)) {
+          markRpcUnavailable(
+            rpcName,
+            result.error instanceof Error ? result.error.message : String(result.error || "rpc_missing"),
+          );
+        }
+        return { ...result, usedRecovery };
+      }
+      clearRpcUnavailableMark(rpcName);
+      return { ...result, usedRecovery };
+    } catch (error) {
+      if (isRpcMissingFunctionError(error)) {
+        markRpcUnavailable(
+          rpcName,
+          error instanceof Error ? error.message : String(error || "rpc_missing"),
+        );
+        return { data: null, error, usedRecovery };
+      }
+      throw error;
+    }
+  };
+
+  if (!isRpcMarkedUnavailable(rpcName)) {
+    return run(false);
+  }
+
+  clearRpcUnavailableMark(rpcName);
+  return run(true);
+};
