@@ -11,7 +11,10 @@ export interface MutationRequest {
   requested_changes: Record<string, unknown>;
   original_data: Record<string, unknown>;
   reason: string;
-  attachment_url?: string | null;
+  document_reference_number?: string | null;
+  document_reference_date?: string | null;
+  document_reference_issuer?: string | null;
+  document_reference_notes?: string | null;
   approved_by?: string | null;
   approved_at?: string | null;
   rejection_reason?: string | null;
@@ -103,12 +106,21 @@ export function useMutationRequests(options: UseMutationRequestsOptions = {}) {
     requested_changes: Record<string, unknown>;
     original_data: Record<string, unknown>;
     reason: string;
-    attachment_url?: string;
+    document_reference_number?: string;
+    document_reference_date?: string;
+    document_reference_issuer?: string;
+    document_reference_notes?: string;
   }) => {
     try {
       const { error } = await supabase
         .from("mutation_requests")
-        .insert(data);
+        .insert({
+          ...data,
+          document_reference_number: data.document_reference_number?.trim() || null,
+          document_reference_date: data.document_reference_date || null,
+          document_reference_issuer: data.document_reference_issuer?.trim() || null,
+          document_reference_notes: data.document_reference_notes?.trim() || null,
+        });
 
       if (error) throw error;
 

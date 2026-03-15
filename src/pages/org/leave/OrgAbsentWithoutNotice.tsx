@@ -184,6 +184,9 @@ export default function OrgAbsentWithoutNotice() {
               Tanpa Keterangan
             </h1>
             <p className="text-muted-foreground">Kelola data ketidakhadiran tanpa keterangan</p>
+            <p className="text-xs text-muted-foreground">
+              Daftar ini membaca absensi harian dengan status <span className="font-mono">tidak_hadir</span>.
+            </p>
           </div>
           <Button variant="outline" onClick={() => toast.info("Fitur export akan segera tersedia")}>
             <Download className="mr-2 h-4 w-4" /> Export
@@ -274,7 +277,7 @@ export default function OrgAbsentWithoutNotice() {
           </CardContent>
         </Card>
 
-        <PageGlossarySection preset="org_leave_requests" />
+        <PageGlossarySection preset="org_leave_absent_without_notice" />
       </div>
     </OrganizationLayout>
   );

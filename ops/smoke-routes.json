@@ -11,6 +11,7 @@
     "admin": [
       "/admin/login",
       "/admin",
+      "/admin/reports/attendance",
       "/admin/settings",
       "/admin/streak-monitoring",
       "/admin/subscriptions",
@@ -33,4 +34,3 @@
     ]
   }
 }
-

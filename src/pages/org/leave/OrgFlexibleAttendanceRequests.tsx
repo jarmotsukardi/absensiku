@@ -17,6 +17,7 @@ import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { logAuditIfEnabled } from "@/lib/auditLoggingPolicy";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
 import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
@@ -196,6 +197,29 @@ export default function OrgFlexibleAttendanceRequests() {
 
       if (error) throw error;
 
+      await logAuditIfEnabled({
+        tenantId,
+        payload: {
+          tenant_id: tenantId,
+          employee_id: selectedRequest.employee_id,
+          user_id: user.id,
+          table_name: "flexible_attendance_requests",
+          action: "flexible_attendance_approved",
+          record_id: selectedRequest.id,
+          old_values: {
+            status: selectedRequest.status,
+            request_date: selectedRequest.request_date,
+            reason_type: selectedRequest.reason_type,
+          },
+          new_values: {
+            status: "disetujui",
+            request_date: selectedRequest.request_date,
+            reason_type: selectedRequest.reason_type,
+            approved_by: empData?.id || null,
+          },
+        },
+      });
+
       // Optional: Update employee's allow_flexible_attendance flag for that date
       // This could be handled via a separate approval mechanism
 
@@ -244,6 +268,30 @@ export default function OrgFlexibleAttendanceRequests() {
         .eq("id", selectedRequest.id);
 
       if (error) throw error;
+
+      await logAuditIfEnabled({
+        tenantId,
+        payload: {
+          tenant_id: tenantId,
+          employee_id: selectedRequest.employee_id,
+          user_id: user.id,
+          table_name: "flexible_attendance_requests",
+          action: "flexible_attendance_rejected",
+          record_id: selectedRequest.id,
+          old_values: {
+            status: selectedRequest.status,
+            request_date: selectedRequest.request_date,
+            reason_type: selectedRequest.reason_type,
+          },
+          new_values: {
+            status: "ditolak",
+            request_date: selectedRequest.request_date,
+            reason_type: selectedRequest.reason_type,
+            approved_by: empData?.id || null,
+            rejection_reason: rejectionReason.trim(),
+          },
+        },
+      });
 
       toast.success("Permohonan berhasil ditolak");
       setDialogMode(null);

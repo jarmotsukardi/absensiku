@@ -7,11 +7,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { TablePaginationFooter } from "@/components/common/TablePaginationFooter";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Briefcase, Plus, RefreshCcw, Search } from "lucide-react";
+import { Briefcase, Plus, RefreshCcw, Search, Trash2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { useHrPageAccess } from "@/hooks/useHrPageAccess";
 import { toast } from "sonner";
 
 type JobStatus = "draft" | "published" | "closed" | "cancelled";
@@ -48,6 +51,20 @@ const INITIAL_FORM: JobForm = {
   description: "",
 };
 
+const PAGE_SIZE = 10;
+const STATUS_LABELS: Record<JobStatus, string> = {
+  draft: "Draf",
+  published: "Dipublikasikan",
+  closed: "Ditutup",
+  cancelled: "Dibatalkan",
+};
+const EMPLOYMENT_TYPE_LABELS: Record<EmploymentType, string> = {
+  full_time: "Penuh Waktu",
+  part_time: "Paruh Waktu",
+  contract: "Kontrak",
+  internship: "Magang",
+};
+
 export default function OrgHRRecruitmentJobs() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [rows, setRows] = useState<JobRow[]>([]);
@@ -58,6 +75,10 @@ export default function OrgHRRecruitmentJobs() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<JobForm>(INITIAL_FORM);
   const [isSaving, setIsSaving] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
+  const confirmDialog = useConfirmDialog();
+  const { access, isLoading: isLoadingAccess } = useHrPageAccess("/org/hr/recruitment/jobs");
 
   const fetchRows = useCallback(async () => {
     setIsLoading(true);
@@ -66,9 +87,9 @@ export default function OrgHRRecruitmentJobs() {
       if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan.");
       if (!tenantId) setTenantId(resolvedTenantId);
 
-      let query = (supabase as any)
+      let query = supabase
         .from("hr_recruitment_jobs")
-        .select("id, title, department, employment_type, location, opening_count, status, created_at")
+        .select("id, title, department, employment_type, location, opening_count, status, created_at", { count: "exact" })
         .eq("tenant_id", resolvedTenantId)
         .order("created_at", { ascending: false });
 
@@ -76,29 +97,44 @@ export default function OrgHRRecruitmentJobs() {
         query = query.eq("status", statusFilter);
       }
 
-      const { data, error } = await query;
+      const keyword = search.trim();
+      if (keyword) {
+        const escapedKeyword = keyword.replace(/[%_,]/g, "\\$&");
+        query = query.or(
+          `title.ilike.%${escapedKeyword}%,department.ilike.%${escapedKeyword}%,location.ilike.%${escapedKeyword}%`,
+        );
+      }
+
+      query = query.range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
+
+      const { data, error, count } = await query;
       if (error) throw error;
       setRows((data || []) as JobRow[]);
+      setTotalItems(count || 0);
     } catch (error) {
       const ref = reportError(error, "org.hr.recruitment.jobs.fetch");
       toast.error(appendErrorReference("Gagal memuat lowongan rekrutmen", ref));
       setRows([]);
+      setTotalItems(0);
     } finally {
       setIsLoading(false);
     }
-  }, [statusFilter, tenantId]);
+  }, [currentPage, search, statusFilter, tenantId]);
 
   useEffect(() => {
     void fetchRows();
   }, [fetchRows]);
 
-  const filteredRows = useMemo(() => {
-    const keyword = search.trim().toLowerCase();
-    if (!keyword) return rows;
-    return rows.filter((row) =>
-      `${row.title} ${row.department || ""} ${row.location || ""}`.toLowerCase().includes(keyword),
-    );
-  }, [rows, search]);
+  const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, statusFilter]);
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
 
   const openCreate = () => {
     setEditingId(null);
@@ -121,8 +157,8 @@ export default function OrgHRRecruitmentJobs() {
   };
 
   const handleSave = async () => {
-    if (!tenantId) {
-      toast.error("Tenant organisasi belum ditemukan.");
+    if (!access.canEdit) {
+      toast.error("Aksi simpan lowongan hanya tersedia untuk admin organisasi.");
       return;
     }
     if (!form.title.trim()) {
@@ -132,8 +168,15 @@ export default function OrgHRRecruitmentJobs() {
 
     setIsSaving(true);
     try {
+      const resolvedTenantId = tenantId || (await resolveOrgTenantId());
+      if (!resolvedTenantId) {
+        toast.error("Tenant organisasi belum ditemukan.");
+        return;
+      }
+      if (!tenantId) setTenantId(resolvedTenantId);
+
       const payload = {
-        tenant_id: tenantId,
+        tenant_id: resolvedTenantId,
         title: form.title.trim(),
         department: form.department.trim() || null,
         employment_type: form.employment_type,
@@ -145,11 +188,15 @@ export default function OrgHRRecruitmentJobs() {
       };
 
       if (editingId) {
-        const { error } = await (supabase as any).from("hr_recruitment_jobs").update(payload).eq("id", editingId);
+        const { error } = await supabase
+          .from("hr_recruitment_jobs")
+          .update(payload)
+          .eq("id", editingId)
+          .eq("tenant_id", resolvedTenantId);
         if (error) throw error;
         toast.success("Lowongan berhasil diperbarui.");
       } else {
-        const { error } = await (supabase as any).from("hr_recruitment_jobs").insert({
+        const { error } = await supabase.from("hr_recruitment_jobs").insert({
           ...payload,
           created_by: payload.updated_by,
           published_at: form.status === "published" ? new Date().toISOString() : null,
@@ -170,6 +217,39 @@ export default function OrgHRRecruitmentJobs() {
     }
   };
 
+  const handleDelete = async (row: JobRow) => {
+    if (!access.canEdit) {
+      toast.error("Aksi hapus lowongan hanya tersedia untuk admin organisasi.");
+      return;
+    }
+    const confirmed = await confirmDialog({
+      title: "Hapus Lowongan",
+      description: `Lowongan "${row.title}" akan dihapus permanen dari ATS.`,
+      confirmText: "Ya, hapus",
+      cancelText: "Batal",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
+
+    try {
+      const resolvedTenantId = tenantId || (await resolveOrgTenantId());
+      if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan.");
+      if (!tenantId) setTenantId(resolvedTenantId);
+
+      const { error } = await supabase
+        .from("hr_recruitment_jobs")
+        .delete()
+        .eq("id", row.id)
+        .eq("tenant_id", resolvedTenantId);
+      if (error) throw error;
+      toast.success("Lowongan berhasil dihapus.");
+      await fetchRows();
+    } catch (error) {
+      const ref = reportError(error, "org.hr.recruitment.jobs.delete", { job_id: row.id });
+      toast.error(appendErrorReference("Gagal menghapus lowongan", ref));
+    }
+  };
+
   return (
     <OrganizationLayout>
       <div className="space-y-6">
@@ -178,6 +258,9 @@ export default function OrgHRRecruitmentJobs() {
           <h1 className="text-2xl font-semibold tracking-tight">Lowongan Kerja</h1>
           <p className="text-sm text-muted-foreground">
             Kelola daftar lowongan dan status publikasi untuk proses rekrutmen.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Capability halaman: {isLoadingAccess ? "memverifikasi..." : access.canEdit ? "mode kelola" : "monitoring hanya-baca"}
           </p>
         </div>
 
@@ -195,7 +278,7 @@ export default function OrgHRRecruitmentJobs() {
                 <Plus className="mr-2 h-4 w-4" /> Tambah Lowongan
               </Button>
               <Button variant="outline" onClick={() => void fetchRows()}>
-                <RefreshCcw className="mr-2 h-4 w-4" /> Refresh
+                <RefreshCcw className="mr-2 h-4 w-4" /> Muat Ulang
               </Button>
               <div className="relative min-w-[240px] flex-1">
                 <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
@@ -212,10 +295,10 @@ export default function OrgHRRecruitmentJobs() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Semua Status</SelectItem>
-                  <SelectItem value="draft">Draft</SelectItem>
-                  <SelectItem value="published">Dipublikasikan</SelectItem>
-                  <SelectItem value="closed">Ditutup</SelectItem>
-                  <SelectItem value="cancelled">Dibatalkan</SelectItem>
+                  <SelectItem value="draft">Draf</SelectItem>
+                  <SelectItem value="published">{STATUS_LABELS.published}</SelectItem>
+                  <SelectItem value="closed">{STATUS_LABELS.closed}</SelectItem>
+                  <SelectItem value="cancelled">{STATUS_LABELS.cancelled}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -223,6 +306,7 @@ export default function OrgHRRecruitmentJobs() {
             {isLoading ? (
               <p className="text-sm text-muted-foreground">Memuat lowongan...</p>
             ) : (
+              <>
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -236,31 +320,47 @@ export default function OrgHRRecruitmentJobs() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredRows.length === 0 ? (
+                  {rows.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center text-muted-foreground">
                         Belum ada data lowongan.
                       </TableCell>
                     </TableRow>
                   ) : (
-                    filteredRows.map((row) => (
-                      <TableRow key={row.id}>
+                    rows.map((row) => (
+                      <TableRow key={row.id} data-testid={`org-hr-ats-job-row-${row.id}`}>
                         <TableCell>{row.title}</TableCell>
                         <TableCell>{row.department || "-"}</TableCell>
-                        <TableCell>{row.employment_type}</TableCell>
+                        <TableCell>{EMPLOYMENT_TYPE_LABELS[row.employment_type]}</TableCell>
                         <TableCell>{row.location || "-"}</TableCell>
                         <TableCell>{row.opening_count}</TableCell>
-                        <TableCell>{row.status}</TableCell>
+                        <TableCell>{STATUS_LABELS[row.status]}</TableCell>
                         <TableCell>
-                          <Button size="sm" variant="outline" onClick={() => openEdit(row)}>
-                            Edit
-                          </Button>
+                          <div className="flex flex-wrap gap-2">
+                            <Button size="sm" variant="outline" onClick={() => openEdit(row)}>
+                              Ubah
+                            </Button>
+                            <Button size="sm" variant="outline" onClick={() => void handleDelete(row)}>
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              Hapus
+                            </Button>
+                          </div>
                         </TableCell>
                       </TableRow>
                     ))
                   )}
                 </TableBody>
               </Table>
+                <TablePaginationFooter
+                  currentPage={safePage}
+                  totalPages={totalPages}
+                  totalItems={totalItems}
+                  pageSize={PAGE_SIZE}
+                  itemLabel="lowongan"
+                  onPrevious={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                  onNext={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                />
+              </>
             )}
           </CardContent>
         </Card>
@@ -268,7 +368,7 @@ export default function OrgHRRecruitmentJobs() {
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>{editingId ? "Edit Lowongan" : "Tambah Lowongan"}</DialogTitle>
+              <DialogTitle>{editingId ? "Ubah Lowongan" : "Tambah Lowongan"}</DialogTitle>
               <DialogDescription>Isi data dasar lowongan rekrutmen.</DialogDescription>
             </DialogHeader>
             <div className="grid gap-3 py-2">
@@ -317,10 +417,10 @@ export default function OrgHRRecruitmentJobs() {
                   <Select value={form.status} onValueChange={(value) => setForm((p) => ({ ...p, status: value as JobStatus }))}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="draft">Draft</SelectItem>
-                      <SelectItem value="published">Dipublikasikan</SelectItem>
-                      <SelectItem value="closed">Ditutup</SelectItem>
-                      <SelectItem value="cancelled">Dibatalkan</SelectItem>
+                      <SelectItem value="draft">Draf</SelectItem>
+                      <SelectItem value="published">{STATUS_LABELS.published}</SelectItem>
+                      <SelectItem value="closed">{STATUS_LABELS.closed}</SelectItem>
+                      <SelectItem value="cancelled">{STATUS_LABELS.cancelled}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

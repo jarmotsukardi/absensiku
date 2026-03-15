@@ -36,6 +36,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { reportError } from '@/lib/errorLogger';
 import { buildAttendanceClientContext } from '@/lib/attendanceClientContext';
 import { debugLog } from '@/lib/debugLog';
+import { DEFAULT_TIMEZONE } from '@/lib/timezone';
 
 export interface SyncStats {
   pendingCount: number;
@@ -127,7 +128,11 @@ async function syncBatchToServer(entries: AttendanceEntry[]): Promise<BatchSyncR
   return rawResults.map(normalizeBatchItem);
 }
 
-export function useAttendanceSync(employeeId: string | null) {
+export function useAttendanceSync(
+  employeeId: string | null,
+  attendanceDate?: string,
+  timezone: string = DEFAULT_TIMEZONE,
+) {
   const [syncStats, setSyncStats] = useState<SyncStats>({
     pendingCount: 0,
     syncedCount: 0,
@@ -371,10 +376,10 @@ export function useAttendanceSync(employeeId: string | null) {
 
     const init = async () => {
       // Migrate from localStorage first
-      await migrateFromLocalStorage();
+      await migrateFromLocalStorage(attendanceDate, timezone);
 
       // Re-hydrate pending entries
-      const { pendingCount } = await rehydratePendingEntries(employeeId);
+      const { pendingCount } = await rehydratePendingEntries(employeeId, attendanceDate);
       
       if (mountedRef.current) {
         setSyncStats(prev => ({ ...prev, pendingCount }));
@@ -388,7 +393,7 @@ export function useAttendanceSync(employeeId: string | null) {
     };
 
     init();
-  }, [employeeId, performSync]);
+  }, [employeeId, performSync, attendanceDate, timezone]);
 
   // Periodic sync with adaptive interval + jitter (avoid thundering herd).
   useEffect(() => {

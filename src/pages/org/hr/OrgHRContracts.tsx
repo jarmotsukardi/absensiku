@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -17,7 +16,11 @@ import type { Database } from "@/integrations/supabase/types";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { buildPostgrestOrClause, sanitizeOrKeyword } from "@/lib/postgrestSearch";
+import { fetchSupabaseRest, fetchSupabaseRpc } from "@/lib/supabaseRestClient";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { useHrPageAccess } from "@/hooks/useHrPageAccess";
+import { useOrgHrContextNavigate } from "@/hooks/useOrgHrContextNavigate";
+import { validateContractForm } from "@/lib/hrEmploymentLifecycle";
 
 type HRContract = Database["public"]["Tables"]["hr_contracts"]["Row"];
 type HRContractInsert = Database["public"]["Tables"]["hr_contracts"]["Insert"];
@@ -39,6 +42,8 @@ type ContractFormState = {
   start_date: string;
   end_date: string;
   status: ContractStatus;
+  effective_date: string;
+  status_reason: string;
   notes: string;
 };
 
@@ -49,6 +54,8 @@ const initialFormState: ContractFormState = {
   start_date: "",
   end_date: "",
   status: "active",
+  effective_date: "",
+  status_reason: "",
   notes: "",
 };
 
@@ -60,7 +67,7 @@ const CONTRACT_TYPE_OPTIONS: Array<{ value: ContractType; label: string }> = [
 ];
 
 const STATUS_OPTIONS: Array<{ value: ContractStatus; label: string }> = [
-  { value: "draft", label: "Draft" },
+  { value: "draft", label: "Draf" },
   { value: "active", label: "Aktif" },
   { value: "ended", label: "Berakhir" },
   { value: "terminated", label: "Terminasi" },
@@ -73,16 +80,26 @@ const toContractType = (value: string): ContractType =>
 const toContractStatus = (value: string): ContractStatus =>
   value === "draft" || value === "active" || value === "ended" || value === "terminated" ? value : "draft";
 
-const NORMALIZED_MAX_DATE = "9999-12-31";
-
 const hasDateOverlap = (startA: string, endA: string | null, startB: string, endB: string | null) => {
+  const NORMALIZED_MAX_DATE = "9999-12-31";
   const normalizedEndA = endA || NORMALIZED_MAX_DATE;
   const normalizedEndB = endB || NORMALIZED_MAX_DATE;
   return startA <= normalizedEndB && startB <= normalizedEndA;
 };
 
+const readContractMeta = (value: unknown): { effective_date: string | null; status_reason: string | null } => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { effective_date: null, status_reason: null };
+  }
+  const metadata = value as Record<string, unknown>;
+  return {
+    effective_date: typeof metadata.effective_date === "string" ? metadata.effective_date : null,
+    status_reason: typeof metadata.status_reason === "string" ? metadata.status_reason : null,
+  };
+};
+
 export default function OrgHRContracts() {
-  const navigate = useNavigate();
+  const navigate = useOrgHrContextNavigate();
   const confirmDialog = useConfirmDialog();
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [employees, setEmployees] = useState<EmployeeOption[]>([]);
@@ -101,6 +118,7 @@ export default function OrgHRContracts() {
   const [sortBy, setSortBy] = useState<ContractSortKey>("start_date");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [currentPage, setCurrentPage] = useState(1);
+  const { access, isLoading: isLoadingAccess } = useHrPageAccess("/org/hr/contracts");
 
   const employeeMap = useMemo(() => new Map(employees.map((item) => [item.id, item])), [employees]);
 
@@ -198,11 +216,23 @@ export default function OrgHRContracts() {
   };
 
   const openCreateDialog = () => {
-    resetForm();
+    if (!access.canCreate) {
+      toast.error("Aksi tambah kontrak hanya tersedia untuk admin organisasi.");
+      return;
+    }
+    setEditingContractId(null);
+    setFormState({
+      ...initialFormState,
+      effective_date: new Date().toISOString().slice(0, 10),
+    });
     setIsDialogOpen(true);
   };
 
   const openEditDialog = (item: HRContract) => {
+    if (!access.canEdit) {
+      toast.error("Aksi edit kontrak hanya tersedia untuk admin organisasi.");
+      return;
+    }
     setEditingContractId(item.id);
     setFormState({
       employee_id: item.employee_id,
@@ -211,28 +241,38 @@ export default function OrgHRContracts() {
       start_date: item.start_date,
       end_date: item.end_date || "",
       status: toContractStatus(item.status),
+      effective_date: readContractMeta(item.metadata).effective_date || item.start_date,
+      status_reason: readContractMeta(item.metadata).status_reason || "",
       notes: item.notes || "",
     });
     setIsDialogOpen(true);
   };
 
   const handleSave = async () => {
+    if (!editingContractId && !access.canCreate) {
+      toast.error("Aksi tambah kontrak hanya tersedia untuk admin organisasi.");
+      return;
+    }
+    if (editingContractId && !access.canEdit) {
+      toast.error("Aksi edit kontrak hanya tersedia untuk admin organisasi.");
+      return;
+    }
     try {
       setIsSubmitting(true);
       const resolvedTenantId = tenantId || (await resolveOrgTenantId());
       if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan.");
       if (!tenantId) setTenantId(resolvedTenantId);
 
-      if (!formState.employee_id) {
-        toast.error("Pegawai wajib dipilih");
-        return;
-      }
-      if (!formState.start_date) {
-        toast.error("Tanggal mulai kontrak wajib diisi");
-        return;
-      }
-      if (formState.end_date && formState.end_date < formState.start_date) {
-        toast.error("Tanggal berakhir tidak boleh sebelum tanggal mulai");
+      const validationError = validateContractForm({
+        employeeId: formState.employee_id,
+        startDate: formState.start_date,
+        endDate: formState.end_date,
+        status: formState.status,
+        effectiveDate: formState.effective_date,
+        statusReason: formState.status_reason,
+      });
+      if (validationError) {
+        toast.error(validationError);
         return;
       }
       const normalizedStart = formState.start_date;
@@ -244,12 +284,19 @@ export default function OrgHRContracts() {
         .eq("employee_id", formState.employee_id);
       if (employeeContractsError) throw employeeContractsError;
 
-      const hasOverlapWithOtherContract = (employeeContracts || []).some((item) => {
+      const overlappingContracts = (employeeContracts || []).filter((item) => {
         if (editingContractId && item.id === editingContractId) return false;
         if (item.status === "terminated") return false;
         return hasDateOverlap(normalizedStart, normalizedEnd, item.start_date, item.end_date);
       });
-      if (hasOverlapWithOtherContract) {
+      if (formState.status === "active") {
+        const hasActiveOverlap = overlappingContracts.some((item) => item.status === "active");
+        if (hasActiveOverlap) {
+          toast.error("Tidak boleh ada lebih dari satu kontrak aktif yang overlap untuk pegawai yang sama.");
+          return;
+        }
+      }
+      if (overlappingContracts.length > 0) {
         toast.error("Rentang kontrak bentrok dengan kontrak lain untuk pegawai yang sama.");
         return;
       }
@@ -270,9 +317,10 @@ export default function OrgHRContracts() {
           return;
         }
       }
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+      const metadata = {
+        effective_date: formState.effective_date,
+        status_reason: formState.status_reason.trim() || null,
+      };
 
       const payload: HRContractInsert = {
         tenant_id: resolvedTenantId,
@@ -282,27 +330,23 @@ export default function OrgHRContracts() {
         start_date: formState.start_date,
         end_date: formState.end_date || null,
         status: formState.status,
+        metadata,
         notes: formState.notes.trim() || null,
-        created_by: user?.id || null,
-        updated_by: user?.id || null,
       };
 
       if (editingContractId) {
-        const updatePayload: HRContractUpdate = {
-          ...payload,
-          created_by: undefined,
-          updated_by: user?.id || null,
-        };
-        const { error } = await supabase
-          .from("hr_contracts")
-          .update(updatePayload)
-          .eq("id", editingContractId)
-          .eq("tenant_id", resolvedTenantId);
-        if (error) throw error;
+        await fetchSupabaseRpc("save_org_hr_contract", {
+          p_tenant_id: resolvedTenantId,
+          p_contract_id: editingContractId,
+          p_payload: payload,
+        });
         toast.success("Kontrak kerja berhasil diperbarui");
       } else {
-        const { error } = await supabase.from("hr_contracts").insert(payload);
-        if (error) throw error;
+        await fetchSupabaseRpc("save_org_hr_contract", {
+          p_tenant_id: resolvedTenantId,
+          p_contract_id: null,
+          p_payload: payload,
+        });
         toast.success("Kontrak kerja berhasil ditambahkan");
       }
 
@@ -329,7 +373,23 @@ export default function OrgHRContracts() {
     }
   };
 
+  useEffect(() => {
+    if (!isDialogOpen || editingContractId) return;
+    setFormState((prev) => {
+      if (!prev.start_date) return prev;
+      if (prev.effective_date && prev.effective_date !== prev.start_date) return prev;
+      return {
+        ...prev,
+        effective_date: prev.start_date,
+      };
+    });
+  }, [formState.start_date, formState.effective_date, isDialogOpen, editingContractId]);
+
   const handleDelete = async (item: HRContract) => {
+    if (!access.canDelete) {
+      toast.error("Aksi hapus kontrak hanya tersedia untuk admin organisasi.");
+      return;
+    }
     if (!(await confirmDialog({
       title: "Hapus Kontrak Kerja",
       description: `Yakin ingin menghapus kontrak ${item.contract_number || item.id}?`,
@@ -343,13 +403,10 @@ export default function OrgHRContracts() {
       const resolvedTenantId = tenantId || (await resolveOrgTenantId());
       if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan.");
       if (!tenantId) setTenantId(resolvedTenantId);
-
-      const { error } = await supabase
-        .from("hr_contracts")
-        .delete()
-        .eq("id", item.id)
-        .eq("tenant_id", resolvedTenantId);
-      if (error) throw error;
+      await fetchSupabaseRpc("delete_org_hr_contract", {
+        p_tenant_id: resolvedTenantId,
+        p_contract_id: item.id,
+      });
 
       toast.success("Kontrak kerja berhasil dihapus");
       await fetchData();
@@ -360,6 +417,10 @@ export default function OrgHRContracts() {
   };
 
   const handleExportCsv = async () => {
+    if (!access.canExport) {
+      toast.error("Aksi export kontrak hanya tersedia untuk admin organisasi.");
+      return;
+    }
     if (totalContracts === 0) {
       toast.error("Tidak ada data kontrak untuk diekspor.");
       return;
@@ -395,9 +456,10 @@ export default function OrgHRContracts() {
     }
 
     const lines = [
-      ["employee_name", "employee_email", "contract_number", "contract_type", "start_date", "end_date", "status", "notes"].join(","),
+      ["employee_name", "employee_email", "contract_number", "contract_type", "start_date", "end_date", "status", "effective_date", "status_reason", "notes"].join(","),
       ...(data || []).map((item) => {
         const employee = employeeMap.get(item.employee_id);
+        const meta = readContractMeta(item.metadata);
         return [
           `"${(employee?.name || "").replaceAll("\"", "\"\"")}"`,
           employee?.email || "",
@@ -406,6 +468,8 @@ export default function OrgHRContracts() {
           item.start_date,
           item.end_date || "",
           item.status,
+          meta.effective_date || "",
+          `"${(meta.status_reason || "").replaceAll("\"", "\"\"")}"`,
           `"${(item.notes || "").replaceAll("\"", "\"\"")}"`,
         ].join(",");
       }),
@@ -419,7 +483,7 @@ export default function OrgHRContracts() {
     anchor.click();
     document.body.removeChild(anchor);
     URL.revokeObjectURL(url);
-    toast.success("Export CSV kontrak kerja berhasil.");
+    toast.success("Ekspor CSV kontrak kerja berhasil.");
   };
 
   const getTimelineRisk = useCallback((item: HRContract) => {
@@ -440,20 +504,23 @@ export default function OrgHRContracts() {
       <div className="space-y-6">
         <div className="flex items-center justify-between gap-3">
           <div className="space-y-2">
-            <Badge variant="outline">HR Core</Badge>
+            <Badge variant="outline">Hubungan Kerja</Badge>
             <h1 className="text-2xl font-semibold tracking-tight">Kontrak Kerja</h1>
-            <p className="text-sm text-muted-foreground">Kelola kontrak pegawai aktif per tenant (PKWT/PKWTT/magang).</p>
+            <p className="text-sm text-muted-foreground">Kelola masa hubungan kerja pegawai dan dokumen kontrak utama per tenant.</p>
+            <p className="text-xs text-muted-foreground">
+              Capability halaman: {isLoadingAccess ? "memverifikasi..." : access.canEdit ? "admin dapat kelola penuh" : "mode hanya-baca"}
+            </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => navigate("/org/hr")}> 
+            <Button variant="outline" onClick={() => navigate("/org/hr")}>
               <ArrowLeft className="mr-2 h-4 w-4" />
               Kembali
             </Button>
-            <Button variant="outline" onClick={() => void handleExportCsv()}>
+            <Button variant="outline" onClick={() => void handleExportCsv()} disabled={isLoadingAccess || !access.canExport}>
               <Download className="mr-2 h-4 w-4" />
-              Export CSV
+              Ekspor CSV
             </Button>
-            <Button onClick={openCreateDialog}>
+            <Button onClick={openCreateDialog} disabled={isLoadingAccess || !access.canCreate}>
               <Plus className="mr-2 h-4 w-4" />
               Tambah Kontrak
             </Button>
@@ -527,12 +594,14 @@ export default function OrgHRContracts() {
                       <TableHead>Tipe</TableHead>
                       <TableHead>Masa Berlaku</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Status Efektif</TableHead>
                       <TableHead className="text-right">Aksi</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {contracts.map((item) => {
                       const employee = employeeMap.get(item.employee_id);
+                      const meta = readContractMeta(item.metadata);
                       return (
                         <TableRow key={item.id}>
                           <TableCell>
@@ -553,12 +622,20 @@ export default function OrgHRContracts() {
                               ) : null}
                             </div>
                           </TableCell>
+                          <TableCell>
+                            <div className="space-y-1 text-xs">
+                              <div>{meta.effective_date || item.start_date}</div>
+                              <div className="max-w-[220px] truncate text-muted-foreground">
+                                {meta.status_reason || "Belum ada alasan status"}
+                              </div>
+                            </div>
+                          </TableCell>
                           <TableCell className="text-right">
                             <div className="flex items-center justify-end gap-1">
-                              <Button size="icon" variant="ghost" onClick={() => openEditDialog(item)}>
+                              <Button size="icon" variant="ghost" onClick={() => openEditDialog(item)} disabled={isLoadingAccess || !access.canEdit}>
                                 <Pencil className="h-4 w-4" />
                               </Button>
-                              <Button size="icon" variant="ghost" onClick={() => void handleDelete(item)}>
+                              <Button size="icon" variant="ghost" onClick={() => void handleDelete(item)} disabled={isLoadingAccess || !access.canDelete}>
                                 <Trash2 className="h-4 w-4 text-destructive" />
                               </Button>
                             </div>
@@ -635,6 +712,15 @@ export default function OrgHRContracts() {
                 <Label htmlFor="end_date">Tanggal Berakhir</Label>
                 <Input id="end_date" type="date" value={formState.end_date} onChange={(event) => setFormState((prev) => ({ ...prev, end_date: event.target.value }))} />
               </div>
+              <div className="space-y-2">
+                <Label htmlFor="effective_date">Tanggal Efektif</Label>
+                <Input
+                  id="effective_date"
+                  type="date"
+                  value={formState.effective_date}
+                  onChange={(event) => setFormState((prev) => ({ ...prev, effective_date: event.target.value }))}
+                />
+              </div>
 
               <div className="space-y-2 md:col-span-2">
                 <Label>Status</Label>
@@ -649,6 +735,16 @@ export default function OrgHRContracts() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="space-y-2 md:col-span-2">
+                <Label htmlFor="status_reason">Alasan Status Efektif</Label>
+                <Textarea
+                  id="status_reason"
+                  value={formState.status_reason}
+                  onChange={(event) => setFormState((prev) => ({ ...prev, status_reason: event.target.value }))}
+                  placeholder="Mis. kontrak baru, perpanjangan, terminasi, atau koreksi administratif"
+                  rows={2}
+                />
+              </div>
             </div>
 
             <div className="space-y-2">
@@ -658,7 +754,17 @@ export default function OrgHRContracts() {
 
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsDialogOpen(false)} disabled={isSubmitting}>Batal</Button>
-              <Button onClick={() => void handleSave()} disabled={isSubmitting}>{isSubmitting ? "Menyimpan..." : "Simpan"}</Button>
+              <Button
+                onClick={() => void handleSave()}
+                disabled={
+                  isSubmitting ||
+                  isLoadingAccess ||
+                  (!editingContractId && !access.canCreate) ||
+                  (Boolean(editingContractId) && !access.canEdit)
+                }
+              >
+                {isSubmitting ? "Menyimpan..." : "Simpan"}
+              </Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

@@ -7,6 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ShieldCheck } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { getHrRoutePolicy } from "@/lib/hrRouteAccess";
 import { toast } from "sonner";
 
 type SectionConfig = {
@@ -55,20 +56,33 @@ type TenantOption = {
   code: string;
 };
 
+const getOrgTargetStatusLabel = (path: string): string => {
+  const policy = getHrRoutePolicy(path);
+  if (policy.status === "redirect") return "Alias";
+  if (policy.status === "internal") return "Internal";
+  if (policy.status === "tunda") return "Tunda";
+  return "Aktif";
+};
+
+const getOrgTargetStatusVariant = (path: string): "default" | "secondary" | "outline" => {
+  const policy = getHrRoutePolicy(path);
+  return policy.status === "tampil" ? "secondary" : "outline";
+};
+
 const SECTION_CONFIG: Record<string, SectionConfig> = {
   "status-absensi-hari-ini": {
     title: "Status Absensi Hari Ini",
-    description: "Halaman mandiri HR superadmin untuk pemantauan status kehadiran harian.",
-    domain: "Dashboard",
+    description: "Halaman mandiri HR super admin untuk pemantauan status kehadiran harian.",
+    domain: "Ringkasan",
     checkpoints: ["Ringkasan status hadir harian", "Anomali keterlambatan", "Tindak lanjut operasional"],
     adminControls: ["/admin/hr", "/admin/hr/audit", "/admin/hr/error-logs"],
     orgTargets: ["/org/hr/attendance-insights", "/org/hr/attendance-recap"],
   },
   "notifikasi-sistem": {
     title: "Notifikasi Sistem",
-    description: "Kontrol notifikasi HR lintas tenant pada workspace superadmin HR.",
-    domain: "Dashboard",
-    checkpoints: ["Template notifikasi HR", "Channel notifikasi aktif", "Riwayat pengiriman notifikasi"],
+    description: "Kontrol notifikasi HR lintas tenant pada area kerja super admin HR.",
+    domain: "Ringkasan",
+    checkpoints: ["Templat notifikasi HR", "Kanal notifikasi aktif", "Riwayat pengiriman notifikasi"],
     adminControls: ["/admin/hr/settings#alert-defaults", "/admin/hr/settings#alert-override"],
     orgTargets: ["/org/hr/notifications", "/org/hr/dashboard-notifications"],
   },
@@ -78,7 +92,7 @@ const SECTION_CONFIG: Record<string, SectionConfig> = {
     domain: "Manajemen Kehadiran",
     checkpoints: ["Daftar hari libur nasional", "Sinkronisasi kalender kerja", "Dampak ke rekap absensi"],
     adminControls: ["/admin/hr/policies", "/admin/hr/settings#coverage-map"],
-    orgTargets: ["/org/hr/national-holidays", "/org/hr/work-calendar"],
+    orgTargets: ["/org/hr/reports", "/org/hr/work-calendar"],
   },
   "pengaturan-keterlambatan": {
     title: "Pengaturan Keterlambatan",
@@ -90,7 +104,7 @@ const SECTION_CONFIG: Record<string, SectionConfig> = {
   },
   "integrasi-fingerprint-gps": {
     title: "Integrasi Fingerprint / GPS",
-    description: "Konfigurasi integrasi perangkat absensi pada workspace HR superadmin.",
+    description: "Konfigurasi integrasi perangkat absensi pada area kerja HR super admin.",
     domain: "Manajemen Kehadiran",
     checkpoints: ["Status integrasi perangkat", "Kanal fallback absensi", "Audit sinkronisasi data"],
     adminControls: ["/admin/hr/settings#workspace-tenant", "/admin/hr/error-logs"],
@@ -122,7 +136,7 @@ const SECTION_CONFIG: Record<string, SectionConfig> = {
   },
   departemen: {
     title: "Departemen",
-    description: "Kontrol baseline departemen untuk seluruh tenant HR.",
+    description: "Kontrol acuan bawaan departemen untuk seluruh tenant HR.",
     domain: "Tata Kelola Tenant",
     checkpoints: ["Standardisasi master departemen", "Cek duplikasi departemen", "Kesesuaian pemetaan pegawai"],
     adminControls: ["/admin/hr/tenants", "/admin/hr/audit"],
@@ -154,7 +168,7 @@ const SECTION_CONFIG: Record<string, SectionConfig> = {
   },
   "lokasi-kerja": {
     title: "Lokasi Kerja",
-    description: "Baseline lokasi kerja tenant untuk modul HR.",
+    description: "Acuan bawaan lokasi kerja tenant untuk modul HR.",
     domain: "Tata Kelola Tenant",
     checkpoints: ["Kelengkapan lokasi kerja", "Pemakaian lokasi pada absensi", "Konsistensi data geo"],
     adminControls: ["/admin/hr/tenants", "/admin/hr/settings#coverage-map"],
@@ -164,46 +178,46 @@ const SECTION_CONFIG: Record<string, SectionConfig> = {
     title: "Kalender Kerja",
     description: "Kontrol kalender kerja global untuk operasional tenant HR.",
     domain: "Tenant Governance",
-    checkpoints: ["Template kalender kerja", "Sinkronisasi hari kerja", "Dampak ke cuti dan absensi"],
+    checkpoints: ["Templat kalender kerja", "Sinkronisasi hari kerja", "Dampak ke cuti dan absensi"],
     adminControls: ["/admin/hr/policies", "/admin/hr/settings#coverage-map"],
-    orgTargets: ["/org/hr/work-calendar", "/org/hr/national-holidays"],
+    orgTargets: ["/org/hr/work-calendar", "/org/hr/reports"],
   },
   "lokasi-kalender-kerja": {
     title: "Lokasi & Kalender Kerja",
     description: "Kontrol lokasi kerja dan kalender operasional tenant dalam satu panel governance.",
     domain: "Tenant Governance",
-    checkpoints: ["Kelengkapan lokasi kerja", "Template kalender kerja", "Sinkronisasi hari libur dan aturan kehadiran"],
+    checkpoints: ["Kelengkapan lokasi kerja", "Templat kalender kerja", "Sinkronisasi hari libur dan aturan kehadiran"],
     adminControls: ["/admin/hr/tenants", "/admin/hr/policies", "/admin/hr/settings#coverage-map"],
-    orgTargets: ["/org/hr/work-locations", "/org/hr/work-calendar", "/org/hr/national-holidays"],
+    orgTargets: ["/org/hr/work-locations", "/org/hr/work-calendar", "/org/hr/reports"],
   },
   "cuti-izin-baseline": {
-    title: "Cuti & Izin Baseline",
-    description: "Baseline kebijakan cuti dan izin di level superadmin.",
-    domain: "Kebijakan & Baseline",
-    checkpoints: ["Aturan jenis cuti", "Kuota dan masa berlaku", "Approval flow default tenant"],
+    title: "Cuti & Izin Acuan Bawaan",
+    description: "Acuan bawaan kebijakan cuti dan izin di level super admin.",
+    domain: "Kebijakan & Acuan Bawaan",
+    checkpoints: ["Aturan jenis cuti", "Kuota dan masa berlaku", "Alur persetujuan tenant bawaan"],
     adminControls: ["/admin/hr/policies", "/admin/hr/settings#coverage-map"],
     orgTargets: ["/org/hr/leave-types", "/org/hr/leave-quota", "/org/hr/leave-approval"],
   },
   "kontrak-kerja-baseline": {
-    title: "Kontrak Kerja Baseline",
-    description: "Standarisasi baseline kontrak kerja pada semua tenant HR.",
-    domain: "Kebijakan & Baseline",
-    checkpoints: ["Masa berlaku kontrak", "Template kontrak default", "Monitoring kontrak mendekati akhir"],
+    title: "Kontrak Kerja Acuan Bawaan",
+    description: "Standarisasi acuan bawaan kontrak kerja pada semua tenant HR.",
+    domain: "Kebijakan & Acuan Bawaan",
+    checkpoints: ["Masa berlaku kontrak", "Templat kontrak bawaan", "Pemantauan kontrak mendekati akhir"],
     adminControls: ["/admin/hr/policies", "/admin/hr/audit"],
     orgTargets: ["/org/hr/contracts", "/org/hr/contract-templates"],
   },
   "kpi-performance-baseline": {
-    title: "KPI & Performance Baseline",
-    description: "Baseline pengaturan KPI dan evaluasi performa HR.",
-    domain: "Kebijakan & Baseline",
-    checkpoints: ["Template KPI default", "Periode evaluasi", "Governance 360 review"],
+    title: "KPI & Kinerja Acuan Bawaan",
+    description: "Acuan bawaan pengaturan KPI dan evaluasi kinerja HR.",
+    domain: "Kebijakan & Acuan Bawaan",
+    checkpoints: ["Templat KPI bawaan", "Periode evaluasi", "Tata kelola ulasan 360"],
     adminControls: ["/admin/hr/policies", "/admin/hr/settings#coverage-map"],
     orgTargets: ["/org/hr/kpi", "/org/hr/performance-periods", "/org/hr/review-360"],
   },
   "analitik-cuti": {
     title: "Analitik Cuti",
-    description: "Monitoring analitik cuti lintas tenant untuk evaluasi kebijakan.",
-    domain: "Monitoring & Kepatuhan",
+    description: "Pemantauan analitik cuti lintas tenant untuk evaluasi kebijakan.",
+    domain: "Pemantauan & Kepatuhan",
     checkpoints: ["Tren penggunaan cuti", "Deteksi anomali kuota", "Kesesuaian approval flow"],
     adminControls: ["/admin/hr/audit", "/admin/hr/error-logs"],
     orgTargets: ["/org/hr/leave-recap", "/org/hr/reports"],
@@ -211,21 +225,21 @@ const SECTION_CONFIG: Record<string, SectionConfig> = {
   "compliance-dokumen": {
     title: "Kepatuhan Dokumen",
     description: "Pengawasan kepatuhan dokumen ketenagakerjaan lintas tenant.",
-    domain: "Monitoring & Kepatuhan",
-    checkpoints: ["Kelengkapan dokumen karyawan", "Validitas template legal", "Audit dokumen kritikal"],
+    domain: "Pemantauan & Kepatuhan",
+    checkpoints: ["Kelengkapan dokumen karyawan", "Validitas templat legal", "Audit dokumen kritikal"],
     adminControls: ["/admin/hr/audit", "/admin/hr/policies"],
     orgTargets: ["/org/hr/documents", "/org/hr/document-templates", "/org/hr/digital-signature"],
   },
   "sla-monitoring": {
-    title: "Monitoring SLA",
+    title: "Pemantauan SLA",
     description: "Pemantauan SLA penanganan isu HR pada tenant.",
     domain: "Operasional Dukungan",
-    checkpoints: ["Waktu respon tiket", "Breach SLA kritikal", "Kapasitas tim dukungan HR"],
+    checkpoints: ["Waktu respon tiket", "Pelanggaran SLA kritikal", "Kapasitas tim dukungan HR"],
     adminControls: ["/admin/hr/help/tickets", "/admin/hr/audit", "/admin/hr/error-logs"],
     orgTargets: ["/org/hr/help/tickets", "/org/hr/help/support"],
   },
   "playbook-eskalasi": {
-    title: "Playbook Eskalasi",
+    title: "Panduan Eskalasi",
     description: "Panduan eskalasi standar untuk insiden dan tiket HR.",
     domain: "Operasional Dukungan",
     checkpoints: ["Matriks eskalasi prioritas", "Jalur komunikasi insiden", "Postmortem dan tindak lanjut"],
@@ -242,9 +256,9 @@ const SECTION_CONFIG: Record<string, SectionConfig> = {
   },
   "rekrutmen-ats": {
     title: "Rekrutmen (ATS)",
-    description: "Governance superadmin untuk modul rekrutmen HR berbasis pipeline.",
+    description: "Tata kelola super admin untuk modul rekrutmen HR berbasis pipeline.",
     domain: "Rekrutmen",
-    checkpoints: ["Standar pipeline kandidat", "SLA tahapan seleksi", "Template evaluasi interview"],
+    checkpoints: ["Standar pipeline kandidat", "SLA tahapan seleksi", "Templat evaluasi wawancara"],
     adminControls: ["/admin/hr/policies", "/admin/hr/audit", "/admin/hr/settings#coverage-map"],
     orgTargets: [
       "/org/hr/recruitment/jobs",
@@ -255,7 +269,7 @@ const SECTION_CONFIG: Record<string, SectionConfig> = {
   },
   "layanan-mandiri-karyawan": {
     title: "Layanan Mandiri Karyawan (ESS)",
-    description: "Kontrol baseline superadmin untuk pengalaman self service karyawan.",
+    description: "Kontrol acuan bawaan super admin untuk pengalaman layanan mandiri karyawan.",
     domain: "Layanan Mandiri Karyawan",
     checkpoints: ["Konsistensi alur pengajuan", "Kualitas data personal", "Audit interaksi ESS lintas tenant"],
     adminControls: ["/admin/hr/settings#workspace-tenant", "/admin/hr/audit", "/admin/hr/policies"],
@@ -269,15 +283,15 @@ const SECTION_CONFIG: Record<string, SectionConfig> = {
   },
   "user-management": {
     title: "Manajemen Pengguna",
-    description: "Kontrol manajemen pengguna khusus konteks HR superadmin.",
+    description: "Kontrol manajemen pengguna khusus konteks HR super admin.",
     domain: "Manajemen Pengguna & Akses",
-    checkpoints: ["Daftar user HR", "Status akses user", "Review user lintas tenant"],
+    checkpoints: ["Daftar user HR", "Status akses user", "Tinjau user lintas tenant"],
     adminControls: ["/admin/hr/tenants", "/admin/hr/audit"],
     orgTargets: ["/org/hr/users"],
   },
   "role-management": {
     title: "Manajemen Peran",
-    description: "Halaman mandiri pengaturan peran pada workspace HR.",
+    description: "Halaman mandiri pengaturan peran pada area kerja HR.",
     domain: "Manajemen Pengguna & Akses",
     checkpoints: ["Daftar role aktif", "Matriks kewenangan", "Audit perubahan role"],
     adminControls: ["/admin/hr/settings#ticket-defaults", "/admin/hr/audit"],
@@ -287,21 +301,21 @@ const SECTION_CONFIG: Record<string, SectionConfig> = {
     title: "Pengaturan Izin",
     description: "Kontrol izin granuler untuk modul HR.",
     domain: "Manajemen Pengguna & Akses",
-    checkpoints: ["Scope permission per fitur", "Review akses kritikal", "Konsistensi role-permission"],
+    checkpoints: ["Cakupan izin per fitur", "Tinjauan akses kritikal", "Konsistensi peran-izin"],
     adminControls: ["/admin/hr/settings#ticket-defaults", "/admin/hr/audit"],
     orgTargets: ["/org/hr/permissions", "/org/hr/approval-hierarchy"],
   },
   "general-settings": {
     title: "Pengaturan Umum",
-    description: "Pengaturan umum modul HR pada level superadmin.",
+    description: "Pengaturan umum modul HR pada level super admin.",
     domain: "Pengaturan Sistem",
-    checkpoints: ["Default workspace tenant", "Kebijakan global HR", "Konfigurasi baseline tenant"],
+    checkpoints: ["Area kerja bawaan tenant", "Kebijakan global HR", "Konfigurasi acuan bawaan tenant"],
     adminControls: ["/admin/hr/settings#workspace-default", "/admin/hr/settings#workspace-tenant"],
     orgTargets: ["/org/hr/general-settings"],
   },
   "branding-logo-warna": {
     title: "Branding (Logo, Warna)",
-    description: "Konfigurasi branding yang dipakai pada pengalaman workspace HR.",
+    description: "Konfigurasi branding yang dipakai pada pengalaman area kerja HR.",
     domain: "Pengaturan Sistem",
     checkpoints: ["Logo & identitas visual", "Konsistensi tema HR", "Kebijakan branding tenant"],
     adminControls: ["/admin/hr/profile", "/admin/hr/settings#coverage-map"],
@@ -311,7 +325,7 @@ const SECTION_CONFIG: Record<string, SectionConfig> = {
     title: "Konfigurasi Email",
     description: "Pengaturan email untuk notifikasi modul HR.",
     domain: "Pengaturan Sistem",
-    checkpoints: ["Template email HR", "Endpoint email", "Kesehatan pengiriman email"],
+    checkpoints: ["Templat email HR", "Endpoint email", "Kesehatan pengiriman email"],
     adminControls: ["/admin/hr/settings#alert-defaults", "/admin/hr/settings#alert-override"],
     orgTargets: ["/org/hr/notifications"],
   },
@@ -327,7 +341,7 @@ const SECTION_CONFIG: Record<string, SectionConfig> = {
     title: "Integrasi API",
     description: "Pengelolaan integrasi API lintas kebutuhan HR.",
     domain: "Pengaturan Sistem",
-    checkpoints: ["Endpoint integrasi aktif", "Validasi payload", "Monitoring error integrasi"],
+    checkpoints: ["Endpoint integrasi aktif", "Validasi payload", "Pemantauan error integrasi"],
     adminControls: ["/admin/hr/settings#workspace-tenant", "/admin/hr/error-logs"],
     orgTargets: ["/org/hr/attendance-integrations"],
   },
@@ -340,18 +354,18 @@ const SECTION_CONFIG: Record<string, SectionConfig> = {
     orgTargets: ["/org/hr/backup"],
   },
   "import-export-data": {
-    title: "Import / Export Data",
-    description: "Pusat kontrol import/export data HR lintas tenant.",
+    title: "Impor / Ekspor Data",
+    description: "Pusat kontrol impor/ekspor data HR lintas tenant.",
     domain: "Pengaturan Sistem",
-    checkpoints: ["Template import aktif", "Validasi data import", "Riwayat export data HR"],
+    checkpoints: ["Templat impor aktif", "Validasi data impor", "Riwayat ekspor data HR"],
     adminControls: ["/admin/hr/policies", "/admin/hr/audit"],
     orgTargets: ["/org/hr/import-export"],
   },
   "report-absensi": {
-    title: "Report Absensi",
-    description: "Halaman mandiri report absensi pada workspace HR superadmin.",
+    title: "Laporan Absensi",
+    description: "Halaman mandiri laporan absensi pada area kerja HR super admin.",
     domain: "Pelaporan",
-    checkpoints: ["Filter laporan absensi", "Kualitas data laporan", "Distribusi report lintas tenant"],
+    checkpoints: ["Filter laporan absensi", "Kualitas data laporan", "Distribusi laporan lintas tenant"],
     adminControls: ["/admin/hr", "/admin/hr/audit", "/admin/hr/error-logs"],
     orgTargets: ["/org/hr/attendance-recap", "/org/hr/reports"],
   },
@@ -374,7 +388,7 @@ const OPERATIONAL_PLAYBOOK: Record<string, OperationalPlaybook> = {
       "Kontrol relasi unit terhadap data pegawai aktif.",
     ],
     deliverables: [
-      "Template struktur organisasi baseline tenant.",
+      "Templat struktur organisasi acuan bawaan tenant.",
       "Daftar anomali unit/departemen/divisi untuk tindak lanjut.",
       "Matriks kepemilikan unit oleh admin tenant.",
     ],
@@ -391,14 +405,14 @@ const OPERATIONAL_PLAYBOOK: Record<string, OperationalPlaybook> = {
       "Sinkronisasi jabatan dengan struktur organisasi.",
     ],
     deliverables: [
-      "Kamus jabatan & grade standar superadmin.",
-      "Daftar gap jabatan tenant terhadap baseline.",
+      "Kamus jabatan & grade standar super admin.",
+      "Daftar gap jabatan tenant terhadap acuan bawaan.",
       "Rekomendasi harmonisasi jenjang karier.",
     ],
     actions: [
       { label: "Kebijakan HR", path: "/admin/hr/policies" },
       { label: "Audit HR", path: "/admin/hr/audit" },
-      { label: "Pengaturan HR", path: "/admin/hr/settings#coverage-map" },
+      { label: "Pengaturan", path: "/admin/hr/settings#coverage-map" },
     ],
   },
   "lokasi-kalender-kerja": {
@@ -409,12 +423,12 @@ const OPERATIONAL_PLAYBOOK: Record<string, OperationalPlaybook> = {
     ],
     deliverables: [
       "Daftar lokasi kerja tervalidasi lintas tenant.",
-      "Template kalender kerja baseline.",
+      "Templat kalender kerja acuan bawaan.",
       "Laporan tenant dengan mismatch kalender/libur.",
     ],
     actions: [
       { label: "Buka Tenant HR", path: "/admin/hr/tenants" },
-      { label: "Pengaturan HR", path: "/admin/hr/settings#coverage-map" },
+      { label: "Pengaturan", path: "/admin/hr/settings#coverage-map" },
       { label: "Log Error HR", path: "/admin/hr/error-logs" },
     ],
   },
@@ -451,12 +465,14 @@ export default function AdminHRSectionBridge() {
     return (
       SECTION_CONFIG[canonicalSectionKey] || {
         title: "Bagian HR",
-        description: "Halaman mandiri untuk bagian HR superadmin.",
-        domain: "HR Workspace",
-        checkpoints: ["Validasi cakupan section", "Konfigurasi baseline", "Monitoring operasional"],
+        description: "Halaman mandiri untuk bagian HR super admin.",
+        domain: "Area Kerja HR",
+        checkpoints: ["Validasi cakupan bagian", "Konfigurasi acuan bawaan", "Pemantauan operasional"],
       }
     );
   }, [canonicalSectionKey]);
+  const orgTargets = config.orgTargets || ["/org/hr"];
+  const orgTargetsContainNonFinalRoute = orgTargets.some((path) => getHrRoutePolicy(path).status !== "tampil");
   const playbook = useMemo<OperationalPlaybook | null>(
     () => OPERATIONAL_PLAYBOOK[canonicalSectionKey] || null,
     [canonicalSectionKey],
@@ -675,7 +691,7 @@ export default function AdminHRSectionBridge() {
               note: "Kontrak status aktif terkait pemetaan jabatan",
             },
             {
-              label: "Kontrak Pending",
+              label: "Kontrak Menunggu",
               value: contractPending.count || 0,
               note: "Kontrak menunggu aktivasi/penetapan",
             },
@@ -749,9 +765,9 @@ export default function AdminHRSectionBridge() {
             note: "Jumlah master lokasi kantor lintas tenant",
           },
           {
-            label: "Total Template Jam Kerja",
+            label: "Total Templat Jam Kerja",
             value: workHoursTotal.count || 0,
-            note: "Template shift/jam kerja yang tersedia",
+            note: "Templat shift/jam kerja yang tersedia",
           },
           {
             label: "Pegawai Tanpa Lokasi",
@@ -785,7 +801,7 @@ export default function AdminHRSectionBridge() {
               tenantLabel: tenantMap.get(row.tenant_id) || row.tenant_id,
               statusLabel: row.is_active ? "Aktif" : "Nonaktif",
               updatedAt: row.updated_at,
-              meta: "Template jam kerja",
+              meta: "Templat jam kerja",
             })),
             ...(holidayRows.data || []).map((row) => ({
               id: `holiday-${row.id}`,
@@ -831,7 +847,7 @@ export default function AdminHRSectionBridge() {
         <Card>
           <CardHeader>
             <CardTitle>KPI Ringkas Section</CardTitle>
-            <CardDescription>Indikator lintas tenant yang relevan untuk triase superadmin HR.</CardDescription>
+            <CardDescription>Indikator lintas tenant yang relevan untuk triase super admin HR.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             <div className="rounded-lg border p-3">
@@ -860,7 +876,7 @@ export default function AdminHRSectionBridge() {
         <Card>
           <CardHeader>
             <div className="flex items-center gap-2">
-              <Badge variant="outline">Halaman Mandiri HR</Badge>
+              <Badge variant="outline">Bagian Admin HR</Badge>
             </div>
             <CardTitle>{config.title}</CardTitle>
             <CardDescription>{config.description}</CardDescription>
@@ -879,8 +895,11 @@ export default function AdminHRSectionBridge() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Relasi Kontrol Section</CardTitle>
-            <CardDescription>Jalur kontrol admin dan target modul org terkait section ini.</CardDescription>
+            <CardTitle>Relasi Kontrol Bagian</CardTitle>
+            <CardDescription>
+              Jalur kontrol admin dan target modul org terkait section ini.
+              {orgTargetsContainNonFinalRoute ? " Beberapa target org masih berupa alias atau rute internal." : ""}
+            </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2 rounded-lg border p-3">
@@ -893,8 +912,11 @@ export default function AdminHRSectionBridge() {
             </div>
             <div className="space-y-2 rounded-lg border p-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Target Org</p>
-              {(config.orgTargets || ["/org/hr"]).map((path) => (
-                <Badge key={path} variant="secondary" className="mr-2 mb-2">{path}</Badge>
+              {orgTargets.map((path) => (
+                <div key={path} className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2">
+                  <span className="font-mono text-xs">{path}</span>
+                  <Badge variant={getOrgTargetStatusVariant(path)}>{getOrgTargetStatusLabel(path)}</Badge>
+                </div>
               ))}
             </div>
           </CardContent>
@@ -903,8 +925,8 @@ export default function AdminHRSectionBridge() {
         {sectionMetrics.length > 0 ? (
           <Card>
             <CardHeader>
-              <CardTitle>Metrik Operasional Section</CardTitle>
-              <CardDescription>Ringkasan data inti untuk eksekusi kontrol harian superadmin.</CardDescription>
+            <CardTitle>Metrik Operasional Bagian</CardTitle>
+              <CardDescription>Ringkasan data inti untuk eksekusi kontrol harian super admin.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-wrap items-center gap-2">
@@ -940,7 +962,7 @@ export default function AdminHRSectionBridge() {
           <Card>
             <CardHeader>
               <CardTitle>Data Operasional Terbaru</CardTitle>
-              <CardDescription>Item terbaru yang perlu review cepat oleh superadmin.</CardDescription>
+              <CardDescription>Item terbaru yang perlu tinjauan cepat oleh super admin.</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-2">
@@ -974,7 +996,7 @@ export default function AdminHRSectionBridge() {
           <Card>
             <CardHeader>
               <CardTitle>Rencana Operasional</CardTitle>
-              <CardDescription>Checklist praktis untuk eksekusi superadmin pada section ini.</CardDescription>
+              <CardDescription>Checklist praktis untuk eksekusi super admin pada bagian ini.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="rounded-lg border p-3">

@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import type { TablesUpdate } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import { logAuditIfEnabled } from "@/lib/auditLoggingPolicy";
  
 export interface OvertimeRequest {
    id: string;
@@ -322,6 +323,7 @@ export function useOvertimeRequests(filters?: {
      rejectionReason?: string
    ): Promise<boolean> => {
      try {
+       const targetRequest = requests.find((item) => item.id === requestId) || null;
        const updates: TablesUpdate<"overtime_requests"> = {
          status: approved ? "approved" : "rejected",
          approved_by: approverId,
@@ -339,6 +341,35 @@ export function useOvertimeRequests(filters?: {
          .eq("id", requestId);
  
        if (error) throw error;
+
+       if (targetRequest) {
+         const {
+           data: { user },
+         } = await supabase.auth.getUser();
+        await logAuditIfEnabled({
+          tenantId: targetRequest.tenant_id,
+          payload: {
+            tenant_id: targetRequest.tenant_id,
+            employee_id: targetRequest.employee_id,
+            user_id: user?.id || null,
+            table_name: "overtime_requests",
+            action: approved ? "overtime_request_approved" : "overtime_request_rejected",
+            record_id: targetRequest.id,
+            old_values: {
+              status: targetRequest.status,
+              total_hours: targetRequest.total_hours,
+              request_number: targetRequest.request_number,
+            },
+            new_values: {
+              status: approved ? "approved" : "rejected",
+              total_hours: targetRequest.total_hours,
+              request_number: targetRequest.request_number,
+              approved_by: approverId,
+              rejection_reason: approved ? null : rejectionReason || null,
+            },
+          },
+        });
+      }
  
        toast.success(approved ? "Lembur disetujui" : "Lembur ditolak");
        await fetchRequests();

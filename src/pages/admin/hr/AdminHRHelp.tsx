@@ -13,13 +13,13 @@ import { toast } from "sonner";
 const HELPDESK_LINKS = [
   {
     title: "Tiket HR",
-    description: "Pantau dan tindaklanjuti tiket operasional HR lintas tenant.",
+      description: "Pantau dan tindak lanjuti tiket operasional HR lintas tenant.",
     path: "/admin/hr/help/tickets",
     icon: Ticket,
   },
   {
     title: "FAQ HR",
-    description: "Rangkuman pertanyaan umum dan jawaban standar untuk tim support HR.",
+    description: "Rangkuman pertanyaan umum dan jawaban standar untuk tim dukungan HR.",
     path: "/admin/hr/help/faq",
     icon: HelpCircle,
   },
@@ -63,7 +63,7 @@ export default function AdminHRHelp() {
         setTenantOptions((data || []) as TenantOption[]);
       } catch (error) {
         const ref = reportError(error, "admin.hr.help.tenants");
-        toast.error(appendErrorReference("Gagal memuat daftar tenant helpdesk HR", ref));
+      toast.error(appendErrorReference("Gagal memuat daftar tenant bantuan HR", ref));
       }
     };
     void loadTenants();
@@ -113,7 +113,7 @@ export default function AdminHRHelp() {
       setLastUpdatedAt(new Date());
     } catch (error) {
       const ref = reportError(error, "admin.hr.help.stats");
-      toast.error(appendErrorReference("Gagal memuat statistik helpdesk HR", ref));
+      toast.error(appendErrorReference("Gagal memuat statistik bantuan HR", ref));
     } finally {
       setIsLoading(false);
     }
@@ -125,9 +125,9 @@ export default function AdminHRHelp() {
 
   const metricCards = useMemo(
     () => [
-      { title: "Open", value: stats.open, description: "Tiket menunggu triase." },
-      { title: "In Progress", value: stats.inProgress, description: "Tiket sedang diproses." },
-      { title: "Resolved", value: stats.resolved, description: "Tiket sudah selesai." },
+      { title: "Terbuka", value: stats.open, description: "Tiket menunggu triase." },
+      { title: "Sedang Diproses", value: stats.inProgress, description: "Tiket sedang diproses." },
+      { title: "Selesai", value: stats.resolved, description: "Tiket sudah selesai." },
       { title: "Event 24 Jam", value: stats.events24h, description: "Perubahan status dalam 24 jam." },
     ],
     [stats],
@@ -143,14 +143,16 @@ export default function AdminHRHelp() {
 
   return (
     <AdminHRPageShell
-      title="Helpdesk HR Superadmin"
-      subtitle="Pusat bantuan dan eskalasi HR"
-      description="Halaman ringkasan untuk navigasi cepat ke tiket, FAQ, dan bantuan HR."
+      title="Pusat Bantuan HR"
+      subtitle="Pusat bantuan dan eskalasi HR lintas tenant"
+      description="Halaman ringkasan untuk navigasi cepat ke tiket, FAQ operasional, dan panduan dukungan HR."
     >
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="space-y-1">
-            <p className="text-sm text-muted-foreground">Statistik live helpdesk tanpa auto-refresh.</p>
+            <p className="text-sm text-muted-foreground">
+              Statistik bantuan lintas tenant dibaca manual agar triase tetap stabil saat acuan bawaan HR terus disempurnakan.
+            </p>
             <p className="text-xs text-muted-foreground">
               {isLoading ? "Memuat data..." : `Terakhir diperbarui: ${lastUpdatedAt?.toLocaleString("id-ID") ?? "-"}`}
             </p>
@@ -177,7 +179,7 @@ export default function AdminHRHelp() {
             </Select>
             <Button variant="outline" size="sm" onClick={() => void loadStats()} disabled={isLoading}>
               <RefreshCcw className="mr-2 h-4 w-4" />
-              Refresh
+              Muat Ulang
             </Button>
           </div>
         </div>

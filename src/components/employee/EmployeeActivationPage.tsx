@@ -61,7 +61,18 @@ interface EmployeeInvoiceRecord {
   paid_at: string | null;
   package_name: string | null;
   package_duration_months: number | null;
+  employee_count?: number | null;
+  price_per_employee?: number | null;
+  subtotal?: number | null;
+  discount_amount?: number | null;
+  vat_percentage?: number | null;
+  vat_amount?: number | null;
+  ppn_percentage?: number | null;
+  ppn_amount?: number | null;
+  pph_percentage?: number | null;
+  pph_amount?: number | null;
   invoice_url: string | null;
+  payment_proof_url?: string | null;
   payment_method_type: string | null;
   rejection_reason?: string | null;
   metadata?: unknown;
@@ -94,6 +105,20 @@ interface XenditInvoiceResponse {
 interface BillingSettingRow {
   setting_key: string;
   setting_value: unknown;
+}
+
+interface ManualPaymentEvidenceRow {
+  id: string;
+  status: string | null;
+  payment_date: string | null;
+  created_at: string;
+  transfer_proof_url: string | null;
+  amount: number | null;
+  confirmed_amount: number | null;
+  verified_amount: number | null;
+  verification_method: string | null;
+  rejection_reason: string | null;
+  notes: string | null;
 }
 
 const formatCurrency = (amount: number) =>
@@ -172,7 +197,15 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isCreatingInvoice, setIsCreatingInvoice] = useState(false);
+  const [xenditFallbackInvoice, setXenditFallbackInvoice] = useState<EmployeeInvoiceRecord | null>(null);
+  const [xenditFallbackMessage, setXenditFallbackMessage] = useState(
+    "Pembayaran online Xendit tidak aktif. Lanjutkan pembayaran melalui transfer manual.",
+  );
+  const [continuePaymentInvoice, setContinuePaymentInvoice] = useState<EmployeeInvoiceRecord | null>(null);
   const [activeManualInvoice, setActiveManualInvoice] = useState<EmployeeInvoiceRecord | null>(null);
+  const [invoiceDetail, setInvoiceDetail] = useState<EmployeeInvoiceRecord | null>(null);
+  const [invoiceDetailEvidence, setInvoiceDetailEvidence] = useState<ManualPaymentEvidenceRow[]>([]);
+  const [isLoadingInvoiceDetailEvidence, setIsLoadingInvoiceDetailEvidence] = useState(false);
   const [manualReferenceNumber, setManualReferenceNumber] = useState("");
   const [manualPaymentDate, setManualPaymentDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [manualDeclaration, setManualDeclaration] = useState(false);
@@ -203,7 +236,7 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
           supabase
             .from("invoices")
             .select(
-              "id, invoice_number, status, gross_amount, created_at, due_date, paid_at, package_name, package_duration_months, invoice_url, payment_method_type, rejection_reason, metadata",
+              "id, invoice_number, status, gross_amount, created_at, due_date, paid_at, package_name, package_duration_months, employee_count, price_per_employee, subtotal, discount_amount, vat_percentage, vat_amount, ppn_percentage, ppn_amount, pph_percentage, pph_amount, invoice_url, payment_proof_url, payment_method_type, rejection_reason, metadata",
             )
             .eq("tenant_id", tenantId)
             .eq("metadata->>billing_scope", "individual")
@@ -281,12 +314,55 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
     );
   }, [invoices]);
 
+  const openXenditFallbackOverlay = useCallback((invoice: EmployeeInvoiceRecord | null, message?: string | null) => {
+    if (!invoice) return;
+    const normalizedMessage = (message || "").trim();
+    setXenditFallbackMessage(
+      normalizedMessage || "Pembayaran online Xendit tidak aktif. Lanjutkan pembayaran melalui transfer manual.",
+    );
+    setXenditFallbackInvoice(invoice);
+  }, []);
+
   const openManualConfirmDialog = useCallback((invoice: EmployeeInvoiceRecord) => {
     setActiveManualInvoice(invoice);
     setManualReferenceNumber("");
     setManualPaymentDate(new Date().toISOString().slice(0, 10));
     setManualDeclaration(false);
   }, []);
+
+  const openInvoiceDetail = useCallback(
+    async (invoice: EmployeeInvoiceRecord) => {
+      setInvoiceDetail(invoice);
+      setInvoiceDetailEvidence([]);
+      if (invoice.payment_method_type !== "MANUAL_TRANSFER") {
+        return;
+      }
+      setIsLoadingInvoiceDetailEvidence(true);
+      try {
+        const { data, error } = await supabase
+          .from("manual_payments")
+          .select(
+            "id, status, payment_date, created_at, transfer_proof_url, amount, confirmed_amount, verified_amount, verification_method, rejection_reason, notes",
+          )
+          .eq("tenant_id", tenantId)
+          .eq("invoice_number", invoice.invoice_number)
+          .order("created_at", { ascending: false })
+          .limit(20);
+        if (error) throw error;
+        setInvoiceDetailEvidence((data || []) as ManualPaymentEvidenceRow[]);
+      } catch (error) {
+        const errorRef = reportError(error, "employee.billing.invoice_detail.fetch_evidence", {
+          tenant_id: tenantId,
+          employee_id: employeeId,
+          invoice_id: invoice.id,
+        });
+        toast.error(appendErrorReference("Gagal memuat detail bukti pembayaran.", errorRef));
+      } finally {
+        setIsLoadingInvoiceDetailEvidence(false);
+      }
+    },
+    [employeeId, tenantId],
+  );
 
   const handleConfirmManualTransfer = useCallback(
     async () => {
@@ -313,6 +389,14 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
           return;
         }
 
+        const requestPayload: Record<string, unknown> = {
+          tenant_id: tenantId,
+          employee_id: employeeId,
+          invoice_id: invoice.id,
+          reference_number: manualReferenceNumber.trim() || null,
+          payment_date: manualPaymentDate,
+        };
+
         const { data, error } = await supabase.functions.invoke<{
           success?: boolean;
           error?: string;
@@ -322,13 +406,7 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
           headers: {
             Authorization: `Bearer ${accessToken}`,
           },
-          body: {
-            tenant_id: tenantId,
-            employee_id: employeeId,
-            invoice_id: invoice.id,
-            reference_number: manualReferenceNumber.trim() || null,
-            payment_date: manualPaymentDate,
-          },
+          body: requestPayload,
         });
 
         if (error) throw error;
@@ -378,6 +456,60 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
   const coverageEndAt = useMemo(() => computeCoverageEnd(paidInvoices), [paidInvoices]);
   const hasActiveCoverage = Boolean(coverageEndAt && coverageEndAt.getTime() > Date.now());
 
+  const latestInvoiceProofUrl = useMemo(() => {
+    const fallbackFromInvoice = (invoiceDetail?.payment_proof_url || "").trim();
+    const fallbackFromEvidence = (invoiceDetailEvidence[0]?.transfer_proof_url || "").trim();
+    return fallbackFromInvoice || fallbackFromEvidence || null;
+  }, [invoiceDetail?.payment_proof_url, invoiceDetailEvidence]);
+
+  const isPdfProof = useMemo(() => {
+    if (!latestInvoiceProofUrl) return false;
+    return /\.pdf($|[?#])/i.test(latestInvoiceProofUrl);
+  }, [latestInvoiceProofUrl]);
+
+  const invoiceDetailBreakdown = useMemo(() => {
+    if (!invoiceDetail) return null;
+
+    const durationMonths = Math.max(1, Number(invoiceDetail.package_duration_months || 1));
+    const employeeCount = Math.max(1, Number(invoiceDetail.employee_count || 1));
+    const unitPrice = Math.max(0, Number(invoiceDetail.price_per_employee || 0));
+
+    const subtotalRaw = Number(invoiceDetail.subtotal ?? 0);
+    const subtotal = subtotalRaw > 0 ? subtotalRaw : Math.max(0, unitPrice * employeeCount * durationMonths);
+    const discountAmount = Math.max(0, Number(invoiceDetail.discount_amount ?? 0));
+    const taxableBase = Math.max(0, subtotal - discountAmount);
+
+    const ppnPercentage = Math.max(0, Number(invoiceDetail.ppn_percentage ?? 0));
+    const pphPercentage = Math.max(0, Number(invoiceDetail.pph_percentage ?? 0));
+    const combinedVatPercentage = Math.max(0, Number(invoiceDetail.vat_percentage ?? 0));
+    const serviceFeePercentage = combinedVatPercentage > 0 ? combinedVatPercentage : ppnPercentage + pphPercentage;
+
+    const ppnAmountRaw = Math.max(0, Number(invoiceDetail.ppn_amount ?? 0));
+    const pphAmountRaw = Math.max(0, Number(invoiceDetail.pph_amount ?? 0));
+    const vatAmountRaw = Math.max(0, Number(invoiceDetail.vat_amount ?? 0));
+    const splitTaxAmount = ppnAmountRaw + pphAmountRaw;
+    const serviceFeeAmount =
+      splitTaxAmount > 0
+        ? splitTaxAmount
+        : vatAmountRaw > 0
+          ? vatAmountRaw
+          : serviceFeePercentage > 0
+            ? taxableBase * (serviceFeePercentage / 100)
+            : 0;
+
+    return {
+      employeeCount,
+      durationMonths,
+      unitPrice,
+      subtotal,
+      discountAmount,
+      taxableBase,
+      serviceFeePercentage,
+      serviceFeeAmount,
+      total: Math.max(0, Number(invoiceDetail.gross_amount || 0)),
+    };
+  }, [invoiceDetail]);
+
   const handleCreateOrContinueInvoice = useCallback(async () => {
     if (!selectedPkg) {
       toast.warning("Pilih paket terlebih dahulu.");
@@ -385,16 +517,14 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
     }
 
     if (latestActiveInvoice && isActiveInvoiceStatus(latestActiveInvoice.status)) {
-      if (latestActiveInvoice.invoice_url) {
-        window.open(latestActiveInvoice.invoice_url, "_blank", "noopener,noreferrer");
-        return;
-      }
       if (latestActiveInvoice.payment_method_type === "MANUAL_TRANSFER") {
-        toast.info(
-          "Invoice transfer manual sudah tersedia. Lakukan transfer lalu klik 'Konfirmasi Transfer' di riwayat invoice.",
+        openXenditFallbackOverlay(
+          latestActiveInvoice,
+          "Pembayaran online Xendit tidak aktif. Lanjutkan pembayaran melalui transfer manual.",
         );
         return;
       }
+      setContinuePaymentInvoice(latestActiveInvoice);
       return;
     }
 
@@ -425,8 +555,31 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
 
       const createdInvoiceUrl = data.invoice?.invoice_url || null;
       const createdInvoiceNo = data.invoice?.invoice_number || "-";
+      const createdInvoiceId = data.invoice?.id || data.active_invoice?.id || null;
       const fallbackManual = data.fallback_payment_method === "MANUAL_TRANSFER";
       const createdMethod = data.invoice?.payment_method_type || null;
+      const knownInvoice =
+        invoices.find((row) => {
+          if (createdInvoiceId && row.id === createdInvoiceId) return true;
+          return Boolean(createdInvoiceNo) && row.invoice_number === createdInvoiceNo;
+        }) || null;
+      const continuationInvoice =
+        knownInvoice ||
+        (createdInvoiceId
+          ? {
+              id: createdInvoiceId,
+              invoice_number: createdInvoiceNo,
+              status: "PENDING",
+              gross_amount: Number(data.invoice?.gross_amount || 0),
+              created_at: new Date().toISOString(),
+              due_date: data.invoice?.due_date || data.active_invoice?.due_date || null,
+              paid_at: null,
+              package_name: selectedPkg.name,
+              package_duration_months: selectedPkg.duration_months,
+              invoice_url: data.invoice?.invoice_url || null,
+              payment_method_type: createdMethod || (fallbackManual ? "MANUAL_TRANSFER" : null),
+            }
+          : null);
 
       if (data.reused) {
         toast.info(`Invoice aktif ${createdInvoiceNo} digunakan kembali.`);
@@ -437,7 +590,10 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
       if (createdInvoiceUrl && createdMethod !== "MANUAL_TRANSFER") {
         window.open(createdInvoiceUrl, "_blank", "noopener,noreferrer");
       } else if (fallbackManual || createdMethod === "MANUAL_TRANSFER") {
-        toast.info(data.message || "Pembayaran online nonaktif. Gunakan konfirmasi transfer manual.");
+        openXenditFallbackOverlay(
+          continuationInvoice,
+          data.message || "Pembayaran online Xendit tidak aktif. Lanjutkan pembayaran melalui transfer manual.",
+        );
       } else {
         toast.info("Invoice dibuat tanpa URL pembayaran. Silakan cek riwayat invoice.");
       }
@@ -453,7 +609,7 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
     } finally {
       setIsCreatingInvoice(false);
     }
-  }, [employeeId, fetchData, latestActiveInvoice, selectedPkg, tenantId]);
+  }, [employeeId, fetchData, invoices, latestActiveInvoice, openXenditFallbackOverlay, selectedPkg, tenantId]);
 
   if (isLoading) {
     return (
@@ -640,7 +796,19 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
           ) : (
             <div className="space-y-2">
               {invoices.map((invoice) => (
-                <div key={invoice.id} className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div
+                  key={invoice.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => void openInvoiceDetail(invoice)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      void openInvoiceDetail(invoice);
+                    }
+                  }}
+                  className="flex cursor-pointer flex-col gap-2 rounded-lg border p-3 transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:flex-row sm:items-center sm:justify-between"
+                >
                   <div>
                     <p className="text-sm font-semibold">{invoice.invoice_number}</p>
                     <p className="text-xs text-muted-foreground">
@@ -661,7 +829,10 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
                         type="button"
                         variant="outline"
                         size="sm"
-                        onClick={() => window.open(invoice.invoice_url || "", "_blank", "noopener,noreferrer")}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          window.open(invoice.invoice_url || "", "_blank", "noopener,noreferrer");
+                        }}
                       >
                         <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
                         Bayar
@@ -673,7 +844,10 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
                         variant="outline"
                         size="sm"
                         disabled={confirmingManualInvoiceId === invoice.id}
-                        onClick={() => openManualConfirmDialog(invoice)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          openManualConfirmDialog(invoice);
+                        }}
                       >
                         {confirmingManualInvoiceId === invoice.id ? (
                           <>
@@ -685,6 +859,17 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
                         )}
                       </Button>
                     ) : null}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void openInvoiceDetail(invoice);
+                      }}
+                    >
+                      Detail
+                    </Button>
                   </div>
                 </div>
               ))}
@@ -692,6 +877,308 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
           )}
         </CardContent>
       </Card>
+
+      <Dialog
+        open={Boolean(invoiceDetail)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setInvoiceDetail(null);
+            setInvoiceDetailEvidence([]);
+          }
+        }}
+      >
+        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Detail Invoice</DialogTitle>
+            <DialogDescription>
+              Ringkasan invoice dan data konfirmasi transfer untuk <strong>{invoiceDetail?.invoice_number || "-"}</strong>.
+            </DialogDescription>
+          </DialogHeader>
+
+          {invoiceDetail ? (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 gap-2 rounded-lg border bg-muted/20 p-3 text-sm sm:grid-cols-2">
+                <div>
+                  <p className="text-xs text-muted-foreground">Nomor Invoice</p>
+                  <p className="font-medium">{invoiceDetail.invoice_number}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Status</p>
+                  <div>{getInvoiceStatusBadge(invoiceDetail.status)}</div>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Tanggal Invoice</p>
+                  <p className="font-medium">
+                    {format(new Date(invoiceDetail.created_at), "d MMM yyyy", { locale: idLocale })}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Jatuh Tempo</p>
+                  <p className="font-medium">
+                    {invoiceDetail.due_date
+                      ? format(new Date(invoiceDetail.due_date), "d MMM yyyy", { locale: idLocale })
+                      : "-"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Paket</p>
+                  <p className="font-medium">
+                    {invoiceDetail.package_name || "-"}
+                    {invoiceDetail.package_duration_months ? ` (${invoiceDetail.package_duration_months} bulan)` : ""}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Metode</p>
+                  <p className="font-medium">
+                    {invoiceDetail.payment_method_type === "MANUAL_TRANSFER" ? "Transfer Manual" : "Pembayaran Online"}
+                  </p>
+                </div>
+                <div className="sm:col-span-2">
+                  <p className="text-xs text-muted-foreground">Total</p>
+                  <p className="text-lg font-semibold">{formatCurrency(invoiceDetail.gross_amount || 0)}</p>
+                </div>
+              </div>
+
+              <div className="space-y-2 rounded-lg border p-3">
+                <p className="text-sm font-medium">Rincian Perhitungan</p>
+                {invoiceDetailBreakdown ? (
+                  <div className="space-y-1 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-muted-foreground">Jumlah pegawai</span>
+                      <span className="font-medium">{invoiceDetailBreakdown.employeeCount}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-muted-foreground">Durasi paket</span>
+                      <span className="font-medium">{invoiceDetailBreakdown.durationMonths} bulan</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-muted-foreground">Harga/pegawai/bulan</span>
+                      <span className="font-medium">{formatCurrency(invoiceDetailBreakdown.unitPrice)}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-muted-foreground">Subtotal</span>
+                      <span>{formatCurrency(invoiceDetailBreakdown.subtotal)}</span>
+                    </div>
+                    {invoiceDetailBreakdown.discountAmount > 0 ? (
+                      <div className="flex items-center justify-between gap-3 text-emerald-700">
+                        <span>Diskon</span>
+                        <span>-{formatCurrency(invoiceDetailBreakdown.discountAmount)}</span>
+                      </div>
+                    ) : null}
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-muted-foreground">Dasar perhitungan</span>
+                      <span>{formatCurrency(invoiceDetailBreakdown.taxableBase)}</span>
+                    </div>
+                    {invoiceDetailBreakdown.serviceFeeAmount > 0 ? (
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-muted-foreground">Service Fee</span>
+                        <span>{formatCurrency(invoiceDetailBreakdown.serviceFeeAmount)}</span>
+                      </div>
+                    ) : null}
+                    <div className="flex items-center justify-between gap-3 border-t pt-2 font-semibold">
+                      <span>Total invoice</span>
+                      <span>{formatCurrency(invoiceDetailBreakdown.total)}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">Rincian belum tersedia.</p>
+                )}
+              </div>
+
+              <div className="space-y-2 rounded-lg border p-3">
+                <p className="text-sm font-medium">Bukti Pembayaran</p>
+                {isLoadingInvoiceDetailEvidence ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Memuat bukti pembayaran...
+                  </div>
+                ) : latestInvoiceProofUrl ? (
+                  <div className="space-y-2">
+                    {isPdfProof ? (
+                      <iframe
+                        src={latestInvoiceProofUrl}
+                        title={`Bukti pembayaran ${invoiceDetail.invoice_number}`}
+                        className="h-[52vh] w-full rounded-md border bg-white"
+                      />
+                    ) : (
+                      <img
+                        src={latestInvoiceProofUrl}
+                        alt={`Bukti pembayaran ${invoiceDetail.invoice_number}`}
+                        className="max-h-[52vh] w-full rounded-md border object-contain"
+                      />
+                    )}
+                    <Button variant="outline" size="sm" asChild>
+                      <a href={latestInvoiceProofUrl} target="_blank" rel="noopener noreferrer">
+                        <ExternalLink className="mr-2 h-4 w-4" />
+                        Buka bukti di tab baru
+                      </a>
+                    </Button>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    Tidak ada file bukti transfer pada konfirmasi ini. Gunakan No. Ref untuk pelacakan transaksi.
+                  </p>
+                )}
+              </div>
+
+              {invoiceDetailEvidence.length > 0 ? (
+                <div className="space-y-2 rounded-lg border p-3">
+                  <p className="text-sm font-medium">Riwayat Konfirmasi Transfer</p>
+                  <div className="space-y-2">
+                    {invoiceDetailEvidence.map((item) => (
+                      <div key={item.id} className="rounded-md border bg-muted/20 px-3 py-2 text-xs">
+                        <p className="font-medium uppercase">{item.status || "-"}</p>
+                        <p className="text-muted-foreground">
+                          {item.payment_date
+                            ? `Tanggal transfer ${format(new Date(item.payment_date), "d MMM yyyy", { locale: idLocale })}`
+                            : `Dibuat ${format(new Date(item.created_at), "d MMM yyyy HH:mm", { locale: idLocale })}`}
+                        </p>
+                        <p className="text-muted-foreground">
+                          Nominal klaim: {formatCurrency(Number(item.confirmed_amount ?? item.amount ?? 0))}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setInvoiceDetail(null)}>
+              Tutup
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(xenditFallbackInvoice)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setXenditFallbackInvoice(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Pembayaran Xendit Tidak Aktif</DialogTitle>
+            <DialogDescription>{xenditFallbackMessage}</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+              <p className="text-xs text-muted-foreground">Invoice</p>
+              <p className="font-semibold">{xenditFallbackInvoice?.invoice_number || "-"}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Metode: <strong>Transfer Manual</strong>
+              </p>
+              <p className="mt-2 text-base font-semibold">
+                {formatCurrency(xenditFallbackInvoice?.gross_amount || 0)}
+              </p>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Setelah transfer, lanjutkan melalui dialog <strong>Konfirmasi Transfer</strong> dan isi No. Ref bila ada.
+            </p>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setXenditFallbackInvoice(null)}>
+              Tutup
+            </Button>
+            <Button
+              onClick={() => {
+                const nextInvoice = xenditFallbackInvoice;
+                setXenditFallbackInvoice(null);
+                if (!nextInvoice) return;
+                setContinuePaymentInvoice(nextInvoice);
+              }}
+            >
+              Lanjutkan Transfer Manual
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(continuePaymentInvoice)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setContinuePaymentInvoice(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Lanjutkan Pembayaran</DialogTitle>
+            <DialogDescription>
+              Invoice aktif terdeteksi. Lanjutkan proses pembayaran dari invoice berikut.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-semibold">{continuePaymentInvoice?.invoice_number || "-"}</p>
+                {continuePaymentInvoice ? getInvoiceStatusBadge(continuePaymentInvoice.status) : null}
+              </div>
+              <p className="text-sm font-medium">{formatCurrency(continuePaymentInvoice?.gross_amount || 0)}</p>
+              <p className="text-xs text-muted-foreground">
+                Jatuh tempo{" "}
+                {continuePaymentInvoice?.due_date
+                  ? format(new Date(continuePaymentInvoice.due_date), "d MMM yyyy", { locale: idLocale })
+                  : "-"}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Metode:{" "}
+                <strong>
+                  {continuePaymentInvoice?.payment_method_type === "MANUAL_TRANSFER"
+                    ? "Transfer Manual"
+                    : "Pembayaran Online"}
+                </strong>
+              </p>
+            </div>
+
+            {continuePaymentInvoice?.payment_method_type === "MANUAL_TRANSFER" ? (
+              <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-100">
+                Lakukan transfer sesuai nominal invoice, lalu kirim konfirmasi melalui tombol{" "}
+                <strong>Konfirmasi Transfer</strong>.
+              </div>
+            ) : null}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setContinuePaymentInvoice(null)}>
+              Tutup
+            </Button>
+            {continuePaymentInvoice?.payment_method_type === "MANUAL_TRANSFER" ? (
+              <Button
+                onClick={() => {
+                  if (!continuePaymentInvoice) return;
+                  openManualConfirmDialog(continuePaymentInvoice);
+                  setContinuePaymentInvoice(null);
+                }}
+                disabled={!continuePaymentInvoice || !canConfirmManualTransfer(continuePaymentInvoice)}
+              >
+                Konfirmasi Transfer
+              </Button>
+            ) : (
+              <Button
+                onClick={() => {
+                  if (continuePaymentInvoice?.invoice_url) {
+                    window.open(continuePaymentInvoice.invoice_url, "_blank", "noopener,noreferrer");
+                  } else {
+                    toast.info("URL pembayaran belum tersedia. Silakan refresh data invoice.");
+                  }
+                }}
+              >
+                <ExternalLink className="mr-2 h-4 w-4" />
+                Buka Pembayaran
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={Boolean(activeManualInvoice)}
@@ -729,14 +1216,16 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="manual-reference-number">Nomor referensi (opsional)</Label>
+              <Label htmlFor="manual-reference-number">No. Ref (opsional)</Label>
               <Input
                 id="manual-reference-number"
+                type="text"
                 value={manualReferenceNumber}
                 onChange={(event) => setManualReferenceNumber(event.target.value)}
                 placeholder="Contoh: TRF-BRI-123456"
                 disabled={Boolean(confirmingManualInvoiceId)}
               />
+              <p className="text-xs text-muted-foreground">Isi jika ada nomor referensi dari mutasi/transfer bank.</p>
             </div>
 
             <div className="flex items-start gap-2 rounded-md border p-3">

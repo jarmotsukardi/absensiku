@@ -8,6 +8,7 @@ import { Briefcase, Layers, Users } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { useHrPageAccess } from "@/hooks/useHrPageAccess";
 import { toast } from "sonner";
 
 type PositionRow = {
@@ -31,6 +32,7 @@ export default function OrgHRPositionGrade() {
   const [positions, setPositions] = useState<PositionRow[]>([]);
   const [employees, setEmployees] = useState<EmployeeLite[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const { access, isLoading: isLoadingAccess } = useHrPageAccess("/org/hr/position-grade");
 
   const fetchData = useCallback(async () => {
     setIsLoading(true);
@@ -41,7 +43,7 @@ export default function OrgHRPositionGrade() {
       const [positionRes, employeeRes] = await Promise.all([
         supabase
           .from("positions")
-          .select("id, name, code, is_active")
+          .select("id, name, is_active")
           .eq("tenant_id", tenantId)
           .order("name", { ascending: true })
           .limit(200),
@@ -50,7 +52,7 @@ export default function OrgHRPositionGrade() {
       if (positionRes.error) throw positionRes.error;
       if (employeeRes.error) throw employeeRes.error;
 
-      setPositions((positionRes.data || []) as PositionRow[]);
+      setPositions(((positionRes.data || []) as Array<Omit<PositionRow, "code">>).map((item) => ({ ...item, code: null })));
       setEmployees((employeeRes.data || []) as EmployeeLite[]);
     } catch (error) {
       const ref = reportError(error, "org.hr.position_grade.fetch");
@@ -88,10 +90,13 @@ export default function OrgHRPositionGrade() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">HR Master</Badge>
-          <h1 className="text-2xl font-semibold tracking-tight">Jabatan, Grade & Golongan</h1>
+          <Badge variant="outline">Hubungan Kerja</Badge>
+          <h1 className="text-2xl font-semibold tracking-tight">Jabatan dan Grade</h1>
           <p className="text-sm text-muted-foreground">
             Standarisasi struktur karier dan segmentasi pegawai untuk kebutuhan HR.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Capability halaman: {isLoadingAccess ? "memverifikasi..." : access.canConfigure ? "admin dapat kelola klasifikasi dan konfigurasi" : access.canEdit ? "admin dapat kelola klasifikasi" : "monitoring hanya-baca"}
           </p>
         </div>
 

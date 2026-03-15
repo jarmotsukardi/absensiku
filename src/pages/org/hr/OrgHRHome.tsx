@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgHRContextLink } from "@/components/org/hr/OrgHRContextLink";
 import { Users, Building2, ClipboardList, FileText, Clock, BellRing, Activity } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
@@ -17,11 +17,26 @@ type DashboardKpi = {
   activeStructures: number;
 };
 
+type HrTicketSummaryRow = {
+  browser_info: string | null;
+  status: string | null;
+};
+
 const INITIAL_KPI: DashboardKpi = {
   employees: 0,
   contracts: 0,
   openTickets: 0,
   activeStructures: 0,
+};
+
+const isHrTicketSummary = (row: HrTicketSummaryRow) => {
+  if (!row.browser_info) return true;
+  try {
+    const parsed = JSON.parse(row.browser_info) as { source?: string } | null;
+    return parsed?.source !== "org_help_ticket";
+  } catch {
+    return true;
+  }
 };
 
 export default function OrgHRHome() {
@@ -41,7 +56,7 @@ export default function OrgHRHome() {
           supabase.from("hr_contracts").select("id", { count: "exact", head: true }).eq("tenant_id", tenantId),
           supabase
             .from("feedback_reports")
-            .select("id", { count: "exact", head: true })
+            .select("browser_info, status")
             .eq("tenant_id", tenantId)
             .eq("feedback_type", "ticket")
             .neq("status", "resolved"),
@@ -55,7 +70,7 @@ export default function OrgHRHome() {
         setKpi({
           employees: employeesRes.count ?? 0,
           contracts: contractsRes.count ?? 0,
-          openTickets: ticketsRes.count ?? 0,
+          openTickets: ((ticketsRes.data || []) as HrTicketSummaryRow[]).filter(isHrTicketSummary).length,
           activeStructures: opdRes.count ?? 0,
         });
       } catch (error) {
@@ -76,7 +91,7 @@ export default function OrgHRHome() {
     () => [
       { title: "Pegawai", value: kpi.employees, note: "Data pegawai aktif/nonaktif.", icon: Users },
       { title: "Kontrak", value: kpi.contracts, note: "Kontrak kerja yang tercatat.", icon: FileText },
-      { title: "Tiket Open", value: kpi.openTickets, note: "Tiket HR yang belum resolved.", icon: ClipboardList },
+      { title: "Tiket HR Terbuka", value: kpi.openTickets, note: "Tiket HR yang belum selesai.", icon: ClipboardList },
       { title: "Unit Organisasi", value: kpi.activeStructures, note: "Jumlah struktur OPD/unit aktif.", icon: Building2 },
     ],
     [kpi],
@@ -86,10 +101,10 @@ export default function OrgHRHome() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">HR Core</Badge>
-          <h1 className="text-2xl font-semibold tracking-tight">HR Workspace</h1>
+          <Badge variant="outline">Ringkasan HR</Badge>
+          <h1 className="text-2xl font-semibold tracking-tight">Ringkasan HR</h1>
           <p className="text-sm text-muted-foreground">
-            Ringkasan operasional HR organisasi untuk pemantauan pegawai, kontrak, kehadiran, dan tiket bantuan.
+            Ringkasan operasional HR organisasi untuk pemantauan pegawai, kontrak, laporan, dan tiket bantuan.
           </p>
         </div>
 
@@ -145,16 +160,16 @@ export default function OrgHRHome() {
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
             <Button asChild variant="outline" size="sm">
-              <Link to="/org/hr/employees">Buka Data Pegawai</Link>
+              <OrgHRContextLink to="/org/hr/employees">Buka Data Pegawai</OrgHRContextLink>
             </Button>
             <Button asChild variant="outline" size="sm">
-              <Link to="/org/hr/contracts">Buka Kontrak Kerja</Link>
+              <OrgHRContextLink to="/org/hr/contracts">Buka Kontrak Kerja</OrgHRContextLink>
             </Button>
             <Button asChild variant="outline" size="sm">
-              <Link to="/org/hr/attendance-insights">Buka Analitik Kehadiran</Link>
+              <OrgHRContextLink to="/org/hr/reports">Buka Laporan HR</OrgHRContextLink>
             </Button>
             <Button asChild variant="outline" size="sm">
-              <Link to="/org/hr/help/tickets">Buka Tiket HR</Link>
+              <OrgHRContextLink to="/org/hr/help/tickets">Buka Tiket HR</OrgHRContextLink>
             </Button>
           </CardContent>
         </Card>
