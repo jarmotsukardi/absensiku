@@ -14,8 +14,8 @@ test.describe.serial("Admin HR Tenants Smoke", () => {
 
   test("kartu ringkasan dan tabel tenant tampil stabil", async ({ page }) => {
     const metrics = [
-      { title: "Total Tenant", note: "Tenant yang terdaftar di platform." },
-      { title: "HR Aktif", note: "Tenant dengan workspace HR aktif." },
+      { title: "Total Tenant", note: "Tenant yang terdaftar di sistem." },
+      { title: "HR Aktif", note: "Tenant dengan area kerja HR aktif." },
       { title: "Alert Realtime", note: "Tenant yang menyalakan alert error HR." },
       { title: "Perlu Perhatian", note: "Tenant dengan error kritis terbuka." },
     ] as const;
@@ -25,7 +25,7 @@ test.describe.serial("Admin HR Tenants Smoke", () => {
     }
 
     await expect(page.getByRole("heading", { name: "Daftar Tenant HR", exact: true })).toBeVisible();
-    await expect(page.getByText(/Menampilkan \d+-\d+ dari \d+ tenant/, { exact: false })).toBeVisible();
+    await expect(page.getByText(/\d+ tenant cocok dengan filter saat ini\./, { exact: false })).toBeVisible();
     await expect(page.getByText(/Halaman \d+ \/ \d+/, { exact: false })).toBeVisible();
   });
 
@@ -80,7 +80,7 @@ test.describe.serial("Admin HR Tenants Smoke", () => {
 
     await page.goto("/admin/hr/tenants", { waitUntil: "domcontentloaded" });
     await waitForStable(page);
-    await page.locator("tbody tr").first().getByRole("link", { name: "Settings", exact: true }).click();
+    await page.locator("tbody tr").first().getByRole("link", { name: "Pengaturan", exact: true }).click();
     await waitForStable(page);
     await expect(page).toHaveURL(/\/admin\/hr\/settings#workspace-tenant$/);
   });

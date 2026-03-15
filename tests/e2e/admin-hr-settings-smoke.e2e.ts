@@ -17,14 +17,14 @@ test.describe.serial("Admin HR Settings Smoke", () => {
     await expect(page.getByText("/org/hr/structure", { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: "/admin/hr/tenants", exact: true }).first()).toBeVisible();
 
-    await expect(page.getByRole("heading", { name: "Default Workspace Tenant Baru", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Simpan Default Global", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Area Kerja Bawaan Tenant Baru", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Simpan Bawaan Global", exact: true })).toBeVisible();
 
-    await expect(page.getByRole("heading", { name: "Baseline Alert Realtime HR", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Simpan Baseline Alert", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Acuan Bawaan Peringatan Realtime HR", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Simpan Acuan Bawaan Peringatan", exact: true })).toBeVisible();
 
-    await expect(page.getByRole("heading", { name: "Baseline Policy Tiket HR", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Simpan Baseline Policy Tiket", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Acuan Bawaan Kebijakan Tiket HR", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Simpan Acuan Bawaan Kebijakan Tiket", exact: true })).toBeVisible();
   });
 
   test("filter tenant dan status tetap stabil", async ({ page }) => {
@@ -37,17 +37,17 @@ test.describe.serial("Admin HR Settings Smoke", () => {
     await statusTrigger.click();
     await page.getByRole("option", { name: "Aktif", exact: true }).click();
     await waitForStable(page);
-    await expect(page.getByRole("heading", { name: "Workspace per Tenant", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Area Kerja per Tenant", exact: true })).toBeVisible();
 
     await statusTrigger.click();
     await page.getByRole("option", { name: "Nonaktif", exact: true }).click();
     await waitForStable(page);
-    await expect(page.getByRole("heading", { name: "Workspace per Tenant", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Area Kerja per Tenant", exact: true })).toBeVisible();
 
     await statusTrigger.click();
     await page.getByRole("option", { name: "Semua", exact: true }).click();
     await waitForStable(page);
-    await expect(page.getByRole("heading", { name: "Workspace per Tenant", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Area Kerja per Tenant", exact: true })).toBeVisible();
   });
 
   test("link coverage map menuju kontrol admin tetap benar", async ({ page }) => {
