@@ -13,9 +13,9 @@ test.describe.serial("Admin HR Policies Smoke", () => {
 
   test("ringkasan domain dan tenant panel tampil stabil", async ({ page }) => {
     const metrics = [
-      { title: "Domain Kebijakan", note: "Blok policy aktif yang saat ini dipantau admin." },
-      { title: "Route Org Aktif", note: "Target org yang sudah tampil sebagai halaman kerja." },
-      { title: "Route Non-Final", note: "Alias atau route internal yang masih butuh konteks admin." },
+      { title: "Domain Kebijakan", note: "Blok kebijakan aktif yang saat ini dipantau admin." },
+      { title: "Rute Org Aktif", note: "Target org yang sudah tampil sebagai halaman kerja." },
+      { title: "Rute Non-Final", note: "Alias atau rute internal yang masih butuh konteks admin." },
     ] as const;
 
     for (const { title, note } of metrics) {
@@ -31,8 +31,8 @@ test.describe.serial("Admin HR Policies Smoke", () => {
 
     await expect(page.getByRole("heading", { name: "Kontrol Domain Tenant", exact: true })).toBeVisible();
     await expect(page.getByTestId("admin-hr-policy-selected-tenant")).toContainText("Tenant aktif:");
-    await expect(page.getByRole("heading", { name: "Baseline Ulasan 360", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Readiness Pelatihan", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Acuan Bawaan Ulasan 360", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Kesiapan Pelatihan", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Kontrol ESS", exact: true })).toBeVisible();
   });
 
@@ -79,7 +79,7 @@ test.describe.serial("Admin HR Policies Smoke", () => {
 
     await page.goto("/admin/hr/policies", { waitUntil: "domcontentloaded" });
     await waitForStable(page);
-    await page.getByRole("link", { name: "Buka Coverage Map", exact: true }).click();
+    await page.getByRole("link", { name: "Buka Matriks Cakupan", exact: true }).click();
     await waitForStable(page);
     await expect(page).toHaveURL(/\/admin\/hr\/settings#coverage-map$/);
   });
