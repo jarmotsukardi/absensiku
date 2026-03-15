@@ -184,7 +184,7 @@ export default function RecapReport() {
     link.click();
     document.body.removeChild(link);
     
-    toast.success("Laporan berhasil diexport");
+    toast.success("Laporan berhasil diekspor");
   };
 
   const filteredData = recapData.filter((rec) => {
@@ -234,7 +234,7 @@ export default function RecapReport() {
           </div>
           <Button onClick={handleExport}>
             <Download className="mr-2 h-4 w-4" />
-            Export Excel
+            Ekspor Excel
           </Button>
         </div>
 

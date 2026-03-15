@@ -25,6 +25,10 @@ interface MutationRecord {
   original_data: Record<string, unknown>;
   created_at: string;
   approved_at?: string;
+  document_reference_number?: string | null;
+  document_reference_date?: string | null;
+  document_reference_issuer?: string | null;
+  document_reference_notes?: string | null;
 }
 
 interface MutationRow {
@@ -37,6 +41,10 @@ interface MutationRow {
   original_data: unknown;
   created_at: string;
   approved_at?: string;
+  document_reference_number?: string | null;
+  document_reference_date?: string | null;
+  document_reference_issuer?: string | null;
+  document_reference_notes?: string | null;
 }
 
 interface MutationTimelineProps {
@@ -201,6 +209,13 @@ export function MutationTimeline({ employeeId }: MutationTimelineProps) {
                   <p className="text-sm text-muted-foreground">
                     Alasan: {mutation.reason}
                   </p>
+
+                  {mutation.document_reference_number ? (
+                    <p className="text-sm text-muted-foreground">
+                      Referensi dokumen: {mutation.document_reference_number}
+                      {mutation.document_reference_issuer ? ` • ${mutation.document_reference_issuer}` : ""}
+                    </p>
+                  ) : null}
 
                   {/* Rejection reason */}
                   {mutation.status === "ditolak" && mutation.rejection_reason && (

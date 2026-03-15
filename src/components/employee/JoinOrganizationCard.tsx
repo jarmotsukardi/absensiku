@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { supabasePublishableKey, supabaseUrl } from "@/integrations/supabase/env";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -37,13 +38,13 @@ export function JoinOrganizationCard({ onSuccess }: JoinOrganizationCardProps) {
       }
 
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/join-organization`,
+        `${supabaseUrl}/functions/v1/join-organization`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${session.access_token}`,
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "apikey": supabasePublishableKey,
           },
           body: JSON.stringify({ invitation_code: normalizedInviteCode }),
         }

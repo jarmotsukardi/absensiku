@@ -1,4 +1,4 @@
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, type ReactNode } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -9,6 +9,7 @@ import { PersistentNotificationDialog } from "@/components/common/PersistentNoti
 import { ConfirmDialogProvider } from "@/components/common/ConfirmDialogProvider";
 import { AndroidBackButtonHandler } from "@/hooks/useAndroidBackButton";
 import { PayrollRouteGuard } from "@/components/org/payroll/PayrollRouteGuard";
+import { OrgHRRouteGuard } from "@/components/org/hr/OrgHRRouteGuard";
 import { AndroidSessionSync } from "@/components/employee/AndroidSessionSync";
 
 const queryClient = new QueryClient();
@@ -114,18 +115,36 @@ const OrgHRReports = lazy(() => import("./pages/org/hr/OrgHRReports"));
 const OrgHRAttendanceInsights = lazy(() => import("./pages/org/hr/OrgHRAttendanceInsights"));
 const OrgHRSettings = lazy(() => import("./pages/org/hr/OrgHRSettings"));
 const OrgHRFAQ = lazy(() => import("./pages/org/hr/OrgHRFAQ"));
-const OrgHRSupport = lazy(() => import("./pages/org/hr/OrgHRSupport"));
 const OrgHRTickets = lazy(() => import("./pages/org/hr/OrgHRTickets"));
 const OrgHRErrorLogs = lazy(() => import("./pages/org/hr/OrgHRErrorLogs"));
+const OrgHRApprovalHierarchy = lazy(() => import("./pages/org/hr/OrgHRApprovalHierarchy"));
+const OrgHRDocumentTemplates = lazy(() => import("./pages/org/hr/OrgHRDocumentTemplates"));
+const OrgHREmployeeStatus = lazy(() => import("./pages/org/hr/OrgHREmployeeStatus"));
+const OrgHRJobHistory = lazy(() => import("./pages/org/hr/OrgHRJobHistory"));
+const OrgHROffboarding = lazy(() => import("./pages/org/hr/OrgHROffboarding"));
+const OrgHROnboarding = lazy(() => import("./pages/org/hr/OrgHROnboarding"));
+const OrgHRLateSettings = lazy(() => import("./pages/org/hr/OrgHRLateSettings"));
+const OrgHRLeaveTypes = lazy(() => import("./pages/org/hr/OrgHRLeaveTypes"));
+const OrgHRLeaveQuota = lazy(() => import("./pages/org/hr/OrgHRLeaveQuota"));
+const OrgHRLeaveValidity = lazy(() => import("./pages/org/hr/OrgHRLeaveValidity"));
+const OrgHRShifts = lazy(() => import("./pages/org/hr/OrgHRShifts"));
+const OrgHRKpi = lazy(() => import("./pages/org/hr/OrgHRKpi"));
+const OrgHRPerformancePeriods = lazy(() => import("./pages/org/hr/OrgHRPerformancePeriods"));
+const OrgHRPerformanceForms = lazy(() => import("./pages/org/hr/OrgHRPerformanceForms"));
+const OrgHRReview360 = lazy(() => import("./pages/org/hr/OrgHRReview360"));
+const OrgHREvaluationResults = lazy(() => import("./pages/org/hr/OrgHREvaluationResults"));
+const OrgHRTrainingData = lazy(() => import("./pages/org/hr/OrgHRTrainingData"));
+const OrgHRCertifications = lazy(() => import("./pages/org/hr/OrgHRCertifications"));
+const OrgHRSkillMatrix = lazy(() => import("./pages/org/hr/OrgHRSkillMatrix"));
 const OrgHRRecruitmentJobs = lazy(() => import("./pages/org/hr/OrgHRRecruitmentJobs"));
 const OrgHRRecruitmentCandidates = lazy(() => import("./pages/org/hr/OrgHRRecruitmentCandidates"));
 const OrgHRRecruitmentInterviews = lazy(() => import("./pages/org/hr/OrgHRRecruitmentInterviews"));
 const OrgHRRecruitmentOffers = lazy(() => import("./pages/org/hr/OrgHRRecruitmentOffers"));
+const OrgHRESSRequests = lazy(() => import("./pages/org/hr/OrgHRESSRequests"));
+const OrgHRESSAttendance = lazy(() => import("./pages/org/hr/OrgHRESSAttendance"));
+const OrgHRESSDocuments = lazy(() => import("./pages/org/hr/OrgHRESSDocuments"));
+const OrgHRESSProfile = lazy(() => import("./pages/org/hr/OrgHRESSProfile"));
 const OrgHRPriorityWorkspace = lazy(() => import("./pages/org/hr/OrgHRPriorityWorkspace"));
-const OrgHROrganizationWorkspace = lazy(() => import("./pages/org/hr/OrgHROrganizationWorkspace"));
-const OrgHROperationalWorkspace = lazy(() => import("./pages/org/hr/OrgHROperationalWorkspace"));
-const OrgHRGovernanceWorkspace = lazy(() => import("./pages/org/hr/OrgHRGovernanceWorkspace"));
-const OrgHRSectionBridge = lazy(() => import("./pages/org/hr/OrgHRSectionBridge"));
 const OrgPayrollPolicies = lazy(() => import("./pages/org/payroll/OrgPayrollPolicies"));
 const OrgPayrollPeriods = lazy(() => import("./pages/org/payroll/OrgPayrollPeriods"));
 const OrgPayrollValidation = lazy(() => import("./pages/org/payroll/OrgPayrollValidation"));
@@ -184,6 +203,10 @@ const RouteLoadingFallback = () => (
   </div>
 );
 
+const withHrGuard = (routePath: string, element: ReactNode) => (
+  <OrgHRRouteGuard routePath={routePath}>{element}</OrgHRRouteGuard>
+);
+
 const App = () => (
   <HelmetProvider>
     <QueryClientProvider client={queryClient}>
@@ -193,9 +216,9 @@ const App = () => (
           <Sonner />
           <BrowserRouter>
             <AndroidBackButtonHandler />
-            <AndroidSessionSync />
-            <Suspense fallback={<RouteLoadingFallback />}>
-              <Routes>
+            <AndroidSessionSync>
+              <Suspense fallback={<RouteLoadingFallback />}>
+                <Routes>
               <Route path="/" element={<Index />} />
               <Route path="/faq" element={<FAQPage />} />
               <Route path="/about" element={<About />} />
@@ -334,73 +357,80 @@ const App = () => (
               <Route path="/org/subscription" element={<Navigate to="/org/billing" replace />} />
               <Route path="/org/activation" element={<Navigate to="/org/billing" replace />} />
               <Route path="/org/billing" element={<OrgBilling />} />
-              <Route path="/org/hr" element={<OrgHRHome />} />
-              <Route path="/org/hr/employees" element={<OrgHREmployees />} />
-              <Route path="/org/hr/structure" element={<OrgHRStructure />} />
-              <Route path="/org/hr/position-grade" element={<OrgHRPositionGrade />} />
-              <Route path="/org/hr/contracts" element={<OrgHRContracts />} />
-              <Route path="/org/hr/documents" element={<OrgHRDocuments />} />
-              <Route path="/org/hr/reports" element={<OrgHRReports />} />
-              <Route path="/org/hr/attendance-insights" element={<OrgHRAttendanceInsights />} />
-              <Route path="/org/hr/settings" element={<OrgHRSettings />} />
-              <Route path="/org/hr/help" element={<Navigate to="/org/hr/help/faq" replace />} />
-              <Route path="/org/hr/help/faq" element={<OrgHRFAQ />} />
-              <Route path="/org/hr/help/support" element={<OrgHRSupport />} />
-              <Route path="/org/hr/help/tickets" element={<OrgHRTickets />} />
-              <Route path="/org/hr/help/error-logs" element={<OrgHRErrorLogs />} />
-              <Route path="/org/hr/notifications" element={<OrgHROperationalWorkspace />} />
-              <Route path="/org/hr/dashboard-notifications" element={<OrgHROperationalWorkspace />} />
-              <Route path="/org/hr/activity-log" element={<OrgHROperationalWorkspace />} />
-              <Route path="/org/hr/dashboard-activity" element={<OrgHROperationalWorkspace />} />
-              <Route path="/org/hr/company" element={<OrgHROrganizationWorkspace />} />
-              <Route path="/org/hr/departments" element={<OrgHROrganizationWorkspace />} />
-              <Route path="/org/hr/divisions" element={<OrgHROrganizationWorkspace />} />
-              <Route path="/org/hr/work-locations" element={<OrgHROrganizationWorkspace />} />
-              <Route path="/org/hr/work-calendar" element={<OrgHROrganizationWorkspace />} />
-              <Route path="/org/hr/employee-status" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/job-history" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/onboarding" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/offboarding" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/work-hours" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/shifts" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/national-holidays" element={<OrgHROperationalWorkspace />} />
-              <Route path="/org/hr/late-settings" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/attendance-integrations" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/attendance-recap" element={<OrgHROperationalWorkspace />} />
-              <Route path="/org/hr/leave-types" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/leave-quota" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/leave-approval" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/leave-recap" element={<OrgHROperationalWorkspace />} />
-              <Route path="/org/hr/leave-validity" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/kpi" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/performance-periods" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/performance-forms" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/review-360" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/evaluation-results" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/training-data" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/certifications" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/skill-matrix" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/document-templates" element={<OrgHRGovernanceWorkspace />} />
-              <Route path="/org/hr/warning-letters" element={<OrgHRGovernanceWorkspace />} />
-              <Route path="/org/hr/contract-templates" element={<OrgHRGovernanceWorkspace />} />
-              <Route path="/org/hr/digital-signature" element={<OrgHRGovernanceWorkspace />} />
-              <Route path="/org/hr/users" element={<OrgHRGovernanceWorkspace />} />
-              <Route path="/org/hr/roles" element={<OrgHRGovernanceWorkspace />} />
-              <Route path="/org/hr/permissions" element={<OrgHRGovernanceWorkspace />} />
-              <Route path="/org/hr/approval-hierarchy" element={<OrgHRGovernanceWorkspace />} />
-              <Route path="/org/hr/general-settings" element={<OrgHRGovernanceWorkspace />} />
-              <Route path="/org/hr/branding" element={<OrgHRGovernanceWorkspace />} />
-              <Route path="/org/hr/import-export" element={<OrgHRGovernanceWorkspace />} />
-              <Route path="/org/hr/backup" element={<OrgHRGovernanceWorkspace />} />
-              <Route path="/org/hr/recruitment/jobs" element={<OrgHRRecruitmentJobs />} />
-              <Route path="/org/hr/recruitment/candidates" element={<OrgHRRecruitmentCandidates />} />
-              <Route path="/org/hr/recruitment/interviews" element={<OrgHRRecruitmentInterviews />} />
-              <Route path="/org/hr/recruitment/offers" element={<OrgHRRecruitmentOffers />} />
-              <Route path="/org/hr/ess/requests" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/ess/leave-requests" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/ess/attendance" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/ess/documents" element={<OrgHRPriorityWorkspace />} />
-              <Route path="/org/hr/ess/profile" element={<OrgHRPriorityWorkspace />} />
+              <Route path="/org/hr" element={withHrGuard("/org/hr", <OrgHRHome />)} />
+              <Route path="/org/hr/employees" element={withHrGuard("/org/hr/employees", <OrgHREmployees />)} />
+              <Route path="/org/hr/structure" element={withHrGuard("/org/hr/structure", <OrgHRStructure />)} />
+              <Route path="/org/hr/position-grade" element={withHrGuard("/org/hr/position-grade", <OrgHRPositionGrade />)} />
+              <Route path="/org/hr/contracts" element={withHrGuard("/org/hr/contracts", <OrgHRContracts />)} />
+              <Route path="/org/hr/documents" element={withHrGuard("/org/hr/documents", <OrgHRDocuments />)} />
+              <Route path="/org/hr/reports" element={withHrGuard("/org/hr/reports", <OrgHRReports />)} />
+              <Route path="/org/hr/attendance-insights" element={withHrGuard("/org/hr/attendance-insights", <OrgHRAttendanceInsights />)} />
+              <Route path="/org/hr/settings" element={withHrGuard("/org/hr/settings", <OrgHRSettings />)} />
+              <Route path="/org/hr/faq" element={withHrGuard("/org/hr/faq", <Navigate to="/org/hr/help/faq" replace />)} />
+              <Route path="/org/hr/support" element={withHrGuard("/org/hr/support", <Navigate to="/org/hr/help/tickets" replace />)} />
+              <Route path="/org/hr/tickets" element={withHrGuard("/org/hr/tickets", <Navigate to="/org/hr/help/tickets" replace />)} />
+              <Route path="/org/hr/help" element={withHrGuard("/org/hr/help", <Navigate to="/org/hr/help/tickets" replace />)} />
+              <Route path="/org/hr/help/faq" element={withHrGuard("/org/hr/help/faq", <OrgHRFAQ />)} />
+              <Route path="/org/hr/help/support" element={withHrGuard("/org/hr/help/support", <Navigate to="/org/hr/help/tickets" replace />)} />
+              <Route path="/org/hr/help/tickets" element={withHrGuard("/org/hr/help/tickets", <OrgHRTickets />)} />
+              <Route path="/org/hr/help/error-logs" element={withHrGuard("/org/hr/help/error-logs", <OrgHRErrorLogs />)} />
+              <Route path="/org/hr/notifications" element={withHrGuard("/org/hr/notifications", <Navigate to="/org/hr/settings" replace />)} />
+              <Route path="/org/hr/dashboard-notifications" element={withHrGuard("/org/hr/dashboard-notifications", <Navigate to="/org/hr" replace />)} />
+              <Route path="/org/hr/activity-log" element={withHrGuard("/org/hr/activity-log", <Navigate to="/org/hr/settings" replace />)} />
+              <Route path="/org/hr/dashboard-activity" element={withHrGuard("/org/hr/dashboard-activity", <Navigate to="/org/hr" replace />)} />
+              <Route path="/org/hr/company" element={withHrGuard("/org/hr/company", <Navigate to="/org/hr/structure" replace />)} />
+              <Route path="/org/hr/departments" element={withHrGuard("/org/hr/departments", <Navigate to="/org/hr/structure" replace />)} />
+              <Route path="/org/hr/divisions" element={withHrGuard("/org/hr/divisions", <Navigate to="/org/hr/structure" replace />)} />
+              <Route path="/org/hr/work-locations" element={withHrGuard("/org/hr/work-locations", <Navigate to="/org/hr/structure" replace />)} />
+              <Route path="/org/hr/work-calendar" element={withHrGuard("/org/hr/work-calendar", <Navigate to="/org/hr/structure" replace />)} />
+              <Route path="/org/hr/employee-status" element={withHrGuard("/org/hr/employee-status", <OrgHREmployeeStatus />)} />
+              <Route path="/org/hr/job-history" element={withHrGuard("/org/hr/job-history", <OrgHRJobHistory />)} />
+              <Route path="/org/hr/offboarding" element={withHrGuard("/org/hr/offboarding", <OrgHROffboarding />)} />
+              <Route path="/org/hr/leave-types" element={withHrGuard("/org/hr/leave-types", <OrgHRLeaveTypes />)} />
+              <Route path="/org/hr/onboarding" element={withHrGuard("/org/hr/onboarding", <OrgHROnboarding />)} />
+              <Route path="/org/hr/work-hours" element={withHrGuard("/org/hr/work-hours", <OrgWorkHoursManagement />)} />
+              <Route path="/org/hr/shifts" element={withHrGuard("/org/hr/shifts", <OrgHRShifts />)} />
+              <Route path="/org/hr/national-holidays" element={withHrGuard("/org/hr/national-holidays", <Navigate to="/org/hr/reports" replace />)} />
+              <Route path="/org/hr/late-settings" element={withHrGuard("/org/hr/late-settings", <OrgHRLateSettings />)} />
+              <Route path="/org/hr/attendance-integrations" element={withHrGuard("/org/hr/attendance-integrations", <Navigate to="/org/hr/reports" replace />)} />
+              <Route path="/org/hr/attendance-recap" element={withHrGuard("/org/hr/attendance-recap", <Navigate to="/org/hr/reports" replace />)} />
+              <Route path="/org/hr/leave-quota" element={withHrGuard("/org/hr/leave-quota", <OrgHRLeaveQuota />)} />
+              <Route path="/org/hr/leave-approval" element={withHrGuard("/org/hr/leave-approval", <OrgLeaveRequests />)} />
+              <Route path="/org/hr/mutation-approval" element={withHrGuard("/org/hr/mutation-approval", <OrgMutationRequests />)} />
+              <Route path="/org/hr/leave-recap" element={withHrGuard("/org/hr/leave-recap", <Navigate to="/org/hr/reports" replace />)} />
+              <Route path="/org/hr/leave-validity" element={withHrGuard("/org/hr/leave-validity", <OrgHRLeaveValidity />)} />
+              <Route path="/org/hr/kpi" element={withHrGuard("/org/hr/kpi", <OrgHRKpi />)} />
+              <Route path="/org/hr/performance-periods" element={withHrGuard("/org/hr/performance-periods", <OrgHRPerformancePeriods />)} />
+              <Route path="/org/hr/performance-forms" element={withHrGuard("/org/hr/performance-forms", <OrgHRPerformanceForms />)} />
+              <Route path="/org/hr/review-360" element={withHrGuard("/org/hr/review-360", <OrgHRReview360 />)} />
+              <Route path="/org/hr/evaluation-results" element={withHrGuard("/org/hr/evaluation-results", <OrgHREvaluationResults />)} />
+              <Route path="/org/hr/training-data" element={withHrGuard("/org/hr/training-data", <OrgHRTrainingData />)} />
+              <Route path="/org/hr/certifications" element={withHrGuard("/org/hr/certifications", <OrgHRCertifications />)} />
+              <Route path="/org/hr/skill-matrix" element={withHrGuard("/org/hr/skill-matrix", <OrgHRSkillMatrix />)} />
+              <Route path="/org/hr/document-templates" element={withHrGuard("/org/hr/document-templates", <OrgHRDocumentTemplates />)} />
+              <Route path="/org/hr/warning-letters" element={withHrGuard("/org/hr/warning-letters", <Navigate to="/org/hr/documents" replace />)} />
+              <Route path="/org/hr/contract-templates" element={withHrGuard("/org/hr/contract-templates", <Navigate to="/org/hr/documents" replace />)} />
+              <Route path="/org/hr/digital-signature" element={withHrGuard("/org/hr/digital-signature", <Navigate to="/org/hr/documents" replace />)} />
+              <Route path="/org/hr/users" element={withHrGuard("/org/hr/users", <Navigate to="/org/hr/settings" replace />)} />
+              <Route path="/org/hr/roles" element={withHrGuard("/org/hr/roles", <Navigate to="/org/hr/settings" replace />)} />
+              <Route path="/org/hr/permissions" element={withHrGuard("/org/hr/permissions", <Navigate to="/org/hr/settings" replace />)} />
+              <Route path="/org/hr/approval-hierarchy" element={withHrGuard("/org/hr/approval-hierarchy", <OrgHRApprovalHierarchy />)} />
+              <Route path="/org/hr/general-settings" element={withHrGuard("/org/hr/general-settings", <Navigate to="/org/hr/settings" replace />)} />
+              <Route path="/org/hr/branding" element={withHrGuard("/org/hr/branding", <Navigate to="/org/hr/settings" replace />)} />
+              <Route path="/org/hr/import-export" element={withHrGuard("/org/hr/import-export", <Navigate to="/org/hr/settings" replace />)} />
+              <Route path="/org/hr/backup" element={withHrGuard("/org/hr/backup", <Navigate to="/org/hr/settings" replace />)} />
+              <Route path="/org/hr/recruitment/jobs" element={withHrGuard("/org/hr/recruitment/jobs", <OrgHRRecruitmentJobs />)} />
+              <Route path="/org/hr/recruitment/candidates" element={withHrGuard("/org/hr/recruitment/candidates", <OrgHRRecruitmentCandidates />)} />
+              <Route path="/org/hr/recruitment/interviews" element={withHrGuard("/org/hr/recruitment/interviews", <OrgHRRecruitmentInterviews />)} />
+              <Route path="/org/hr/recruitment/offers" element={withHrGuard("/org/hr/recruitment/offers", <OrgHRRecruitmentOffers />)} />
+              <Route path="/org/hr/ess/requests" element={withHrGuard("/org/hr/ess/requests", <OrgHRESSRequests />)} />
+              <Route path="/org/hr/ess/leave-requests" element={withHrGuard("/org/hr/ess/leave-requests", <OrgLeaveRequests />)} />
+              <Route path="/org/hr/ess/wfh-requests" element={withHrGuard("/org/hr/ess/wfh-requests", <OrgWfhRequests />)} />
+              <Route path="/org/hr/ess/flexible-attendance" element={withHrGuard("/org/hr/ess/flexible-attendance", <OrgFlexibleAttendanceRequests />)} />
+              <Route path="/org/hr/ess/overtime-requests" element={withHrGuard("/org/hr/ess/overtime-requests", <OrgOvertimeRequests />)} />
+              <Route path="/org/hr/ess/attendance" element={withHrGuard("/org/hr/ess/attendance", <OrgHRESSAttendance />)} />
+              <Route path="/org/hr/ess/documents" element={withHrGuard("/org/hr/ess/documents", <OrgHRESSDocuments />)} />
+              <Route path="/org/hr/ess/profile" element={withHrGuard("/org/hr/ess/profile", <OrgHRESSProfile />)} />
               <Route path="/org/payroll" element={<PayrollRouteGuard permission="payroll.workspace.view"><OrgPayrollHome /></PayrollRouteGuard>} />
               <Route path="/org/payroll/employees" element={<PayrollRouteGuard permission="payroll.master.manage"><OrgPayrollEmployees /></PayrollRouteGuard>} />
               <Route path="/org/payroll/org-grade" element={<PayrollRouteGuard permission="payroll.master.manage"><OrgPayrollOrgGrade /></PayrollRouteGuard>} />
@@ -448,9 +478,10 @@ const App = () => (
               {/* News Detail Page */}
               <Route path="/news/:id" element={<NewsDetail />} />
 
-              <Route path="*" element={<NotFound />} />
-              </Routes>
-            </Suspense>
+                  <Route path="*" element={<NotFound />} />
+                </Routes>
+              </Suspense>
+            </AndroidSessionSync>
             <PersistentNotificationDialog />
           </BrowserRouter>
         </ConfirmDialogProvider>

@@ -12,6 +12,9 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { useHrPageAccess } from "@/hooks/useHrPageAccess";
+import { getHrRoutePolicy } from "@/lib/hrRouteAccess";
+import { getHrRouteStatusBadgeLabel, getHrRouteStatusDescription } from "@/lib/hrRouteStatusPresentation";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import {
   DEFAULT_HR_ERROR_ALERT_SETTINGS,
@@ -83,6 +86,7 @@ const toAlertTargets = (settings: HrErrorAlertSettings): AlertTarget[] =>
   ].filter((target) => target.url.length > 0);
 
 export default function OrgHRErrorLogs() {
+  const routePolicy = getHrRoutePolicy("/org/hr/help/error-logs");
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [rows, setRows] = useState<ClientErrorLogRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -94,6 +98,7 @@ export default function OrgHRErrorLogs() {
   const [isSavingAlertSettings, setIsSavingAlertSettings] = useState(false);
   const [canManageAlertSettings, setCanManageAlertSettings] = useState(false);
   const realtimeNotifiedRefs = useRef<Set<string>>(new Set());
+  const { access, isLoading: isLoadingAccess } = useHrPageAccess("/org/hr/help/error-logs");
 
   const fetchRows = useCallback(async () => {
     setIsLoading(true);
@@ -405,33 +410,45 @@ export default function OrgHRErrorLogs() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">HR Help</Badge>
-          <h1 className="text-2xl font-semibold tracking-tight">Log Error</h1>
-          <p className="text-sm text-muted-foreground">Catatan error/gagal muat data berdasarkan nomor referensi.</p>
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="outline">HR</Badge>
+            <Badge variant="secondary">{getHrRouteStatusBadgeLabel(routePolicy.status)}</Badge>
+          </div>
+          <h1 className="text-2xl font-semibold tracking-tight">Log Error HR</h1>
+          <p className="text-sm text-muted-foreground">Catatan error operasional HR berdasarkan nomor referensi untuk kebutuhan triase internal.</p>
+          <p className="text-xs text-muted-foreground">
+            Capability halaman: {isLoadingAccess ? "memverifikasi..." : access.canConfigure ? "admin dapat triase, ekspor, dan konfigurasi alert" : access.canView ? "monitoring internal hanya-baca" : "akses dibatasi"}
+          </p>
         </div>
+
+        <Card className="border-dashed">
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">{getHrRouteStatusDescription(routePolicy.status, "audit")}</p>
+          </CardContent>
+        </Card>
 
         <Card className="border-amber-300/70 bg-amber-50/50">
           <CardContent className="pt-6">
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={() => void fetchRows()} disabled={isLoading}>
                 <RefreshCw className="mr-2 h-4 w-4" />
-                Refresh
+                Muat Ulang
               </Button>
-              <Button variant="outline" onClick={handleExportCsv}>
+              <Button variant="outline" onClick={handleExportCsv} disabled={isLoadingAccess || !access.canExport}>
                 <Download className="mr-2 h-4 w-4" />
-                Export CSV
+                Ekspor CSV
               </Button>
-              <Button variant="outline" onClick={handleExportJson}>
+              <Button variant="outline" onClick={handleExportJson} disabled={isLoadingAccess || !access.canExport}>
                 <Download className="mr-2 h-4 w-4" />
-                Export JSON
+                Ekspor JSON
               </Button>
-              <Button variant="outline" onClick={() => void handleRetentionNow()}>
+              <Button variant="outline" onClick={() => void handleRetentionNow()} disabled={isLoadingAccess || !access.canApprove}>
                 <RotateCcw className="mr-2 h-4 w-4" />
                 Retensi Sekarang
               </Button>
-              <Button variant="destructive" onClick={handleClearLocalLogs}>
+              <Button variant="destructive" onClick={handleClearLocalLogs} disabled={isLoadingAccess || !access.canEdit}>
                 <Trash2 className="mr-2 h-4 w-4" />
-                Clear Log Lokal
+                Bersihkan Log Lokal
               </Button>
             </div>
           </CardContent>
@@ -444,7 +461,7 @@ export default function OrgHRErrorLogs() {
               Alert Realtime Kritis
             </CardTitle>
             <CardDescription>
-              Simpan endpoint webhook untuk notifikasi realtime error kritis (webhook umum, Slack, WhatsApp, Email).
+              Simpan endpoint webhook untuk notifikasi realtime error kritis (webhook umum, Slack, WhatsApp, email).
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -456,6 +473,7 @@ export default function OrgHRErrorLogs() {
               <Switch
                 checked={alertSettings.enableRealtimeAlerts}
                 onCheckedChange={(checked) => setAlertSettings((prev) => ({ ...prev, enableRealtimeAlerts: checked }))}
+                disabled={isLoadingAccess || !access.canConfigure}
               />
             </div>
 
@@ -464,29 +482,33 @@ export default function OrgHRErrorLogs() {
                 value={alertSettings.webhookUrl}
                 onChange={(event) => setAlertSettings((prev) => ({ ...prev, webhookUrl: event.target.value }))}
                 placeholder="Webhook Umum (https://...)"
+                disabled={isLoadingAccess || !access.canConfigure}
               />
               <Input
                 value={alertSettings.slackWebhookUrl}
                 onChange={(event) => setAlertSettings((prev) => ({ ...prev, slackWebhookUrl: event.target.value }))}
                 placeholder="Slack Webhook (https://...)"
+                disabled={isLoadingAccess || !access.canConfigure}
               />
               <Input
                 value={alertSettings.whatsappWebhookUrl}
                 onChange={(event) => setAlertSettings((prev) => ({ ...prev, whatsappWebhookUrl: event.target.value }))}
                 placeholder="WhatsApp Webhook (https://...)"
+                disabled={isLoadingAccess || !access.canConfigure}
               />
               <Input
                 value={alertSettings.emailWebhookUrl}
                 onChange={(event) => setAlertSettings((prev) => ({ ...prev, emailWebhookUrl: event.target.value }))}
                 placeholder="Email Webhook (https://...)"
+                disabled={isLoadingAccess || !access.canConfigure}
               />
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <Button onClick={() => void saveAlertSettings()} disabled={isSavingAlertSettings || !canManageAlertSettings}>
+              <Button onClick={() => void saveAlertSettings()} disabled={isSavingAlertSettings || !canManageAlertSettings || isLoadingAccess || !access.canConfigure}>
                 Simpan Pengaturan Alert
               </Button>
-              <Button variant="outline" onClick={() => void resetAlertSettings()} disabled={isSavingAlertSettings || !canManageAlertSettings}>
+              <Button variant="outline" onClick={() => void resetAlertSettings()} disabled={isSavingAlertSettings || !canManageAlertSettings || isLoadingAccess || !access.canConfigure}>
                 Muat Ulang Pengaturan
               </Button>
               {!canManageAlertSettings ? (
@@ -522,11 +544,16 @@ export default function OrgHRErrorLogs() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => void patchStatusForRows("non_kritis")}>Tandai Halaman Ini Non Kritis</Button>
-              <Button variant="outline" onClick={() => void patchStatusForRows("selesai")}>Tandai Halaman Ini Selesai</Button>
+              <Button variant="outline" onClick={() => void patchStatusForRows("non_kritis")} disabled={isLoadingAccess || !access.canEdit}>
+                Tandai Halaman Ini Non Kritis
+              </Button>
+              <Button variant="outline" onClick={() => void patchStatusForRows("selesai")} disabled={isLoadingAccess || !access.canApprove}>
+                Tandai Halaman Ini Selesai
+              </Button>
               <Button
                 variant="outline"
                 onClick={() => void patchStatusForRows(activeTab === "kritis" ? "arsip_kritis" : "arsip_non_kritis")}
+                disabled={isLoadingAccess || !access.canApprove}
               >
                 Arsipkan Halaman Ini
               </Button>
@@ -586,7 +613,7 @@ export default function OrgHRErrorLogs() {
                     <TableHead>Waktu</TableHead>
                     <TableHead>Konteks</TableHead>
                     <TableHead>Pesan</TableHead>
-                    <TableHead>Route</TableHead>
+                    <TableHead>Rute</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>

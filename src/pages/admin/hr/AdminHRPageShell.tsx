@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useLocation } from "react-router-dom";
+import { AdminHRPageGuide } from "@/components/admin/hr/AdminHRPageGuide";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -25,7 +26,7 @@ export function AdminHRPageShell({
       <div className="space-y-6">
         {isHelpdeskOrProfile ? (
           <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">
-            Navigasi halaman ini tersedia di sidebar: <strong>Helpdesk HR</strong> atau <strong>Akun</strong>.
+            Navigasi halaman ini tersedia di sidebar: <strong>Bantuan Sistem</strong> atau <strong>Tenant HR</strong>.
           </div>
         ) : null}
         <Card>
@@ -35,6 +36,7 @@ export function AdminHRPageShell({
           </CardHeader>
           <CardContent>{children}</CardContent>
         </Card>
+        <AdminHRPageGuide pathname={location.pathname} />
       </div>
     </SuperAdminLayout>
   );

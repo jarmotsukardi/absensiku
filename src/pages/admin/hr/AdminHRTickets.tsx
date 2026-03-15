@@ -51,9 +51,9 @@ const formatDateTime = (value: string | null) => {
 const escapeLikeKeyword = (keyword: string) => keyword.replace(/[%,_]/g, "").trim();
 
 const statusBadge = (status: string) => {
-  if (status === "resolved") return <Badge className="bg-emerald-600 hover:bg-emerald-600">Resolved</Badge>;
-  if (status === "in_progress") return <Badge className="bg-blue-600 hover:bg-blue-600">In Progress</Badge>;
-  return <Badge variant="secondary">Open</Badge>;
+  if (status === "resolved") return <Badge className="bg-emerald-600 hover:bg-emerald-600">Selesai</Badge>;
+  if (status === "in_progress") return <Badge className="bg-blue-600 hover:bg-blue-600">Sedang Diproses</Badge>;
+  return <Badge variant="secondary">Terbuka</Badge>;
 };
 
 export default function AdminHRTickets() {
@@ -230,14 +230,14 @@ export default function AdminHRTickets() {
 
   return (
     <AdminHRPageShell
-      title="Tiket HR Superadmin"
+      title="Tiket HR Lintas Tenant"
       subtitle="Manajemen tiket bantuan HR"
-      description="Pantau tiket HR lintas tenant, lakukan triase, lalu lanjutkan investigasi detail di manajemen tiket global."
+      description="Pantau tiket HR lintas tenant, lakukan triase, lalu lanjutkan investigasi rinci di manajemen tiket global."
     >
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="space-y-1">
-            <p className="text-sm text-muted-foreground">Panel ini tanpa auto-refresh.</p>
+            <p className="text-sm text-muted-foreground">Panel ini tanpa muat ulang otomatis.</p>
             <p className="text-xs text-muted-foreground">
               {isLoading ? "Memuat..." : `Terakhir diperbarui: ${lastUpdatedAt?.toLocaleString("id-ID") ?? "-"}`}
             </p>
@@ -245,10 +245,10 @@ export default function AdminHRTickets() {
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => void loadData()} disabled={isLoading}>
               <RefreshCcw className="mr-2 h-4 w-4" />
-              Refresh
+              Muat Ulang
             </Button>
             <Button size="sm" onClick={() => navigate("/admin/hr/help/support")}>
-              Buka Helpdesk HR
+              Buka Dukungan HR Global
             </Button>
           </div>
         </div>
@@ -263,21 +263,21 @@ export default function AdminHRTickets() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Open</CardTitle>
+              <CardTitle className="text-base">Terbuka</CardTitle>
               <CardDescription>Butuh triase awal.</CardDescription>
             </CardHeader>
             <CardContent className="text-2xl font-semibold">{isLoading ? "..." : stats.open}</CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">In Progress</CardTitle>
+              <CardTitle className="text-base">Sedang Diproses</CardTitle>
               <CardDescription>Sedang ditangani.</CardDescription>
             </CardHeader>
             <CardContent className="text-2xl font-semibold">{isLoading ? "..." : stats.inProgress}</CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Resolved</CardTitle>
+              <CardTitle className="text-base">Selesai</CardTitle>
               <CardDescription>Sudah selesai.</CardDescription>
             </CardHeader>
             <CardContent className="text-2xl font-semibold">{isLoading ? "..." : stats.resolved}</CardContent>
@@ -297,9 +297,9 @@ export default function AdminHRTickets() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Semua Status</SelectItem>
-              <SelectItem value="open">Open</SelectItem>
-              <SelectItem value="in_progress">In Progress</SelectItem>
-              <SelectItem value="resolved">Resolved</SelectItem>
+              <SelectItem value="open">Terbuka</SelectItem>
+              <SelectItem value="in_progress">Sedang Diproses</SelectItem>
+              <SelectItem value="resolved">Selesai</SelectItem>
             </SelectContent>
           </Select>
           <Select value={tenantFilter} onValueChange={setTenantFilter}>
@@ -328,9 +328,9 @@ export default function AdminHRTickets() {
                 <TableRow>
                   <TableHead>Tenant</TableHead>
                   <TableHead>Total</TableHead>
-                  <TableHead>Open</TableHead>
-                  <TableHead>In Progress</TableHead>
-                  <TableHead>Resolved</TableHead>
+                  <TableHead>Terbuka</TableHead>
+                  <TableHead>Sedang Diproses</TableHead>
+                  <TableHead>Selesai</TableHead>
                   <TableHead>Aktivitas Terakhir</TableHead>
                 </TableRow>
               </TableHeader>

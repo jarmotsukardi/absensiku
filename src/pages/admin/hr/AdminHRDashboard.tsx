@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { AdminHRPageGuide } from "@/components/admin/hr/AdminHRPageGuide";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -157,17 +158,17 @@ export default function AdminHRDashboard() {
   const quickActions = [
     { label: "Mapping Pengaturan /org/hr", path: "/admin/hr/settings#coverage-map" },
     { label: "Kelola Tenant HR", path: "/admin/hr/tenants" },
-    { label: "Review Kebijakan HR", path: "/admin/hr/policies" },
+    { label: "Tinjau Kebijakan HR", path: "/admin/hr/policies" },
     { label: "Buka Tiket HR", path: "/admin/hr/help/tickets" },
     { label: "Audit Aktivitas HR", path: "/admin/hr/audit" },
     { label: "Pantau Log Error HR", path: "/admin/hr/error-logs" },
-    { label: "Pengaturan HR", path: "/admin/hr/settings" },
+    { label: "Buka Pengaturan", path: "/admin/hr/settings" },
   ] as const;
 
   return (
     <SuperAdminLayout
-      title="Dashboard HR Superadmin"
-      subtitle="Ringkasan platform modul /org/hr lintas tenant"
+      title="Ringkasan Dukungan HR"
+      subtitle="Ringkasan governance modul /org/hr lintas tenant"
       workspaceMode="hr"
     >
       <div className="space-y-6">
@@ -197,8 +198,8 @@ export default function AdminHRDashboard() {
             <CardHeader>
               <CardTitle>Ringkasan Prioritas /org/hr</CardTitle>
               <CardDescription>
-                Fokus monitoring lintas tenant untuk employee data, struktur organisasi, kontrak,
-                dokumen, dan helpdesk HR.
+                Fokus pemantauan lintas tenant untuk data pegawai, struktur organisasi, kontrak,
+                dokumen, dan bantuan HR.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3 text-sm text-muted-foreground">
@@ -209,16 +210,16 @@ export default function AdminHRDashboard() {
                 Aktivitas audit tiket HR 24 jam: {formatNumber(kpi.ticketEvents24h)} perubahan status tercatat.
               </p>
               <p>
-                Error HR kritis terbuka: {formatNumber(kpi.hrCriticalErrors24h)} item perlu follow up.
+                Error HR kritis terbuka: {formatNumber(kpi.hrCriticalErrors24h)} item perlu tindak lanjut.
               </p>
             </CardContent>
           </Card>
 
           <Card>
             <CardHeader>
-              <CardTitle>Aksi Cepat HR</CardTitle>
-              <CardDescription>Navigasi cepat ke halaman operasional utama.</CardDescription>
-            </CardHeader>
+            <CardTitle>Aksi Cepat HR</CardTitle>
+            <CardDescription>Navigasi cepat ke halaman governance utama.</CardDescription>
+          </CardHeader>
             <CardContent className="space-y-2">
               {quickActions.map((item) => (
                 <Button key={item.path} asChild variant="outline" className="w-full justify-start">
@@ -238,7 +239,7 @@ export default function AdminHRDashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent className="text-sm text-muted-foreground">
-              Validasi baseline kebijakan perlu difokuskan pada {formatNumber(kpi.activeTenants)} tenant aktif.
+              Validasi acuan bawaan kebijakan perlu difokuskan pada {formatNumber(kpi.activeTenants)} tenant aktif.
             </CardContent>
           </Card>
           <Card>
@@ -249,7 +250,7 @@ export default function AdminHRDashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent className="text-sm text-muted-foreground">
-              {formatNumber(kpi.ticketEvents24h)} event tiket tercatat dalam 24 jam untuk monitoring eskalasi.
+              {formatNumber(kpi.ticketEvents24h)} event tiket tercatat dalam 24 jam untuk pemantauan eskalasi.
             </CardContent>
           </Card>
         </section>
@@ -258,6 +259,7 @@ export default function AdminHRDashboard() {
             ? "Memuat KPI real-time HR..."
             : `Terakhir diperbarui: ${lastUpdatedAt?.toLocaleString("id-ID") ?? "-"}`}
         </p>
+        <AdminHRPageGuide pathname="/admin/hr" />
       </div>
     </SuperAdminLayout>
   );

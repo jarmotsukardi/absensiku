@@ -62,8 +62,8 @@ export default function AttendanceStressTest() {
   const handleStart = useCallback(() => {
     if (config.mode === "live" && config.totalUsers > 5000) {
       toast({
-        title: "Live Test Dibatasi",
-        description: "Untuk keamanan, mode LIVE dibatasi maksimal 5.000 virtual users per run.",
+        title: "Uji Langsung Dibatasi",
+        description: "Untuk keamanan, mode uji langsung dibatasi maksimal 5.000 pengguna virtual per eksekusi.",
         variant: "destructive",
       });
       return;
@@ -94,7 +94,7 @@ export default function AttendanceStressTest() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
             <Activity className="h-6 w-6 text-primary" />
-            Stress Test Absensi
+            Uji Beban Absensi
           </h1>
           <p className="text-muted-foreground mt-1">
             Simulasi beban tinggi untuk menguji resiliensi sistem sebelum deployment produksi
@@ -107,7 +107,7 @@ export default function AttendanceStressTest() {
             <CardHeader>
               <CardTitle className="text-lg flex items-center gap-2">
                 <Gauge className="h-5 w-5" />
-                Konfigurasi Test
+                Konfigurasi Uji
               </CardTitle>
               <CardDescription>
                 Pilih skenario dan sesuaikan parameter simulasi
@@ -120,7 +120,7 @@ export default function AttendanceStressTest() {
                   { key: 'burst', icon: Zap, title: 'Burst', desc: '1.000 user sekaligus', color: 'text-yellow-500' },
                   { key: 'gradual', icon: TrendingUp, title: 'Gradual', desc: '5.000 user bertahap', color: 'text-blue-500' },
                   { key: 'peak_simulation', icon: Users, title: 'Peak 20K', desc: '20.000 user simulasi', color: 'text-red-500' },
-                  { key: 'circuit_breaker', icon: Shield, title: 'Circuit Breaker', desc: 'Test circuit breaker', color: 'text-purple-500' },
+                  { key: 'circuit_breaker', icon: Shield, title: 'Circuit Breaker', desc: 'Uji circuit breaker', color: 'text-purple-500' },
                 ].map(s => (
                   <button
                     key={s.key}
@@ -139,7 +139,7 @@ export default function AttendanceStressTest() {
               </div>
 
               <div className="space-y-2">
-                <Label className="text-xs">Staged Load Test (Rekomendasi Produksi)</Label>
+                <Label className="text-xs">Uji Beban Bertahap (Rekomendasi Produksi)</Label>
                 <div className="flex flex-wrap gap-2">
                   {[
                     { key: "stage_10k", label: "Tahap 10K" },
@@ -158,7 +158,7 @@ export default function AttendanceStressTest() {
                   ))}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Jalankan bertahap: 10K → 50K → 100K → 500K, evaluasi p95 latency dan error rate di tiap tahap.
+                  Jalankan bertahap: 10K → 50K → 100K → 500K, evaluasi latensi p95 dan tingkat galat di tiap tahap.
                 </p>
               </div>
 
@@ -167,7 +167,7 @@ export default function AttendanceStressTest() {
               {/* Parameters */}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                 <div className="space-y-2">
-                  <Label className="text-xs">Total Virtual Users</Label>
+                  <Label className="text-xs">Total Pengguna Virtual</Label>
                   <Input
                     type="number"
                     value={config.totalUsers}
@@ -187,7 +187,7 @@ export default function AttendanceStressTest() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label className="text-xs">Batch Size</Label>
+                  <Label className="text-xs">Ukuran Batch</Label>
                   <Input
                     type="number"
                     value={config.concurrentBatchSize}
@@ -197,7 +197,7 @@ export default function AttendanceStressTest() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label className="text-xs">Simulated Latency (ms)</Label>
+                  <Label className="text-xs">Latensi Simulasi (ms)</Label>
                   <Input
                     type="number"
                     value={config.simulatedLatencyMs}
@@ -207,7 +207,7 @@ export default function AttendanceStressTest() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label className="text-xs">Failure Rate (%)</Label>
+                  <Label className="text-xs">Tingkat Kegagalan (%)</Label>
                   <Input
                     type="number"
                     value={Math.round(config.failureRate * 100)}
@@ -223,8 +223,8 @@ export default function AttendanceStressTest() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="dry_run">Dry Run (tanpa DB)</SelectItem>
-                      <SelectItem value="live">Live Test</SelectItem>
+                      <SelectItem value="dry_run">Simulasi Kering (tanpa DB)</SelectItem>
+                      <SelectItem value="live">Uji Langsung</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -234,12 +234,12 @@ export default function AttendanceStressTest() {
               <div className="flex gap-3">
                 <Button onClick={handleStart} size="lg" className="gap-2">
                   <Play className="h-4 w-4" />
-                  Mulai Stress Test
+                  Mulai Uji Beban
                 </Button>
                 {config.mode === 'live' && (
                   <Badge variant="destructive" className="self-center">
                     <AlertTriangle className="h-3 w-3 mr-1" />
-                    Mode LIVE — akan mengirim request ke server
+                    Mode uji langsung — akan mengirim permintaan ke server
                   </Badge>
                 )}
               </div>
@@ -256,12 +256,12 @@ export default function AttendanceStressTest() {
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-3">
                     <Badge variant={isRunning ? 'default' : isCompleted ? 'secondary' : 'outline'}>
-                      {testState.status === 'running' && '🔄 Running'}
+                      {testState.status === 'running' && '🔄 Berjalan'}
                       {testState.status === 'completed' && '✅ Selesai'}
                       {testState.status === 'aborted' && '⏹️ Dibatalkan'}
                     </Badge>
                     <span className="text-sm text-muted-foreground">
-                      {metrics?.completedUsers ?? 0} / {config.totalUsers} users
+                      {metrics?.completedUsers ?? 0} / {config.totalUsers} pengguna
                     </span>
                     <span className="text-sm text-muted-foreground">
                       ⏱️ {metrics?.elapsedSeconds ?? 0}s
@@ -270,7 +270,7 @@ export default function AttendanceStressTest() {
                   {isRunning && (
                     <Button onClick={handleStop} variant="destructive" size="sm" className="gap-1">
                       <Square className="h-3 w-3" />
-                      Stop
+                      Hentikan
                     </Button>
                   )}
                   {!isRunning && (
@@ -288,20 +288,20 @@ export default function AttendanceStressTest() {
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
               <MetricCard
                 icon={BarChart3}
-                label="Total Requests"
+                label="Total Permintaan"
                 value={metrics?.totalRequests ?? 0}
                 color="text-blue-500"
               />
               <MetricCard
                 icon={CheckCircle2}
-                label="Success"
+                label="Berhasil"
                 value={metrics?.successCount ?? 0}
                 suffix={`(${successRate}%)`}
                 color="text-green-500"
               />
               <MetricCard
                 icon={XCircle}
-                label="Failed"
+                label="Gagal"
                 value={metrics?.failureCount ?? 0}
                 color="text-red-500"
               />
@@ -313,13 +313,13 @@ export default function AttendanceStressTest() {
               />
               <MetricCard
                 icon={Timer}
-                label="Avg Response"
+                label="Rata-rata Respons"
                 value={`${metrics?.avgResponseTime ?? 0}ms`}
                 color="text-orange-500"
               />
               <MetricCard
                 icon={Shield}
-                label="CB Trips"
+                label="Trip CB"
                 value={metrics?.circuitBreakerTrips ?? 0}
                 suffix={metrics?.circuitBreakerStatus}
                 color="text-pink-500"
@@ -331,7 +331,7 @@ export default function AttendanceStressTest() {
               <TabsList className="h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
                 <TabsTrigger value="charts" className="whitespace-nowrap">📊 Throughput</TabsTrigger>
                 <TabsTrigger value="latency" className="whitespace-nowrap">⏱️ Latensi</TabsTrigger>
-                <TabsTrigger value="users" className="whitespace-nowrap">👥 Users</TabsTrigger>
+                <TabsTrigger value="users" className="whitespace-nowrap">👥 Pengguna</TabsTrigger>
                 <TabsTrigger value="logs" className="whitespace-nowrap">📝 Log</TabsTrigger>
               </TabsList>
 
@@ -339,7 +339,7 @@ export default function AttendanceStressTest() {
               <TabsContent value="charts">
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-sm">Throughput & Error Rate (per detik)</CardTitle>
+                    <CardTitle className="text-sm">Throughput & Tingkat Galat (per detik)</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <div className="h-64">
@@ -350,7 +350,7 @@ export default function AttendanceStressTest() {
                           <YAxis className="text-xs" />
                           <Tooltip />
                           <Area type="monotone" dataKey="rps" stroke="hsl(var(--primary))" fill="hsl(var(--primary)/0.2)" name="Req/s" />
-                          <Area type="monotone" dataKey="errors" stroke="hsl(var(--destructive))" fill="hsl(var(--destructive)/0.2)" name="Errors" />
+                          <Area type="monotone" dataKey="errors" stroke="hsl(var(--destructive))" fill="hsl(var(--destructive)/0.2)" name="Galat" />
                         </AreaChart>
                       </ResponsiveContainer>
                     </div>
@@ -382,15 +382,15 @@ export default function AttendanceStressTest() {
                     <Separator className="my-4" />
                     <div className="grid grid-cols-3 gap-4 text-sm">
                       <div className="p-3 rounded-lg bg-muted/30">
-                        <span className="text-muted-foreground">Avg Jitter:</span>{' '}
+                        <span className="text-muted-foreground">Jitter Rata-rata:</span>{' '}
                         <span className="font-semibold">{metrics?.avgJitterMs ?? 0}ms</span>
                       </div>
                       <div className="p-3 rounded-lg bg-muted/30">
-                        <span className="text-muted-foreground">Total Retries:</span>{' '}
+                        <span className="text-muted-foreground">Total Coba Ulang:</span>{' '}
                         <span className="font-semibold">{metrics?.totalRetries ?? 0}</span>
                       </div>
                       <div className="p-3 rounded-lg bg-muted/30">
-                        <span className="text-muted-foreground">Active Users:</span>{' '}
+                        <span className="text-muted-foreground">Pengguna Aktif:</span>{' '}
                         <span className="font-semibold">{metrics?.activeUsers ?? 0}</span>
                       </div>
                     </div>
@@ -402,7 +402,7 @@ export default function AttendanceStressTest() {
               <TabsContent value="users">
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-sm">Virtual Users (top 100)</CardTitle>
+                    <CardTitle className="text-sm">Pengguna Virtual (100 teratas)</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <ScrollArea className="h-72">
@@ -440,7 +440,7 @@ export default function AttendanceStressTest() {
               <TabsContent value="logs">
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-sm">Event Log (last 50)</CardTitle>
+                    <CardTitle className="text-sm">Log Peristiwa (50 terakhir)</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <ScrollArea className="h-72">
@@ -483,7 +483,7 @@ export default function AttendanceStressTest() {
                 <CardContent>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                     <div>
-                      <span className="text-muted-foreground">Success Rate:</span>
+                      <span className="text-muted-foreground">Tingkat Keberhasilan:</span>
                       <div className="text-2xl font-bold">{successRate}%</div>
                     </div>
                     <div>
@@ -491,11 +491,11 @@ export default function AttendanceStressTest() {
                       <div className="text-2xl font-bold">{metrics.requestsPerSecond} req/s</div>
                     </div>
                     <div>
-                      <span className="text-muted-foreground">P95 Latency:</span>
+                      <span className="text-muted-foreground">Latensi P95:</span>
                       <div className="text-2xl font-bold">{metrics.p95ResponseTime}ms</div>
                     </div>
                     <div>
-                      <span className="text-muted-foreground">CB Trips:</span>
+                      <span className="text-muted-foreground">Trip CB:</span>
                       <div className="text-2xl font-bold">{metrics.circuitBreakerTrips}</div>
                     </div>
                   </div>

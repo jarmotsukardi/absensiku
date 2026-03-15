@@ -154,6 +154,12 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
   });
   
   const [reason, setReason] = useState("");
+  const [documentReference, setDocumentReference] = useState({
+    number: "",
+    date: "",
+    issuer: "",
+    notes: "",
+  });
 
   const fetchMasterData = useCallback(async () => {
     if (!employee.tenant_id) {
@@ -370,6 +376,10 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
         requested_changes: changes,
         original_data: original,
         reason: reason.trim(),
+        document_reference_number: documentReference.number.trim() || null,
+        document_reference_date: documentReference.date || null,
+        document_reference_issuer: documentReference.issuer.trim() || null,
+        document_reference_notes: documentReference.notes.trim() || null,
       });
 
       if (error) throw error;
@@ -409,6 +419,12 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
       office_id: employee.office_id || "",
     });
     setReason("");
+    setDocumentReference({
+      number: "",
+      date: "",
+      issuer: "",
+      notes: "",
+    });
   };
 
   return (
@@ -427,7 +443,7 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
           </DialogTitle>
           <DialogDescription>
             Ajukan perubahan data profil atau mutasi ke unit kerja lain.
-            Data Nama dan NIP tidak dapat diubah.
+            Data Nama dan NIP tidak dapat diubah. Gunakan nomor dokumen rujukan jika perubahan perlu dasar administratif.
           </DialogDescription>
         </DialogHeader>
 
@@ -837,10 +853,58 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
 
           <Separator />
 
+          <div className="space-y-4">
+            <Label className="text-base font-semibold">Referensi Dokumen</Label>
+            <p className="text-sm text-muted-foreground">
+              Aplikasi ini tidak menyimpan unggahan file untuk mutasi. Jika ada surat atau nota dinas, cukup catat nomor dan identitas dokumennya.
+            </p>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="mutation_doc_number">Nomor Dokumen</Label>
+                <Input
+                  id="mutation_doc_number"
+                  value={documentReference.number}
+                  onChange={(e) => setDocumentReference((prev) => ({ ...prev, number: e.target.value }))}
+                  placeholder="Contoh: 800/123/SDM/2026"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="mutation_doc_date">Tanggal Dokumen</Label>
+                <Input
+                  id="mutation_doc_date"
+                  type="date"
+                  value={documentReference.date}
+                  onChange={(e) => setDocumentReference((prev) => ({ ...prev, date: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="mutation_doc_issuer">Penerbit Dokumen</Label>
+                <Input
+                  id="mutation_doc_issuer"
+                  value={documentReference.issuer}
+                  onChange={(e) => setDocumentReference((prev) => ({ ...prev, issuer: e.target.value }))}
+                  placeholder="Contoh: BKPSDM / Sekretariat Daerah"
+                />
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <Label htmlFor="mutation_doc_notes">Catatan Referensi</Label>
+                <Textarea
+                  id="mutation_doc_notes"
+                  value={documentReference.notes}
+                  onChange={(e) => setDocumentReference((prev) => ({ ...prev, notes: e.target.value }))}
+                  placeholder="Catatan tambahan terkait dasar surat, nomor nota, atau penjelasan administratif."
+                  rows={2}
+                />
+              </div>
+            </div>
+          </div>
+
+          <Separator />
+
           {/* Reason */}
           <div className="space-y-2">
             <Label htmlFor="reason" className="text-base font-semibold">
-              Alasan Pengajuan <span className="text-destructive">*</span>
+              Ringkasan Alasan <span className="text-destructive">*</span>
             </Label>
             <Textarea
               id="reason"
