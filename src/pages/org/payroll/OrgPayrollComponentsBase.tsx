@@ -398,10 +398,6 @@ export function OrgPayrollComponentsBase({
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="secondary">Lanjutan</Badge>
-            <Badge variant="outline">Konfigurasi Payroll</Badge>
-          </div>
           <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
           <p className="text-sm text-muted-foreground">{description}</p>
         </div>

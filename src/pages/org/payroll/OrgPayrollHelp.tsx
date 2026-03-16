@@ -33,10 +33,6 @@ export default function OrgPayrollHelp() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">Info</Badge>
-            <Badge variant="outline">Bantuan Payroll</Badge>
-          </div>
           <h1 className="text-2xl font-semibold tracking-tight">Bantuan Payroll</h1>
           <p className="text-sm text-muted-foreground">
             Titik bantuan cepat untuk memahami alur payroll dan membuka halaman rujukan yang relevan.

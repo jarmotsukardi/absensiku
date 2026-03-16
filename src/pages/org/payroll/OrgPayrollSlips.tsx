@@ -386,10 +386,6 @@ export default function OrgPayrollSlips() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="secondary">Ditunda</Badge>
-            <Badge variant="outline">Distribusi Payroll</Badge>
-          </div>
           <h1 className="text-2xl font-semibold tracking-tight">Slip Gaji & Distribusi</h1>
           <p className="text-sm text-muted-foreground">Generate, publish, dan lacak distribusi slip gaji payroll.</p>
         </div>

@@ -292,10 +292,6 @@ export default function OrgPayrollAuditLog() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="secondary">Ditunda</Badge>
-            <Badge variant="outline">Observabilitas</Badge>
-          </div>
           <h1 className="text-2xl font-semibold tracking-tight">Audit Log Payroll</h1>
           <p className="text-sm text-muted-foreground">Jejak perubahan payroll untuk menelusuri siapa mengubah apa, kapan, dan pada proses yang mana.</p>
         </div>

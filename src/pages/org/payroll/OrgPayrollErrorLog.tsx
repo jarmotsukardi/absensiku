@@ -358,10 +358,6 @@ export default function OrgPayrollErrorLog() {
       <div className="space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="destructive">Ditunda</Badge>
-              <Badge variant="outline">Observabilitas</Badge>
-            </div>
             <h1 className="text-2xl font-semibold tracking-tight">Log Error Payroll</h1>
             <p className="text-sm text-muted-foreground">
               Catatan error payroll berdasarkan nomor referensi, konteks, dan rute kejadian.

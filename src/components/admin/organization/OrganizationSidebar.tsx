@@ -153,25 +153,7 @@ const withHrSidebarBadges = (subItems: SubMenuItem[]): SubMenuItem[] =>
     badgeLabel: subItem.badgeLabel || getHrSidebarBadgeLabel(subItem.path),
   }));
 
-const PAYROLL_SIDEBAR_BADGES: Record<string, string> = {
-  "/org/payroll/employees": "Referensi HR",
-  "/org/payroll/org-grade": "Referensi HR",
-  "/org/payroll/income-components": "Lanjutan",
-  "/org/payroll/deduction-components": "Lanjutan",
-  "/org/payroll/slips": "Ditunda",
-  "/org/payroll/payment": "Ditunda",
-  "/org/payroll/tax-compliance": "Ditunda",
-  "/org/payroll/audit-log": "Ditunda",
-  "/org/payroll/error-log": "Ditunda",
-  "/org/payroll/integrations": "Ditunda",
-  "/org/payroll/help": "Info",
-};
-
-const withPayrollSidebarBadges = (subItems: SubMenuItem[]): SubMenuItem[] =>
-  subItems.map((subItem) => ({
-    ...subItem,
-    badgeLabel: subItem.badgeLabel || PAYROLL_SIDEBAR_BADGES[subItem.path],
-  }));
+const withPayrollSidebarBadges = (subItems: SubMenuItem[]): SubMenuItem[] => subItems;
 
 const MENU_GROUPS: MenuGroup[] = [
   {

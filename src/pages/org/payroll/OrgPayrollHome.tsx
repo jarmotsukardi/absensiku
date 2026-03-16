@@ -1,6 +1,5 @@
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ArrowRight, Briefcase, CheckCircle2, FolderOpen, Settings } from "lucide-react";
@@ -9,7 +8,6 @@ import { useNavigate } from "react-router-dom";
 type PayrollHomeItem = {
   title: string;
   path: string;
-  badge?: string;
   description: string;
 };
 
@@ -76,13 +74,11 @@ const PAYROLL_HOME_SECTIONS: PayrollHomeSection[] = [
       {
         title: "Data Pegawai Payroll",
         path: "/org/payroll/employees",
-        badge: "Referensi HR",
         description: "Lihat kesiapan data pegawai untuk proses payroll.",
       },
       {
         title: "Struktur Organisasi dan Grade",
         path: "/org/payroll/org-grade",
-        badge: "Referensi HR",
         description: "Gunakan struktur dan grade dari HR sebagai konteks payroll.",
       },
     ],
@@ -95,49 +91,41 @@ const PAYROLL_HOME_SECTIONS: PayrollHomeSection[] = [
       {
         title: "Komponen Penghasilan",
         path: "/org/payroll/income-components",
-        badge: "Lanjutan",
         description: "Pengembangan setelah alur inti payroll stabil.",
       },
       {
         title: "Komponen Potongan",
         path: "/org/payroll/deduction-components",
-        badge: "Lanjutan",
         description: "Disiapkan untuk tahap lanjutan setelah kebutuhan inti aman.",
       },
       {
         title: "Slip Gaji",
         path: "/org/payroll/slips",
-        badge: "Ditunda",
         description: "Belum menjadi prioritas pada payroll sederhana tahap awal.",
       },
       {
         title: "Pembayaran Payroll",
         path: "/org/payroll/payment",
-        badge: "Ditunda",
         description: "Dikerjakan setelah proses payroll inti cukup stabil.",
       },
       {
         title: "Pajak dan Kepatuhan",
         path: "/org/payroll/tax-compliance",
-        badge: "Ditunda",
         description: "Ditunda sampai payroll dasar benar-benar siap dipakai.",
       },
       {
         title: "Log Audit Payroll",
         path: "/org/payroll/audit-log",
-        badge: "Ditunda",
         description: "Diprioritaskan setelah progres payroll melewati 75%.",
       },
       {
         title: "Log Error Payroll",
         path: "/org/payroll/error-log",
-        badge: "Ditunda",
         description: "Diaktifkan mendekati 75% untuk mempercepat triase error aktif.",
       },
       {
         title: "Integrasi Payroll",
         path: "/org/payroll/integrations",
-        badge: "Ditunda",
         description: "Belum menjadi target aktif pada fase awal.",
       },
     ],
@@ -155,7 +143,6 @@ const PAYROLL_HOME_SECTIONS: PayrollHomeSection[] = [
       {
         title: "Bantuan Payroll",
         path: "/org/payroll/help",
-        badge: "Info",
         description: "Bantuan singkat saat tim membutuhkan arahan penggunaan payroll.",
       },
     ],
@@ -240,11 +227,6 @@ export default function OrgPayrollHome() {
                     <div className="space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="text-sm font-medium">{item.title}</p>
-                        {item.badge ? (
-                          <Badge variant="outline" className="text-[10px]">
-                            {item.badge}
-                          </Badge>
-                        ) : null}
                       </div>
                       <p className="text-xs text-muted-foreground">{item.description}</p>
                     </div>

@@ -281,10 +281,6 @@ export default function OrgPayrollIntegrations() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="secondary">Ditunda</Badge>
-            <Badge variant="outline">Integrasi Payroll</Badge>
-          </div>
           <h1 className="text-2xl font-semibold tracking-tight">Integrasi Payroll</h1>
           <p className="text-sm text-muted-foreground">
             Konfigurasi sinkronisasi payroll ke data absensi, export akuntansi, payout bank, dan webhook API.

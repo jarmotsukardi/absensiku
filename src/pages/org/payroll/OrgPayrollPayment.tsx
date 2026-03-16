@@ -369,10 +369,6 @@ export default function OrgPayrollPayment() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="secondary">Ditunda</Badge>
-            <Badge variant="outline">Pembayaran Payroll</Badge>
-          </div>
           <h1 className="text-2xl font-semibold tracking-tight">Pembayaran & Bank File</h1>
           <p className="text-sm text-muted-foreground">Kelola batch pembayaran payroll, status transfer, dan rekonsiliasi.</p>
         </div>
