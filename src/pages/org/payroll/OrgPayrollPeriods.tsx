@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import type { Database } from "@/integrations/supabase/types";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { buildPostgrestOrClause, sanitizeOrKeyword } from "@/lib/postgrestSearch";
+import { fetchSupabaseRest } from "@/lib/supabaseRestClient";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 type PayrollPeriod = Database["public"]["Tables"]["payroll_periods"]["Row"];
@@ -46,10 +48,10 @@ const initialFormState: PeriodFormState = {
 
 const STATUS_OPTIONS: Array<{ value: PeriodStatus; label: string }> = [
   { value: "draft", label: "Draft" },
-  { value: "review", label: "Review" },
-  { value: "approved", label: "Approved" },
-  { value: "paid", label: "Paid" },
-  { value: "archived", label: "Archived" },
+  { value: "review", label: "Tinjau" },
+  { value: "approved", label: "Disetujui" },
+  { value: "paid", label: "Dibayar" },
+  { value: "archived", label: "Arsip" },
 ];
 
 const buildDefaultPeriodKey = () => {
@@ -57,6 +59,14 @@ const buildDefaultPeriodKey = () => {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 };
 const ITEMS_PER_PAGE = 10;
+
+const PERIOD_STATUS_LABELS: Record<PeriodStatus, string> = {
+  draft: "Draft",
+  review: "Tinjau",
+  approved: "Disetujui",
+  paid: "Dibayar",
+  archived: "Arsip",
+};
 
 export default function OrgPayrollPeriods() {
   const navigate = useNavigate();
@@ -200,7 +210,7 @@ export default function OrgPayrollPeriods() {
 
       const periodKey = formState.period_key.trim();
       if (!periodKey) {
-        toast.error("Periode key wajib diisi");
+        toast.error("Kode periode wajib diisi.");
         return;
       }
       if (!formState.period_start || !formState.period_end) {
@@ -233,16 +243,20 @@ export default function OrgPayrollPeriods() {
           created_by: undefined,
           updated_by: user?.id || null,
         };
-        const { error } = await supabase
-          .from("payroll_periods")
-          .update(updatePayload)
-          .eq("id", editingPeriodId)
-          .eq("tenant_id", resolvedTenantId);
-        if (error) throw error;
+        await fetchSupabaseRest<null>("payroll_periods", {
+          method: "PATCH",
+          params: {
+            id: `eq.${editingPeriodId}`,
+            tenant_id: `eq.${resolvedTenantId}`,
+          },
+          body: updatePayload,
+        });
         toast.success("Periode payroll berhasil diperbarui");
       } else {
-        const { error } = await supabase.from("payroll_periods").insert(payload);
-        if (error) throw error;
+        await fetchSupabaseRest<null>("payroll_periods", {
+          method: "POST",
+          body: payload,
+        });
         toast.success("Periode payroll berhasil ditambahkan");
       }
 
@@ -272,12 +286,13 @@ export default function OrgPayrollPeriods() {
       if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan.");
       if (!tenantId) setTenantId(resolvedTenantId);
 
-      const { error } = await supabase
-        .from("payroll_periods")
-        .delete()
-        .eq("id", item.id)
-        .eq("tenant_id", resolvedTenantId);
-      if (error) throw error;
+      await fetchSupabaseRest<null>("payroll_periods", {
+        method: "DELETE",
+        params: {
+          id: `eq.${item.id}`,
+          tenant_id: `eq.${resolvedTenantId}`,
+        },
+      });
 
       toast.success("Periode payroll berhasil dihapus");
       await fetchPeriods();
@@ -349,14 +364,19 @@ export default function OrgPayrollPeriods() {
       <div className="space-y-6">
         <div className="flex items-center justify-between gap-3">
           <div className="space-y-2">
-            <Badge variant="outline">Payroll</Badge>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="secondary">Inti</Badge>
+              <Badge variant="outline">Periode Payroll</Badge>
+            </div>
             <h1 className="text-2xl font-semibold tracking-tight">Periode Payroll</h1>
-            <p className="text-sm text-muted-foreground">Buka, update, dan pantau lifecycle periode payroll organisasi.</p>
+            <p className="text-sm text-muted-foreground">
+              Kelola siklus payroll bulanan setelah kebijakan payroll siap dipakai.
+            </p>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={() => navigate("/org/payroll")}> 
               <ArrowLeft className="mr-2 h-4 w-4" />
-              Kembali
+              Kembali ke Beranda
             </Button>
             <Button variant="outline" onClick={() => void handleExportCsv()}>
               <Download className="mr-2 h-4 w-4" />
@@ -369,6 +389,42 @@ export default function OrgPayrollPeriods() {
           </div>
         </div>
 
+        <div className="grid gap-4 md:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Periode aktif kerja</CardDescription>
+              <CardTitle className="text-2xl">{totalPeriods}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Pantau periode yang sedang dibuka, ditinjau, atau sudah disetujui.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Fokus tahap ini</CardDescription>
+              <CardTitle className="text-lg">Siklus bulanan</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Pastikan setiap periode punya tanggal mulai, tanggal selesai, cutoff, dan status yang jelas.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Langkah berikutnya</CardDescription>
+              <CardTitle className="text-lg">Input Variabel</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/variable-input")}>
+                Buka Input Variabel
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -376,7 +432,7 @@ export default function OrgPayrollPeriods() {
               Daftar Periode
             </CardTitle>
             <CardDescription>
-              Draft: {statusCounts.draft} • Review: {statusCounts.review} • Approved: {statusCounts.approved} • Paid: {statusCounts.paid} • Archived: {statusCounts.archived}
+              Draft: {statusCounts.draft} • Tinjau: {statusCounts.review} • Disetujui: {statusCounts.approved} • Dibayar: {statusCounts.paid} • Arsip: {statusCounts.archived}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -408,10 +464,10 @@ export default function OrgPayrollPeriods() {
                   <SelectValue placeholder="Urutkan" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="period_start">Sort: Tanggal Mulai</SelectItem>
-                  <SelectItem value="period_end">Sort: Tanggal Akhir</SelectItem>
-                  <SelectItem value="period_key">Sort: Period Key</SelectItem>
-                  <SelectItem value="status">Sort: Status</SelectItem>
+                  <SelectItem value="period_start">Urutkan: Tanggal Mulai</SelectItem>
+                  <SelectItem value="period_end">Urutkan: Tanggal Akhir</SelectItem>
+                  <SelectItem value="period_key">Urutkan: Kode Periode</SelectItem>
+                  <SelectItem value="status">Urutkan: Status</SelectItem>
                 </SelectContent>
               </Select>
               <Select value={sortDir} onValueChange={(value) => setSortDir(value as "asc" | "desc")}>
@@ -447,7 +503,7 @@ export default function OrgPayrollPeriods() {
                         <TableCell className="font-medium">{item.period_key}</TableCell>
                         <TableCell>{item.period_start} s/d {item.period_end}</TableCell>
                         <TableCell>{item.cutoff_date || "-"}</TableCell>
-                        <TableCell><Badge variant="secondary">{item.status}</Badge></TableCell>
+                        <TableCell><Badge variant="secondary">{PERIOD_STATUS_LABELS[item.status as PeriodStatus]}</Badge></TableCell>
                         <TableCell className="text-right">
                           <div className="flex items-center justify-end gap-1">
                             <Button size="icon" variant="ghost" onClick={() => openEditDialog(item)}>
@@ -485,12 +541,14 @@ export default function OrgPayrollPeriods() {
           <DialogContent className="sm:max-w-2xl">
             <DialogHeader>
               <DialogTitle>{editingPeriodId ? "Edit Periode Payroll" : "Tambah Periode Payroll"}</DialogTitle>
-              <DialogDescription>Setiap periode sebaiknya unik per tenant agar proses hitung deterministik.</DialogDescription>
+              <DialogDescription>
+                Setiap periode sebaiknya unik per tenant agar proses payroll tetap rapi dan deterministik.
+              </DialogDescription>
             </DialogHeader>
 
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="period_key">Periode Key</Label>
+                <Label htmlFor="period_key">Kode Periode</Label>
                 <Input id="period_key" value={formState.period_key} onChange={(event) => setFormState((prev) => ({ ...prev, period_key: event.target.value }))} placeholder="Contoh: 2026-02" />
               </div>
               <div className="space-y-2">
@@ -532,6 +590,8 @@ export default function OrgPayrollPeriods() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <OrgPayrollPageGuide pathname="/org/payroll/periods" />
       </div>
     </OrganizationLayout>
   );

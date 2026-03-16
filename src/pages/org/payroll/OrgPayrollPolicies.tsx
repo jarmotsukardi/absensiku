@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ import type { Database } from "@/integrations/supabase/types";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { buildPostgrestOrClause, sanitizeOrKeyword } from "@/lib/postgrestSearch";
+import { fetchSupabaseRest } from "@/lib/supabaseRestClient";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 type PayrollPolicy = Database["public"]["Tables"]["payroll_policies"]["Row"];
@@ -65,6 +67,14 @@ const OVERTIME_OPTIONS = [
   { value: "hybrid", label: "Hybrid" },
 ];
 const ITEMS_PER_PAGE = 10;
+
+const ROUNDING_LABELS: Record<string, string> = Object.fromEntries(
+  ROUNDING_OPTIONS.map((item) => [item.value, item.label]),
+);
+
+const OVERTIME_LABELS: Record<string, string> = Object.fromEntries(
+  OVERTIME_OPTIONS.map((item) => [item.value, item.label]),
+);
 
 export default function OrgPayrollPolicies() {
   const navigate = useNavigate();
@@ -189,7 +199,7 @@ export default function OrgPayrollPolicies() {
 
       const cutoffDay = Number(formState.cutoff_day);
       if (!Number.isFinite(cutoffDay) || cutoffDay < 1 || cutoffDay > 31) {
-        toast.error("Cutoff day harus 1-31");
+        toast.error("Tanggal cutoff harus diisi antara 1 sampai 31.");
         return;
       }
 
@@ -228,16 +238,20 @@ export default function OrgPayrollPolicies() {
           created_by: undefined,
           updated_by: user?.id || null,
         };
-        const { error } = await supabase
-          .from("payroll_policies")
-          .update(updatePayload)
-          .eq("id", editingPolicyId)
-          .eq("tenant_id", resolvedTenantId);
-        if (error) throw error;
+        await fetchSupabaseRest<null>("payroll_policies", {
+          method: "PATCH",
+          params: {
+            id: `eq.${editingPolicyId}`,
+            tenant_id: `eq.${resolvedTenantId}`,
+          },
+          body: updatePayload,
+        });
         toast.success("Kebijakan payroll berhasil diperbarui");
       } else {
-        const { error } = await supabase.from("payroll_policies").insert(payload);
-        if (error) throw error;
+        await fetchSupabaseRest<null>("payroll_policies", {
+          method: "POST",
+          body: payload,
+        });
         toast.success("Kebijakan payroll berhasil ditambahkan");
       }
 
@@ -267,12 +281,13 @@ export default function OrgPayrollPolicies() {
       if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan.");
       if (!tenantId) setTenantId(resolvedTenantId);
 
-      const { error } = await supabase
-        .from("payroll_policies")
-        .delete()
-        .eq("id", item.id)
-        .eq("tenant_id", resolvedTenantId);
-      if (error) throw error;
+      await fetchSupabaseRest<null>("payroll_policies", {
+        method: "DELETE",
+        params: {
+          id: `eq.${item.id}`,
+          tenant_id: `eq.${resolvedTenantId}`,
+        },
+      });
 
       toast.success("Kebijakan payroll berhasil dihapus");
       await fetchPolicies();
@@ -349,14 +364,19 @@ export default function OrgPayrollPolicies() {
       <div className="space-y-6">
         <div className="flex items-center justify-between gap-3">
           <div className="space-y-2">
-            <Badge variant="outline">Payroll</Badge>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="secondary">Inti</Badge>
+              <Badge variant="outline">Kebijakan Payroll</Badge>
+            </div>
             <h1 className="text-2xl font-semibold tracking-tight">Kebijakan Payroll</h1>
-            <p className="text-sm text-muted-foreground">Atur cutoff, prorata, lembur, dan pembulatan untuk tenant organisasi.</p>
+            <p className="text-sm text-muted-foreground">
+              Tetapkan aturan dasar payroll sebelum membuka periode dan menjalankan proses payroll.
+            </p>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={() => navigate("/org/payroll")}> 
               <ArrowLeft className="mr-2 h-4 w-4" />
-              Kembali
+              Kembali ke Beranda
             </Button>
             <Button variant="outline" onClick={() => void handleExportCsv()}>
               <Download className="mr-2 h-4 w-4" />
@@ -369,13 +389,52 @@ export default function OrgPayrollPolicies() {
           </div>
         </div>
 
+        <div className="grid gap-4 md:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Kebijakan aktif</CardDescription>
+              <CardTitle className="text-2xl">{activePolicies}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Gunakan satu kebijakan aktif yang benar-benar berlaku untuk periode berjalan.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Fokus tahap ini</CardDescription>
+              <CardTitle className="text-lg">Aturan dasar payroll</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Selesaikan cutoff, prorata, pembulatan, dan sumber lembur sebelum masuk ke periode payroll.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Langkah berikutnya</CardDescription>
+              <CardTitle className="text-lg">Periode Payroll</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/periods")}>
+                Buka Periode Payroll
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Calculator className="h-4 w-4" />
               Daftar Kebijakan
             </CardTitle>
-            <CardDescription>Total {totalPolicies} kebijakan, {activePolicies} aktif.</CardDescription>
+            <CardDescription>
+              Total {totalPolicies} kebijakan, {activePolicies} aktif. Pastikan hanya kebijakan yang relevan
+              untuk periode berjalan yang tetap aktif.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="mb-4 grid gap-3 md:grid-cols-3">
@@ -405,8 +464,8 @@ export default function OrgPayrollPolicies() {
                   <SelectValue placeholder="Urutkan" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="effective_date">Sort: Tanggal Efektif</SelectItem>
-                  <SelectItem value="cutoff_day">Sort: Cutoff Day</SelectItem>
+                  <SelectItem value="effective_date">Urutkan: Tanggal Efektif</SelectItem>
+                  <SelectItem value="cutoff_day">Urutkan: Tanggal Cutoff</SelectItem>
                   <SelectItem value="rounding_mode">Sort: Pembulatan</SelectItem>
                   <SelectItem value="status">Sort: Status</SelectItem>
                 </SelectContent>
@@ -444,8 +503,8 @@ export default function OrgPayrollPolicies() {
                       <TableRow key={item.id}>
                         <TableCell>{item.effective_date}</TableCell>
                         <TableCell>Tanggal {item.cutoff_day}</TableCell>
-                        <TableCell>{item.rounding_mode}</TableCell>
-                        <TableCell>{item.overtime_source}</TableCell>
+                        <TableCell>{ROUNDING_LABELS[item.rounding_mode] || item.rounding_mode}</TableCell>
+                        <TableCell>{OVERTIME_LABELS[item.overtime_source] || item.overtime_source}</TableCell>
                         <TableCell>
                           <Badge variant={item.is_active ? "default" : "secondary"}>{item.is_active ? "Aktif" : "Nonaktif"}</Badge>
                         </TableCell>
@@ -486,7 +545,9 @@ export default function OrgPayrollPolicies() {
           <DialogContent className="sm:max-w-2xl">
             <DialogHeader>
               <DialogTitle>{editingPolicyId ? "Edit Kebijakan Payroll" : "Tambah Kebijakan Payroll"}</DialogTitle>
-              <DialogDescription>Pastikan kebijakan sesuai aturan payroll organisasi.</DialogDescription>
+              <DialogDescription>
+                Pastikan kebijakan ini benar-benar siap dipakai sebagai dasar periode payroll.
+              </DialogDescription>
             </DialogHeader>
 
             <div className="grid gap-4 md:grid-cols-2">
@@ -495,7 +556,7 @@ export default function OrgPayrollPolicies() {
                 <Input id="effective_date" type="date" value={formState.effective_date} onChange={(event) => setFormState((prev) => ({ ...prev, effective_date: event.target.value }))} />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="cutoff_day">Cutoff Day (1-31)</Label>
+                <Label htmlFor="cutoff_day">Tanggal Cutoff (1-31)</Label>
                 <Input id="cutoff_day" type="number" min={1} max={31} value={formState.cutoff_day} onChange={(event) => setFormState((prev) => ({ ...prev, cutoff_day: event.target.value }))} />
               </div>
               <div className="space-y-2">
@@ -565,6 +626,8 @@ export default function OrgPayrollPolicies() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <OrgPayrollPageGuide pathname="/org/payroll/policies" />
       </div>
     </OrganizationLayout>
   );

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -40,13 +41,31 @@ type JsonObject = Record<string, unknown>;
 
 const ITEMS_PER_PAGE = 15;
 
+const ENTITY_LABELS: Record<string, string> = {
+  payroll_run: "Proses Payroll",
+  tax_filing: "Pelaporan Pajak",
+  payment_batch: "Pembayaran Batch",
+  report_snapshot: "Snapshot Laporan",
+  payroll_webhook: "Webhook Payroll",
+};
+
+const ACTION_LABELS: Record<string, string> = {
+  create: "Buat",
+  update: "Ubah",
+  status_change: "Perubahan Status",
+  publish: "Publikasikan",
+  delete: "Hapus",
+  webhook_test_success: "Uji Webhook Berhasil",
+  webhook_test_failed: "Uji Webhook Gagal",
+};
+
 const initialFormState: FormState = {
   period_id: "all",
   run_id: "all",
   entity_type: "payroll_run",
   entity_id: "",
   action_type: "update",
-  action_label: "Manual Update",
+  action_label: "Pembaruan Manual",
   actor_role: "admin_instansi",
   log_id: "",
   trace_id: "",
@@ -73,6 +92,9 @@ const getWebhookAttemptCount = (value: Json | null): number | null => {
   if (Array.isArray(attempts)) return attempts.length;
   return null;
 };
+
+const getEntityLabel = (value: string) => ENTITY_LABELS[value] || value;
+const getActionLabel = (value: string) => ACTION_LABELS[value] || value;
 
 export default function OrgPayrollAuditLog() {
   const navigate = useNavigate();
@@ -107,10 +129,18 @@ export default function OrgPayrollAuditLog() {
         supabase.from("payroll_periods").select("*").eq("tenant_id", resolvedTenantId).order("period_start", { ascending: false }),
         supabase.from("payroll_runs").select("*").eq("tenant_id", resolvedTenantId).order("created_at", { ascending: false }).limit(200),
       ]);
-      if (periodRes.error) throw periodRes.error;
-      if (runRes.error) throw runRes.error;
-      setPeriods(periodRes.data || []);
-      setRuns(runRes.data || []);
+      if (periodRes.error) {
+        reportError(periodRes.error, "org.payroll.audit_log.fetch_periods", { tenant_id: resolvedTenantId });
+        setPeriods([]);
+      } else {
+        setPeriods(periodRes.data || []);
+      }
+      if (runRes.error) {
+        reportError(runRes.error, "org.payroll.audit_log.fetch_runs", { tenant_id: resolvedTenantId });
+        setRuns([]);
+      } else {
+        setRuns(runRes.data || []);
+      }
 
       let query = supabase.from("payroll_audit_logs").select("*", { count: "exact" }).eq("tenant_id", resolvedTenantId);
       if (entityFilter !== "all") query = query.eq("entity_type", entityFilter);
@@ -262,9 +292,45 @@ export default function OrgPayrollAuditLog() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">Payroll</Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Ditunda</Badge>
+            <Badge variant="outline">Observabilitas</Badge>
+          </div>
           <h1 className="text-2xl font-semibold tracking-tight">Audit Log Payroll</h1>
-          <p className="text-sm text-muted-foreground">Semua error operasional payroll harus bisa ditelusuri dengan trace_id/log_id.</p>
+          <p className="text-sm text-muted-foreground">Jejak perubahan payroll untuk menelusuri siapa mengubah apa, kapan, dan pada proses yang mana.</p>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-3">
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Fungsi utama</CardDescription>
+              <CardTitle className="text-base">Lacak jejak perubahan payroll</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Audit log dipakai saat butuh investigasi perubahan data, status proses, dan aktivitas manual yang berdampak ke payroll.
+            </CardContent>
+          </Card>
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Fokus penggunaan</CardDescription>
+              <CardTitle className="text-base">Hubungkan periode, proses, dan referensi</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Gunakan filter entitas, aksi, dan pencarian nomor referensi untuk mempercepat pelacakan saat ada insiden.
+            </CardContent>
+          </Card>
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Langkah terkait</CardDescription>
+              <CardTitle className="text-base">Cek log error saat ada kegagalan aktif</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm text-muted-foreground">
+              <p>Jika masalah masih aktif, lanjutkan ke log error untuk melihat konteks runtime dan nomor referensi yang lebih cepat ditindaklanjuti.</p>
+              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/error-log")}>
+                Buka Log Error
+              </Button>
+            </CardContent>
+          </Card>
         </div>
 
         <div className="grid gap-4 md:grid-cols-3">
@@ -292,27 +358,27 @@ export default function OrgPayrollAuditLog() {
                 <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Semua</SelectItem>
-                  <SelectItem value="payroll_run">payroll_run</SelectItem>
-                  <SelectItem value="tax_filing">tax_filing</SelectItem>
-                  <SelectItem value="payment_batch">payment_batch</SelectItem>
-                  <SelectItem value="report_snapshot">report_snapshot</SelectItem>
-                  <SelectItem value="payroll_webhook">payroll_webhook</SelectItem>
+                  <SelectItem value="payroll_run">{getEntityLabel("payroll_run")}</SelectItem>
+                  <SelectItem value="tax_filing">{getEntityLabel("tax_filing")}</SelectItem>
+                  <SelectItem value="payment_batch">{getEntityLabel("payment_batch")}</SelectItem>
+                  <SelectItem value="report_snapshot">{getEntityLabel("report_snapshot")}</SelectItem>
+                  <SelectItem value="payroll_webhook">{getEntityLabel("payroll_webhook")}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
             <div>
-              <Label>Action</Label>
+              <Label>Aksi</Label>
               <Select value={actionFilter} onValueChange={setActionFilter}>
                 <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Semua</SelectItem>
-                  <SelectItem value="create">create</SelectItem>
-                  <SelectItem value="update">update</SelectItem>
-                  <SelectItem value="status_change">status_change</SelectItem>
-                  <SelectItem value="publish">publish</SelectItem>
-                  <SelectItem value="delete">delete</SelectItem>
-                  <SelectItem value="webhook_test_success">webhook_test_success</SelectItem>
-                  <SelectItem value="webhook_test_failed">webhook_test_failed</SelectItem>
+                  <SelectItem value="create">{getActionLabel("create")}</SelectItem>
+                  <SelectItem value="update">{getActionLabel("update")}</SelectItem>
+                  <SelectItem value="status_change">{getActionLabel("status_change")}</SelectItem>
+                  <SelectItem value="publish">{getActionLabel("publish")}</SelectItem>
+                  <SelectItem value="delete">{getActionLabel("delete")}</SelectItem>
+                  <SelectItem value="webhook_test_success">{getActionLabel("webhook_test_success")}</SelectItem>
+                  <SelectItem value="webhook_test_failed">{getActionLabel("webhook_test_failed")}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -347,12 +413,12 @@ export default function OrgPayrollAuditLog() {
         <Card>
           <CardHeader>
             <CardTitle>Daftar Audit Log</CardTitle>
-            <CardDescription>Gunakan log ini untuk triase cepat saat ada incident payroll.</CardDescription>
+            <CardDescription>Gunakan log ini untuk triase cepat saat ada insiden payroll.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => navigate("/org/payroll/reports")}><ArrowLeft className="mr-2 h-4 w-4" />Reports</Button>
-              <Button variant="outline" onClick={() => navigate("/org/payroll/integrations")}>Integrations</Button>
+              <Button variant="outline" onClick={() => navigate("/org/payroll/reports")}><ArrowLeft className="mr-2 h-4 w-4" />Laporan Payroll</Button>
+              <Button variant="outline" onClick={() => navigate("/org/payroll/integrations")}>Integrasi Payroll</Button>
               <Button variant="secondary" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Export CSV</Button>
               <Button onClick={openCreateDialog}><Plus className="mr-2 h-4 w-4" />Tambah Audit Log</Button>
             </div>
@@ -363,10 +429,10 @@ export default function OrgPayrollAuditLog() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Waktu</TableHead>
-                  <TableHead>Entity/Action</TableHead>
-                  <TableHead>Period/Run</TableHead>
-                  <TableHead>Webhook Attempts</TableHead>
-                  <TableHead>Ref</TableHead>
+                  <TableHead>Entitas / Aksi</TableHead>
+                  <TableHead>Periode / Proses</TableHead>
+                  <TableHead>Percobaan Webhook</TableHead>
+                  <TableHead>Referensi</TableHead>
                   <TableHead>Catatan</TableHead>
                 </TableRow>
               </TableHeader>
@@ -383,17 +449,17 @@ export default function OrgPayrollAuditLog() {
                     <TableRow key={row.id}>
                       <TableCell>{formatDateTime(row.created_at)}</TableCell>
                       <TableCell>
-                        <div className="font-medium">{row.entity_type} / {row.action_type}</div>
+                        <div className="font-medium">{getEntityLabel(row.entity_type)} / {getActionLabel(row.action_type)}</div>
                         <div className="text-xs text-muted-foreground">{row.action_label}</div>
                       </TableCell>
                       <TableCell>
                         <div>{period?.period_key || "-"}</div>
-                        <div className="text-xs text-muted-foreground">{run ? `Run #${run.run_sequence}` : "-"}</div>
+                        <div className="text-xs text-muted-foreground">{run ? `Proses #${run.run_sequence}` : "-"}</div>
                       </TableCell>
                       <TableCell className="text-sm">
                         {row.entity_type === "payroll_webhook" ? (attemptCount ?? "-") : "-"}
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">trace:{row.trace_id || "-"}<br />log:{row.log_id || "-"}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">trace_id: {row.trace_id || "-"}<br />log_id: {row.log_id || "-"}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{row.notes || "-"}</TableCell>
                     </TableRow>
                   );
@@ -404,9 +470,9 @@ export default function OrgPayrollAuditLog() {
             <div className="flex items-center justify-between text-sm text-muted-foreground">
               <span>Total {totalRows} log</span>
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" disabled={currentPage <= 1} onClick={() => setCurrentPage((v) => Math.max(1, v - 1))}>Prev</Button>
-                <span>Page {currentPage} / {totalPages}</span>
-                <Button variant="outline" size="sm" disabled={currentPage >= totalPages} onClick={() => setCurrentPage((v) => Math.min(totalPages, v + 1))}>Next</Button>
+                <Button variant="outline" size="sm" disabled={currentPage <= 1} onClick={() => setCurrentPage((v) => Math.max(1, v - 1))}>Sebelumnya</Button>
+                <span>Halaman {currentPage} / {totalPages}</span>
+                <Button variant="outline" size="sm" disabled={currentPage >= totalPages} onClick={() => setCurrentPage((v) => Math.min(totalPages, v + 1))}>Berikutnya</Button>
               </div>
             </div>
           </CardContent>
@@ -420,19 +486,19 @@ export default function OrgPayrollAuditLog() {
             </DialogHeader>
             <div className="grid gap-3 py-2 md:grid-cols-2">
               <div>
-                <Label>Entity Type</Label>
+                <Label>Jenis Entitas</Label>
                 <Input className="mt-1.5" value={formState.entity_type} onChange={(e) => setFormState((prev) => ({ ...prev, entity_type: e.target.value }))} />
               </div>
               <div>
-                <Label>Entity ID</Label>
+                <Label>ID Entitas</Label>
                 <Input className="mt-1.5" value={formState.entity_id} onChange={(e) => setFormState((prev) => ({ ...prev, entity_id: e.target.value }))} />
               </div>
               <div>
-                <Label>Action Type</Label>
+                <Label>Jenis Aksi</Label>
                 <Input className="mt-1.5" value={formState.action_type} onChange={(e) => setFormState((prev) => ({ ...prev, action_type: e.target.value }))} />
               </div>
               <div>
-                <Label>Action Label</Label>
+                <Label>Label Aksi</Label>
                 <Input className="mt-1.5" value={formState.action_label} onChange={(e) => setFormState((prev) => ({ ...prev, action_label: e.target.value }))} />
               </div>
               <div>
@@ -450,7 +516,7 @@ export default function OrgPayrollAuditLog() {
                 </Select>
               </div>
               <div>
-                <Label>Actor Role</Label>
+                <Label>Peran Pelaku</Label>
                 <Input className="mt-1.5" value={formState.actor_role} onChange={(e) => setFormState((prev) => ({ ...prev, actor_role: e.target.value }))} />
               </div>
               <div>
@@ -472,6 +538,8 @@ export default function OrgPayrollAuditLog() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <OrgPayrollPageGuide pathname="/org/payroll/audit-log" />
       </div>
     </OrganizationLayout>
   );

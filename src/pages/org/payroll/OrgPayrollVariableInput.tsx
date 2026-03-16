@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,7 +24,10 @@ type PayrollVariableInput = Database["public"]["Tables"]["payroll_variable_input
 type PayrollVariableInputInsert = Database["public"]["Tables"]["payroll_variable_inputs"]["Insert"];
 type PayrollVariableInputUpdate = Database["public"]["Tables"]["payroll_variable_inputs"]["Update"];
 type PayrollPeriod = Database["public"]["Tables"]["payroll_periods"]["Row"];
-type Employee = Database["public"]["Tables"]["employees"]["Row"];
+type Employee = Pick<
+  Database["public"]["Tables"]["employees"]["Row"],
+  "id" | "name" | "email" | "nik" | "tenant_id" | "is_active"
+>;
 
 type VariableInputSortKey = "created_at" | "amount" | "input_type" | "component_scope";
 
@@ -55,8 +59,8 @@ const INPUT_TYPE_OPTIONS = [
 const SOURCE_OPTIONS = [
   { value: "manual", label: "Manual" },
   { value: "import", label: "Import" },
-  { value: "integration", label: "Integration" },
-  { value: "system", label: "System" },
+  { value: "integration", label: "Integrasi" },
+  { value: "system", label: "Sistem" },
 ];
 
 const initialFormState: VariableInputFormState = {
@@ -86,6 +90,15 @@ const formatCurrency = (value: number) =>
     currency: "IDR",
     maximumFractionDigits: 0,
   }).format(Number.isFinite(value) ? value : 0);
+
+const SCOPE_LABELS: Record<"income" | "deduction", string> = {
+  income: "Penghasilan",
+  deduction: "Potongan",
+};
+
+const INPUT_TYPE_LABELS: Record<string, string> = Object.fromEntries(
+  INPUT_TYPE_OPTIONS.map((item) => [item.value, item.label]),
+);
 
 export default function OrgPayrollVariableInput() {
   const navigate = useNavigate();
@@ -119,12 +132,37 @@ export default function OrgPayrollVariableInput() {
       if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan.");
       if (!tenantId) setTenantId(resolvedTenantId);
 
-      const [periodRes, employeeRes] = await Promise.all([
+      const [periodRes, variableInputRes, employeeRes] = await Promise.all([
         supabase
           .from("payroll_periods")
           .select("*")
           .eq("tenant_id", resolvedTenantId)
           .order("period_start", { ascending: false }),
+        (() => {
+          let query = supabase
+            .from("payroll_variable_inputs")
+            .select("*", { count: "exact" })
+            .eq("tenant_id", resolvedTenantId);
+
+          if (periodFilter !== "all") query = query.eq("period_id", periodFilter);
+          if (scopeFilter !== "all") query = query.eq("component_scope", scopeFilter);
+
+          const keyword = sanitizeOrKeyword(searchTerm);
+          if (keyword.length > 0) {
+            const orClause = buildPostgrestOrClause({
+              keyword,
+              ilikeFields: ["component_code", "component_name", "trace_id", "notes", "input_type", "source"],
+            });
+            if (orClause) query = query.or(orClause);
+          }
+
+          const from = (currentPage - 1) * ITEMS_PER_PAGE;
+          const to = from + ITEMS_PER_PAGE - 1;
+          return query
+            .order(sortBy, { ascending: sortDir === "asc" })
+            .order("created_at", { ascending: false })
+            .range(from, to);
+        })(),
         supabase
           .from("employees")
           .select("id, name, email, nik, tenant_id, is_active")
@@ -135,37 +173,18 @@ export default function OrgPayrollVariableInput() {
       ]);
 
       if (periodRes.error) throw periodRes.error;
-      if (employeeRes.error) throw employeeRes.error;
+      if (variableInputRes.error) throw variableInputRes.error;
+
       setPeriods(periodRes.data || []);
-      setEmployees((employeeRes.data || []) as Employee[]);
+      setRows(variableInputRes.data || []);
+      setTotalRows(variableInputRes.count || 0);
 
-      let query = supabase
-        .from("payroll_variable_inputs")
-        .select("*", { count: "exact" })
-        .eq("tenant_id", resolvedTenantId);
-
-      if (periodFilter !== "all") query = query.eq("period_id", periodFilter);
-      if (scopeFilter !== "all") query = query.eq("component_scope", scopeFilter);
-
-      const keyword = sanitizeOrKeyword(searchTerm);
-      if (keyword.length > 0) {
-        const orClause = buildPostgrestOrClause({
-          keyword,
-          ilikeFields: ["component_code", "component_name", "trace_id", "notes", "input_type", "source"],
-        });
-        if (orClause) query = query.or(orClause);
+      if (employeeRes.error) {
+        reportError(employeeRes.error, "org.payroll.variable_input.fetch_employees", { tenant_id: resolvedTenantId });
+        setEmployees([]);
+      } else {
+        setEmployees((employeeRes.data || []) as Employee[]);
       }
-
-      const from = (currentPage - 1) * ITEMS_PER_PAGE;
-      const to = from + ITEMS_PER_PAGE - 1;
-      const { data, error, count } = await query
-        .order(sortBy, { ascending: sortDir === "asc" })
-        .order("created_at", { ascending: false })
-        .range(from, to);
-      if (error) throw error;
-
-      setRows(data || []);
-      setTotalRows(count || 0);
     } catch (error) {
       const ref = reportError(error, "org.payroll.variable_input.fetch");
       const message = appendErrorReference("Gagal memuat input variabel payroll", ref);
@@ -353,17 +372,58 @@ export default function OrgPayrollVariableInput() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">Payroll</Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Inti</Badge>
+            <Badge variant="outline">Input Variabel</Badge>
+          </div>
           <h1 className="text-2xl font-semibold tracking-tight">Input Variabel Bulanan</h1>
           <p className="text-sm text-muted-foreground">
-            Input komponen variabel bulanan untuk bonus, lembur, koreksi, dan penyesuaian payroll.
+            Masukkan komponen non-rutin seperti bonus, lembur, koreksi, dan penyesuaian sebelum validasi payroll.
           </p>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Total input variabel</CardDescription>
+              <CardTitle className="text-2xl">{totalRows}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Gunakan data ini untuk melengkapi kebutuhan payroll yang tidak otomatis berasal dari HR atau absensi.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Fokus tahap ini</CardDescription>
+              <CardTitle className="text-lg">Data non-rutin</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Pastikan komponen, nominal, periode, dan target pegawai sudah tepat sebelum masuk ke validasi.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Langkah berikutnya</CardDescription>
+              <CardTitle className="text-lg">Validasi Payroll</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/validation")}>
+                Buka Validasi Payroll
+              </Button>
+            </CardContent>
+          </Card>
         </div>
 
         <Card>
           <CardHeader>
             <CardTitle>Filter Input Variabel</CardTitle>
-            <CardDescription>Gunakan filter untuk mempercepat validasi data variabel sebelum run payroll.</CardDescription>
+            <CardDescription>
+              Gunakan filter untuk memastikan data variabel siap dipakai sebelum validasi dan proses payroll.
+            </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             <div className="xl:col-span-2">
@@ -392,13 +452,13 @@ export default function OrgPayrollVariableInput() {
               </Select>
             </div>
             <div>
-              <Label>Scope</Label>
+              <Label>Jenis Komponen</Label>
               <Select value={scopeFilter} onValueChange={(value) => setScopeFilter(value as typeof scopeFilter)}>
                 <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Semua</SelectItem>
-                  <SelectItem value="income">Income</SelectItem>
-                  <SelectItem value="deduction">Deduction</SelectItem>
+                  <SelectItem value="income">Penghasilan</SelectItem>
+                  <SelectItem value="deduction">Potongan</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -424,7 +484,7 @@ export default function OrgPayrollVariableInput() {
         <Card>
           <CardHeader>
             <CardTitle>Data Variabel</CardTitle>
-            <CardDescription>Data variabel yang akan dipakai pada proses payroll run.</CardDescription>
+            <CardDescription>Data variabel yang akan dipakai pada proses payroll.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
@@ -466,8 +526,10 @@ export default function OrgPayrollVariableInput() {
                       </TableCell>
                       <TableCell>{row.employee_id ? employeeMap.get(row.employee_id)?.name || row.employee_id : "Semua Pegawai"}</TableCell>
                       <TableCell>
-                        <Badge variant="secondary" className="mr-1">{row.component_scope}</Badge>
-                        <Badge variant="outline">{row.input_type}</Badge>
+                        <Badge variant="secondary" className="mr-1">
+                          {SCOPE_LABELS[row.component_scope as "income" | "deduction"] || row.component_scope}
+                        </Badge>
+                        <Badge variant="outline">{INPUT_TYPE_LABELS[row.input_type] || row.input_type}</Badge>
                       </TableCell>
                       <TableCell>{formatCurrency(Number(row.amount))}</TableCell>
                       <TableCell className="font-mono text-xs">{row.trace_id || "-"}</TableCell>
@@ -498,7 +560,9 @@ export default function OrgPayrollVariableInput() {
           <DialogContent>
             <DialogHeader>
               <DialogTitle>{editingId ? "Edit Input Variabel" : "Tambah Input Variabel"}</DialogTitle>
-              <DialogDescription>Isi data variabel yang akan dihitung pada payroll period terkait.</DialogDescription>
+              <DialogDescription>
+                Isi data variabel yang akan dihitung pada periode payroll terkait.
+              </DialogDescription>
             </DialogHeader>
 
             <div className="grid gap-3 py-2">
@@ -516,12 +580,12 @@ export default function OrgPayrollVariableInput() {
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="grid gap-1.5">
-                  <Label>Scope Komponen</Label>
+                  <Label>Jenis Komponen</Label>
                   <Select value={formState.component_scope} onValueChange={(value) => setFormState((prev) => ({ ...prev, component_scope: value as "income" | "deduction" }))}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="income">Income</SelectItem>
-                      <SelectItem value="deduction">Deduction</SelectItem>
+                      <SelectItem value="income">Penghasilan</SelectItem>
+                      <SelectItem value="deduction">Potongan</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -598,6 +662,8 @@ export default function OrgPayrollVariableInput() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <OrgPayrollPageGuide pathname="/org/payroll/variable-input" />
       </div>
     </OrganizationLayout>
   );

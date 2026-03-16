@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,9 +40,9 @@ type ValidationFormState = {
 const ITEMS_PER_PAGE = 10;
 
 const STATUS_OPTIONS: Array<{ value: ValidationStatus; label: string }> = [
-  { value: "warning", label: "Warning" },
-  { value: "failed", label: "Failed" },
-  { value: "passed", label: "Passed" },
+  { value: "warning", label: "Perlu Perhatian" },
+  { value: "failed", label: "Gagal" },
+  { value: "passed", label: "Lolos" },
 ];
 
 const initialFormState: ValidationFormState = {
@@ -68,6 +69,12 @@ const toCsvSafe = (value: string | number | null | undefined) => {
     return `"${text.replaceAll('"', '""')}"`;
   }
   return text;
+};
+
+const VALIDATION_STATUS_LABELS: Record<ValidationStatus, string> = {
+  warning: "Perlu Perhatian",
+  failed: "Gagal",
+  passed: "Lolos",
 };
 
 export default function OrgPayrollValidation() {
@@ -343,16 +350,19 @@ export default function OrgPayrollValidation() {
       <div className="space-y-6">
         <div className="flex items-center justify-between gap-3">
           <div className="space-y-2">
-            <Badge variant="outline">Payroll</Badge>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="secondary">Inti</Badge>
+              <Badge variant="outline">Validasi Payroll</Badge>
+            </div>
             <h1 className="text-2xl font-semibold tracking-tight">Validasi Payroll</h1>
             <p className="text-sm text-muted-foreground">
-              Jalankan dan pantau hasil validasi sebelum proses payroll agar error dapat dikoreksi lebih awal.
+              Tinjau hasil validasi sebelum proses payroll agar masalah data bisa dikoreksi lebih awal.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" onClick={() => navigate("/org/payroll")}>
               <ArrowLeft className="mr-2 h-4 w-4" />
-              Kembali ke Payroll
+              Kembali ke Beranda
             </Button>
             <Button variant="outline" onClick={exportCsv}>
               <Download className="mr-2 h-4 w-4" />
@@ -368,27 +378,63 @@ export default function OrgPayrollValidation() {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Total Run</CardDescription>
+              <CardDescription>Total validasi</CardDescription>
               <CardTitle className="text-2xl">{totalRuns}</CardTitle>
             </CardHeader>
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Failed</CardDescription>
+              <CardDescription>Gagal</CardDescription>
               <CardTitle className="text-2xl text-red-600">{summary.failed}</CardTitle>
             </CardHeader>
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Warning</CardDescription>
+              <CardDescription>Perlu perhatian</CardDescription>
               <CardTitle className="text-2xl text-amber-600">{summary.warning}</CardTitle>
             </CardHeader>
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardDescription>Passed</CardDescription>
+              <CardDescription>Lolos</CardDescription>
               <CardTitle className="text-2xl text-emerald-600">{summary.passed}</CardTitle>
             </CardHeader>
+          </Card>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Fokus tahap ini</CardDescription>
+              <CardTitle className="text-lg">Cek kesiapan data</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Pastikan periode, input variabel, dan hasil validasi sudah jelas sebelum proses payroll dijalankan.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Yang perlu diperhatikan</CardDescription>
+              <CardTitle className="text-lg">Issue dan critical</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Gunakan trace ID untuk menelusuri masalah yang perlu ditindaklanjuti lebih dulu.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Langkah berikutnya</CardDescription>
+              <CardTitle className="text-lg">Proses Payroll</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/run-engine")}>
+                Buka Proses Payroll
+              </Button>
+            </CardContent>
           </Card>
         </div>
 
@@ -398,7 +444,9 @@ export default function OrgPayrollValidation() {
               <ShieldCheck className="h-4 w-4" />
               Daftar Validasi
             </CardTitle>
-            <CardDescription>Filter dan review hasil validasi payroll per periode.</CardDescription>
+            <CardDescription>
+              Filter dan tinjau hasil validasi payroll per periode sebelum melanjutkan ke proses payroll.
+            </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-3 lg:grid-cols-5">
@@ -470,8 +518,8 @@ export default function OrgPayrollValidation() {
                   <SelectContent>
                     <SelectItem value="executed_at">Waktu Eksekusi</SelectItem>
                     <SelectItem value="status">Status</SelectItem>
-                    <SelectItem value="issue_count">Issue Count</SelectItem>
-                    <SelectItem value="critical_count">Critical Count</SelectItem>
+                    <SelectItem value="issue_count">Jumlah Masalah</SelectItem>
+                    <SelectItem value="critical_count">Jumlah Kritis</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -541,7 +589,7 @@ export default function OrgPayrollValidation() {
                                   : "border-emerald-300 bg-emerald-50 text-emerald-700"
                             }
                           >
-                            {item.status}
+                            {VALIDATION_STATUS_LABELS[item.status as ValidationStatus]}
                           </Badge>
                         </TableCell>
                         <TableCell>
@@ -599,7 +647,7 @@ export default function OrgPayrollValidation() {
           <DialogHeader>
             <DialogTitle>{editingRunId ? "Edit Validasi Payroll" : "Tambah Validasi Payroll"}</DialogTitle>
             <DialogDescription>
-              Simpan hasil validasi payroll untuk periode terpilih, termasuk trace_id agar mudah ditelusuri.
+              Simpan hasil validasi payroll untuk periode terpilih, termasuk trace ID agar mudah ditelusuri.
             </DialogDescription>
           </DialogHeader>
 
@@ -641,7 +689,7 @@ export default function OrgPayrollValidation() {
               </Select>
             </div>
             <div className="space-y-1">
-              <Label htmlFor="issue_count">Issue Count</Label>
+              <Label htmlFor="issue_count">Jumlah Masalah</Label>
               <Input
                 id="issue_count"
                 inputMode="numeric"
@@ -650,7 +698,7 @@ export default function OrgPayrollValidation() {
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="critical_count">Critical Count</Label>
+              <Label htmlFor="critical_count">Jumlah Kritis</Label>
               <Input
                 id="critical_count"
                 inputMode="numeric"
@@ -697,6 +745,8 @@ export default function OrgPayrollValidation() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <OrgPayrollPageGuide pathname="/org/payroll/validation" />
     </OrganizationLayout>
   );
 }

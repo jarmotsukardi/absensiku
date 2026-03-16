@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -37,12 +38,12 @@ const ITEMS_PER_PAGE = 10;
 
 const STATUS_OPTIONS: Array<{ value: RunStatus; label: string }> = [
   { value: "draft", label: "Draft" },
-  { value: "processing", label: "Processing" },
-  { value: "review", label: "Review" },
-  { value: "approved", label: "Approved" },
-  { value: "paid", label: "Paid" },
-  { value: "archived", label: "Archived" },
-  { value: "failed", label: "Failed" },
+  { value: "processing", label: "Diproses" },
+  { value: "review", label: "Tinjau" },
+  { value: "approved", label: "Disetujui" },
+  { value: "paid", label: "Dibayar" },
+  { value: "archived", label: "Arsip" },
+  { value: "failed", label: "Gagal" },
 ];
 
 const initialFormState: RunFormState = {
@@ -56,6 +57,21 @@ const initialFormState: RunFormState = {
 const formatDateTime = (value: string | null) => {
   if (!value) return "-";
   return new Intl.DateTimeFormat("id-ID", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+};
+
+const RUN_STATUS_LABELS: Record<RunStatus, string> = {
+  draft: "Draft",
+  processing: "Diproses",
+  review: "Tinjau",
+  approved: "Disetujui",
+  paid: "Dibayar",
+  archived: "Arsip",
+  failed: "Gagal",
+};
+
+const RUN_TYPE_LABELS: Record<"simulation" | "final", string> = {
+  simulation: "Simulasi",
+  final: "Final",
 };
 
 export default function OrgPayrollRunEngine() {
@@ -90,8 +106,12 @@ export default function OrgPayrollRunEngine() {
         .select("*")
         .eq("tenant_id", resolvedTenantId)
         .order("period_start", { ascending: false });
-      if (periodError) throw periodError;
-      setPeriods(periodRows || []);
+      if (periodError) {
+        reportError(periodError, "org.payroll.run_engine.fetch_periods", { tenant_id: resolvedTenantId });
+        setPeriods([]);
+      } else {
+        setPeriods(periodRows || []);
+      }
 
       let query = supabase
         .from("payroll_runs")
@@ -103,7 +123,7 @@ export default function OrgPayrollRunEngine() {
 
       const keyword = sanitizeOrKeyword(searchTerm);
       if (keyword.length > 0) {
-        const matchedPeriodIds = (periodRows || [])
+        const matchedPeriodIds = ((periodError ? [] : periodRows) || [])
           .filter((item) => `${item.period_key} ${item.status}`.toLowerCase().includes(keyword.toLowerCase()))
           .map((item) => item.id);
         const orClause = buildPostgrestOrClause({
@@ -307,7 +327,7 @@ export default function OrgPayrollRunEngine() {
         await ensureApprovalStages(resolvedTenantId, row.id);
       }
 
-      toast.success(`Status run diperbarui ke ${nextStatus}`);
+      toast.success(`Status run diperbarui ke ${RUN_STATUS_LABELS[nextStatus]}`);
       await fetchData();
     } catch (error) {
       const ref = reportError(error, "org.payroll.run_engine.quick_status");
@@ -329,25 +349,64 @@ export default function OrgPayrollRunEngine() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">Payroll</Badge>
-          <h1 className="text-2xl font-semibold tracking-tight">Proses Payroll (Run Engine)</h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Inti</Badge>
+            <Badge variant="outline">Proses Payroll</Badge>
+          </div>
+          <h1 className="text-2xl font-semibold tracking-tight">Proses Payroll</h1>
           <p className="text-sm text-muted-foreground">
-            Jalankan simulasi/final payroll per periode dengan status deterministik dan trace audit.
+            Jalankan simulasi atau proses final payroll per periode dengan status yang rapi dan mudah ditelusuri.
           </p>
         </div>
 
         <div className="grid gap-4 md:grid-cols-5">
           <StatCard title="Draft" value={summary.draft} />
-          <StatCard title="Processing" value={summary.processing} />
-          <StatCard title="Review" value={summary.review} />
-          <StatCard title="Approved" value={summary.approved} />
-          <StatCard title="Failed" value={summary.failed} />
+          <StatCard title="Diproses" value={summary.processing} />
+          <StatCard title="Tinjau" value={summary.review} />
+          <StatCard title="Disetujui" value={summary.approved} />
+          <StatCard title="Gagal" value={summary.failed} />
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Fokus tahap ini</CardDescription>
+              <CardTitle className="text-lg">Eksekusi payroll</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Jalankan payroll hanya setelah validasi cukup aman dan periode yang dipilih sudah jelas.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Yang perlu dijaga</CardDescription>
+              <CardTitle className="text-lg">Status dan trace</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Pastikan setiap run memiliki status yang tepat dan trace ID yang bisa dipakai untuk triase.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Langkah berikutnya</CardDescription>
+              <CardTitle className="text-lg">Persetujuan Payroll</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/approval")}>
+                Buka Persetujuan Payroll
+              </Button>
+            </CardContent>
+          </Card>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle>Filter Run Engine</CardTitle>
-            <CardDescription>Filter periode/status untuk triase run payroll.</CardDescription>
+            <CardTitle>Filter Proses Payroll</CardTitle>
+            <CardDescription>Filter periode dan status untuk meninjau run payroll.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <div className="xl:col-span-2">
@@ -393,7 +452,7 @@ export default function OrgPayrollRunEngine() {
         <Card>
           <CardHeader>
             <CardTitle>Daftar Payroll Run</CardTitle>
-            <CardDescription>Buat run baru atau ubah status run sesuai lifecycle payroll.</CardDescription>
+            <CardDescription>Buat run baru atau ubah status run sesuai alur payroll sederhana.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
@@ -401,7 +460,7 @@ export default function OrgPayrollRunEngine() {
                 <ArrowLeft className="mr-2 h-4 w-4" />Validasi
               </Button>
               <Button onClick={openCreateDialog}>
-                <PlayCircle className="mr-2 h-4 w-4" />Buat Run
+                <PlayCircle className="mr-2 h-4 w-4" />Buat Proses
               </Button>
             </div>
 
@@ -430,10 +489,12 @@ export default function OrgPayrollRunEngine() {
                       <TableCell>{periodMap.get(row.period_id)?.period_key || "-"}</TableCell>
                       <TableCell>Run #{row.run_sequence}</TableCell>
                       <TableCell>
-                        <Badge variant="secondary">{row.run_type}</Badge>
+                        <Badge variant="secondary">{RUN_TYPE_LABELS[row.run_type as "simulation" | "final"]}</Badge>
                       </TableCell>
                       <TableCell>
-                        <Badge variant={row.status === "failed" ? "destructive" : "outline"}>{row.status}</Badge>
+                        <Badge variant={row.status === "failed" ? "destructive" : "outline"}>
+                          {RUN_STATUS_LABELS[row.status as RunStatus]}
+                        </Badge>
                       </TableCell>
                       <TableCell className="font-mono text-xs">{row.trace_id || "-"}</TableCell>
                       <TableCell>
@@ -451,19 +512,19 @@ export default function OrgPayrollRunEngine() {
                             <Button variant="secondary" size="sm" onClick={() => quickSetStatus(row, "processing")}>Proses</Button>
                           ) : null}
                           {row.status === "processing" ? (
-                            <Button variant="secondary" size="sm" onClick={() => quickSetStatus(row, "review")}>Review</Button>
+                            <Button variant="secondary" size="sm" onClick={() => quickSetStatus(row, "review")}>Tinjau</Button>
                           ) : null}
                           {row.status === "review" ? (
                             <Button variant="secondary" size="sm" onClick={() => quickSetStatus(row, "approved")}>
-                              <ShieldCheck className="mr-1 h-3.5 w-3.5" />Approve
+                              <ShieldCheck className="mr-1 h-3.5 w-3.5" />Setujui
                             </Button>
                           ) : null}
                           {row.status === "approved" ? (
-                            <Button variant="secondary" size="sm" onClick={() => quickSetStatus(row, "paid")}>Paid</Button>
+                            <Button variant="secondary" size="sm" onClick={() => quickSetStatus(row, "paid")}>Tandai Dibayar</Button>
                           ) : null}
                           {["draft", "processing", "review", "approved"].includes(row.status) ? (
                             <Button variant="destructive" size="sm" onClick={() => quickSetStatus(row, "failed")}>
-                              <XCircle className="mr-1 h-3.5 w-3.5" />Fail
+                              <XCircle className="mr-1 h-3.5 w-3.5" />Tandai Gagal
                             </Button>
                           ) : null}
                         </div>
@@ -488,8 +549,8 @@ export default function OrgPayrollRunEngine() {
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>{editingRunId ? "Edit Payroll Run" : "Buat Payroll Run"}</DialogTitle>
-              <DialogDescription>Pilih periode, tipe run, dan status awal run engine.</DialogDescription>
+              <DialogTitle>{editingRunId ? "Edit Proses Payroll" : "Buat Proses Payroll"}</DialogTitle>
+              <DialogDescription>Pilih periode, tipe proses, dan status awal payroll.</DialogDescription>
             </DialogHeader>
 
             <div className="grid gap-3 py-2">
@@ -507,11 +568,11 @@ export default function OrgPayrollRunEngine() {
 
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="grid gap-1.5">
-                  <Label>Tipe Run</Label>
+                  <Label>Tipe Proses</Label>
                   <Select value={formState.run_type} onValueChange={(value) => setFormState((prev) => ({ ...prev, run_type: value as "simulation" | "final" }))}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="simulation">Simulation</SelectItem>
+                      <SelectItem value="simulation">Simulasi</SelectItem>
                       <SelectItem value="final">Final</SelectItem>
                     </SelectContent>
                   </Select>
@@ -546,6 +607,8 @@ export default function OrgPayrollRunEngine() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <OrgPayrollPageGuide pathname="/org/payroll/run-engine" />
       </div>
     </OrganizationLayout>
   );

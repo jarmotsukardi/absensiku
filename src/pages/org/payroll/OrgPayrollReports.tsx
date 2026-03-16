@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -44,19 +45,19 @@ const ITEMS_PER_PAGE = 10;
 
 const STATUS_OPTIONS: Array<{ value: ReportStatus; label: string }> = [
   { value: "draft", label: "Draft" },
-  { value: "generated", label: "Generated" },
-  { value: "published", label: "Published" },
-  { value: "archived", label: "Archived" },
-  { value: "failed", label: "Failed" },
+  { value: "generated", label: "Dibuat" },
+  { value: "published", label: "Dipublikasikan" },
+  { value: "archived", label: "Arsip" },
+  { value: "failed", label: "Gagal" },
 ];
 
 const TYPE_OPTIONS: Array<{ value: ReportType; label: string }> = [
-  { value: "summary", label: "Summary" },
-  { value: "cost_center", label: "Cost Center" },
-  { value: "bank_transfer", label: "Bank Transfer" },
-  { value: "tax", label: "Tax" },
-  { value: "journal", label: "Journal" },
-  { value: "custom", label: "Custom" },
+  { value: "summary", label: "Ringkasan" },
+  { value: "cost_center", label: "Pusat Biaya" },
+  { value: "bank_transfer", label: "Transfer Bank" },
+  { value: "tax", label: "Pajak" },
+  { value: "journal", label: "Jurnal" },
+  { value: "custom", label: "Kustom" },
 ];
 
 const initialFormState: FormState = {
@@ -81,6 +82,18 @@ const formatDateTime = (value: string | null) => {
   if (!value) return "-";
   return new Intl.DateTimeFormat("id-ID", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 };
+
+const REPORT_STATUS_LABELS: Record<ReportStatus, string> = {
+  draft: "Draft",
+  generated: "Dibuat",
+  published: "Dipublikasikan",
+  archived: "Arsip",
+  failed: "Gagal",
+};
+
+const REPORT_TYPE_LABELS: Record<ReportType, string> = Object.fromEntries(
+  TYPE_OPTIONS.map((item) => [item.value, item.label]),
+) as Record<ReportType, string>;
 
 export default function OrgPayrollReports() {
   const navigate = useNavigate();
@@ -116,10 +129,18 @@ export default function OrgPayrollReports() {
         supabase.from("payroll_periods").select("*").eq("tenant_id", resolvedTenantId).order("period_start", { ascending: false }),
         supabase.from("payroll_runs").select("*").eq("tenant_id", resolvedTenantId).order("created_at", { ascending: false }).limit(200),
       ]);
-      if (periodRes.error) throw periodRes.error;
-      if (runRes.error) throw runRes.error;
-      setPeriods(periodRes.data || []);
-      setRuns(runRes.data || []);
+      if (periodRes.error) {
+        reportError(periodRes.error, "org.payroll.reports.fetch_periods", { tenant_id: resolvedTenantId });
+        setPeriods([]);
+      } else {
+        setPeriods(periodRes.data || []);
+      }
+      if (runRes.error) {
+        reportError(runRes.error, "org.payroll.reports.fetch_runs", { tenant_id: resolvedTenantId });
+        setRuns([]);
+      } else {
+        setRuns(runRes.data || []);
+      }
 
       let query = supabase.from("payroll_report_snapshots").select("*", { count: "exact" }).eq("tenant_id", resolvedTenantId);
       if (statusFilter !== "all") query = query.eq("status", statusFilter);
@@ -256,7 +277,7 @@ export default function OrgPayrollReports() {
       if (status === "generated") patch.generated_at = new Date().toISOString();
       const { error } = await supabase.from("payroll_report_snapshots").update(patch).eq("id", row.id).eq("tenant_id", resolvedTenantId);
       if (error) throw error;
-      toast.success(`Status laporan diubah ke ${status}`);
+      toast.success(`Status laporan diubah ke ${REPORT_STATUS_LABELS[status]}`);
       await fetchData();
     } catch (error) {
       const ref = reportError(error, "org.payroll.reports.update_status");
@@ -321,21 +342,62 @@ export default function OrgPayrollReports() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">Payroll</Badge>
-          <h1 className="text-2xl font-semibold tracking-tight">Laporan & Analitik</h1>
-          <p className="text-sm text-muted-foreground">Kelola snapshot laporan payroll dengan referensi trace_id/log_id untuk audit operasional.</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Inti</Badge>
+            <Badge variant="outline">Laporan Payroll</Badge>
+          </div>
+          <h1 className="text-2xl font-semibold tracking-tight">Laporan Payroll</h1>
+          <p className="text-sm text-muted-foreground">
+            Kelola snapshot laporan payroll ringkas dengan referensi trace ID dan log ID untuk tindak lanjut operasional.
+          </p>
         </div>
 
         <div className="grid gap-4 md:grid-cols-3">
-          <StatCard title="Generated" value={summary.generated} />
-          <StatCard title="Published" value={summary.published} />
-          <StatCard title="Failed" value={summary.failed} />
+          <StatCard title="Dibuat" value={summary.generated} />
+          <StatCard title="Dipublikasikan" value={summary.published} />
+          <StatCard title="Gagal" value={summary.failed} />
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Fokus tahap ini</CardDescription>
+              <CardTitle className="text-lg">Hasil ringkas payroll</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Gunakan laporan untuk melihat hasil akhir proses payroll tanpa masuk ke fitur distribusi yang lebih kompleks.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Yang perlu dijaga</CardDescription>
+              <CardTitle className="text-lg">Trace dan log</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Pastikan setiap snapshot laporan memiliki referensi yang bisa dipakai saat ada kendala operasional.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Langkah akhir inti</CardDescription>
+              <CardTitle className="text-lg">Ringkasan siap baca</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Setelah persetujuan selesai, laporan ini menjadi titik akhir alur payroll sederhana tahap awal.
+              </p>
+            </CardContent>
+          </Card>
         </div>
 
         <Card>
           <CardHeader>
             <CardTitle>Filter Laporan</CardTitle>
-            <CardDescription>Filter status dan jenis laporan payroll.</CardDescription>
+            <CardDescription>Filter status dan jenis laporan payroll ringkas.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <div className="xl:col-span-2">
@@ -356,7 +418,7 @@ export default function OrgPayrollReports() {
               </Select>
             </div>
             <div>
-              <Label>Type</Label>
+              <Label>Jenis Laporan</Label>
               <Select value={typeFilter} onValueChange={(v) => setTypeFilter(v as typeof typeFilter)}>
                 <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -375,8 +437,8 @@ export default function OrgPayrollReports() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => navigate("/org/payroll/slips")}><ArrowLeft className="mr-2 h-4 w-4" />Slip Gaji</Button>
-              <Button variant="outline" onClick={() => navigate("/org/payroll/audit-log")}>Audit Log</Button>
+              <Button variant="outline" onClick={() => navigate("/org/payroll/approval")}><ArrowLeft className="mr-2 h-4 w-4" />Persetujuan Payroll</Button>
+              <Button variant="outline" onClick={() => navigate("/org/payroll/run-engine")}>Proses Payroll</Button>
               <Button variant="secondary" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Export CSV</Button>
               <Button onClick={openCreateDialog}><Plus className="mr-2 h-4 w-4" />Tambah Snapshot</Button>
             </div>
@@ -406,13 +468,13 @@ export default function OrgPayrollReports() {
                     <TableRow key={row.id}>
                       <TableCell>
                         <div className="font-medium">{row.snapshot_name}</div>
-                        <div className="text-xs text-muted-foreground">{row.report_type}</div>
+                        <div className="text-xs text-muted-foreground">{REPORT_TYPE_LABELS[row.report_type as ReportType]}</div>
                       </TableCell>
                       <TableCell>
                         <div>{period?.period_key || "-"}</div>
                         <div className="text-xs text-muted-foreground">{run ? `Run #${run.run_sequence}` : "-"}</div>
                       </TableCell>
-                      <TableCell><Badge variant="outline">{row.status}</Badge></TableCell>
+                      <TableCell><Badge variant="outline">{REPORT_STATUS_LABELS[row.status as ReportStatus]}</Badge></TableCell>
                       <TableCell className="text-xs text-muted-foreground">trace:{row.trace_id || "-"}<br />log:{row.log_id || "-"}</TableCell>
                       <TableCell>{formatDateTime(row.generated_at)}</TableCell>
                       <TableCell className="text-right">
@@ -432,9 +494,9 @@ export default function OrgPayrollReports() {
             <div className="flex items-center justify-between text-sm text-muted-foreground">
               <span>Total {totalRows} snapshot</span>
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" disabled={currentPage <= 1} onClick={() => setCurrentPage((v) => Math.max(1, v - 1))}>Prev</Button>
-                <span>Page {currentPage} / {totalPages}</span>
-                <Button variant="outline" size="sm" disabled={currentPage >= totalPages} onClick={() => setCurrentPage((v) => Math.min(totalPages, v + 1))}>Next</Button>
+                <Button variant="outline" size="sm" disabled={currentPage <= 1} onClick={() => setCurrentPage((v) => Math.max(1, v - 1))}>Sebelumnya</Button>
+                <span>Halaman {currentPage} / {totalPages}</span>
+                <Button variant="outline" size="sm" disabled={currentPage >= totalPages} onClick={() => setCurrentPage((v) => Math.min(totalPages, v + 1))}>Berikutnya</Button>
               </div>
             </div>
           </CardContent>
@@ -443,8 +505,8 @@ export default function OrgPayrollReports() {
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogContent className="sm:max-w-2xl">
             <DialogHeader>
-              <DialogTitle>{editingId ? "Edit Snapshot" : "Tambah Snapshot"}</DialogTitle>
-              <DialogDescription>Simpan snapshot laporan payroll beserta referensi trace/log.</DialogDescription>
+              <DialogTitle>{editingId ? "Edit Snapshot Laporan" : "Tambah Snapshot Laporan"}</DialogTitle>
+              <DialogDescription>Simpan snapshot laporan payroll beserta referensi trace dan log.</DialogDescription>
             </DialogHeader>
             <div className="grid gap-3 py-2 md:grid-cols-2">
               <div>
@@ -452,7 +514,7 @@ export default function OrgPayrollReports() {
                 <Input className="mt-1.5" value={formState.snapshot_name} onChange={(e) => setFormState((prev) => ({ ...prev, snapshot_name: e.target.value }))} />
               </div>
               <div>
-                <Label>Type</Label>
+                <Label>Jenis Laporan</Label>
                 <Select value={formState.report_type} onValueChange={(value) => setFormState((prev) => ({ ...prev, report_type: value as ReportType }))}>
                   <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
                   <SelectContent>{TYPE_OPTIONS.map((item) => <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>)}</SelectContent>
@@ -473,7 +535,7 @@ export default function OrgPayrollReports() {
                 </Select>
               </div>
               <div>
-                <Label>Run</Label>
+                <Label>Proses Payroll</Label>
                 <Select value={formState.run_id} onValueChange={(value) => setFormState((prev) => ({ ...prev, run_id: value }))}>
                   <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
                   <SelectContent><SelectItem value="all">(Opsional) Semua</SelectItem>{runs.map((item) => <SelectItem key={item.id} value={item.id}>Run #{item.run_sequence}</SelectItem>)}</SelectContent>
@@ -502,6 +564,8 @@ export default function OrgPayrollReports() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <OrgPayrollPageGuide pathname="/org/payroll/reports" />
       </div>
     </OrganizationLayout>
   );

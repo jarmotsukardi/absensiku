@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,7 +25,10 @@ type PayrollSlipInsert = Database["public"]["Tables"]["payroll_slips"]["Insert"]
 type PayrollSlipUpdate = Database["public"]["Tables"]["payroll_slips"]["Update"];
 type PayrollRun = Database["public"]["Tables"]["payroll_runs"]["Row"];
 type PayrollPeriod = Database["public"]["Tables"]["payroll_periods"]["Row"];
-type Employee = Database["public"]["Tables"]["employees"]["Row"];
+type Employee = Pick<
+  Database["public"]["Tables"]["employees"]["Row"],
+  "id" | "name" | "email" | "nik" | "tenant_id" | "is_active"
+>;
 
 type SlipStatus = "draft" | "generated" | "published" | "failed";
 
@@ -43,10 +47,14 @@ const ITEMS_PER_PAGE = 10;
 
 const STATUS_OPTIONS: Array<{ value: SlipStatus; label: string }> = [
   { value: "draft", label: "Draft" },
-  { value: "generated", label: "Generated" },
-  { value: "published", label: "Published" },
-  { value: "failed", label: "Failed" },
+  { value: "generated", label: "Dibuat" },
+  { value: "published", label: "Dipublikasikan" },
+  { value: "failed", label: "Gagal" },
 ];
+
+const STATUS_LABELS: Record<SlipStatus, string> = Object.fromEntries(
+  STATUS_OPTIONS.map((item) => [item.value, item.label]),
+) as Record<SlipStatus, string>;
 
 const CHANNEL_OPTIONS = [
   { value: "portal", label: "Portal" },
@@ -54,6 +62,10 @@ const CHANNEL_OPTIONS = [
   { value: "whatsapp", label: "WhatsApp" },
   { value: "manual", label: "Manual" },
 ] as const;
+
+const CHANNEL_LABELS: Record<(typeof CHANNEL_OPTIONS)[number]["value"], string> = Object.fromEntries(
+  CHANNEL_OPTIONS.map((item) => [item.value, item.label]),
+) as Record<(typeof CHANNEL_OPTIONS)[number]["value"], string>;
 
 const initialFormState: SlipFormState = {
   run_id: "",
@@ -122,13 +134,24 @@ export default function OrgPayrollSlips() {
           .order("name", { ascending: true })
           .limit(200),
       ]);
-      if (runRes.error) throw runRes.error;
-      if (periodRes.error) throw periodRes.error;
-      if (employeeRes.error) throw employeeRes.error;
-
-      setRuns(runRes.data || []);
-      setPeriods(periodRes.data || []);
-      setEmployees((employeeRes.data || []) as Employee[]);
+      if (runRes.error) {
+        reportError(runRes.error, "org.payroll.slips.fetch_runs", { tenant_id: resolvedTenantId });
+        setRuns([]);
+      } else {
+        setRuns(runRes.data || []);
+      }
+      if (periodRes.error) {
+        reportError(periodRes.error, "org.payroll.slips.fetch_periods", { tenant_id: resolvedTenantId });
+        setPeriods([]);
+      } else {
+        setPeriods(periodRes.data || []);
+      }
+      if (employeeRes.error) {
+        reportError(employeeRes.error, "org.payroll.slips.fetch_employees", { tenant_id: resolvedTenantId });
+        setEmployees([]);
+      } else {
+        setEmployees((employeeRes.data || []) as Employee[]);
+      }
 
       let query = supabase
         .from("payroll_slips")
@@ -140,7 +163,7 @@ export default function OrgPayrollSlips() {
 
       const keyword = sanitizeOrKeyword(searchTerm);
       if (keyword.length > 0) {
-        const matchedRunIds = (runRes.data || [])
+        const matchedRunIds = ((runRes.error ? [] : runRes.data) || [])
           .filter((run) => `${run.trace_id || ""} ${run.notes || ""}`.toLowerCase().includes(keyword.toLowerCase()))
           .map((run) => run.id);
         const orClause = buildPostgrestOrClause({
@@ -363,9 +386,45 @@ export default function OrgPayrollSlips() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">Payroll</Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Ditunda</Badge>
+            <Badge variant="outline">Distribusi Payroll</Badge>
+          </div>
           <h1 className="text-2xl font-semibold tracking-tight">Slip Gaji & Distribusi</h1>
           <p className="text-sm text-muted-foreground">Generate, publish, dan lacak distribusi slip gaji payroll.</p>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-3">
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Status fitur</CardDescription>
+              <CardTitle className="text-base">Slip masih tahap lanjutan</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Halaman ini tetap tampil sejak awal, tetapi distribusi slip belum menjadi fokus utama payroll sederhana.
+            </CardContent>
+          </Card>
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Fokus penggunaan</CardDescription>
+              <CardTitle className="text-base">Kelola metadata dan kanal distribusi</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Gunakan saat organisasi sudah siap mengelola nomor slip, status publikasi, dan kanal penyampaian ke pegawai.
+            </CardContent>
+          </Card>
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Langkah terkait</CardDescription>
+              <CardTitle className="text-base">Kembali ke persetujuan bila perlu</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm text-muted-foreground">
+              <p>Pastikan proses dan persetujuan payroll sudah beres sebelum slip dipublikasikan.</p>
+              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/approval")}>
+                Buka Persetujuan Payroll
+              </Button>
+            </CardContent>
+          </Card>
         </div>
 
         <Card>
@@ -388,11 +447,11 @@ export default function OrgPayrollSlips() {
               </div>
             </div>
             <div>
-              <Label>Run Payroll</Label>
+              <Label>Proses Payroll</Label>
               <Select value={runFilter} onValueChange={setRunFilter}>
                 <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">Semua Run</SelectItem>
+                  <SelectItem value="all">Semua Proses</SelectItem>
                   {runs.map((run) => (
                     <SelectItem key={run.id} value={run.id}>
                       {periodMap.get(run.period_id)?.period_key || "-"} • Run #{run.run_sequence}
@@ -424,7 +483,7 @@ export default function OrgPayrollSlips() {
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={() => navigate("/org/payroll/approval")}>
-                <ArrowLeft className="mr-2 h-4 w-4" />Approval
+                <ArrowLeft className="mr-2 h-4 w-4" />Persetujuan Payroll
               </Button>
               <Button onClick={openCreateDialog}><Plus className="mr-2 h-4 w-4" />Tambah Slip</Button>
               <Button variant="secondary" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Export CSV</Button>
@@ -470,12 +529,12 @@ export default function OrgPayrollSlips() {
                         <TableCell>{employee}</TableCell>
                         <TableCell>
                           <Badge variant={row.status === "failed" ? "destructive" : row.status === "published" ? "default" : "secondary"}>
-                            {row.status}
+                            {STATUS_LABELS[row.status as SlipStatus] || row.status}
                           </Badge>
                         </TableCell>
                         <TableCell>
                           <div className="space-y-0.5 text-xs text-muted-foreground">
-                            <p>{row.distribution_channel}</p>
+                            <p>{CHANNEL_LABELS[row.distribution_channel as keyof typeof CHANNEL_LABELS] || row.distribution_channel}</p>
                             <p>{formatDateTime(row.distributed_at)}</p>
                           </div>
                         </TableCell>
@@ -484,7 +543,7 @@ export default function OrgPayrollSlips() {
                             <Button variant="outline" size="icon" onClick={() => openEditDialog(row)}><PencilLine className="h-4 w-4" /></Button>
                             {row.status !== "published" ? (
                               <Button variant="secondary" size="sm" onClick={() => publishSlip(row)}>
-                                <Send className="mr-1 h-3.5 w-3.5" />Publish
+                                <Send className="mr-1 h-3.5 w-3.5" />Publikasikan
                               </Button>
                             ) : null}
                             <Button variant="destructive" size="icon" onClick={() => handleDelete(row)}><Trash2 className="h-4 w-4" /></Button>
@@ -517,7 +576,7 @@ export default function OrgPayrollSlips() {
 
             <div className="grid gap-3 py-2">
               <div className="grid gap-1.5">
-                <Label>Run Payroll</Label>
+                <Label>Proses Payroll</Label>
                 <Select value={formState.run_id} onValueChange={(value) => setFormState((prev) => ({ ...prev, run_id: value }))}>
                   <SelectTrigger><SelectValue placeholder="Pilih run" /></SelectTrigger>
                   <SelectContent>
@@ -562,7 +621,7 @@ export default function OrgPayrollSlips() {
                   </Select>
                 </div>
                 <div className="grid gap-1.5">
-                  <Label>Channel</Label>
+                  <Label>Kanal Distribusi</Label>
                   <Select value={formState.distribution_channel} onValueChange={(value) => setFormState((prev) => ({ ...prev, distribution_channel: value as SlipFormState["distribution_channel"] }))}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
                     <SelectContent>
@@ -597,6 +656,8 @@ export default function OrgPayrollSlips() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <OrgPayrollPageGuide pathname="/org/payroll/slips" />
       </div>
     </OrganizationLayout>
   );

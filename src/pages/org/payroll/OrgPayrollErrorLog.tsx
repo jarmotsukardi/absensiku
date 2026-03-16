@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,6 +24,17 @@ type ErrorTab = "critical" | "non_critical" | "done" | "archived_critical" | "ar
 type TimeRange = "24h" | "7d" | "30d";
 
 const ITEMS_PER_PAGE = 20;
+
+const TIME_RANGE_LABELS: Record<TimeRange, string> = {
+  "24h": "24 jam",
+  "7d": "7 hari",
+  "30d": "30 hari",
+};
+
+const SEVERITY_LABELS: Record<Exclude<SeverityFilter, "all">, string> = {
+  error: "Error",
+  warning: "Peringatan",
+};
 
 const formatDateTime = (value: string | null) => {
   if (!value) return "-";
@@ -346,10 +358,13 @@ export default function OrgPayrollErrorLog() {
       <div className="space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="space-y-2">
-            <Badge variant="destructive">Log Error</Badge>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="destructive">Ditunda</Badge>
+              <Badge variant="outline">Observabilitas</Badge>
+            </div>
             <h1 className="text-2xl font-semibold tracking-tight">Log Error Payroll</h1>
             <p className="text-sm text-muted-foreground">
-              Catatan error/gagal muat data payroll berdasarkan nomor referensi.
+              Catatan error payroll berdasarkan nomor referensi, konteks, dan rute kejadian.
             </p>
           </div>
           <div className="flex gap-2">
@@ -363,11 +378,44 @@ export default function OrgPayrollErrorLog() {
           </div>
         </div>
 
+        <div className="grid gap-4 xl:grid-cols-3">
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Tahap observabilitas</CardDescription>
+              <CardTitle className="text-base">Pantau error aktif lebih cepat</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Halaman ini dipakai saat payroll sudah cukup stabil untuk memusatkan penelusuran error aktif.
+            </CardContent>
+          </Card>
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Prioritas tindakan</CardDescription>
+              <CardTitle className="text-base">Mulai dari error kritis</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Fokus ke tab kritis, salin nomor referensi, lalu cocokkan dengan konteks proses payroll yang terkait.
+            </CardContent>
+          </Card>
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Langkah berikutnya</CardDescription>
+              <CardTitle className="text-base">Lanjut ke audit untuk jejak perubahan</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm text-muted-foreground">
+              <p>Gunakan audit log saat butuh melihat siapa melakukan perubahan, pada periode mana, dan dari proses yang mana.</p>
+              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/audit-log")}>
+                Buka Audit Log
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+
         <Card className="border-yellow-300/80 bg-yellow-50/40">
           <CardContent className="flex flex-wrap gap-2 p-4">
             <Button variant="outline" onClick={() => void fetchRows()} disabled={isLoading}>
               <RefreshCcw className="mr-2 h-4 w-4" />
-              Refresh
+              Muat Ulang
             </Button>
             <Button variant="outline" onClick={handleExportCsv}>
               <Download className="mr-2 h-4 w-4" />
@@ -383,11 +431,11 @@ export default function OrgPayrollErrorLog() {
                 toast.success(`Retensi dihitung dari ${summary.total} log error`);
               }}
             >
-              Retensi Sekarang
+              Cek Retensi
             </Button>
             <Button variant="destructive" onClick={clearLocalRows}>
               <Trash2 className="mr-2 h-4 w-4" />
-              Clear Log Lokal
+              Bersihkan Log Lokal
             </Button>
           </CardContent>
         </Card>
@@ -399,7 +447,7 @@ export default function OrgPayrollErrorLog() {
               Alert Realtime Kritis
             </CardTitle>
             <CardDescription>
-              Simpan endpoint webhook untuk notifikasi realtime error kritis (Webhook umum, Slack, WhatsApp, Email).
+              Simpan endpoint notifikasi untuk error kritis agar triase lebih cepat saat payroll sudah aktif digunakan.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -459,7 +507,7 @@ export default function OrgPayrollErrorLog() {
           <CardHeader>
             <CardTitle>Daftar Error</CardTitle>
             <CardDescription>
-              {summary.total} error tercatat • Sumber: Payroll Audit Log. Rentang {timeRange === "24h" ? "24 jam" : timeRange === "7d" ? "7 hari" : "30 hari"}.
+              {summary.total} error tercatat • Sumber dari audit payroll. Rentang aktif {TIME_RANGE_LABELS[timeRange]}.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -516,12 +564,12 @@ export default function OrgPayrollErrorLog() {
               </Select>
               <Select value={severityFilter} onValueChange={(value) => setSeverityFilter(value as SeverityFilter)}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Semua Severity" />
+                  <SelectValue placeholder="Semua Tingkat" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">Semua Severity</SelectItem>
-                  <SelectItem value="error">Error</SelectItem>
-                  <SelectItem value="warning">Warning</SelectItem>
+                  <SelectItem value="all">Semua Tingkat</SelectItem>
+                  <SelectItem value="error">{SEVERITY_LABELS.error}</SelectItem>
+                  <SelectItem value="warning">{SEVERITY_LABELS.warning}</SelectItem>
                 </SelectContent>
               </Select>
               <Button
@@ -691,6 +739,8 @@ export default function OrgPayrollErrorLog() {
             </div>
           </CardContent>
         </Card>
+
+        <OrgPayrollPageGuide pathname="/org/payroll/error-log" />
       </div>
     </OrganizationLayout>
   );

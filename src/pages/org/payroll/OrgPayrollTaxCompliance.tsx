@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -44,12 +45,16 @@ const ITEMS_PER_PAGE = 10;
 
 const STATUS_OPTIONS: Array<{ value: FilingStatus; label: string }> = [
   { value: "draft", label: "Draft" },
-  { value: "calculated", label: "Calculated" },
-  { value: "submitted", label: "Submitted" },
-  { value: "paid", label: "Paid" },
-  { value: "revised", label: "Revised" },
-  { value: "failed", label: "Failed" },
+  { value: "calculated", label: "Dihitung" },
+  { value: "submitted", label: "Dikirim" },
+  { value: "paid", label: "Dibayar" },
+  { value: "revised", label: "Direvisi" },
+  { value: "failed", label: "Gagal" },
 ];
+
+const STATUS_LABELS: Record<FilingStatus, string> = Object.fromEntries(
+  STATUS_OPTIONS.map((item) => [item.value, item.label]),
+) as Record<FilingStatus, string>;
 
 const TYPE_OPTIONS: Array<{ value: FilingType; label: string }> = [
   { value: "pph21", label: "PPh21" },
@@ -119,10 +124,18 @@ export default function OrgPayrollTaxCompliance() {
         supabase.from("payroll_periods").select("*").eq("tenant_id", resolvedTenantId).order("period_start", { ascending: false }),
         supabase.from("payroll_runs").select("*").eq("tenant_id", resolvedTenantId).order("created_at", { ascending: false }).limit(200),
       ]);
-      if (periodRes.error) throw periodRes.error;
-      if (runRes.error) throw runRes.error;
-      setPeriods(periodRes.data || []);
-      setRuns(runRes.data || []);
+      if (periodRes.error) {
+        reportError(periodRes.error, "org.payroll.tax_compliance.fetch_periods", { tenant_id: resolvedTenantId });
+        setPeriods([]);
+      } else {
+        setPeriods(periodRes.data || []);
+      }
+      if (runRes.error) {
+        reportError(runRes.error, "org.payroll.tax_compliance.fetch_runs", { tenant_id: resolvedTenantId });
+        setRuns([]);
+      } else {
+        setRuns(runRes.data || []);
+      }
 
       let query = supabase.from("payroll_tax_filings").select("*", { count: "exact" }).eq("tenant_id", resolvedTenantId);
       if (statusFilter !== "all") query = query.eq("status", statusFilter);
@@ -131,7 +144,7 @@ export default function OrgPayrollTaxCompliance() {
 
       const keyword = sanitizeOrKeyword(searchTerm);
       if (keyword.length > 0) {
-        const matchedRunIds = (runRes.data || [])
+        const matchedRunIds = ((runRes.error ? [] : runRes.data) || [])
           .filter((run) => `${run.trace_id || ""} ${run.notes || ""}`.toLowerCase().includes(keyword.toLowerCase()))
           .map((run) => run.id);
         const orClause = buildPostgrestOrClause({
@@ -336,15 +349,51 @@ export default function OrgPayrollTaxCompliance() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">Payroll</Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Ditunda</Badge>
+            <Badge variant="outline">Kepatuhan Payroll</Badge>
+          </div>
           <h1 className="text-2xl font-semibold tracking-tight">Pajak & Kepatuhan</h1>
           <p className="text-sm text-muted-foreground">Kelola filing pajak payroll dengan jejak trace_id untuk audit dan pelaporan.</p>
         </div>
 
+        <div className="grid gap-4 xl:grid-cols-3">
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Status fitur</CardDescription>
+              <CardTitle className="text-base">Kepatuhan pajak masih tahap lanjutan</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Halaman ini tetap tampil sejak awal, tetapi pengelolaan filing pajak belum menjadi fokus payroll sederhana tahap awal.
+            </CardContent>
+          </Card>
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Fungsi halaman</CardDescription>
+              <CardTitle className="text-base">Rekam filing dan tenggat kepatuhan</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Gunakan untuk mencatat status pelaporan, nominal kewajiban, dan nomor referensi saat organisasi sudah siap mengelola compliance payroll.
+            </CardContent>
+          </Card>
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Langkah terkait</CardDescription>
+              <CardTitle className="text-base">Sambungkan ke hak akses dan audit</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm text-muted-foreground">
+              <p>Pastikan hanya peran yang tepat yang mengelola filing pajak, lalu gunakan audit log untuk menelusuri perubahannya.</p>
+              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/roles")}>
+                Buka Hak Akses Payroll
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+
         <div className="grid gap-4 md:grid-cols-3">
           <StatCard title="Jatuh Tempo < 7 Hari" value={summary.dueSoon} />
-          <StatCard title="Submitted" value={summary.submitted} />
-          <StatCard title="Paid" value={summary.paid} />
+          <StatCard title="Dikirim" value={summary.submitted} />
+          <StatCard title="Dibayar" value={summary.paid} />
         </div>
 
         <Card>
@@ -396,12 +445,12 @@ export default function OrgPayrollTaxCompliance() {
         <Card>
           <CardHeader>
             <CardTitle>Daftar Filing Pajak</CardTitle>
-            <CardDescription>Trace ID wajib dicatat agar triase cepat saat issue compliance.</CardDescription>
+            <CardDescription>Trace ID wajib dicatat agar triase cepat saat ada masalah kepatuhan payroll.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={() => navigate("/org/payroll/payment")}><ArrowLeft className="mr-2 h-4 w-4" />Pembayaran</Button>
-              <Button variant="outline" onClick={() => navigate("/org/payroll/roles")}>Lanjut ke Roles</Button>
+              <Button variant="outline" onClick={() => navigate("/org/payroll/roles")}>Lanjut ke Hak Akses</Button>
               <Button variant="secondary" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Export CSV</Button>
               <Button onClick={openCreateDialog}><Plus className="mr-2 h-4 w-4" />Tambah Filing</Button>
             </div>
@@ -415,7 +464,7 @@ export default function OrgPayrollTaxCompliance() {
                   <TableHead>Periode/Run</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Nominal</TableHead>
-                  <TableHead>Due Date</TableHead>
+                  <TableHead>Tenggat</TableHead>
                   <TableHead>Trace</TableHead>
                   <TableHead className="text-right">Aksi</TableHead>
                 </TableRow>
@@ -436,9 +485,9 @@ export default function OrgPayrollTaxCompliance() {
                       </TableCell>
                       <TableCell>
                         <div>{period?.period_key || "-"}</div>
-                        <div className="text-xs text-muted-foreground">{run ? `Run #${run.run_sequence}` : "-"}</div>
+                        <div className="text-xs text-muted-foreground">{run ? `Proses #${run.run_sequence}` : "-"}</div>
                       </TableCell>
-                      <TableCell><Badge variant="outline">{row.status}</Badge></TableCell>
+                      <TableCell><Badge variant="outline">{STATUS_LABELS[row.status as FilingStatus] || row.status}</Badge></TableCell>
                       <TableCell className="text-right">{formatCurrency(row.total_amount)}</TableCell>
                       <TableCell>{row.due_date || "-"}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{row.trace_id || "-"}</TableCell>
@@ -459,9 +508,9 @@ export default function OrgPayrollTaxCompliance() {
             <div className="flex items-center justify-between text-sm text-muted-foreground">
               <span>Total {totalRows} filing</span>
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" disabled={currentPage <= 1} onClick={() => setCurrentPage((v) => Math.max(1, v - 1))}>Prev</Button>
-                <span>Page {currentPage} / {totalPages}</span>
-                <Button variant="outline" size="sm" disabled={currentPage >= totalPages} onClick={() => setCurrentPage((v) => Math.min(totalPages, v + 1))}>Next</Button>
+                <Button variant="outline" size="sm" disabled={currentPage <= 1} onClick={() => setCurrentPage((v) => Math.max(1, v - 1))}>Sebelumnya</Button>
+                <span>Halaman {currentPage} / {totalPages}</span>
+                <Button variant="outline" size="sm" disabled={currentPage >= totalPages} onClick={() => setCurrentPage((v) => Math.min(totalPages, v + 1))}>Berikutnya</Button>
               </div>
             </div>
           </CardContent>
@@ -503,17 +552,17 @@ export default function OrgPayrollTaxCompliance() {
                 </Select>
               </div>
               <div>
-                <Label>Run Payroll</Label>
+                <Label>Proses Payroll</Label>
                 <Select value={formState.run_id} onValueChange={(value) => setFormState((prev) => ({ ...prev, run_id: value }))}>
                   <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">(Opsional) Semua</SelectItem>
-                    {runs.map((item) => <SelectItem key={item.id} value={item.id}>Run #{item.run_sequence} ({item.status})</SelectItem>)}
+                    {runs.map((item) => <SelectItem key={item.id} value={item.id}>Proses #{item.run_sequence} ({item.status})</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
               <div>
-                <Label>Due Date</Label>
+                <Label>Tenggat</Label>
                 <Input type="date" className="mt-1.5" value={formState.due_date} onChange={(e) => setFormState((prev) => ({ ...prev, due_date: e.target.value }))} />
               </div>
               <div>
@@ -535,6 +584,8 @@ export default function OrgPayrollTaxCompliance() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <OrgPayrollPageGuide pathname="/org/payroll/tax-compliance" />
       </div>
     </OrganizationLayout>
   );

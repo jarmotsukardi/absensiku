@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -33,19 +34,29 @@ const ITEMS_PER_PAGE = 12;
 
 const STAGE_OPTIONS = [
   { value: "hr", label: "HR" },
-  { value: "finance", label: "Finance" },
-  { value: "executive", label: "Executive" },
+  { value: "finance", label: "Keuangan" },
+  { value: "executive", label: "Pimpinan" },
 ];
 
 const STATUS_OPTIONS: Array<{ value: ApprovalStatus; label: string }> = [
-  { value: "pending", label: "Pending" },
-  { value: "approved", label: "Approved" },
-  { value: "rejected", label: "Rejected" },
+  { value: "pending", label: "Menunggu" },
+  { value: "approved", label: "Disetujui" },
+  { value: "rejected", label: "Ditolak" },
 ];
 
 const formatDateTime = (value: string | null) => {
   if (!value) return "-";
   return new Intl.DateTimeFormat("id-ID", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+};
+
+const APPROVAL_STAGE_LABELS: Record<string, string> = Object.fromEntries(
+  STAGE_OPTIONS.map((item) => [item.value, item.label]),
+);
+
+const APPROVAL_STATUS_LABELS: Record<ApprovalStatus, string> = {
+  pending: "Menunggu",
+  approved: "Disetujui",
+  rejected: "Ditolak",
 };
 
 export default function OrgPayrollApproval() {
@@ -76,7 +87,7 @@ export default function OrgPayrollApproval() {
       if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan.");
       if (!tenantId) setTenantId(resolvedTenantId);
 
-      const [runRes, periodRes] = await Promise.all([
+      const [runLookup, periodLookup] = await Promise.allSettled([
         supabase
           .from("payroll_runs")
           .select("*")
@@ -89,10 +100,29 @@ export default function OrgPayrollApproval() {
           .eq("tenant_id", resolvedTenantId)
           .order("period_start", { ascending: false }),
       ]);
-      if (runRes.error) throw runRes.error;
-      if (periodRes.error) throw periodRes.error;
-      setRuns(runRes.data || []);
-      setPeriods(periodRes.data || []);
+
+      const runRes = runLookup.status === "fulfilled" ? runLookup.value : null;
+      const periodRes = periodLookup.status === "fulfilled" ? periodLookup.value : null;
+
+      if (runLookup.status === "rejected") {
+        reportError(runLookup.reason, "org.payroll.approval.fetch_runs", { tenant_id: resolvedTenantId });
+        setRuns([]);
+      } else if (runRes.error) {
+        reportError(runRes.error, "org.payroll.approval.fetch_runs", { tenant_id: resolvedTenantId });
+        setRuns([]);
+      } else {
+        setRuns(runRes.data || []);
+      }
+
+      if (periodLookup.status === "rejected") {
+        reportError(periodLookup.reason, "org.payroll.approval.fetch_periods", { tenant_id: resolvedTenantId });
+        setPeriods([]);
+      } else if (periodRes.error) {
+        reportError(periodRes.error, "org.payroll.approval.fetch_periods", { tenant_id: resolvedTenantId });
+        setPeriods([]);
+      } else {
+        setPeriods(periodRes.data || []);
+      }
 
       let query = supabase
         .from("payroll_approvals")
@@ -104,7 +134,7 @@ export default function OrgPayrollApproval() {
 
       const keyword = sanitizeOrKeyword(searchTerm);
       if (keyword.length > 0) {
-        const runIds = (runRes.data || [])
+        const runIds = ((runRes?.error ? [] : runRes?.data) || [])
           .filter((run) => `${run.trace_id || ""} ${run.notes || ""}`.toLowerCase().includes(keyword.toLowerCase()))
           .map((run) => run.id);
         const orClause = buildPostgrestOrClause({
@@ -182,7 +212,9 @@ export default function OrgPayrollApproval() {
         .eq("tenant_id", resolvedTenantId);
       if (error) throw error;
 
-      toast.success(`Approval stage ${editingRow.approval_stage} diubah ke ${nextStatus}`);
+      toast.success(
+        `Persetujuan tahap ${APPROVAL_STAGE_LABELS[editingRow.approval_stage] || editingRow.approval_stage} diubah ke ${APPROVAL_STATUS_LABELS[nextStatus]}`,
+      );
       closeDialog();
       await fetchData();
     } catch (error) {
@@ -200,7 +232,7 @@ export default function OrgPayrollApproval() {
 
       const candidateRuns = runs.filter((run) => ["review", "approved", "paid"].includes(run.status));
       if (candidateRuns.length === 0) {
-        toast.info("Belum ada run dengan status review/approved/paid untuk disinkronkan.");
+        toast.info("Belum ada proses payroll dengan status tinjau, disetujui, atau dibayar untuk disinkronkan.");
         return;
       }
 
@@ -239,23 +271,62 @@ export default function OrgPayrollApproval() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">Payroll</Badge>
-          <h1 className="text-2xl font-semibold tracking-tight">Approval Payroll</h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Inti</Badge>
+            <Badge variant="outline">Persetujuan Payroll</Badge>
+          </div>
+          <h1 className="text-2xl font-semibold tracking-tight">Persetujuan Payroll</h1>
           <p className="text-sm text-muted-foreground">
-            Kelola persetujuan payroll berlapis per stage {"(HR -> Finance -> Executive)"} dari payroll run.
+            Kelola persetujuan payroll satu alur kerja dengan tahapan HR, Keuangan, dan Pimpinan.
           </p>
         </div>
 
         <div className="grid gap-4 md:grid-cols-3">
-          <StatCard title="Pending" value={summary.pending} />
-          <StatCard title="Approved" value={summary.approved} />
-          <StatCard title="Rejected" value={summary.rejected} />
+          <StatCard title="Menunggu" value={summary.pending} />
+          <StatCard title="Disetujui" value={summary.approved} />
+          <StatCard title="Ditolak" value={summary.rejected} />
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Fokus tahap ini</CardDescription>
+              <CardTitle className="text-lg">Keputusan persetujuan</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Pastikan proses payroll yang masuk ke tahap ini sudah layak ditinjau dan punya jejak trace yang jelas.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Yang perlu dijaga</CardDescription>
+              <CardTitle className="text-lg">Komentar keputusan</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-xs text-muted-foreground">
+                Simpan komentar singkat agar alasan persetujuan atau penolakan mudah ditindaklanjuti.
+              </p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Langkah berikutnya</CardDescription>
+              <CardTitle className="text-lg">Laporan Payroll</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/reports")}>
+                Buka Laporan Payroll
+              </Button>
+            </CardContent>
+          </Card>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle>Filter Approval</CardTitle>
-            <CardDescription>Filter stage/status untuk proses approval payroll.</CardDescription>
+            <CardTitle>Filter Persetujuan</CardTitle>
+            <CardDescription>Filter tahap dan status untuk meninjau persetujuan payroll.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <div className="xl:col-span-2">
@@ -272,7 +343,7 @@ export default function OrgPayrollApproval() {
               </div>
             </div>
             <div>
-              <Label>Stage</Label>
+              <Label>Tahap</Label>
               <Select value={stageFilter} onValueChange={setStageFilter}>
                 <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -300,16 +371,16 @@ export default function OrgPayrollApproval() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Daftar Approval</CardTitle>
-            <CardDescription>Approval payroll terkait run engine dengan jejak audit dan keputusan.</CardDescription>
+            <CardTitle>Daftar Persetujuan</CardTitle>
+            <CardDescription>Persetujuan payroll terkait proses payroll dengan jejak keputusan yang mudah dibaca.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" onClick={() => navigate("/org/payroll/run-engine")}>
-                <ArrowLeft className="mr-2 h-4 w-4" />Run Engine
+                <ArrowLeft className="mr-2 h-4 w-4" />Proses Payroll
               </Button>
               <Button variant="secondary" onClick={syncApprovals}>
-                <RefreshCw className="mr-2 h-4 w-4" />Sync dari Run
+                <RefreshCw className="mr-2 h-4 w-4" />Sinkronkan dari Proses
               </Button>
             </div>
 
@@ -318,8 +389,8 @@ export default function OrgPayrollApproval() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Periode / Run</TableHead>
-                  <TableHead>Stage</TableHead>
+                  <TableHead>Periode / Proses</TableHead>
+                  <TableHead>Tahap</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Trace</TableHead>
                   <TableHead>Keputusan</TableHead>
@@ -343,10 +414,10 @@ export default function OrgPayrollApproval() {
                             <p className="text-xs text-muted-foreground">Run #{run?.run_sequence || "-"} • {run?.trace_id || "-"}</p>
                           </div>
                         </TableCell>
-                        <TableCell><Badge variant="outline">{row.approval_stage}</Badge></TableCell>
+                        <TableCell><Badge variant="outline">{APPROVAL_STAGE_LABELS[row.approval_stage] || row.approval_stage}</Badge></TableCell>
                         <TableCell>
                           <Badge variant={row.status === "approved" ? "default" : row.status === "rejected" ? "destructive" : "secondary"}>
-                            {row.status}
+                            {APPROVAL_STATUS_LABELS[row.status as ApprovalStatus]}
                           </Badge>
                         </TableCell>
                         <TableCell className="font-mono text-xs">{row.trace_id || "-"}</TableCell>
@@ -383,13 +454,13 @@ export default function OrgPayrollApproval() {
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Aksi Approval Payroll</DialogTitle>
-              <DialogDescription>Ubah status approval untuk stage terkait dan simpan catatan keputusan.</DialogDescription>
+              <DialogDescription>Ubah status persetujuan untuk tahap terkait dan simpan catatan keputusan.</DialogDescription>
             </DialogHeader>
 
             <div className="space-y-3 py-2">
               <div className="rounded-md border p-3 text-sm">
-                <p><span className="font-medium">Stage:</span> {editingRow?.approval_stage || "-"}</p>
-                <p><span className="font-medium">Run:</span> {editingRow ? runMap.get(editingRow.run_id)?.trace_id || editingRow.run_id : "-"}</p>
+                <p><span className="font-medium">Tahap:</span> {editingRow ? APPROVAL_STAGE_LABELS[editingRow.approval_stage] || editingRow.approval_stage : "-"}</p>
+                <p><span className="font-medium">Proses:</span> {editingRow ? runMap.get(editingRow.run_id)?.trace_id || editingRow.run_id : "-"}</p>
               </div>
               <div className="grid gap-1.5">
                 <Label htmlFor="comment">Komentar</Label>
@@ -400,15 +471,17 @@ export default function OrgPayrollApproval() {
             <DialogFooter className="gap-2 sm:justify-between">
               <Button variant="outline" onClick={closeDialog}>Batal</Button>
               <div className="flex gap-2">
-                <Button variant="secondary" onClick={() => updateApprovalStatus("pending")} disabled={isSubmitting}>Pending</Button>
-                <Button variant="default" onClick={() => updateApprovalStatus("approved")} disabled={isSubmitting}>Approve</Button>
+                <Button variant="secondary" onClick={() => updateApprovalStatus("pending")} disabled={isSubmitting}>Menunggu</Button>
+                <Button variant="default" onClick={() => updateApprovalStatus("approved")} disabled={isSubmitting}>Setujui</Button>
                 <Button variant="destructive" onClick={() => updateApprovalStatus("rejected")} disabled={isSubmitting}>
-                  <XCircle className="mr-1 h-3.5 w-3.5" />Reject
+                  <XCircle className="mr-1 h-3.5 w-3.5" />Tolak
                 </Button>
               </div>
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <OrgPayrollPageGuide pathname="/org/payroll/approval" />
       </div>
     </OrganizationLayout>
   );

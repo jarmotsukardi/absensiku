@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -55,6 +56,7 @@ type PayrollComponentsBaseProps = {
   componentTypeOptions: Array<{ value: string; label: string }>;
   backPath: string;
   routeErrorScope: string;
+  guidePath?: string;
 };
 
 const CALCULATION_OPTIONS = [
@@ -104,6 +106,7 @@ export function OrgPayrollComponentsBase({
   componentTypeOptions,
   backPath,
   routeErrorScope,
+  guidePath,
 }: PayrollComponentsBaseProps) {
   const navigate = useNavigate();
   const confirmDialog = useConfirmDialog();
@@ -395,9 +398,45 @@ export function OrgPayrollComponentsBase({
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">Payroll</Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Lanjutan</Badge>
+            <Badge variant="outline">Konfigurasi Payroll</Badge>
+          </div>
           <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
           <p className="text-sm text-muted-foreground">{description}</p>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-3">
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Posisi menu</CardDescription>
+              <CardTitle className="text-base">Konfigurasi lanjutan payroll</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Halaman ini dipakai saat organisasi sudah butuh aturan komponen yang lebih rinci di luar alur inti payroll.
+            </CardContent>
+          </Card>
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Fokus penggunaan</CardDescription>
+              <CardTitle className="text-base">Jaga konsistensi perhitungan</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Gunakan kode, tipe, dan mode kalkulasi yang konsisten agar proses payroll tidak membingungkan saat validasi dan laporan.
+            </CardContent>
+          </Card>
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Langkah berikutnya</CardDescription>
+              <CardTitle className="text-base">Kembali ke alur inti jika sudah cukup</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm text-muted-foreground">
+              <p>Jika konfigurasi komponen sudah siap, lanjutkan lagi ke proses inti payroll untuk memeriksa dampaknya.</p>
+              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/validation")}>
+                Buka Validasi Payroll
+              </Button>
+            </CardContent>
+          </Card>
         </div>
 
         <div className="grid gap-4 md:grid-cols-3">
@@ -660,6 +699,8 @@ export function OrgPayrollComponentsBase({
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {guidePath ? <OrgPayrollPageGuide pathname={guidePath} /> : null}
       </div>
     </OrganizationLayout>
   );

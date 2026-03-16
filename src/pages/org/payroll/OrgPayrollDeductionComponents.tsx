@@ -1,8 +1,8 @@
 import { OrgPayrollComponentsBase } from "./OrgPayrollComponentsBase";
 
 const DEDUCTION_COMPONENT_TYPES = [
-  { value: "fixed", label: "Fixed" },
-  { value: "variable", label: "Variable" },
+  { value: "fixed", label: "Tetap" },
+  { value: "variable", label: "Variabel" },
   { value: "installment", label: "Cicilan" },
 ];
 
@@ -19,6 +19,7 @@ export default function OrgPayrollDeductionComponents() {
       componentTypeOptions={DEDUCTION_COMPONENT_TYPES}
       backPath="/org/payroll/income-components"
       routeErrorScope="org.payroll.deduction_components"
+      guidePath="/org/payroll/deduction-components"
     />
   );
 }

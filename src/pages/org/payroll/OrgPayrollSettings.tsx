@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -29,7 +30,10 @@ export default function OrgPayrollSettings() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">Payroll</Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Info</Badge>
+            <Badge variant="outline">Pengaturan Payroll</Badge>
+          </div>
           <h1 className="text-2xl font-semibold tracking-tight">Pengaturan Payroll</h1>
           <p className="text-sm text-muted-foreground">
             Pusat pengaturan payroll terisolasi dari menu absensi.
@@ -59,11 +63,13 @@ export default function OrgPayrollSettings() {
         </Card>
 
         <div className="flex gap-2">
-          <Button onClick={() => navigate("/org/payroll")}>Payroll Home</Button>
+          <Button onClick={() => navigate("/org/payroll")}>Beranda Payroll</Button>
           <Button variant="outline" onClick={() => navigate("/org/payroll/help")}>
             Bantuan Payroll
           </Button>
         </div>
+
+        <OrgPayrollPageGuide pathname="/org/payroll/settings" />
       </div>
     </OrganizationLayout>
   );

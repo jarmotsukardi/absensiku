@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import type { Database } from "@/integrations/supabase/types";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { buildPostgrestOrClause, sanitizeOrKeyword } from "@/lib/postgrestSearch";
+import { fetchSupabaseRest } from "@/lib/supabaseRestClient";
 
 type PayrollPaymentBatch = Database["public"]["Tables"]["payroll_payment_batches"]["Row"];
 type PayrollPaymentBatchInsert = Database["public"]["Tables"]["payroll_payment_batches"]["Insert"];
@@ -42,12 +44,16 @@ const ITEMS_PER_PAGE = 10;
 
 const STATUS_OPTIONS: Array<{ value: PaymentStatus; label: string }> = [
   { value: "draft", label: "Draft" },
-  { value: "queued", label: "Queued" },
-  { value: "processing", label: "Processing" },
-  { value: "completed", label: "Completed" },
-  { value: "failed", label: "Failed" },
-  { value: "reconciled", label: "Reconciled" },
+  { value: "queued", label: "Antre" },
+  { value: "processing", label: "Diproses" },
+  { value: "completed", label: "Selesai" },
+  { value: "failed", label: "Gagal" },
+  { value: "reconciled", label: "Terekonsiliasi" },
 ];
+
+const STATUS_LABELS: Record<PaymentStatus, string> = Object.fromEntries(
+  STATUS_OPTIONS.map((item) => [item.value, item.label]),
+) as Record<PaymentStatus, string>;
 
 const initialFormState: PaymentFormState = {
   run_id: "",
@@ -114,10 +120,18 @@ export default function OrgPayrollPayment() {
         supabase.from("payroll_runs").select("*").eq("tenant_id", resolvedTenantId).order("created_at", { ascending: false }).limit(200),
         supabase.from("payroll_periods").select("*").eq("tenant_id", resolvedTenantId).order("period_start", { ascending: false }),
       ]);
-      if (runRes.error) throw runRes.error;
-      if (periodRes.error) throw periodRes.error;
-      setRuns(runRes.data || []);
-      setPeriods(periodRes.data || []);
+      if (runRes.error) {
+        reportError(runRes.error, "org.payroll.payment.fetch_runs", { tenant_id: resolvedTenantId });
+        setRuns([]);
+      } else {
+        setRuns(runRes.data || []);
+      }
+      if (periodRes.error) {
+        reportError(periodRes.error, "org.payroll.payment.fetch_periods", { tenant_id: resolvedTenantId });
+        setPeriods([]);
+      } else {
+        setPeriods(periodRes.data || []);
+      }
 
       let query = supabase
         .from("payroll_payment_batches")
@@ -129,7 +143,7 @@ export default function OrgPayrollPayment() {
 
       const keyword = sanitizeOrKeyword(searchTerm);
       if (keyword.length > 0) {
-        const matchedRunIds = (runRes.data || [])
+        const matchedRunIds = ((runRes.error ? [] : runRes.data) || [])
           .filter((run) => `${run.trace_id || ""} ${run.notes || ""}`.toLowerCase().includes(keyword.toLowerCase()))
           .map((run) => run.id);
         const orClause = buildPostgrestOrClause({
@@ -252,15 +266,19 @@ export default function OrgPayrollPayment() {
           created_by: undefined,
           updated_by: user?.id || null,
         };
-        const { error } = await supabase
-          .from("payroll_payment_batches")
-          .update(updatePayload)
-          .eq("id", editingId)
-          .eq("tenant_id", resolvedTenantId);
-        if (error) throw error;
+        await fetchSupabaseRest<null>("payroll_payment_batches", {
+          method: "PATCH",
+          params: {
+            id: `eq.${editingId}`,
+            tenant_id: `eq.${resolvedTenantId}`,
+          },
+          body: updatePayload,
+        });
       } else {
-        const { error } = await supabase.from("payroll_payment_batches").insert(payload);
-        if (error) throw error;
+        await fetchSupabaseRest<null>("payroll_payment_batches", {
+          method: "POST",
+          body: payload,
+        });
       }
 
       toast.success(`Batch pembayaran berhasil ${editingId ? "diperbarui" : "ditambahkan"}`);
@@ -286,12 +304,14 @@ export default function OrgPayrollPayment() {
       if (status === "completed") patch.paid_at = new Date().toISOString();
       if (status === "reconciled") patch.reconciled_at = new Date().toISOString();
 
-      const { error } = await supabase
-        .from("payroll_payment_batches")
-        .update(patch)
-        .eq("id", row.id)
-        .eq("tenant_id", resolvedTenantId);
-      if (error) throw error;
+      await fetchSupabaseRest<null>("payroll_payment_batches", {
+        method: "PATCH",
+        params: {
+          id: `eq.${row.id}`,
+          tenant_id: `eq.${resolvedTenantId}`,
+        },
+        body: patch,
+      });
 
       toast.success(`Status pembayaran diubah ke ${status}`);
       await fetchData();
@@ -349,16 +369,52 @@ export default function OrgPayrollPayment() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">Payroll</Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Ditunda</Badge>
+            <Badge variant="outline">Pembayaran Payroll</Badge>
+          </div>
           <h1 className="text-2xl font-semibold tracking-tight">Pembayaran & Bank File</h1>
           <p className="text-sm text-muted-foreground">Kelola batch pembayaran payroll, status transfer, dan rekonsiliasi.</p>
         </div>
 
+        <div className="grid gap-4 xl:grid-cols-3">
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Status fitur</CardDescription>
+              <CardTitle className="text-base">Pembayaran belum menjadi fokus awal</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Menu ini tetap tampil untuk memberi gambaran roadmap, tetapi pembayaran batch belum termasuk inti payroll sederhana tahap awal.
+            </CardContent>
+          </Card>
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Fungsi halaman</CardDescription>
+              <CardTitle className="text-base">Kelola batch transfer dan rekonsiliasi</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Gunakan saat organisasi sudah siap mengelola bank file, status transfer, dan pencocokan hasil pembayaran.
+            </CardContent>
+          </Card>
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Langkah terkait</CardDescription>
+              <CardTitle className="text-base">Cocokkan dengan slip dan laporan</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm text-muted-foreground">
+              <p>Setelah batch pembayaran siap, cocokkan kembali dengan slip payroll dan ringkasan laporan sebelum ditutup.</p>
+              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/slips")}>
+                Buka Slip Payroll
+              </Button>
+            </CardContent>
+          </Card>
+        </div>
+
         <div className="grid gap-4 md:grid-cols-4">
           <StatCard title="Draft" value={summary.draft} />
-          <StatCard title="Processing" value={summary.processing} />
-          <StatCard title="Completed" value={summary.completed} />
-          <StatCard title="Reconciled" value={summary.reconciled} />
+          <StatCard title="Diproses" value={summary.processing} />
+          <StatCard title="Selesai" value={summary.completed} />
+          <StatCard title="Terekonsiliasi" value={summary.reconciled} />
         </div>
 
         <Card>
@@ -381,11 +437,11 @@ export default function OrgPayrollPayment() {
               </div>
             </div>
             <div>
-              <Label>Run Payroll</Label>
+              <Label>Proses Payroll</Label>
               <Select value={runFilter} onValueChange={setRunFilter}>
                 <SelectTrigger className="mt-1.5"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">Semua Run</SelectItem>
+                  <SelectItem value="all">Semua Proses</SelectItem>
                   {runs.map((run) => (
                     <SelectItem key={run.id} value={run.id}>
                       {periodMap.get(run.period_id)?.period_key || "-"} • Run #{run.run_sequence}
@@ -467,33 +523,33 @@ export default function OrgPayrollPayment() {
                         </TableCell>
                         <TableCell>
                           <Badge variant={row.payment_status === "failed" ? "destructive" : row.payment_status === "reconciled" ? "default" : "secondary"}>
-                            {row.payment_status}
+                            {STATUS_LABELS[row.payment_status as PaymentStatus] || row.payment_status}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-xs text-muted-foreground">
-                          <p>Paid: {formatDateTime(row.paid_at)}</p>
-                          <p>Recon: {formatDateTime(row.reconciled_at)}</p>
+                          <p>Dibayar: {formatDateTime(row.paid_at)}</p>
+                          <p>Rekonsiliasi: {formatDateTime(row.reconciled_at)}</p>
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="inline-flex flex-wrap justify-end gap-1">
                             <Button variant="outline" size="icon" onClick={() => openEditDialog(row)}><PencilLine className="h-4 w-4" /></Button>
                             {row.payment_status === "draft" ? (
-                              <Button variant="secondary" size="sm" onClick={() => updatePaymentStatus(row, "queued")}>Queue</Button>
+                              <Button variant="secondary" size="sm" onClick={() => updatePaymentStatus(row, "queued")}>Antrekan</Button>
                             ) : null}
                             {row.payment_status === "queued" ? (
-                              <Button variant="secondary" size="sm" onClick={() => updatePaymentStatus(row, "processing")}>Process</Button>
+                              <Button variant="secondary" size="sm" onClick={() => updatePaymentStatus(row, "processing")}>Proses</Button>
                             ) : null}
                             {row.payment_status === "processing" ? (
                               <Button variant="secondary" size="sm" onClick={() => updatePaymentStatus(row, "completed")}>
-                                <CheckCircle2 className="mr-1 h-3.5 w-3.5" />Done
+                                <CheckCircle2 className="mr-1 h-3.5 w-3.5" />Selesai
                               </Button>
                             ) : null}
                             {row.payment_status === "completed" ? (
-                              <Button variant="secondary" size="sm" onClick={() => updatePaymentStatus(row, "reconciled")}>Reconcile</Button>
+                              <Button variant="secondary" size="sm" onClick={() => updatePaymentStatus(row, "reconciled")}>Rekonsiliasi</Button>
                             ) : null}
                             {row.payment_status !== "reconciled" ? (
                               <Button variant="destructive" size="sm" onClick={() => updatePaymentStatus(row, "failed")}>
-                                <XCircle className="mr-1 h-3.5 w-3.5" />Fail
+                                <XCircle className="mr-1 h-3.5 w-3.5" />Gagal
                               </Button>
                             ) : null}
                           </div>
@@ -525,7 +581,7 @@ export default function OrgPayrollPayment() {
 
             <div className="grid gap-3 py-2">
               <div className="grid gap-1.5">
-                <Label>Run Payroll</Label>
+                <Label>Proses Payroll</Label>
                 <Select value={formState.run_id} onValueChange={(value) => setFormState((prev) => ({ ...prev, run_id: value }))}>
                   <SelectTrigger><SelectValue placeholder="Pilih run" /></SelectTrigger>
                   <SelectContent>
@@ -595,6 +651,8 @@ export default function OrgPayrollPayment() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <OrgPayrollPageGuide pathname="/org/payroll/payment" />
       </div>
     </OrganizationLayout>
   );

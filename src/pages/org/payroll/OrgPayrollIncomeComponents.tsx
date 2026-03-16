@@ -1,8 +1,8 @@
 import { OrgPayrollComponentsBase } from "./OrgPayrollComponentsBase";
 
 const INCOME_COMPONENT_TYPES = [
-  { value: "fixed", label: "Fixed" },
-  { value: "variable", label: "Variable" },
+  { value: "fixed", label: "Tetap" },
+  { value: "variable", label: "Variabel" },
   { value: "formula", label: "Formula" },
 ];
 
@@ -19,6 +19,7 @@ export default function OrgPayrollIncomeComponents() {
       componentTypeOptions={INCOME_COMPONENT_TYPES}
       backPath="/org/payroll/employees"
       routeErrorScope="org.payroll.income_components"
+      guidePath="/org/payroll/income-components"
     />
   );
 }

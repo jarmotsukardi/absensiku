@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -41,6 +42,11 @@ const formatDateTime = (value: string | null) => {
   return new Intl.DateTimeFormat("id-ID", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 };
 
+type IntegrationHealthEmployee = {
+  id: string;
+  user_id: string | null;
+};
+
 export default function OrgPayrollIntegrations() {
   const navigate = useNavigate();
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -68,9 +74,12 @@ export default function OrgPayrollIntegrations() {
       .eq("tenant_id", resolvedTenantId)
       .eq("is_active", true)
       .limit(200);
-    if (employeeRes.error) throw employeeRes.error;
+    const employeeRows = employeeRes.error ? [] : ((employeeRes.data || []) as IntegrationHealthEmployee[]);
+    if (employeeRes.error) {
+      reportError(employeeRes.error, "org.payroll.integrations.health_check_employees", { tenant_id: resolvedTenantId });
+    }
 
-    const sampleEmployeeIds = (employeeRes.data || []).map((item) => item.id);
+    const sampleEmployeeIds = employeeRows.map((item) => item.id);
 
     const [periodRes, attendanceRes, attendancePartitionedRes] = await Promise.all([
       supabase
@@ -105,10 +114,10 @@ export default function OrgPayrollIntegrations() {
           ? "match"
           : "mismatch";
 
-    const employeeWithUserCount = (employeeRes.data || []).filter((item) => Boolean(item.user_id)).length;
+    const employeeWithUserCount = employeeRows.filter((item) => Boolean(item.user_id)).length;
 
     setHealth({
-      employeeCount: employeeRes.count || 0,
+      employeeCount: employeeRes.error ? 0 : (employeeRes.count || 0),
       employeeWithUserCount,
       payrollPeriodCount: periodRes.count || 0,
       attendanceRecords30d: attendanceRes.count || 0,
@@ -198,10 +207,10 @@ export default function OrgPayrollIntegrations() {
       if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan.");
 
       await runHealthCheck(resolvedTenantId);
-      toast.success("Health check integrasi payroll selesai");
+      toast.success("Pemeriksaan kesehatan integrasi payroll selesai");
     } catch (error) {
       const ref = reportError(error, "org.payroll.integrations.health_check");
-      toast.error(appendErrorReference("Health check integrasi payroll gagal", ref));
+      toast.error(appendErrorReference("Pemeriksaan kesehatan integrasi payroll gagal", ref));
     } finally {
       setIsChecking(false);
     }
@@ -272,11 +281,47 @@ export default function OrgPayrollIntegrations() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">Payroll</Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Ditunda</Badge>
+            <Badge variant="outline">Integrasi Payroll</Badge>
+          </div>
           <h1 className="text-2xl font-semibold tracking-tight">Integrasi Payroll</h1>
           <p className="text-sm text-muted-foreground">
             Konfigurasi sinkronisasi payroll ke data absensi, export akuntansi, payout bank, dan webhook API.
           </p>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-3">
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Status fitur</CardDescription>
+              <CardTitle className="text-base">Integrasi belum jadi fokus awal</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Integrasi tetap ditampilkan sejak awal sebagai peta roadmap, tetapi implementasi mendalamnya belum menjadi prioritas payroll sederhana.
+            </CardContent>
+          </Card>
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Fungsi halaman</CardDescription>
+              <CardTitle className="text-base">Sinkronisasi dan koneksi antar sistem</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-muted-foreground">
+              Gunakan saat organisasi sudah siap menghubungkan payroll ke absensi, akuntansi, payout, atau endpoint webhook eksternal.
+            </CardContent>
+          </Card>
+          <Card className="border-dashed">
+            <CardHeader className="pb-3">
+              <CardDescription>Langkah terkait</CardDescription>
+              <CardTitle className="text-base">Kembali ke beranda payroll bila perlu</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm text-muted-foreground">
+              <p>Jika integrasi belum dibutuhkan, kembali ke alur inti payroll dan fokuskan kerja ke kebijakan, periode, proses, dan laporan.</p>
+              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll")}>
+                Buka Beranda Payroll
+              </Button>
+            </CardContent>
+          </Card>
         </div>
 
         <div className="grid gap-4 md:grid-cols-5">
@@ -309,7 +354,7 @@ export default function OrgPayrollIntegrations() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Integrasi Absensi (DB Shared)</CardTitle>
+            <CardTitle>Integrasi Absensi (Basis Data Bersama)</CardTitle>
             <CardDescription>
               Payroll membaca data absensi langsung dari database yang sama dengan aplikasi absensi (tabel
               <span className="px-1 font-mono text-xs">attendance_records</span> dan
@@ -410,7 +455,7 @@ export default function OrgPayrollIntegrations() {
                 </Select>
               </div>
               <div className="space-y-1.5">
-                <Label>Cost Center Field</Label>
+                <Label>Kolom Cost Center</Label>
                 <Input
                   value={settings.accounting.costCenterField}
                   onChange={(event) =>
@@ -423,7 +468,7 @@ export default function OrgPayrollIntegrations() {
                 />
               </div>
               <div className="space-y-1.5">
-                <Label>Mapping Mode</Label>
+                <Label>Mode Pemetaan</Label>
                 <Select
                   value={settings.accounting.journalMappingMode}
                   onValueChange={(value) =>
@@ -437,7 +482,7 @@ export default function OrgPayrollIntegrations() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="summary">Summary Journal</SelectItem>
+                    <SelectItem value="summary">Jurnal Ringkas</SelectItem>
                     <SelectItem value="component">Per Komponen</SelectItem>
                   </SelectContent>
                 </Select>
@@ -550,7 +595,7 @@ export default function OrgPayrollIntegrations() {
                 placeholder="whsec_..."
               />
               <p className="text-xs text-muted-foreground">
-                Secret disimpan di tenant setting. Gunakan rotasi berkala jika endpoint dipakai lintas sistem.
+                Secret disimpan di pengaturan tenant. Gunakan rotasi berkala jika endpoint dipakai lintas sistem.
               </p>
               <Button
                 variant="secondary"
@@ -558,7 +603,7 @@ export default function OrgPayrollIntegrations() {
                 disabled={isTestingWebhook || isLoading}
                 className="w-full md:w-auto"
               >
-                {isTestingWebhook ? "Mengirim test..." : "Kirim Test Webhook"}
+                {isTestingWebhook ? "Mengirim uji..." : "Kirim Uji Webhook"}
               </Button>
             </div>
           </CardContent>
@@ -567,7 +612,7 @@ export default function OrgPayrollIntegrations() {
         {lastWebhookResult ? (
           <Card>
             <CardHeader>
-              <CardTitle>Hasil Test Webhook</CardTitle>
+              <CardTitle>Hasil Uji Webhook</CardTitle>
               <CardDescription>
                 trace_id: <span className="font-mono text-xs">{lastWebhookTraceId || "-"}</span>
               </CardDescription>
@@ -576,7 +621,7 @@ export default function OrgPayrollIntegrations() {
               <p>
                 status relay:{" "}
                 <span className={lastWebhookSuccess ? "font-medium text-emerald-600" : "font-medium text-destructive"}>
-                  {lastWebhookSuccess ? "success" : "failed"}
+                  {lastWebhookSuccess ? "berhasil" : "gagal"}
                 </span>
               </p>
               <p>
@@ -586,10 +631,10 @@ export default function OrgPayrollIntegrations() {
                 relay_trace_id: <span className="font-mono text-xs">{lastWebhookRelayTraceId || "-"}</span>
               </p>
               <p>
-                HTTP Status: <span className="font-medium">{lastWebhookResult.status}</span>
+                Status HTTP: <span className="font-medium">{lastWebhookResult.status}</span>
               </p>
               <p className="text-xs text-muted-foreground break-all">
-                Response: {lastWebhookResult.responseText.slice(0, 300) || "-"}
+                Respons: {lastWebhookResult.responseText.slice(0, 300) || "-"}
               </p>
               {lastWebhookError ? (
                 <p className="text-xs text-destructive break-all">Error: {lastWebhookError}</p>
@@ -616,7 +661,7 @@ export default function OrgPayrollIntegrations() {
                     onClick={handleTestWebhook}
                     disabled={isTestingWebhook || isLoading}
                   >
-                    {isTestingWebhook ? "Retry..." : "Retry Test"}
+                    {isTestingWebhook ? "Mengulang..." : "Ulangi Uji"}
                   </Button>
                 </div>
               </div>
@@ -641,10 +686,12 @@ export default function OrgPayrollIntegrations() {
           </Button>
           <Button variant="secondary" onClick={handleHealthCheck} disabled={isChecking || isLoading}>
             <RefreshCcw className="mr-2 h-4 w-4" />
-            {isChecking ? "Mengecek..." : "Health Check"}
+            {isChecking ? "Mengecek..." : "Cek Kesehatan"}
           </Button>
-          <Button variant="ghost" onClick={() => navigate("/org/payroll")}>Payroll Home</Button>
+          <Button variant="ghost" onClick={() => navigate("/org/payroll")}>Beranda Payroll</Button>
         </div>
+
+        <OrgPayrollPageGuide pathname="/org/payroll/integrations" />
       </div>
     </OrganizationLayout>
   );

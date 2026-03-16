@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
+import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,7 +29,10 @@ import {
 } from "@/lib/payrollAccessMode";
 
 type PayrollRoleAssignment = Database["public"]["Tables"]["payroll_role_assignments"]["Row"];
-type Employee = Database["public"]["Tables"]["employees"]["Row"];
+type Employee = Pick<
+  Database["public"]["Tables"]["employees"]["Row"],
+  "id" | "name" | "email" | "nik" | "user_id" | "tenant_id" | "is_active"
+>;
 
 const ROLE_OPTIONS = Object.entries(PAYROLL_ROLE_LABELS).map(([value, label]) => ({ value: value as PayrollRole, label }));
 
@@ -84,13 +88,17 @@ export default function OrgPayrollRoles() {
           .order("created_at", { ascending: false }),
       ]);
 
-      if (employeeRes.error) throw employeeRes.error;
       if (assignmentRes.error) throw assignmentRes.error;
 
       const mode = await fetchTenantPayrollAccessMode(resolvedTenantId);
       setAccessMode(mode);
 
-      setEmployees((employeeRes.data || []) as Employee[]);
+      if (employeeRes.error) {
+        reportError(employeeRes.error, "org.payroll.roles.fetch_employees", { tenant_id: resolvedTenantId });
+        setEmployees([]);
+      } else {
+        setEmployees((employeeRes.data || []) as Employee[]);
+      }
       setAssignments((assignmentRes.data || []) as PayrollRoleAssignment[]);
     } catch (error) {
       const ref = reportError(error, "org.payroll.roles.fetch");
@@ -231,9 +239,12 @@ export default function OrgPayrollRoles() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <Badge variant="outline">Payroll</Badge>
-          <h1 className="text-2xl font-semibold tracking-tight">Role & Permission Payroll</h1>
-          <p className="text-sm text-muted-foreground">Kelola role payroll per user. Route payroll sekarang menggunakan assignment ini untuk guard akses menu.</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">Inti</Badge>
+            <Badge variant="outline">Hak Akses Payroll</Badge>
+          </div>
+          <h1 className="text-2xl font-semibold tracking-tight">Hak Akses Payroll</h1>
+          <p className="text-sm text-muted-foreground">Kelola peran payroll per pengguna. Route payroll menggunakan assignment ini untuk guard akses menu.</p>
         </div>
 
         <div className="grid gap-4 md:grid-cols-3">
@@ -244,8 +255,8 @@ export default function OrgPayrollRoles() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Assign Role Payroll</CardTitle>
-            <CardDescription>Pilih pegawai dan role untuk grant akses payroll terkontrol.</CardDescription>
+            <CardTitle>Tetapkan Peran Payroll</CardTitle>
+            <CardDescription>Pilih pegawai dan peran untuk memberi akses payroll secara terkontrol.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-3">
             <div>
@@ -401,6 +412,8 @@ export default function OrgPayrollRoles() {
             </Table>
           </CardContent>
         </Card>
+
+        <OrgPayrollPageGuide pathname="/org/payroll/roles" />
       </div>
     </OrganizationLayout>
   );
