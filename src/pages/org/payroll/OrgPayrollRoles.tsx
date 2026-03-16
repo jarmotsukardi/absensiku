@@ -239,10 +239,6 @@ export default function OrgPayrollRoles() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="secondary">Inti</Badge>
-            <Badge variant="outline">Hak Akses Payroll</Badge>
-          </div>
           <h1 className="text-2xl font-semibold tracking-tight">Hak Akses Payroll</h1>
           <p className="text-sm text-muted-foreground">Kelola peran payroll per pengguna. Route payroll menggunakan assignment ini untuk guard akses menu.</p>
         </div>

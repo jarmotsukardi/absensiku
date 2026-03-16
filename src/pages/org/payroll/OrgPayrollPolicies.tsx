@@ -364,10 +364,6 @@ export default function OrgPayrollPolicies() {
       <div className="space-y-6">
         <div className="flex items-center justify-between gap-3">
           <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="secondary">Inti</Badge>
-              <Badge variant="outline">Kebijakan Payroll</Badge>
-            </div>
             <h1 className="text-2xl font-semibold tracking-tight">Kebijakan Payroll</h1>
             <p className="text-sm text-muted-foreground">
               Tetapkan aturan dasar payroll sebelum membuka periode dan menjalankan proses payroll.

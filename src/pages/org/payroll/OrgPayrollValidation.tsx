@@ -350,10 +350,6 @@ export default function OrgPayrollValidation() {
       <div className="space-y-6">
         <div className="flex items-center justify-between gap-3">
           <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="secondary">Inti</Badge>
-              <Badge variant="outline">Validasi Payroll</Badge>
-            </div>
             <h1 className="text-2xl font-semibold tracking-tight">Validasi Payroll</h1>
             <p className="text-sm text-muted-foreground">
               Tinjau hasil validasi sebelum proses payroll agar masalah data bisa dikoreksi lebih awal.

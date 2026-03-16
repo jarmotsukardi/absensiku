@@ -342,10 +342,6 @@ export default function OrgPayrollReports() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="secondary">Inti</Badge>
-            <Badge variant="outline">Laporan Payroll</Badge>
-          </div>
           <h1 className="text-2xl font-semibold tracking-tight">Laporan Payroll</h1>
           <p className="text-sm text-muted-foreground">
             Kelola snapshot laporan payroll ringkas dengan referensi trace ID dan log ID untuk tindak lanjut operasional.

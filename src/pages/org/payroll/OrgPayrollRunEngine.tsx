@@ -349,10 +349,6 @@ export default function OrgPayrollRunEngine() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="secondary">Inti</Badge>
-            <Badge variant="outline">Proses Payroll</Badge>
-          </div>
           <h1 className="text-2xl font-semibold tracking-tight">Proses Payroll</h1>
           <p className="text-sm text-muted-foreground">
             Jalankan simulasi atau proses final payroll per periode dengan status yang rapi dan mudah ditelusuri.

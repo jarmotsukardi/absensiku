@@ -9,7 +9,7 @@ import { useNavigate } from "react-router-dom";
 type PayrollHomeItem = {
   title: string;
   path: string;
-  badge: string;
+  badge?: string;
   description: string;
 };
 
@@ -29,49 +29,41 @@ const PAYROLL_HOME_SECTIONS: PayrollHomeSection[] = [
       {
         title: "Beranda Payroll",
         path: "/org/payroll",
-        badge: "Inti",
         description: "Ringkasan langkah kerja payroll dan fokus periode berjalan.",
       },
       {
         title: "Kebijakan Payroll",
         path: "/org/payroll/policies",
-        badge: "Inti",
         description: "Atur cutoff, prorata, pembulatan, dan aturan dasar payroll.",
       },
       {
         title: "Periode Payroll",
         path: "/org/payroll/periods",
-        badge: "Inti",
         description: "Buka dan kelola siklus payroll bulanan.",
       },
       {
         title: "Input Variabel",
         path: "/org/payroll/variable-input",
-        badge: "Inti",
         description: "Masukkan bonus, koreksi, dan penyesuaian non-rutin.",
       },
       {
         title: "Validasi Payroll",
         path: "/org/payroll/validation",
-        badge: "Inti",
         description: "Periksa kesiapan data sebelum proses payroll dijalankan.",
       },
       {
         title: "Proses Payroll",
         path: "/org/payroll/run-engine",
-        badge: "Inti",
         description: "Jalankan simulasi dan proses payroll sederhana.",
       },
       {
         title: "Persetujuan Payroll",
         path: "/org/payroll/approval",
-        badge: "Inti",
         description: "Gunakan persetujuan satu tahap untuk hasil payroll awal.",
       },
       {
         title: "Laporan Payroll",
         path: "/org/payroll/reports",
-        badge: "Inti",
         description: "Lihat hasil ringkas payroll per periode.",
       },
     ],
@@ -158,7 +150,6 @@ const PAYROLL_HOME_SECTIONS: PayrollHomeSection[] = [
       {
         title: "Hak Akses Payroll",
         path: "/org/payroll/roles",
-        badge: "Inti",
         description: "Atur siapa yang boleh melihat, memproses, dan menyetujui payroll.",
       },
       {
@@ -187,10 +178,6 @@ export default function OrgPayrollHome() {
     <OrganizationLayout>
       <div className="space-y-6">
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="secondary">Inti</Badge>
-            <Badge variant="outline">Beranda Payroll</Badge>
-          </div>
           <div className="space-y-2">
             <h1 className="text-2xl font-semibold tracking-tight">Beranda Payroll</h1>
             <p className="max-w-3xl text-sm text-muted-foreground">
@@ -217,9 +204,9 @@ export default function OrgPayrollHome() {
                 className="rounded-lg border bg-card p-4 text-left transition-colors hover:bg-muted/40"
               >
                 <div className="mb-3 flex items-center justify-between gap-3">
-                  <Badge variant="secondary" className="text-[10px]">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                     Langkah {index + 1}
-                  </Badge>
+                  </span>
                   <ArrowRight className="h-4 w-4 text-muted-foreground" />
                 </div>
                 <p className="text-sm font-medium">{item.title}</p>
@@ -253,9 +240,11 @@ export default function OrgPayrollHome() {
                     <div className="space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="text-sm font-medium">{item.title}</p>
-                        <Badge variant="outline" className="text-[10px]">
-                          {item.badge}
-                        </Badge>
+                        {item.badge ? (
+                          <Badge variant="outline" className="text-[10px]">
+                            {item.badge}
+                          </Badge>
+                        ) : null}
                       </div>
                       <p className="text-xs text-muted-foreground">{item.description}</p>
                     </div>
