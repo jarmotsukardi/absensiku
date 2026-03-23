@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type ConsoleMessage } from "@playwright/test";
 import { loginAsOrgAdmin, waitForStable } from "./helpers/orgAuth";
 
 /**
@@ -36,7 +36,7 @@ test.describe("HR Application - Quick Button Audit", () => {
       // Capture errors
       const pageErrors: Array<{ element: string; error: string }> = [];
       
-      const consoleHandler = (msg: any) => {
+      const consoleHandler = (msg: ConsoleMessage) => {
         if (msg.type() === "error") {
           pageErrors.push({ element: path, error: msg.text() });
         }
