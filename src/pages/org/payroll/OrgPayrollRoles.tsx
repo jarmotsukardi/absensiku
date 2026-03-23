@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,6 +17,7 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isPayrollRoleAssignmentStorageMissing } from "@/lib/payrollAssignmentStorage";
 import {
   PAYROLL_ROLE_LABELS,
   PAYROLL_ROLE_PERMISSION_MAP,
@@ -23,6 +25,7 @@ import {
   resolvePayrollPermissionsFromRoles,
 } from "@/lib/payrollAccess";
 import {
+  DEFAULT_PAYROLL_ACCESS_MODE,
   fetchTenantPayrollAccessMode,
   saveTenantPayrollAccessMode,
   type PayrollAccessMode,
@@ -38,6 +41,9 @@ const ROLE_OPTIONS = Object.entries(PAYROLL_ROLE_LABELS).map(([value, label]) =>
 
 export default function OrgPayrollRoles() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target));
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [assignments, setAssignments] = useState<PayrollRoleAssignment[]>([]);
@@ -45,8 +51,10 @@ export default function OrgPayrollRoles() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedRole, setSelectedRole] = useState<PayrollRole>("payroll_officer");
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>("none");
-  const [accessMode, setAccessMode] = useState<PayrollAccessMode>("fallback");
+  const [accessMode, setAccessMode] = useState<PayrollAccessMode>(DEFAULT_PAYROLL_ACCESS_MODE);
   const [isSavingAccessMode, setIsSavingAccessMode] = useState(false);
+  const [assignmentStorageReady, setAssignmentStorageReady] = useState(true);
+  const [assignmentStorageRef, setAssignmentStorageRef] = useState<string | null>(null);
 
   const assignmentMap = useMemo(() => {
     const map = new Map<string, PayrollRoleAssignment[]>();
@@ -88,8 +96,6 @@ export default function OrgPayrollRoles() {
           .order("created_at", { ascending: false }),
       ]);
 
-      if (assignmentRes.error) throw assignmentRes.error;
-
       const mode = await fetchTenantPayrollAccessMode(resolvedTenantId);
       setAccessMode(mode);
 
@@ -99,10 +105,27 @@ export default function OrgPayrollRoles() {
       } else {
         setEmployees((employeeRes.data || []) as Employee[]);
       }
-      setAssignments((assignmentRes.data || []) as PayrollRoleAssignment[]);
+
+      if (assignmentRes.error) {
+        if (!isPayrollRoleAssignmentStorageMissing(assignmentRes.error)) {
+          throw assignmentRes.error;
+        }
+        const ref = reportError(assignmentRes.error, "org.payroll.roles.fetch_assignments_missing", {
+          tenant_id: resolvedTenantId,
+        });
+        setAssignmentStorageReady(false);
+        setAssignmentStorageRef(ref || null);
+        setAssignments([]);
+      } else {
+        setAssignmentStorageReady(true);
+        setAssignmentStorageRef(null);
+        setAssignments((assignmentRes.data || []) as PayrollRoleAssignment[]);
+      }
     } catch (error) {
       const ref = reportError(error, "org.payroll.roles.fetch");
       toast.error(appendErrorReference("Gagal memuat role payroll", ref));
+      setAssignmentStorageReady(true);
+      setAssignmentStorageRef(null);
       setEmployees([]);
       setAssignments([]);
     } finally {
@@ -172,6 +195,10 @@ export default function OrgPayrollRoles() {
 
   const assignRole = async () => {
     try {
+      if (!assignmentStorageReady) {
+        toast.error(appendErrorReference("Storage assignment payroll belum tersedia pada schema tenant", assignmentStorageRef));
+        return;
+      }
       if (selectedEmployeeId === "none") {
         toast.error("Pilih pegawai terlebih dahulu");
         return;
@@ -211,6 +238,10 @@ export default function OrgPayrollRoles() {
 
   const toggleAssignment = async (assignment: PayrollRoleAssignment, nextActive: boolean) => {
     try {
+      if (!assignmentStorageReady) {
+        toast.error(appendErrorReference("Storage assignment payroll belum tersedia pada schema tenant", assignmentStorageRef));
+        return;
+      }
       const resolvedTenantId = tenantId || (await resolveOrgTenantId());
       if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan.");
 
@@ -279,8 +310,14 @@ export default function OrgPayrollRoles() {
               </Select>
             </div>
             <div className="flex items-end">
-              <Button onClick={assignRole} className="w-full">Assign Role</Button>
+              <Button onClick={assignRole} className="w-full" disabled={!assignmentStorageReady}>Tetapkan Peran</Button>
             </div>
+            {!assignmentStorageReady ? (
+              <p className="md:col-span-3 text-xs text-amber-700">
+                Storage assignment payroll belum tersedia pada schema tenant. Gunakan mode `Fallback` untuk recovery sementara.
+                {assignmentStorageRef ? ` Ref: ${assignmentStorageRef}` : ""}
+              </p>
+            ) : null}
           </CardContent>
         </Card>
 
@@ -288,7 +325,7 @@ export default function OrgPayrollRoles() {
           <CardHeader>
             <CardTitle>Mode Akses Payroll</CardTitle>
             <CardDescription>
-              `Strict` menolak semua route payroll untuk admin tanpa assignment role payroll.
+              `Strict` adalah mode default yang disarankan. `Fallback` hanya untuk recovery sementara saat assignment role payroll belum siap.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap items-center justify-between gap-4">
@@ -297,6 +334,11 @@ export default function OrgPayrollRoles() {
               <p className="text-xs text-muted-foreground">
                 Status saat ini: <strong>{accessMode === "strict" ? "STRICT" : "FALLBACK"}</strong>
               </p>
+              {!assignmentStorageReady ? (
+                <p className="text-xs text-muted-foreground">
+                  Assignment per-user belum siap, tetapi mode akses tetap bisa dipakai untuk recovery tenant.
+                </p>
+              ) : null}
             </div>
             <Switch
               id="strict-mode-payroll"
@@ -336,7 +378,7 @@ export default function OrgPayrollRoles() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => navigate("/org/payroll/tax-compliance")}><ArrowLeft className="mr-2 h-4 w-4" />Kembali</Button>
+              <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll/tax-compliance")}><ArrowLeft className="mr-2 h-4 w-4" />Kembali</Button>
             </div>
 
             <div>
@@ -359,6 +401,13 @@ export default function OrgPayrollRoles() {
               <TableBody>
                 {isLoading ? (
                   <TableRow><TableCell colSpan={4} className="text-center text-sm text-muted-foreground">Memuat assignment...</TableCell></TableRow>
+                ) : !assignmentStorageReady ? (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-center text-sm text-muted-foreground">
+                      Storage assignment payroll belum tersedia. Role per-user belum dapat dimuat.
+                      {assignmentStorageRef ? ` Ref: ${assignmentStorageRef}` : ""}
+                    </TableCell>
+                  </TableRow>
                 ) : filteredEmployees.length === 0 ? (
                   <TableRow><TableCell colSpan={4} className="text-center text-sm text-muted-foreground">Tidak ada data pegawai</TableCell></TableRow>
                 ) : filteredEmployees.map((employee) => {
@@ -374,7 +423,9 @@ export default function OrgPayrollRoles() {
                       </TableCell>
                       <TableCell>
                         {activeRoles.length === 0 ? (
-                          <span className="text-xs text-muted-foreground">Default Admin (fallback)</span>
+                          <span className="text-xs text-muted-foreground">
+                            {accessMode === "fallback" ? "Admin fallback aktif" : "Belum ada assignment"}
+                          </span>
                         ) : (
                           <div className="flex flex-wrap gap-1">
                             {activeRoles.map((role) => (

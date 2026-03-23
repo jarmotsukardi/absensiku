@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Badge } from "@/components/ui/badge";
@@ -49,6 +50,9 @@ type IntegrationHealthEmployee = {
 
 export default function OrgPayrollIntegrations() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target));
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [settings, setSettings] = useState<PayrollIntegrationSettings>(DEFAULT_PAYROLL_INTEGRATION_SETTINGS);
   const [health, setHealth] = useState<IntegrationHealth | null>(null);
@@ -217,6 +221,7 @@ export default function OrgPayrollIntegrations() {
   };
 
   const handleTestWebhook = async () => {
+    let traceId: string | null = null;
     try {
       setIsTestingWebhook(true);
       const resolvedTenantId = tenantId || (await resolveOrgTenantId());
@@ -237,7 +242,7 @@ export default function OrgPayrollIntegrations() {
         return;
       }
 
-      const traceId = generatePayrollWebhookTraceId();
+      traceId = generatePayrollWebhookTraceId();
       const payload = buildPayrollWebhookTestPayload({
         tenantId: resolvedTenantId,
         traceId,
@@ -259,16 +264,23 @@ export default function OrgPayrollIntegrations() {
       setLastWebhookResult({ status: result.status, responseText: result.responseText });
       if (result.success) {
         toast.success(
-          `Test webhook via relay terkirim (HTTP ${result.status}) | trace_id: ${result.traceId || traceId}`,
+          `Test webhook via relay terkirim (HTTP ${result.status}) | ID trace: ${result.traceId || traceId}`,
         );
       } else {
         toast.error(
-          `Test webhook gagal (HTTP ${result.status || 0}) | trace_id: ${result.traceId || traceId}${result.error ? ` | ${result.error}` : ""}`,
+          `Test webhook gagal (HTTP ${result.status || 0}) | ID trace: ${result.traceId || traceId}${result.error ? ` | ${result.error}` : ""}`,
         );
       }
     } catch (error) {
       const ref = reportError(error, "org.payroll.integrations.webhook_test");
-      toast.error(appendErrorReference("Gagal mengirim test webhook", ref));
+      const errorMessage = appendErrorReference("Gagal mengirim test webhook", ref);
+      setLastWebhookTraceId(traceId);
+      setLastWebhookLogId(null);
+      setLastWebhookRelayTraceId(null);
+      setLastWebhookSuccess(false);
+      setLastWebhookError(errorMessage);
+      setLastWebhookResult({ status: 0, responseText: errorMessage });
+      toast.error(errorMessage);
     } finally {
       setIsTestingWebhook(false);
     }
@@ -313,7 +325,7 @@ export default function OrgPayrollIntegrations() {
             </CardHeader>
             <CardContent className="space-y-3 text-sm text-muted-foreground">
               <p>Jika integrasi belum dibutuhkan, kembali ke alur inti payroll dan fokuskan kerja ke kebijakan, periode, proses, dan laporan.</p>
-              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll")}>
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/payroll")}>
                 Buka Beranda Payroll
               </Button>
             </CardContent>
@@ -418,7 +430,7 @@ export default function OrgPayrollIntegrations() {
           <Card>
             <CardHeader>
               <CardTitle>Integrasi Akuntansi</CardTitle>
-              <CardDescription>Export jurnal payroll ke sistem akuntansi.</CardDescription>
+              <CardDescription>Ekspor jurnal payroll ke sistem akuntansi.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               <Label className="flex items-center justify-between">
@@ -610,7 +622,7 @@ export default function OrgPayrollIntegrations() {
             <CardHeader>
               <CardTitle>Hasil Uji Webhook</CardTitle>
               <CardDescription>
-                trace_id: <span className="font-mono text-xs">{lastWebhookTraceId || "-"}</span>
+                ID trace: <span className="font-mono text-xs">{lastWebhookTraceId || "-"}</span>
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-1.5 text-sm">
@@ -624,7 +636,7 @@ export default function OrgPayrollIntegrations() {
                 log_id audit: <span className="font-mono text-xs">{lastWebhookLogId || "-"}</span>
               </p>
               <p>
-                relay_trace_id: <span className="font-mono text-xs">{lastWebhookRelayTraceId || "-"}</span>
+                ID trace relay: <span className="font-mono text-xs">{lastWebhookRelayTraceId || "-"}</span>
               </p>
               <p>
                 Status HTTP: <span className="font-medium">{lastWebhookResult.status}</span>
@@ -646,7 +658,7 @@ export default function OrgPayrollIntegrations() {
                       if (lastWebhookTraceId) query.set("trace", lastWebhookTraceId);
                       if (lastWebhookLogId) query.set("log", lastWebhookLogId);
                       query.set("q", lastWebhookLogId || lastWebhookTraceId || "");
-                      navigate(`/org/payroll/audit-log?${query.toString()}`);
+                      navigateWithOverlay(`/org/payroll/audit-log?${query.toString()}`);
                     }}
                   >
                     Buka di Audit Log
@@ -672,7 +684,7 @@ export default function OrgPayrollIntegrations() {
         ) : null}
 
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={() => navigate("/org/payroll/audit-log")}> 
+          <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll/audit-log")}> 
             <ArrowLeft className="mr-2 h-4 w-4" />
             Kembali
           </Button>
@@ -684,7 +696,7 @@ export default function OrgPayrollIntegrations() {
             <RefreshCcw className="mr-2 h-4 w-4" />
             {isChecking ? "Mengecek..." : "Cek Kesehatan"}
           </Button>
-          <Button variant="ghost" onClick={() => navigate("/org/payroll")}>Beranda Payroll</Button>
+          <Button variant="ghost" onClick={() => navigateWithOverlay("/org/payroll")}>Beranda Payroll</Button>
         </div>
 
         <OrgPayrollPageGuide pathname="/org/payroll/integrations" />

@@ -62,6 +62,31 @@ export function formatDateToTimezone(
 }
 
 /**
+ * Format date key YYYY-MM-DD in a specific timezone.
+ */
+export function formatDateKeyInTimezone(
+  utcDate: string | Date,
+  timezone: string = DEFAULT_TIMEZONE
+): string {
+  try {
+    const date = typeof utcDate === 'string' ? parseISO(utcDate) : utcDate;
+    return formatInTimeZone(date, timezone, 'yyyy-MM-dd');
+  } catch (error) {
+    console.error('Error formatting date key to timezone:', error);
+    return formatInTimeZone(new Date(), timezone, 'yyyy-MM-dd');
+  }
+}
+
+/**
+ * Get the current local date key for a specific timezone.
+ */
+export function getCurrentDateStringInTimezone(
+  timezone: string = DEFAULT_TIMEZONE
+): string {
+  return formatDateKeyInTimezone(new Date(), timezone);
+}
+
+/**
  * Get the current time in a specific timezone
  */
 export function getCurrentTimeInTimezone(timezone: string = DEFAULT_TIMEZONE): Date {

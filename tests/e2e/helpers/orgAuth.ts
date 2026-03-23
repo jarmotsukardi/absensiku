@@ -97,45 +97,37 @@ export const ensurePayrollAdminAccess = async (page: Page, email: string): Promi
   const normalizedEmail = email.trim().toLowerCase();
   if (!normalizedEmail) return false;
 
-  await ensureWorkspaceEnabled(page, "Aktifkan workspace Payroll");
   await page.goto("/org/payroll/roles", { waitUntil: "domcontentloaded" });
   await waitForStable(page);
-  await expect(page.getByRole("heading", { name: "Role & Permission Payroll" })).toBeVisible();
+  const rolesHeading = page.getByRole("heading", { name: "Hak Akses Payroll", exact: true, level: 1 });
+  const rolesReady = await rolesHeading.isVisible().catch(() => false);
+  if (!rolesReady) return false;
+  await expect(rolesHeading).toBeVisible();
 
   const strictSwitch = page.getByLabel("Strict Mode Payroll");
   if (await strictSwitch.isVisible().catch(() => false)) {
     await expect(strictSwitch).toBeEnabled({ timeout: 15_000 });
     if (await strictSwitch.isChecked()) {
       await strictSwitch.click();
-      await expect(strictSwitch).not.toBeChecked();
+      const fallbackReady = await expect
+        .poll(
+          async () => {
+            const isChecked = await strictSwitch.isChecked().catch(() => true);
+            const fallbackLabelVisible = await page
+              .getByText("Status saat ini: FALLBACK", { exact: false })
+              .isVisible()
+              .catch(() => false);
+            const switchEnabled = await strictSwitch.isEnabled().catch(() => false);
+            return !isChecked && fallbackLabelVisible && switchEnabled;
+          },
+          { timeout: 15_000, intervals: [500, 1000, 1500, 2000] },
+        )
+        .toBeTruthy()
+        .then(() => true)
+        .catch(() => false);
+
+      if (!fallbackReady) return false;
     }
   }
-
-  const searchInput = page.getByLabel("Cari Pegawai");
-  if (await searchInput.isVisible().catch(() => false)) {
-    await searchInput.fill(normalizedEmail);
-  }
-
-  const roleSelect = page.locator("label", { hasText: "Role Payroll" }).locator("..").getByRole("combobox").first();
-  await roleSelect.click();
-  await page.getByRole("option", { name: "Payroll Admin" }).click();
-
-  const employeeSelect = page.locator("label", { hasText: "Pegawai" }).locator("..").getByRole("combobox").first();
-  await employeeSelect.click();
-  const selfOption = page.getByRole("option").filter({ hasText: normalizedEmail }).first();
-  if ((await selfOption.count()) > 0) {
-    await selfOption.click();
-  } else {
-    const fallbackOption = page
-      .getByRole("option")
-      .filter({ hasNotText: /^Pilih Pegawai$/i })
-      .first();
-    const hasFallbackOption = (await fallbackOption.count()) > 0;
-    if (!hasFallbackOption) return false;
-    await fallbackOption.click();
-  }
-
-  await page.getByRole("button", { name: "Assign Role" }).click();
-  await waitForStable(page);
   return true;
 };

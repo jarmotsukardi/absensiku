@@ -2,18 +2,20 @@ import { supabase } from "@/integrations/supabase/client";
 import { withTimeout } from "@/lib/attendanceResilience";
 
 export const ORG_PAYROLL_ACCESS_MODE_KEY = "org_payroll_access_mode_v1";
+export const DEFAULT_PAYROLL_ACCESS_MODE: PayrollAccessMode = "strict";
 
 const READ_TIMEOUT_MS = 12000;
 const WRITE_TIMEOUT_MS = 15000;
 
 export type PayrollAccessMode = "fallback" | "strict";
 
-const normalizeMode = (value: unknown): PayrollAccessMode => {
+export const normalizePayrollAccessMode = (value: unknown): PayrollAccessMode => {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const mode = (value as Record<string, unknown>).mode;
+    if (mode === "fallback") return "fallback";
     if (mode === "strict") return "strict";
   }
-  return "fallback";
+  return DEFAULT_PAYROLL_ACCESS_MODE;
 };
 
 export async function fetchTenantPayrollAccessMode(tenantId: string): Promise<PayrollAccessMode> {
@@ -30,7 +32,7 @@ export async function fetchTenantPayrollAccessMode(tenantId: string): Promise<Pa
   );
 
   if (error && error.code !== "PGRST116") throw error;
-  return normalizeMode(data?.setting_value);
+  return normalizePayrollAccessMode(data?.setting_value);
 }
 
 export async function saveTenantPayrollAccessMode(

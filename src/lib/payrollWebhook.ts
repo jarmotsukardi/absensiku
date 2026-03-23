@@ -1,5 +1,15 @@
 import { supabase } from "@/integrations/supabase/client";
 
+type PayrollWebhookRelayResponse = {
+  success?: boolean;
+  error?: string;
+  trace_id?: string;
+  relay_trace_id?: string;
+  log_id?: string;
+  http_status?: number;
+  response_text?: string;
+};
+
 export type PayrollWebhookTestPayload = {
   event: "payroll.webhook.test";
   trace_id: string;
@@ -50,15 +60,7 @@ export async function sendPayrollWebhookTest(input: {
   logId: string | null;
   relayTraceId: string | null;
 }> {
-  const { data, error } = await supabase.functions.invoke<{
-    success?: boolean;
-    error?: string;
-    trace_id?: string;
-    relay_trace_id?: string;
-    log_id?: string;
-    http_status?: number;
-    response_text?: string;
-  }>("payroll-webhook-relay", {
+  const { data, error } = await supabase.functions.invoke<PayrollWebhookRelayResponse>("payroll-webhook-relay", {
     body: {
       tenant_id: input.tenantId,
       payload: input.payload,
@@ -66,7 +68,42 @@ export async function sendPayrollWebhookTest(input: {
     },
   });
 
-  if (error) throw error;
+  if (error) {
+    const httpContext = (error as { name?: string; context?: { status?: number; text?: () => Promise<string> } }).context;
+    const isHttpError = (error as { name?: string }).name === "FunctionsHttpError";
+    if (!isHttpError || !httpContext) {
+      return {
+        success: false,
+        error: error.message || "Gagal menghubungi payroll webhook relay.",
+        status: httpContext?.status || 0,
+        responseText: "",
+        traceId: input.payload.trace_id,
+        logId: null,
+        relayTraceId: null,
+      };
+    }
+
+    const rawText = typeof httpContext.text === "function" ? await httpContext.text().catch(() => "") : "";
+    let parsed: PayrollWebhookRelayResponse | null = null;
+    if (rawText) {
+      try {
+        parsed = JSON.parse(rawText) as PayrollWebhookRelayResponse;
+      } catch {
+        parsed = null;
+      }
+    }
+
+    return {
+      success: false,
+      error: parsed?.error || rawText || error.message || "Gagal menghubungi payroll webhook relay.",
+      status: parsed?.http_status || httpContext.status || 0,
+      responseText: parsed?.response_text || rawText || "",
+      traceId: parsed?.trace_id || input.payload.trace_id,
+      logId: parsed?.log_id || null,
+      relayTraceId: parsed?.relay_trace_id || null,
+    };
+  }
+
   if (!data) throw new Error("Respons relay webhook kosong.");
 
   return {

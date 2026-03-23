@@ -74,7 +74,14 @@ export const createSupabaseServiceTestClient = async (): Promise<SupabaseClient 
 export const createSupabaseAnonTestClient = async (): Promise<SupabaseClient | null> => {
   const envMap = await readSupabaseTestEnvMap();
   const supabaseUrl = pickSupabaseTestEnv(envMap, ["VITE_SUPABASE_URL", "SUPABASE_URL"]);
-  const anonKey = pickSupabaseTestEnv(envMap, ["VITE_SUPABASE_ANON_KEY", "SUPABASE_ANON_KEY"]);
+  const anonKey = pickSupabaseTestEnv(envMap, [
+    "VITE_SUPABASE_ANON_KEY",
+    "SUPABASE_ANON_KEY",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    "VITE_SUPABASE_PUBLISHABLE_KEY",
+    "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+    "SUPABASE_PUBLISHABLE_KEY",
+  ]);
   if (!supabaseUrl || !anonKey) return null;
 
   return createClient(supabaseUrl, anonKey, {
