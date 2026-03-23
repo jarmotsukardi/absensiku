@@ -8,32 +8,59 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { Building2, Users, CreditCard, Loader2, CheckCircle2, Info } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 interface BillingPolicySettingsProps {
   tenantId: string;
   currentMode?: string;
   onUpdate?: () => void;
 }
+const BILLING_POLICY_READ_TIMEOUT_MS = 12000;
+const BILLING_POLICY_WRITE_TIMEOUT_MS = 15000;
+const BILLING_POLICY_MAX_RETRIES = 2;
 
 export function BillingPolicySettings({ tenantId, currentMode, onUpdate }: BillingPolicySettingsProps) {
   const [billingMode, setBillingMode] = useState(currentMode || "centralized");
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const fetchCurrentMode = useCallback(async () => {
     setIsLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("tenants")
-        .select("billing_mode")
-        .eq("id", tenantId)
-        .single();
+      setLoadError(null);
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("tenants")
+              .select("billing_mode")
+              .eq("id", tenantId)
+              .single(),
+            BILLING_POLICY_READ_TIMEOUT_MS,
+            "Permintaan mode billing tenant timeout."
+          ),
+        {
+          maxRetries: BILLING_POLICY_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setBillingMode(data?.billing_mode || "centralized");
     } catch (err) {
-      console.error("Error fetching billing mode:", err);
+      const errorRef = reportError(err, "admin.billing.policy.fetch_mode", { tenant_id: tenantId });
+      setLoadError(appendErrorReference("Gagal memuat mode billing tenant", errorRef));
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [tenantId]);
@@ -54,17 +81,22 @@ export function BillingPolicySettings({ tenantId, currentMode, onUpdate }: Billi
         billing_mode_updated_at: new Date().toISOString(),
       };
 
-      const { error } = await supabase
-        .from("tenants")
-        .update(updatePayload)
-        .eq("id", tenantId);
+      const { error } = await withTimeout(
+        supabase
+          .from("tenants")
+          .update(updatePayload)
+          .eq("id", tenantId),
+        BILLING_POLICY_WRITE_TIMEOUT_MS,
+        "Simpan kebijakan billing timeout."
+      );
 
       if (error) throw error;
       toast.success("Kebijakan pembayaran berhasil disimpan");
       onUpdate?.();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
-      toast.error("Gagal menyimpan: " + message);
+      const errorRef = reportError(err, "admin.billing.policy.save", { tenant_id: tenantId, billing_mode: billingMode });
+      toast.error(appendErrorReference("Gagal menyimpan: " + message, errorRef));
     } finally {
       setIsSaving(false);
     }
@@ -73,8 +105,16 @@ export function BillingPolicySettings({ tenantId, currentMode, onUpdate }: Billi
   if (isLoading) {
     return (
       <Card>
-        <CardContent className="py-8 flex items-center justify-center">
-          <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+        <CardContent className="py-10">
+          <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
+            <div className="rounded-full bg-slate-100 p-3">
+              <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+            </div>
+            <p className="text-base font-medium text-slate-900">Memuat kebijakan pembayaran</p>
+            <p className="text-sm text-muted-foreground">
+              Konfigurasi model penagihan tenant sedang diproses.
+            </p>
+          </div>
         </CardContent>
       </Card>
     );
@@ -92,6 +132,19 @@ export function BillingPolicySettings({ tenantId, currentMode, onUpdate }: Billi
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+            Sedang mencoba ulang memuat kebijakan billing...
+          </div>
+        )}
+        {loadError && (
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchCurrentMode()}>
+              Coba Lagi
+            </Button>
+          </div>
+        )}
         <RadioGroup value={billingMode} onValueChange={setBillingMode} className="space-y-4">
           {/* Centralized */}
           <label

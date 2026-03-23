@@ -6,8 +6,10 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Globe, Building2, Save, Upload, Loader2 } from "lucide-react";
+import { Globe, Save, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface GeneralSettingsData {
   siteName: string;
@@ -46,17 +48,23 @@ export function GeneralSettings() {
 
   const fetchSettings = async () => {
     try {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "general_settings")
-        .maybeSingle();
+      const { data } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "general_settings")
+            .maybeSingle(),
+        10000,
+        "Load general settings timeout"
+      );
 
       if (data?.value) {
         setSettings({ ...defaultSettings, ...(data.value as Record<string, unknown>) });
       }
     } catch (error) {
-      console.error("Error:", error);
+      const errorRef = reportError(error, "admin.settings.general.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan umum", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -69,30 +77,46 @@ export function GeneralSettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "general_settings")
-        .maybeSingle();
+      const { data: existing } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("id")
+            .eq("key", "general_settings")
+            .maybeSingle(),
+        10000,
+        "Load general settings for save timeout"
+      );
 
       const jsonValue = JSON.parse(JSON.stringify(settings));
 
       if (existing) {
-        const { error } = await supabase
-          .from("system_settings")
-          .update({ value: jsonValue, updated_at: new Date().toISOString() })
-          .eq("key", "general_settings");
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .update({ value: jsonValue, updated_at: new Date().toISOString() })
+              .eq("key", "general_settings"),
+          10000,
+          "Update general settings timeout"
+        );
         if (error) throw error;
       } else {
-        const { error } = await supabase
-          .from("system_settings")
-          .insert({ key: "general_settings", value: jsonValue });
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .insert({ key: "general_settings", value: jsonValue }),
+          10000,
+          "Insert general settings timeout"
+        );
         if (error) throw error;
       }
 
       toast.success("Pengaturan umum berhasil disimpan");
     } catch (error) {
-      toast.error("Gagal menyimpan pengaturan");
+      const errorRef = reportError(error, "admin.settings.general.save");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan", errorRef));
     } finally {
       setIsSaving(false);
     }

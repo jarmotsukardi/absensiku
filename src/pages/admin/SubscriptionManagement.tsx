@@ -27,6 +27,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import { Label } from "@/components/ui/label";
 import { 
   CreditCard, 
@@ -49,6 +50,7 @@ import { id } from "date-fns/locale";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import {
   Pagination,
   PaginationContent,
@@ -60,6 +62,8 @@ import {
 
 type SubscriptionStatus = "trial" | "active" | "expired" | "cancelled";
 type StreakPolicyStatus = "tracking" | "near_suspension" | "suspended" | "invoiced" | "unknown";
+const SUBSCRIPTIONS_QUERY_TIMEOUT_MS = 12000;
+const SUBSCRIPTIONS_QUERY_RETRY_MAX = 2;
 
 interface StreakSnapshot {
   tenant_id: string;
@@ -204,6 +208,7 @@ export default function SubscriptionManagement() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [policyThreshold, setPolicyThreshold] = useState(30);
   const [policyGraceDays, setPolicyGraceDays] = useState(7);
   const [defaultPricePerEmployee, setDefaultPricePerEmployee] = useState(15000);
@@ -224,17 +229,42 @@ export default function SubscriptionManagement() {
     setLoadError(null);
     try {
       setIsLoading(true);
-      const { error: syncPolicyError } = await supabase.rpc("sync_streak_subscription_status", {});
+      setIsRetrying(false);
+      const { error: syncPolicyError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("sync_streak_subscription_status", {}),
+            SUBSCRIPTIONS_QUERY_TIMEOUT_MS,
+            "admin.subscriptions.sync_policy_pre_fetch timeout"
+          ),
+        {
+          maxRetries: SUBSCRIPTIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (syncPolicyError) {
         reportError(syncPolicyError, "admin.subscriptions.sync_policy_status_pre_fetch");
       }
       let tenantIds: string[] | null = null;
       if (searchQuery.trim()) {
         const escaped = searchQuery.trim().replace(/[%_]/g, "\\$&");
-        const { data: tenantRows, error: tenantSearchError } = await supabase
-          .from("tenants")
-          .select("id")
-          .or(`name.ilike.%${escaped}%,code.ilike.%${escaped}%`);
+        const { data: tenantRows, error: tenantSearchError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("tenants")
+                .select("id")
+                .or(`name.ilike.%${escaped}%,code.ilike.%${escaped}%`),
+              SUBSCRIPTIONS_QUERY_TIMEOUT_MS,
+              "admin.subscriptions.search_tenants timeout"
+            ),
+          {
+            maxRetries: SUBSCRIPTIONS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (tenantSearchError) throw tenantSearchError;
         tenantIds = (tenantRows || []).map((t) => t.id);
         if (tenantIds.length === 0) {
@@ -261,24 +291,43 @@ export default function SubscriptionManagement() {
         query = query.in("tenant_id", tenantIds);
       }
 
-      const { data, error, count } = await query;
+      const { data, error, count } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query,
+            SUBSCRIPTIONS_QUERY_TIMEOUT_MS,
+            "admin.subscriptions.fetch_page timeout"
+          ),
+        {
+          maxRetries: SUBSCRIPTIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
       setTotalCount(count || 0);
 
       const tenantIdsInPage = [...new Set((data || []).map((sub) => sub.tenant_id))];
 
-      const [
-        subsWithCounts,
-        streakRes,
-        settingsRes,
-        billingPriceRes,
-      ] = await Promise.all([
+      const [subsWithCounts, streakRes, settingsRes, billingPriceRes] = await Promise.all([
         Promise.all(
           (data || []).map(async (sub: Subscription) => {
-            const { count, error: countError } = await supabase
-              .from("employees")
-              .select("*", { count: "exact", head: true })
-              .eq("tenant_id", sub.tenant_id);
+            const { count, error: countError } = await withExponentialBackoff(
+              () =>
+                withTimeout(
+                  supabase
+                    .from("employees")
+                    .select("*", { count: "exact", head: true })
+                    .eq("tenant_id", sub.tenant_id),
+                  SUBSCRIPTIONS_QUERY_TIMEOUT_MS,
+                  "admin.subscriptions.fetch_employee_count timeout"
+                ),
+              {
+                maxRetries: SUBSCRIPTIONS_QUERY_RETRY_MAX,
+                shouldRetry: isRetryableError,
+                onRetry: () => setIsRetrying(true),
+              }
+            );
 
             if (countError) {
               reportError(countError, "admin.subscriptions.fetch_employee_count", {
@@ -291,20 +340,56 @@ export default function SubscriptionManagement() {
           })
         ),
         tenantIdsInPage.length > 0
-          ? supabase
-              .from("stability_streaks")
-              .select("tenant_id, streak_count, status, reached_target, reached_target_at, grace_period_end")
-              .in("tenant_id", tenantIdsInPage)
+          ? withExponentialBackoff(
+              () =>
+                withTimeout(
+                  supabase
+                    .from("stability_streaks")
+                    .select("tenant_id, streak_count, status, reached_target, reached_target_at, grace_period_end")
+                    .in("tenant_id", tenantIdsInPage),
+                  SUBSCRIPTIONS_QUERY_TIMEOUT_MS,
+                  "admin.subscriptions.fetch_streaks timeout"
+                ),
+              {
+                maxRetries: SUBSCRIPTIONS_QUERY_RETRY_MAX,
+                shouldRetry: isRetryableError,
+                onRetry: () => setIsRetrying(true),
+              }
+            )
           : Promise.resolve({ data: [], error: null }),
-        supabase
-          .from("system_settings")
-          .select("key, value")
-          .in("key", ["streak_threshold", "streak_grace_period_days"]),
-        supabase
-          .from("billing_settings")
-          .select("setting_value")
-          .eq("setting_key", "price_per_employee")
-          .maybeSingle(),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("system_settings")
+                .select("key, value")
+                .in("key", ["streak_threshold", "streak_grace_period_days"]),
+              SUBSCRIPTIONS_QUERY_TIMEOUT_MS,
+              "admin.subscriptions.fetch_streak_settings timeout"
+            ),
+          {
+            maxRetries: SUBSCRIPTIONS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("billing_settings")
+                .select("setting_value")
+                .eq("setting_key", "price_per_employee")
+                .maybeSingle(),
+              SUBSCRIPTIONS_QUERY_TIMEOUT_MS,
+              "admin.subscriptions.fetch_default_price timeout"
+            ),
+          {
+            maxRetries: SUBSCRIPTIONS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
       ]);
 
       let effectiveThreshold = policyThreshold;
@@ -359,21 +444,55 @@ export default function SubscriptionManagement() {
       setSubscriptions(subscriptionsWithPolicy);
 
       // Calculate stats (global, not affected by pagination)
-      const { count: total } = await supabase
-        .from("subscriptions")
-        .select("id", { count: "exact", head: true });
-      const { count: trial } = await supabase
-        .from("subscriptions")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "trial");
-      const { count: active } = await supabase
-        .from("subscriptions")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "active");
-      const { count: expired } = await supabase
-        .from("subscriptions")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "expired");
+      const [{ count: total }, { count: trial }, { count: active }, { count: expired }] = await Promise.all([
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("subscriptions")
+                .select("id", { count: "exact", head: true }),
+              SUBSCRIPTIONS_QUERY_TIMEOUT_MS,
+              "admin.subscriptions.stats.total timeout"
+            ),
+          { maxRetries: SUBSCRIPTIONS_QUERY_RETRY_MAX, shouldRetry: isRetryableError, onRetry: () => setIsRetrying(true) }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("subscriptions")
+                .select("id", { count: "exact", head: true })
+                .eq("status", "trial"),
+              SUBSCRIPTIONS_QUERY_TIMEOUT_MS,
+              "admin.subscriptions.stats.trial timeout"
+            ),
+          { maxRetries: SUBSCRIPTIONS_QUERY_RETRY_MAX, shouldRetry: isRetryableError, onRetry: () => setIsRetrying(true) }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("subscriptions")
+                .select("id", { count: "exact", head: true })
+                .eq("status", "active"),
+              SUBSCRIPTIONS_QUERY_TIMEOUT_MS,
+              "admin.subscriptions.stats.active timeout"
+            ),
+          { maxRetries: SUBSCRIPTIONS_QUERY_RETRY_MAX, shouldRetry: isRetryableError, onRetry: () => setIsRetrying(true) }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("subscriptions")
+                .select("id", { count: "exact", head: true })
+                .eq("status", "expired"),
+              SUBSCRIPTIONS_QUERY_TIMEOUT_MS,
+              "admin.subscriptions.stats.expired timeout"
+            ),
+          { maxRetries: SUBSCRIPTIONS_QUERY_RETRY_MAX, shouldRetry: isRetryableError, onRetry: () => setIsRetrying(true) }
+        ),
+      ]);
 
       setStats({
         total: total || 0,
@@ -424,12 +543,25 @@ export default function SubscriptionManagement() {
     options?: { silentSuccess?: boolean; silentError?: boolean }
   ) => {
     try {
-      const { data, error } = await supabase
-        .from("subscriptions")
-        .update({ status: newStatus as SubscriptionStatus })
-        .eq("id", subId)
-        .select("id")
-        .maybeSingle();
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("subscriptions")
+              .update({ status: newStatus as SubscriptionStatus })
+              .eq("id", subId)
+              .select("id")
+              .maybeSingle(),
+            SUBSCRIPTIONS_QUERY_TIMEOUT_MS,
+            "admin.subscriptions.update_status timeout"
+          ),
+        {
+          maxRetries: SUBSCRIPTIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       if (!data?.id) {
@@ -472,13 +604,26 @@ export default function SubscriptionManagement() {
 
     setIsSavingPrice(true);
     try {
+      setIsRetrying(false);
       const normalized = Math.floor(parsed);
-      const { data, error } = await supabase
-        .from("subscriptions")
-        .update({ price_per_employee: normalized })
-        .eq("id", editingSubscription.id)
-        .select("id")
-        .maybeSingle();
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("subscriptions")
+              .update({ price_per_employee: normalized })
+              .eq("id", editingSubscription.id)
+              .select("id")
+              .maybeSingle(),
+            SUBSCRIPTIONS_QUERY_TIMEOUT_MS,
+            "admin.subscriptions.save_negotiated_price timeout"
+          ),
+        {
+          maxRetries: SUBSCRIPTIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error || !data?.id) {
         throw error || new Error("Gagal menyimpan harga negosiasi");
@@ -503,12 +648,25 @@ export default function SubscriptionManagement() {
 
     setIsSavingPrice(true);
     try {
-      const { data, error } = await supabase
-        .from("subscriptions")
-        .update({ price_per_employee: null })
-        .eq("id", editingSubscription.id)
-        .select("id")
-        .maybeSingle();
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("subscriptions")
+              .update({ price_per_employee: null })
+              .eq("id", editingSubscription.id)
+              .select("id")
+              .maybeSingle(),
+            SUBSCRIPTIONS_QUERY_TIMEOUT_MS,
+            "admin.subscriptions.reset_negotiated_price timeout"
+          ),
+        {
+          maxRetries: SUBSCRIPTIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error || !data?.id) {
         throw error || new Error("Gagal reset harga negosiasi");
@@ -543,15 +701,28 @@ export default function SubscriptionManagement() {
 
     setIsSyncingPolicy(true);
     try {
+      setIsRetrying(false);
       const results = await Promise.allSettled(
         syncTargets.map(async (sub) => {
           const targetStatus = sub.recommended_status || DEFAULT_SUBSCRIPTION_STATUS;
-          const { data, error } = await supabase
-            .from("subscriptions")
-            .update({ status: targetStatus })
-            .eq("id", sub.id)
-            .select("id")
-            .maybeSingle();
+          const { data, error } = await withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase
+                  .from("subscriptions")
+                  .update({ status: targetStatus })
+                  .eq("id", sub.id)
+                  .select("id")
+                  .maybeSingle(),
+                SUBSCRIPTIONS_QUERY_TIMEOUT_MS,
+                "admin.subscriptions.sync_streak_policy timeout"
+              ),
+            {
+              maxRetries: SUBSCRIPTIONS_QUERY_RETRY_MAX,
+              shouldRetry: isRetryableError,
+              onRetry: () => setIsRetrying(true),
+            }
+          );
 
           if (error || !data?.id) {
             throw error || new Error("Update tidak berhasil");
@@ -674,6 +845,11 @@ export default function SubscriptionManagement() {
       subtitle="Kelola subscription dan billing organisasi"
     >
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang memuat data langganan...
+          </div>
+        )}
         {/* Stats Cards */}
         <div className="grid gap-4 md:grid-cols-4">
           <Card>
@@ -762,12 +938,16 @@ export default function SubscriptionManagement() {
           </CardHeader>
           <CardContent>
             {loadError && (
-              <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                {loadError}
+              <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <span>{loadError}</span>
+                <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void fetchSubscriptions()}>
+                  Coba Lagi
+                </Button>
               </div>
             )}
-            <div className="flex flex-col sm:flex-row gap-4 mb-6">
-              <div className="relative flex-1 max-w-sm">
+            <div className="mb-6 rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="relative flex-1 sm:max-w-sm">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder="Cari organisasi..."
@@ -777,7 +957,7 @@ export default function SubscriptionManagement() {
                 />
               </div>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[180px]">
+                <SelectTrigger className="w-full sm:w-[180px]">
                   <Filter className="h-4 w-4 mr-2" />
                   <SelectValue placeholder="Filter Status" />
                 </SelectTrigger>
@@ -789,6 +969,7 @@ export default function SubscriptionManagement() {
                   <SelectItem value="cancelled">Dibatalkan</SelectItem>
                 </SelectContent>
               </Select>
+              </div>
             </div>
 
             {isLoading ? (
@@ -988,18 +1169,22 @@ export default function SubscriptionManagement() {
                 </p>
               </div>
             </div>
-            <DialogFooter className="gap-2 sm:justify-between">
-              <Button
-                variant="outline"
-                onClick={() => void resetNegotiatedPrice()}
-                disabled={isSavingPrice}
-              >
-                Reset ke Default
-              </Button>
-              <Button onClick={() => void saveNegotiatedPrice()} disabled={isSavingPrice}>
-                {isSavingPrice ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-                Simpan Harga
-              </Button>
+            <DialogFooter className={dialogActionBarClassName}>
+              <DialogActionHint>Reset akan mengembalikan tenant ke harga default global.</DialogActionHint>
+              <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                <Button
+                  variant="outline"
+                  className="w-full sm:w-auto bg-white"
+                  onClick={() => void resetNegotiatedPrice()}
+                  disabled={isSavingPrice}
+                >
+                  Reset ke Default
+                </Button>
+                <Button className="w-full sm:w-auto sm:min-w-[170px]" onClick={() => void saveNegotiatedPrice()} disabled={isSavingPrice}>
+                  {isSavingPrice ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+                  Simpan Harga
+                </Button>
+              </div>
             </DialogFooter>
           </DialogContent>
         </Dialog>

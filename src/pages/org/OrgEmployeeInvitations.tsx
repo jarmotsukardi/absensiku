@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -30,7 +30,15 @@ import {
 import { addDays, format } from "date-fns";
 import type { TablesInsert } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import {
+  DEFAULT_ORG_MASTER_DATA_MODULES,
+  fetchTenantOrgMasterDataModules,
+} from "@/lib/orgMasterDataModules";
 import {
   Pagination,
   PaginationContent,
@@ -40,6 +48,11 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
+import {
+  buildInvitationLink,
+  ensureIndividualEmployeeInvitation,
+  logEmployeeInvitationFlowAudit,
+} from "@/lib/employeeInvitations";
 
 interface Invitation {
   id: string;
@@ -68,11 +81,25 @@ interface Office {
   name: string;
 }
 
+interface EmployeeCandidate {
+  id: string;
+  user_id: string | null;
+  name: string;
+  email: string;
+  nik: string;
+  phone: string | null;
+  opd_id: string | null;
+  office_id: string | null;
+}
+
 type InvitationType = "individual" | "opd" | "office";
 
 const ITEMS_PER_PAGE = 15;
+const ORG_INVITATIONS_QUERY_TIMEOUT_MS = 12000;
+const ORG_INVITATIONS_QUERY_RETRY_MAX = 2;
 
 export default function OrgEmployeeInvitations() {
+  const confirmDialog = useConfirmDialog();
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [totalInvitations, setTotalInvitations] = useState(0);
@@ -93,6 +120,7 @@ export default function OrgEmployeeInvitations() {
     office_id: "",
   });
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
+  const [generatedExpiresAt, setGeneratedExpiresAt] = useState<string | null>(null);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [editingInvitationId, setEditingInvitationId] = useState<string | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
@@ -109,7 +137,14 @@ export default function OrgEmployeeInvitations() {
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [officeList, setOfficeList] = useState<Office[]>([]);
+  const [masterDataModules, setMasterDataModules] = useState(DEFAULT_ORG_MASTER_DATA_MODULES);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const canUseOpdInvitation = masterDataModules.opd_admins;
+  const availableInvitationTypes = useMemo<InvitationType[]>(
+    () => (canUseOpdInvitation ? ["individual", "opd", "office"] : ["individual", "office"]),
+    [canUseOpdInvitation]
+  );
 
   useEffect(() => {
     void fetchTenantAndData();
@@ -122,57 +157,98 @@ export default function OrgEmployeeInvitations() {
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
+  useEffect(() => {
+    if (availableInvitationTypes.includes(invitationType)) return;
+    const nextType = availableInvitationTypes[0] ?? "individual";
+    setInvitationType(nextType);
+    setFormData((prev) => ({ ...prev, opd_id: "" }));
+  }, [availableInvitationTypes, invitationType]);
+
+  useEffect(() => {
+    if (!canUseOpdInvitation && filterOpdId !== "all") {
+      setFilterOpdId("all");
+    }
+  }, [canUseOpdInvitation, filterOpdId]);
+
   const fetchTenantAndData = async () => {
     try {
       setLoadError(null);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        setIsLoading(false);
-        return;
-      }
-
-      const { data: roleRows, error: roleError } = await supabase
-        .from("user_roles")
-        .select("tenant_id, role")
-        .eq("user_id", user.id)
-        .eq("role", "admin_instansi")
-        .not("tenant_id", "is", null)
-        .limit(5);
-
-      if (roleError) {
-        throw roleError;
-      }
-
-      const resolvedTenantId = roleRows?.find((row) => !!row.tenant_id)?.tenant_id ?? null;
-
+      setIsRetrying(false);
+      const resolvedTenantId = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            resolveOrgTenantId(),
+            ORG_INVITATIONS_QUERY_TIMEOUT_MS,
+            "org.invitations.fetch_tenant.resolve_tenant timeout"
+          ),
+        {
+          maxRetries: ORG_INVITATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (!resolvedTenantId) {
         setIsLoading(false);
         return;
       }
       setTenantId(resolvedTenantId);
 
-      // Fetch OPD list
-      const { data: opdData } = await supabase
-        .from("opd")
-        .select("id, name")
-        .eq("tenant_id", resolvedTenantId)
-        .eq("is_active", true)
-        .order("name");
-      setOpdList(opdData || []);
+      try {
+        const moduleSetting = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              fetchTenantOrgMasterDataModules(resolvedTenantId),
+              ORG_INVITATIONS_QUERY_TIMEOUT_MS,
+              "org.invitations.fetch_tenant.modules timeout"
+            ),
+          {
+            maxRetries: ORG_INVITATIONS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
+        setMasterDataModules(moduleSetting.modules);
+      } catch (moduleError) {
+        reportError(moduleError, "org.invitations.fetch_tenant.modules");
+        setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
+      }
 
-      // Fetch Office list
-      const { data: officeData } = await supabase
-        .from("offices")
-        .select("id, name")
-        .eq("tenant_id", resolvedTenantId)
-        .eq("is_active", true)
-        .order("name");
+      const [{ data: opdData, error: opdError }, { data: officeData, error: officeError }] = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.all([
+              supabase
+                .from("opd")
+                .select("id, name")
+                .eq("tenant_id", resolvedTenantId)
+                .eq("is_active", true)
+                .order("name"),
+              supabase
+                .from("offices")
+                .select("id, name")
+                .eq("tenant_id", resolvedTenantId)
+                .eq("is_active", true)
+                .order("name"),
+            ]),
+            ORG_INVITATIONS_QUERY_TIMEOUT_MS,
+            "org.invitations.fetch_tenant.master_data timeout"
+          ),
+        {
+          maxRetries: ORG_INVITATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+      if (opdError) throw opdError;
+      if (officeError) throw officeError;
+      setOpdList(opdData || []);
       setOfficeList(officeData || []);
     } catch (error) {
       const errorRef = reportError(error, "org.invitations.fetch_tenant_and_data");
       const message = appendErrorReference("Gagal memuat data undangan", errorRef);
       toast.error(message);
       setLoadError(message);
+      setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
       setOpdList([]);
       setOfficeList([]);
     }
@@ -183,6 +259,7 @@ export default function OrgEmployeeInvitations() {
     setIsLoading(true);
     try {
       setLoadError(null);
+      setIsRetrying(false);
       const from = (currentPage - 1) * ITEMS_PER_PAGE;
       const to = from + ITEMS_PER_PAGE - 1;
 
@@ -212,9 +289,21 @@ export default function OrgEmployeeInvitations() {
         query = query.or(`name.ilike.%${escaped}%,email.ilike.%${escaped}%,invitation_code.ilike.%${escaped}%`);
       }
 
-      const { data, count, error } = await query
-        .order("created_at", { ascending: false })
-        .range(from, to);
+      const { data, count, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query
+              .order("created_at", { ascending: false })
+              .range(from, to),
+            ORG_INVITATIONS_QUERY_TIMEOUT_MS,
+            "org.invitations.fetch_list timeout"
+          ),
+        {
+          maxRetries: ORG_INVITATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setInvitations((data || []) as Invitation[]);
@@ -256,6 +345,9 @@ export default function OrgEmployeeInvitations() {
         toast.error("Nama, Email, dan NIK harus diisi");
         return;
       }
+    } else if (invitationType === "opd" && !canUseOpdInvitation) {
+      toast.error("Undangan per OPD sedang dinonaktifkan di Setup Awal.");
+      return;
     } else if (invitationType === "opd" && !formData.opd_id) {
       toast.error("Pilih OPD terlebih dahulu");
       return;
@@ -265,56 +357,174 @@ export default function OrgEmployeeInvitations() {
     }
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      setIsRetrying(false);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ORG_INVITATIONS_QUERY_TIMEOUT_MS,
+            "org.invitations.create.auth timeout"
+          ),
+        {
+          maxRetries: ORG_INVITATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (!user || !tenantId) return;
 
-      const { data: empData } = await supabase
-        .from("employees")
-        .select("id")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      const { data: empData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("id")
+              .eq("user_id", user.id)
+              .maybeSingle(),
+            ORG_INVITATIONS_QUERY_TIMEOUT_MS,
+            "org.invitations.create.employee timeout"
+          ),
+        {
+          maxRetries: ORG_INVITATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       const code = generateInvitationCode();
       const expiresAt = addDays(new Date(), parseInt(expiryDays));
-
-      const insertData: TablesInsert<"employee_invitations"> = {
-        tenant_id: tenantId,
-        invitation_code: code,
-        invitation_type: invitationType,
-        expires_at: expiresAt.toISOString(),
-        invited_by: empData?.id || null,
-      };
-
       if (invitationType === "individual") {
-        insertData.name = formData.name;
-        insertData.email = formData.email;
-        insertData.phone = formData.phone || null;
-        insertData.nik = formData.nik;
-      } else if (invitationType === "opd") {
-        insertData.opd_id = formData.opd_id;
-        insertData.name = opdList.find(o => o.id === formData.opd_id)?.name || "Undangan OPD";
-        insertData.email = "bulk@invitation.local";
-        insertData.nik = "0000000000000000";
-      } else if (invitationType === "office") {
-        insertData.office_id = formData.office_id;
-        insertData.name = officeList.find(o => o.id === formData.office_id)?.name || "Undangan Lokasi";
-        insertData.email = "bulk@invitation.local";
-        insertData.nik = "0000000000000000";
+        const normalizedEmail = formData.email.trim().toLowerCase();
+        const normalizedNik = formData.nik.trim();
+        const [employeeByEmailRes, employeeByNikRes] = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              Promise.all([
+                supabase
+                  .from("employees")
+                  .select("id, user_id, name, email, nik, phone, opd_id, office_id")
+                  .eq("tenant_id", tenantId)
+                  .ilike("email", normalizedEmail)
+                  .order("created_at", { ascending: false })
+                  .limit(1)
+                  .maybeSingle(),
+                supabase
+                  .from("employees")
+                  .select("id, user_id, name, email, nik, phone, opd_id, office_id")
+                  .eq("tenant_id", tenantId)
+                  .eq("nik", normalizedNik)
+                  .order("created_at", { ascending: false })
+                  .limit(1)
+                  .maybeSingle(),
+              ]),
+              ORG_INVITATIONS_QUERY_TIMEOUT_MS,
+              "org.invitations.create.resolve_existing_employee timeout"
+            ),
+          {
+            maxRetries: ORG_INVITATIONS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
+        if (employeeByEmailRes.error) throw employeeByEmailRes.error;
+        if (employeeByNikRes.error) throw employeeByNikRes.error;
+
+        const matchedEmployee =
+          (employeeByNikRes.data as EmployeeCandidate | null) ??
+          (employeeByEmailRes.data as EmployeeCandidate | null);
+
+        if (matchedEmployee?.user_id) {
+          toast.error("Pegawai ini sudah memiliki akun aktif. Tidak perlu membuat undangan baru.");
+          return;
+        }
+
+        const invitationResult = await ensureIndividualEmployeeInvitation({
+          tenantId,
+          name: matchedEmployee?.name || formData.name,
+          email: matchedEmployee?.email || formData.email,
+          nik: matchedEmployee?.nik || formData.nik,
+          phone: formData.phone || matchedEmployee?.phone || null,
+          opdId: matchedEmployee?.opd_id || null,
+          officeId: matchedEmployee?.office_id || null,
+          invitedByEmployeeId: empData?.id || null,
+          expiresInDays: Number.parseInt(expiryDays, 10),
+        });
+
+        try {
+          await logEmployeeInvitationFlowAudit({
+            tenantId,
+            invitationId: invitationResult.invitation.id,
+            event: invitationResult.reused ? "INVITATION_REUSE_EXISTING" : "INVITATION_CREATE_NEW",
+            payload: {
+              source: "org_invitations_page",
+              invitation_type: "individual",
+              candidate_employee_id: matchedEmployee?.id ?? null,
+              invited_by_employee_id: empData?.id ?? null,
+              email: invitationResult.invitation.email,
+            },
+          });
+        } catch (auditError) {
+          reportError(auditError, "org.invitations.create.audit", {
+            tenant_id: tenantId,
+            invitation_id: invitationResult.invitation.id,
+          });
+        }
+
+        setGeneratedCode(invitationResult.invitation.invitation_code);
+        setGeneratedExpiresAt(invitationResult.invitation.expires_at ?? null);
+        if (invitationResult.reused) {
+          toast.info("Undangan aktif untuk pegawai ini sudah ada. Gunakan kode/link yang sama.");
+        } else {
+          toast.success("Undangan berhasil dibuat!");
+        }
+      } else {
+        const insertData: TablesInsert<"employee_invitations"> = {
+          tenant_id: tenantId,
+          invitation_code: code,
+          invitation_type: invitationType,
+          expires_at: expiresAt.toISOString(),
+          invited_by: empData?.id || null,
+        };
+
+        if (invitationType === "opd") {
+          insertData.opd_id = formData.opd_id;
+          insertData.name = opdList.find(o => o.id === formData.opd_id)?.name || "Undangan OPD";
+          insertData.email = "bulk@invitation.local";
+          insertData.nik = "0000000000000000";
+        } else if (invitationType === "office") {
+          insertData.office_id = formData.office_id;
+          insertData.name = officeList.find(o => o.id === formData.office_id)?.name || "Undangan Lokasi";
+          insertData.email = "bulk@invitation.local";
+          insertData.nik = "0000000000000000";
+        }
+
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("employee_invitations").insert(insertData),
+              ORG_INVITATIONS_QUERY_TIMEOUT_MS,
+              "org.invitations.create.insert timeout"
+            ),
+          {
+            maxRetries: ORG_INVITATIONS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
+        if (error) throw error;
+
+        setGeneratedCode(code);
+        setGeneratedExpiresAt(expiresAt.toISOString());
+        toast.success("Undangan berhasil dibuat!");
       }
 
-      const { error } = await supabase.from("employee_invitations").insert(insertData);
-      if (error) throw error;
-
-      setGeneratedCode(code);
-      toast.success("Undangan berhasil dibuat!");
       setCurrentPage(1);
       if (currentPage === 1) {
         await fetchInvitations();
       }
     } catch (error: unknown) {
-      console.error("Error creating invitation:", error);
-      const errorMessage = error instanceof Error ? error.message : "Gagal membuat undangan";
-      toast.error(errorMessage);
+      const errorRef = reportError(error, "org.invitations.create");
+      toast.error(appendErrorReference("Gagal membuat undangan", errorRef));
     }
   };
 
@@ -421,7 +631,12 @@ export default function OrgEmployeeInvitations() {
   };
 
   const handleDeleteInvitation = async (id: string) => {
-    const confirmed = window.confirm("Hapus undangan ini? Tindakan ini tidak dapat dibatalkan.");
+    const confirmed = await confirmDialog({
+      title: "Hapus Undangan",
+      description: "Hapus undangan ini? Tindakan ini tidak dapat dibatalkan.",
+      confirmText: "Ya, hapus",
+      variant: "destructive",
+    });
     if (!confirmed) return;
 
     try {
@@ -439,13 +654,13 @@ export default function OrgEmployeeInvitations() {
   };
 
   const copyInviteLink = (code: string) => {
-    const link = `${window.location.origin}/employee/login?invite=${code}`;
+    const link = buildInvitationLink(code);
     navigator.clipboard.writeText(link);
     toast.success("Link undangan disalin!");
   };
 
   const sendViaWhatsApp = (phone: string, code: string, name: string) => {
-    const link = `${window.location.origin}/employee/login?invite=${code}`;
+    const link = buildInvitationLink(code);
     const message = `Halo ${name},\n\nAnda diundang untuk bergabung dengan sistem absensi.\n\nKode Undangan: ${code}\nLink Daftar: ${link}\n\nSilakan klik link di atas untuk mendaftar.`;
     const waUrl = `https://wa.me/${phone.replace(/^0/, "62").replace(/[^0-9]/g, "")}?text=${encodeURIComponent(message)}`;
     window.open(waUrl, "_blank");
@@ -492,6 +707,7 @@ export default function OrgEmployeeInvitations() {
   const resetForm = () => {
     setFormData({ name: "", email: "", phone: "", nik: "", opd_id: "", office_id: "" });
     setGeneratedCode(null);
+    setGeneratedExpiresAt(null);
     setInvitationType("individual");
     setExpiryDays("7");
   };
@@ -504,6 +720,19 @@ export default function OrgEmployeeInvitations() {
   return (
     <OrganizationLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang memuat data undangan...
+          </div>
+        )}
+        {loadError && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void fetchInvitations()}>
+              Coba Lagi
+            </Button>
+          </div>
+        )}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -530,21 +759,28 @@ export default function OrgEmployeeInvitations() {
                   <div className="space-y-2">
                     <Label>Jenis Undangan</Label>
                     <Tabs value={invitationType} onValueChange={(value) => setInvitationType(value as InvitationType)}>
-                      <TabsList className="grid w-full grid-cols-3">
-                        <TabsTrigger value="individual" className="flex items-center gap-1">
+                      <TabsList className="h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+                        <TabsTrigger value="individual" className="flex items-center gap-1 whitespace-nowrap">
                           <User className="h-3 w-3" />
                           <span className="hidden sm:inline">Individual</span>
                         </TabsTrigger>
-                        <TabsTrigger value="opd" className="flex items-center gap-1">
-                          <Building2 className="h-3 w-3" />
-                          <span className="hidden sm:inline">Per OPD</span>
-                        </TabsTrigger>
-                        <TabsTrigger value="office" className="flex items-center gap-1">
+                        {canUseOpdInvitation && (
+                          <TabsTrigger value="opd" className="flex items-center gap-1 whitespace-nowrap">
+                            <Building2 className="h-3 w-3" />
+                            <span className="hidden sm:inline">Per OPD</span>
+                          </TabsTrigger>
+                        )}
+                        <TabsTrigger value="office" className="flex items-center gap-1 whitespace-nowrap">
                           <MapPin className="h-3 w-3" />
                           <span className="hidden sm:inline">Per Lokasi</span>
                         </TabsTrigger>
                       </TabsList>
                     </Tabs>
+                    {!canUseOpdInvitation && (
+                      <p className="text-xs text-muted-foreground">
+                        Opsi undangan Per OPD dimatikan dari Setup Awal organisasi.
+                      </p>
+                    )}
                   </div>
 
                   {/* Expiry */}
@@ -606,7 +842,7 @@ export default function OrgEmployeeInvitations() {
                     </div>
                   )}
 
-                  {invitationType === "opd" && (
+                  {invitationType === "opd" && canUseOpdInvitation && (
                     <div className="space-y-2">
                       <Label>Pilih OPD *</Label>
                       <Select value={formData.opd_id} onValueChange={(v) => setFormData({ ...formData, opd_id: v })}>
@@ -644,9 +880,12 @@ export default function OrgEmployeeInvitations() {
                     </div>
                   )}
 
-                  <DialogFooter>
-                    <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
-                    <Button onClick={handleCreateInvitation}>Buat Undangan</Button>
+                  <DialogFooter className={dialogActionBarClassName}>
+                    <DialogActionHint>Pastikan data undangan sudah sesuai.</DialogActionHint>
+                    <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                      <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
+                      <Button onClick={handleCreateInvitation}>Buat Undangan</Button>
+                    </div>
                   </DialogFooter>
                 </div>
               ) : (
@@ -665,7 +904,7 @@ export default function OrgEmployeeInvitations() {
                       </Button>
                     </div>
                     <p className="text-xs text-muted-foreground mt-2">
-                      Berlaku hingga: {format(addDays(new Date(), parseInt(expiryDays)), "d MMMM yyyy")}
+                      Berlaku hingga: {generatedExpiresAt ? format(new Date(generatedExpiresAt), "d MMMM yyyy") : "-"}
                     </p>
                   </div>
 
@@ -690,8 +929,11 @@ export default function OrgEmployeeInvitations() {
                     </Button>
                   </div>
 
-                  <DialogFooter>
-                    <Button onClick={() => { setIsDialogOpen(false); resetForm(); }}>Selesai</Button>
+                  <DialogFooter className={dialogActionBarClassName}>
+                    <DialogActionHint>Simpan kode/link sebelum menutup dialog.</DialogActionHint>
+                    <div className="flex w-full justify-end">
+                      <Button onClick={() => { setIsDialogOpen(false); resetForm(); }}>Selesai</Button>
+                    </div>
                   </DialogFooter>
                 </div>
               )}
@@ -699,19 +941,20 @@ export default function OrgEmployeeInvitations() {
           </Dialog>
         </div>
 
+        <Card className="border-primary/25 bg-primary/5">
+          <CardContent className="pt-6 text-sm text-primary/90">
+            Alur direkomendasikan: import data pegawai terlebih dahulu, lalu kirim undangan aktivasi.
+            Untuk undangan individual, sistem akan memprioritaskan data pegawai yang sudah ada agar tidak membuat duplikasi.
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle>Daftar Undangan</CardTitle>
             <CardDescription>{totalInvitations} undangan</CardDescription>
           </CardHeader>
           <CardContent>
-            {loadError && (
-              <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                {loadError}
-              </div>
-            )}
-
-            <div className="flex flex-col sm:flex-row gap-4 mb-4">
+            <div className="mb-4 flex flex-col gap-4 rounded-2xl border border-slate-200/80 bg-white/80 p-3 shadow-sm sm:flex-row sm:items-center">
               <div className="relative flex-1 max-w-sm">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -723,16 +966,16 @@ export default function OrgEmployeeInvitations() {
               </div>
               <div className="flex gap-2 flex-wrap">
                 <Tabs value={filterStatus} onValueChange={setFilterStatus}>
-                  <TabsList>
-                    <TabsTrigger value="all">Semua</TabsTrigger>
-                    <TabsTrigger value="pending">Menunggu</TabsTrigger>
-                    <TabsTrigger value="verified">Terverifikasi</TabsTrigger>
-                    <TabsTrigger value="rejected">Ditolak</TabsTrigger>
+                  <TabsList className="min-w-max h-auto gap-1.5 rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+                    <TabsTrigger value="all" className="whitespace-nowrap">Semua</TabsTrigger>
+                    <TabsTrigger value="pending" className="whitespace-nowrap">Menunggu</TabsTrigger>
+                    <TabsTrigger value="verified" className="whitespace-nowrap">Terverifikasi</TabsTrigger>
+                    <TabsTrigger value="rejected" className="whitespace-nowrap">Ditolak</TabsTrigger>
                   </TabsList>
                 </Tabs>
-                {opdList.length > 0 && (
+                {canUseOpdInvitation && opdList.length > 0 && (
                   <Select value={filterOpdId} onValueChange={setFilterOpdId}>
-                    <SelectTrigger className="w-[180px]">
+                    <SelectTrigger className="w-full sm:w-[200px]">
                       <SelectValue placeholder="Filter OPD" />
                     </SelectTrigger>
                     <SelectContent>
@@ -944,13 +1187,16 @@ export default function OrgEmployeeInvitations() {
             </div>
           </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsEditDialogOpen(false)} disabled={isSavingEdit}>
-              Batal
-            </Button>
-            <Button onClick={handleUpdateInvitation} disabled={isSavingEdit}>
-              {isSavingEdit ? "Menyimpan..." : "Simpan Perubahan"}
-            </Button>
+          <DialogFooter className={dialogActionBarClassName}>
+            <DialogActionHint>Perubahan undangan akan langsung diterapkan.</DialogActionHint>
+            <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+              <Button variant="outline" onClick={() => setIsEditDialogOpen(false)} disabled={isSavingEdit}>
+                Batal
+              </Button>
+              <Button onClick={handleUpdateInvitation} disabled={isSavingEdit}>
+                {isSavingEdit ? "Menyimpan..." : "Simpan Perubahan"}
+              </Button>
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

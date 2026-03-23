@@ -7,6 +7,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Loader2, Save } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface HeroSettingsData {
   title: string;
@@ -43,17 +45,23 @@ export function HeroSettings() {
 
   const fetchSettings = async () => {
     try {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "hero_settings")
-        .maybeSingle();
+      const { data } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "hero_settings")
+            .maybeSingle(),
+        10000,
+        "Load hero settings timeout"
+      );
 
       if (data?.value) {
         setSettings({ ...defaultSettings, ...(data.value as Record<string, unknown>) });
       }
     } catch (error) {
-      console.error("Error fetching hero settings:", error);
+      const errorRef = reportError(error, "admin.settings.hero.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan hero", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -62,28 +70,46 @@ export function HeroSettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "hero_settings")
-        .maybeSingle();
+      const { data: existing } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("id")
+            .eq("key", "hero_settings")
+            .maybeSingle(),
+        10000,
+        "Load hero existing setting timeout"
+      );
 
       const jsonValue = JSON.parse(JSON.stringify(settings));
 
       if (existing) {
-        await supabase
-          .from("system_settings")
-          .update({ value: jsonValue, updated_at: new Date().toISOString() })
-          .eq("key", "hero_settings");
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .update({ value: jsonValue, updated_at: new Date().toISOString() })
+              .eq("key", "hero_settings"),
+          10000,
+          "Update hero settings timeout"
+        );
+        if (error) throw error;
       } else {
-        await supabase
-          .from("system_settings")
-          .insert({ key: "hero_settings", value: jsonValue });
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .insert({ key: "hero_settings", value: jsonValue }),
+          10000,
+          "Insert hero settings timeout"
+        );
+        if (error) throw error;
       }
       
       toast.success("Pengaturan hero berhasil disimpan");
-    } catch (err) {
-      toast.error("Gagal menyimpan pengaturan");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.hero.save");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan", errorRef));
     } finally {
       setIsSaving(false);
     }

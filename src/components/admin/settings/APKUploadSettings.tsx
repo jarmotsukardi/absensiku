@@ -10,6 +10,13 @@ import { Loader2, Upload, Smartphone, Download, Trash2, Building2, Users } from 
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import type { Json } from "@/integrations/supabase/types";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 interface APKInfo {
   url: string;
@@ -19,10 +26,16 @@ interface APKInfo {
 }
 
 type APKType = "reguler" | "pemda";
+const APK_SETTINGS_READ_TIMEOUT_MS = 12000;
+const APK_SETTINGS_WRITE_TIMEOUT_MS = 20000;
+const APK_SETTINGS_MAX_RETRIES = 2;
 
 export function APKUploadSettings() {
+  const confirmDialog = useConfirmDialog();
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<APKType>("reguler");
   
   // Aplikasi Reguler
@@ -39,12 +52,26 @@ export function APKUploadSettings() {
 
   const fetchAPKInfo = async () => {
     try {
+      setLoadError(null);
+      setIsRetrying(false);
       // Fetch Aplikasi Reguler
-      const { data: regulerData } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "global_apk")
-        .maybeSingle();
+      const { data: regulerData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("value")
+              .eq("key", "global_apk")
+              .maybeSingle(),
+            APK_SETTINGS_READ_TIMEOUT_MS,
+            "Permintaan konfigurasi APK reguler timeout."
+          ),
+        {
+          maxRetries: APK_SETTINGS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (regulerData?.value && typeof regulerData.value === "object" && !Array.isArray(regulerData.value)) {
         const apkData = regulerData.value as unknown as APKInfo;
@@ -55,11 +82,23 @@ export function APKUploadSettings() {
       }
 
       // Fetch Aplikasi Pemda
-      const { data: pemdaData } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "global_apk_pemda")
-        .maybeSingle();
+      const { data: pemdaData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("value")
+              .eq("key", "global_apk_pemda")
+              .maybeSingle(),
+            APK_SETTINGS_READ_TIMEOUT_MS,
+            "Permintaan konfigurasi APK pemda timeout."
+          ),
+        {
+          maxRetries: APK_SETTINGS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (pemdaData?.value && typeof pemdaData.value === "object" && !Array.isArray(pemdaData.value)) {
         const apkData = pemdaData.value as unknown as APKInfo;
@@ -69,8 +108,12 @@ export function APKUploadSettings() {
         }
       }
     } catch (error) {
-      console.error("Error fetching app info:", error);
+      const errorRef = reportError(error, "admin.components.apk_upload.fetch");
+      const message = appendErrorReference("Gagal memuat konfigurasi APK", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   };
@@ -92,9 +135,13 @@ export function APKUploadSettings() {
     setIsUploading(true);
     try {
       const fileName = `${type}-app-${Date.now()}.apk`;
-      const { error: uploadError } = await supabase.storage
-        .from("apk-files")
-        .upload(fileName, file, { upsert: true });
+      const { error: uploadError } = await withTimeout(
+        supabase.storage
+          .from("apk-files")
+          .upload(fileName, file, { upsert: true }),
+        APK_SETTINGS_WRITE_TIMEOUT_MS,
+        "Upload file APK timeout."
+      );
 
       if (uploadError) throw uploadError;
 
@@ -114,27 +161,41 @@ export function APKUploadSettings() {
       const apkPayload: Json = newApkInfo;
 
       // Save to system_settings
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", settingsKey)
-        .maybeSingle();
+      const { data: existing } = await withTimeout(
+        supabase
+          .from("system_settings")
+          .select("id")
+          .eq("key", settingsKey)
+          .maybeSingle(),
+        APK_SETTINGS_WRITE_TIMEOUT_MS,
+        "Permintaan cek konfigurasi APK timeout."
+      );
 
       if (existing) {
-        await supabase
-          .from("system_settings")
-          .update({ value: apkPayload, updated_at: new Date().toISOString() })
-          .eq("key", settingsKey);
+        const { error: updateError } = await withTimeout(
+          supabase
+            .from("system_settings")
+            .update({ value: apkPayload, updated_at: new Date().toISOString() })
+            .eq("key", settingsKey),
+          APK_SETTINGS_WRITE_TIMEOUT_MS,
+          "Simpan konfigurasi APK timeout."
+        );
+        if (updateError) throw updateError;
       } else {
-        await supabase
-          .from("system_settings")
-          .insert({
-            key: settingsKey,
-            value: apkPayload,
-            description: type === "reguler" 
-              ? "Aplikasi Reguler untuk organisasi umum" 
-              : "Aplikasi Khusus untuk Pemerintah Daerah",
-          });
+        const { error: insertError } = await withTimeout(
+          supabase
+            .from("system_settings")
+            .insert({
+              key: settingsKey,
+              value: apkPayload,
+              description: type === "reguler" 
+                ? "Aplikasi Reguler untuk organisasi umum" 
+                : "Aplikasi Khusus untuk Pemerintah Daerah",
+            }),
+          APK_SETTINGS_WRITE_TIMEOUT_MS,
+          "Simpan konfigurasi APK timeout."
+        );
+        if (insertError) throw insertError;
       }
 
       if (type === "reguler") {
@@ -146,8 +207,8 @@ export function APKUploadSettings() {
       toast.success(`Aplikasi ${type === "reguler" ? "Reguler" : "Pemda"} berhasil diupload`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
-      console.error("Error uploading app:", error);
-      toast.error("Gagal mengupload aplikasi: " + message);
+      const errorRef = reportError(error, "admin.components.apk_upload.upload", { apk_type: type });
+      toast.error(appendErrorReference("Gagal mengupload aplikasi: " + message, errorRef));
     } finally {
       setIsUploading(false);
       e.target.value = "";
@@ -158,19 +219,34 @@ export function APKUploadSettings() {
     const apkInfo = type === "reguler" ? apkReguler : apkPemda;
     const settingsKey = type === "reguler" ? "global_apk" : "global_apk_pemda";
     
-    if (!apkInfo || !confirm(`Yakin ingin menghapus aplikasi ${type === "reguler" ? "Reguler" : "Pemda"}?`)) return;
+    if (!apkInfo) return;
+    const confirmed = await confirmDialog({
+      title: "Hapus Aplikasi APK",
+      description: `Yakin ingin menghapus aplikasi ${type === "reguler" ? "Reguler" : "Pemda"}?`,
+      confirmText: "Ya, hapus",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
 
     try {
       // Delete from storage
       if (apkInfo.fileName) {
-        await supabase.storage.from("apk-files").remove([apkInfo.fileName]);
+        await withTimeout(
+          supabase.storage.from("apk-files").remove([apkInfo.fileName]),
+          APK_SETTINGS_WRITE_TIMEOUT_MS,
+          "Hapus file APK timeout."
+        );
       }
 
       // Delete from system_settings
-      await supabase
-        .from("system_settings")
-        .delete()
-        .eq("key", settingsKey);
+      await withTimeout(
+        supabase
+          .from("system_settings")
+          .delete()
+          .eq("key", settingsKey),
+        APK_SETTINGS_WRITE_TIMEOUT_MS,
+        "Hapus konfigurasi APK timeout."
+      );
 
       if (type === "reguler") {
         setApkReguler(null);
@@ -180,8 +256,8 @@ export function APKUploadSettings() {
       
       toast.success(`Aplikasi ${type === "reguler" ? "Reguler" : "Pemda"} berhasil dihapus`);
     } catch (error) {
-      console.error("Error deleting app:", error);
-      toast.error("Gagal menghapus aplikasi");
+      const errorRef = reportError(error, "admin.components.apk_upload.delete", { apk_type: type });
+      toast.error(appendErrorReference("Gagal menghapus aplikasi", errorRef));
     }
   };
 
@@ -280,6 +356,19 @@ export function APKUploadSettings() {
 
   return (
     <div className="space-y-6">
+      {isRetrying && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+          Sedang mencoba ulang memuat konfigurasi APK...
+        </div>
+      )}
+      {loadError && (
+        <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+          <span>{loadError}</span>
+          <Button variant="outline" size="sm" onClick={() => void fetchAPKInfo()}>
+            Coba Lagi
+          </Button>
+        </div>
+      )}
       <div>
         <h3 className="text-lg font-medium">Upload Aplikasi Mobile</h3>
         <p className="text-sm text-muted-foreground">
@@ -288,12 +377,12 @@ export function APKUploadSettings() {
       </div>
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as APKType)}>
-        <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="reguler" className="flex items-center gap-2">
+        <TabsList className="h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+          <TabsTrigger value="reguler" className="flex items-center gap-2 whitespace-nowrap">
             <Users className="h-4 w-4" />
             Aplikasi Reguler
           </TabsTrigger>
-          <TabsTrigger value="pemda" className="flex items-center gap-2">
+          <TabsTrigger value="pemda" className="flex items-center gap-2 whitespace-nowrap">
             <Building2 className="h-4 w-4" />
             Aplikasi Pemda
           </TabsTrigger>

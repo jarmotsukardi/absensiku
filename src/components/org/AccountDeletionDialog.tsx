@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import SingleOTPInput, { SingleOTPInputRef } from "@/components/common/SingleOTPInput";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 const WORDS_POOL = [
   "hapus", "akun", "saya", "yakin", "setuju", "konfirmasi", "permanen", "mengerti",
@@ -23,6 +24,8 @@ function generatePhrase(): string {
 }
 
 export function AccountDeletionDialog() {
+  const ACCOUNT_DELETION_OP_TIMEOUT_MS = 12000;
+  const ACCOUNT_DELETION_OP_RETRY_MAX = 1;
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
   const [step, setStep] = useState<"otp" | "phrase">("otp");
@@ -83,9 +86,20 @@ export function AccountDeletionDialog() {
     }
     setIsSendingOtp(true);
     try {
-      const { data, error } = await supabase.functions.invoke("send-billing-mode-otp", {
-        body: { email: orgEmail, whatsapp: orgWhatsapp },
-      });
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.functions.invoke("send-billing-mode-otp", {
+              body: { email: orgEmail, whatsapp: orgWhatsapp },
+            }),
+            ACCOUNT_DELETION_OP_TIMEOUT_MS,
+            "org.account_deletion.send_otp timeout",
+          ),
+        {
+          maxRetries: ACCOUNT_DELETION_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (error) throw error;
       if (data.demo_otp) {
         toast.info(`[DEMO] Kode OTP: ${data.demo_otp}`);
@@ -94,8 +108,9 @@ export function AccountDeletionDialog() {
       }
       setOtpSent(true);
     } catch (error: unknown) {
+      const errorRef = reportError(error, "org.account_deletion.send_otp");
       const errorMessage = error instanceof Error ? error.message : "Coba lagi";
-      toast.error("Gagal mengirim OTP: " + errorMessage);
+      toast.error(appendErrorReference(`Gagal mengirim OTP: ${errorMessage}`, errorRef));
     } finally {
       setIsSendingOtp(false);
     }
@@ -109,9 +124,20 @@ export function AccountDeletionDialog() {
     }
     setIsVerifyingOtp(true);
     try {
-      const { data, error } = await supabase.functions.invoke("verify-billing-mode-otp", {
-        body: { email: orgEmail, otp: otpCode },
-      });
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.functions.invoke("verify-billing-mode-otp", {
+              body: { email: orgEmail, otp: otpCode },
+            }),
+            ACCOUNT_DELETION_OP_TIMEOUT_MS,
+            "org.account_deletion.verify_otp timeout",
+          ),
+        {
+          maxRetries: ACCOUNT_DELETION_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (error || !data?.success) {
         toast.error(data?.error || "Kode OTP tidak valid");
         return;
@@ -119,7 +145,8 @@ export function AccountDeletionDialog() {
       toast.success("OTP terverifikasi");
       setStep("phrase");
     } catch (error: unknown) {
-      toast.error("Gagal verifikasi OTP");
+      const errorRef = reportError(error, "org.account_deletion.verify_otp");
+      toast.error(appendErrorReference("Gagal verifikasi OTP", errorRef));
     } finally {
       setIsVerifyingOtp(false);
     }

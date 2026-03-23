@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,14 +24,22 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { Loader2, ArrowRight, Edit3, Building2, MapPin, User, Send } from "lucide-react";
-
-// Konstanta daftar Golongan (sama dengan halaman admin)
-const GOLONGAN_OPTIONS = [
-  "I/a", "I/b", "I/c", "I/d",
-  "II/a", "II/b", "II/c", "II/d",
-  "III/a", "III/b", "III/c", "III/d",
-  "IV/a", "IV/b", "IV/c", "IV/d", "IV/e",
-];
+import {
+  DEFAULT_EMPLOYEE_CATEGORY_OPTIONS,
+  fetchTenantEmployeeCategories,
+  getActiveEmployeeCategoryOptions,
+  type EmployeeCategoryOption,
+} from "@/lib/employeeCategories";
+import {
+  DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS,
+  fetchTenantEmployeeGolongan,
+  getActiveEmployeeGolonganOptions,
+  type EmployeeGolonganOption,
+} from "@/lib/employeeGolongan";
+import {
+  DEFAULT_ORG_MASTER_DATA_MODULES,
+  fetchTenantOrgMasterDataModules,
+} from "@/lib/orgMasterDataModules";
 
 interface EmployeeData {
   id: string;
@@ -105,6 +113,7 @@ const getErrorMessage = (error: unknown): string => {
 export function MutationRequestForm({ employee, onSuccess }: MutationRequestFormProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isMasterDataLoading, setIsMasterDataLoading] = useState(false);
   const [mutationType, setMutationType] = useState<MutationType>("profile_change");
   
   // Master data
@@ -112,6 +121,13 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
   const [workUnits, setWorkUnits] = useState<WorkUnit[]>([]);
   const [offices, setOffices] = useState<Office[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
+  const [employeeCategoryOptions, setEmployeeCategoryOptions] = useState<EmployeeCategoryOption[]>(
+    DEFAULT_EMPLOYEE_CATEGORY_OPTIONS
+  );
+  const [employeeGolonganOptions, setEmployeeGolonganOptions] = useState<EmployeeGolonganOption[]>(
+    DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS
+  );
+  const [masterDataModules, setMasterDataModules] = useState(DEFAULT_ORG_MASTER_DATA_MODULES);
   
   // Form state - Profile changes (phone/whatsapp gabung jadi satu field)
   const [formData, setFormData] = useState({
@@ -138,32 +154,67 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
   });
   
   const [reason, setReason] = useState("");
+  const [documentReference, setDocumentReference] = useState({
+    number: "",
+    date: "",
+    issuer: "",
+    notes: "",
+  });
 
   const fetchMasterData = useCallback(async () => {
-    if (!employee.tenant_id) return;
+    if (!employee.tenant_id) {
+      setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
+      setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
+      setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
+      setIsMasterDataLoading(false);
+      return;
+    }
+
+    setIsMasterDataLoading(true);
     try {
-      const [opdRes, workUnitRes, officeRes, positionRes] = await Promise.all([
+      try {
+        const moduleSetting = await fetchTenantOrgMasterDataModules(employee.tenant_id);
+        setMasterDataModules(moduleSetting.modules);
+      } catch (moduleError) {
+        console.error("Error fetching mutation module settings:", moduleError);
+        setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
+      }
+
+      const [opdRes, workUnitRes, officeRes, positionRes, categoryMaster, golonganMaster] = await Promise.all([
         supabase.from("opd").select("id, name, code").eq("tenant_id", employee.tenant_id).eq("is_active", true),
         supabase.from("work_units").select("id, name, opd_id").eq("tenant_id", employee.tenant_id).eq("is_active", true),
         supabase.from("offices").select("id, name, opd_id").eq("tenant_id", employee.tenant_id).eq("is_active", true),
         supabase.from("positions").select("id, name").eq("tenant_id", employee.tenant_id).eq("is_active", true),
+        fetchTenantEmployeeCategories(employee.tenant_id),
+        fetchTenantEmployeeGolongan(employee.tenant_id),
       ]);
 
       if (opdRes.data) setOpdList(opdRes.data);
       if (workUnitRes.data) setWorkUnits(workUnitRes.data);
       if (officeRes.data) setOffices(officeRes.data as Office[]);
       if (positionRes.data) setPositions(positionRes.data);
+      const nextCategoryOptions = getActiveEmployeeCategoryOptions(categoryMaster.categories);
+      setEmployeeCategoryOptions(nextCategoryOptions.length > 0 ? nextCategoryOptions : DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
+      const nextGolonganOptions = getActiveEmployeeGolonganOptions(golonganMaster.golongan);
+      setEmployeeGolonganOptions(nextGolonganOptions.length > 0 ? nextGolonganOptions : DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
     } catch (error) {
       console.error("Error fetching master data:", error);
+      setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
+      setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
+      setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
+    } finally {
+      setIsMasterDataLoading(false);
     }
   }, [employee.tenant_id]);
 
   // Fetch master data
   useEffect(() => {
-    if (isOpen && employee.tenant_id) {
-      fetchMasterData();
+    if (!isOpen) {
+      return;
     }
-  }, [isOpen, employee.tenant_id, fetchMasterData]);
+
+    void fetchMasterData();
+  }, [isOpen, fetchMasterData]);
 
   // Filter work units by selected OPD
   const filteredWorkUnits = transferData.opd_id
@@ -183,6 +234,32 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
   const profileFilteredOffices = formData.opd_id
     ? offices.filter((o) => o.opd_id === formData.opd_id)
     : offices;
+
+  const profileEmployeeCategoryOptions = useMemo(() => {
+    if (!formData.employee_category) return employeeCategoryOptions;
+    if (employeeCategoryOptions.some((option) => option.value === formData.employee_category)) {
+      return employeeCategoryOptions;
+    }
+    return [
+      { value: formData.employee_category, label: `${formData.employee_category} (nonaktif)` },
+      ...employeeCategoryOptions,
+    ];
+  }, [employeeCategoryOptions, formData.employee_category]);
+
+  const profileEmployeeGolonganOptions = useMemo(() => {
+    if (!formData.golongan) return employeeGolonganOptions;
+    if (employeeGolonganOptions.some((option) => option.value === formData.golongan)) {
+      return employeeGolonganOptions;
+    }
+    return [
+      { value: formData.golongan, label: `${formData.golongan} (nonaktif)` },
+      ...employeeGolonganOptions,
+    ];
+  }, [employeeGolonganOptions, formData.golongan]);
+
+  const showPositionField = masterDataModules.positions;
+  const showGolonganField = masterDataModules.employee_golongan;
+  const showCategoryField = masterDataModules.employee_categories;
 
   const getChangedFields = () => {
     const changes: MutationPayload = {};
@@ -218,11 +295,9 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
 
     // Semua perubahan dilakukan di satu form (tidak dipisah lagi)
     // Profile fields (kecuali nama & NIP)
-    const profileFields: EditableProfileField[] = [
-      "email", "address", "gender", 
-      "golongan", "employee_category",
-      "gelar_depan", "gelar_belakang", "nik"
-    ];
+    const profileFields: EditableProfileField[] = ["email", "address", "gender", "gelar_depan", "gelar_belakang", "nik"];
+    if (showGolonganField) profileFields.push("golongan");
+    if (showCategoryField) profileFields.push("employee_category");
 
     profileFields.forEach((field) => {
       const currentValue = String(employee[field] ?? "");
@@ -243,7 +318,7 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
     }
 
     // Position dari dropdown
-    if (formData.position_id) {
+    if (showPositionField && formData.position_id) {
       const selectedPosition = positions.find(p => p.id === formData.position_id);
       if (selectedPosition && selectedPosition.name !== employee.position) {
         changes.position = selectedPosition.name;
@@ -301,6 +376,10 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
         requested_changes: changes,
         original_data: original,
         reason: reason.trim(),
+        document_reference_number: documentReference.number.trim() || null,
+        document_reference_date: documentReference.date || null,
+        document_reference_issuer: documentReference.issuer.trim() || null,
+        document_reference_notes: documentReference.notes.trim() || null,
       });
 
       if (error) throw error;
@@ -340,6 +419,12 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
       office_id: employee.office_id || "",
     });
     setReason("");
+    setDocumentReference({
+      number: "",
+      date: "",
+      issuer: "",
+      notes: "",
+    });
   };
 
   return (
@@ -358,7 +443,7 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
           </DialogTitle>
           <DialogDescription>
             Ajukan perubahan data profil atau mutasi ke unit kerja lain.
-            Data Nama dan NIP tidak dapat diubah.
+            Data Nama dan NIP tidak dapat diubah. Gunakan nomor dokumen rujukan jika perubahan perlu dasar administratif.
           </DialogDescription>
         </DialogHeader>
 
@@ -490,22 +575,27 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
                   </Select>
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="golongan">Golongan</Label>
-                  <Select
-                    value={formData.golongan}
-                    onValueChange={(v) => setFormData({ ...formData, golongan: v })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Pilih Golongan" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {GOLONGAN_OPTIONS.map((g) => (
-                        <SelectItem key={g} value={g}>{g}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                {showGolonganField && (
+                  <div className="space-y-2">
+                    <Label htmlFor="golongan">Golongan</Label>
+                    <Select
+                      value={formData.golongan}
+                      onValueChange={(v) => setFormData({ ...formData, golongan: v })}
+                      disabled={isMasterDataLoading}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={isMasterDataLoading ? "Memuat golongan..." : "Pilih golongan"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {profileEmployeeGolonganOptions.map((golongan) => (
+                          <SelectItem key={golongan.value} value={golongan.value}>
+                            {golongan.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
 
                 <div className="space-y-2">
                   <Label htmlFor="gelar_depan">Gelar Depan</Label>
@@ -527,40 +617,48 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
                   />
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="employee_category">Kategori Pegawai</Label>
-                  <Select
-                    value={formData.employee_category}
-                    onValueChange={(v) => setFormData({ ...formData, employee_category: v })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Pilih kategori" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="ASN">ASN</SelectItem>
-                      <SelectItem value="P3K">P3K</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
+                {showCategoryField && (
+                  <div className="space-y-2">
+                    <Label htmlFor="employee_category">Kategori Pegawai</Label>
+                    <Select
+                      value={formData.employee_category}
+                      onValueChange={(v) => setFormData({ ...formData, employee_category: v })}
+                      disabled={isMasterDataLoading}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder={isMasterDataLoading ? "Memuat kategori..." : "Pilih kategori"} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {profileEmployeeCategoryOptions.map((category) => (
+                          <SelectItem key={category.value} value={category.value}>
+                            {category.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
 
-                <div className="space-y-2">
-                  <Label htmlFor="position">Jabatan</Label>
-                  <Select
-                    value={formData.position_id}
-                    onValueChange={(v) => setFormData({ ...formData, position_id: v })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Pilih jabatan" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {positions.map((pos) => (
-                        <SelectItem key={pos.id} value={pos.id}>
-                          {pos.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                {showPositionField && (
+                  <div className="space-y-2">
+                    <Label htmlFor="position">Jabatan</Label>
+                    <Select
+                      value={formData.position_id}
+                      onValueChange={(v) => setFormData({ ...formData, position_id: v })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Pilih jabatan" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {positions.map((pos) => (
+                          <SelectItem key={pos.id} value={pos.id}>
+                            {pos.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-2">
@@ -755,10 +853,58 @@ export function MutationRequestForm({ employee, onSuccess }: MutationRequestForm
 
           <Separator />
 
+          <div className="space-y-4">
+            <Label className="text-base font-semibold">Referensi Dokumen</Label>
+            <p className="text-sm text-muted-foreground">
+              Aplikasi ini tidak menyimpan unggahan file untuk mutasi. Jika ada surat atau nota dinas, cukup catat nomor dan identitas dokumennya.
+            </p>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="mutation_doc_number">Nomor Dokumen</Label>
+                <Input
+                  id="mutation_doc_number"
+                  value={documentReference.number}
+                  onChange={(e) => setDocumentReference((prev) => ({ ...prev, number: e.target.value }))}
+                  placeholder="Contoh: 800/123/SDM/2026"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="mutation_doc_date">Tanggal Dokumen</Label>
+                <Input
+                  id="mutation_doc_date"
+                  type="date"
+                  value={documentReference.date}
+                  onChange={(e) => setDocumentReference((prev) => ({ ...prev, date: e.target.value }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="mutation_doc_issuer">Penerbit Dokumen</Label>
+                <Input
+                  id="mutation_doc_issuer"
+                  value={documentReference.issuer}
+                  onChange={(e) => setDocumentReference((prev) => ({ ...prev, issuer: e.target.value }))}
+                  placeholder="Contoh: BKPSDM / Sekretariat Daerah"
+                />
+              </div>
+              <div className="space-y-2 md:col-span-2">
+                <Label htmlFor="mutation_doc_notes">Catatan Referensi</Label>
+                <Textarea
+                  id="mutation_doc_notes"
+                  value={documentReference.notes}
+                  onChange={(e) => setDocumentReference((prev) => ({ ...prev, notes: e.target.value }))}
+                  placeholder="Catatan tambahan terkait dasar surat, nomor nota, atau penjelasan administratif."
+                  rows={2}
+                />
+              </div>
+            </div>
+          </div>
+
+          <Separator />
+
           {/* Reason */}
           <div className="space-y-2">
             <Label htmlFor="reason" className="text-base font-semibold">
-              Alasan Pengajuan <span className="text-destructive">*</span>
+              Ringkasan Alasan <span className="text-destructive">*</span>
             </Label>
             <Textarea
               id="reason"

@@ -3,6 +3,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { TablesUpdate } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import { logAuditIfEnabled } from "@/lib/auditLoggingPolicy";
  
 export interface OvertimeRequest {
    id: string;
@@ -70,6 +72,8 @@ const withContextError = (
   const ref = reportError(error, context, metadata);
   return appendErrorReference(`${label}: ${getErrorMessage(error)}`, ref);
 };
+const OVERTIME_REQUESTS_QUERY_TIMEOUT_MS = 15000;
+const OVERTIME_REQUESTS_QUERY_RETRY_MAX = 1;
 
 export function useOvertimeSettings(tenantId?: string) {
    const [settings, setSettings] = useState<OvertimeSettings | null>(null);
@@ -144,11 +148,13 @@ export function useOvertimeRequests(filters?: {
    const [requests, setRequests] = useState<OvertimeRequest[]>([]);
    const [isLoading, setIsLoading] = useState(true);
    const [totalCount, setTotalCount] = useState(0);
+   const [isRetrying, setIsRetrying] = useState(false);
    const [loadError, setLoadError] = useState<string | null>(null);
  
    const fetchRequests = useCallback(async () => {
      try {
        setLoadError(null);
+       setIsRetrying(false);
        let query = supabase
          .from("overtime_requests")
          .select(`
@@ -178,7 +184,19 @@ export function useOvertimeRequests(filters?: {
            employeeQuery.eq("tenant_id", filters.tenantId);
          }
 
-         const { data: employeeMatches, error: employeeError } = await employeeQuery;
+         const { data: employeeMatches, error: employeeError } = await withExponentialBackoff(
+           () =>
+             withTimeout(
+               employeeQuery,
+               OVERTIME_REQUESTS_QUERY_TIMEOUT_MS,
+               "overtime_requests.fetch.employee_lookup timeout",
+             ),
+           {
+             maxRetries: OVERTIME_REQUESTS_QUERY_RETRY_MAX,
+             shouldRetry: isRetryableError,
+             onRetry: () => setIsRetrying(true),
+           },
+         );
          if (employeeError) throw employeeError;
 
          const employeeIds = (employeeMatches || []).map((employee) => employee.id);
@@ -194,7 +212,19 @@ export function useOvertimeRequests(filters?: {
          query = query.range(from, to);
        }
 
-       const { data, error, count } = await query;
+       const { data, error, count } = await withExponentialBackoff(
+         () =>
+           withTimeout(
+             query,
+             OVERTIME_REQUESTS_QUERY_TIMEOUT_MS,
+             "overtime_requests.fetch.query timeout",
+           ),
+         {
+           maxRetries: OVERTIME_REQUESTS_QUERY_RETRY_MAX,
+           shouldRetry: isRetryableError,
+           onRetry: () => setIsRetrying(true),
+         },
+       );
        if (error) throw error;
        setRequests((data || []) as OvertimeRequest[]);
        setTotalCount(count || 0);
@@ -211,6 +241,7 @@ export function useOvertimeRequests(filters?: {
        setTotalCount(0);
      } finally {
        setIsLoading(false);
+       setIsRetrying(false);
      }
    }, [filters?.employeeId, filters?.page, filters?.pageSize, filters?.searchQuery, filters?.status, filters?.tenantId]);
  
@@ -292,6 +323,7 @@ export function useOvertimeRequests(filters?: {
      rejectionReason?: string
    ): Promise<boolean> => {
      try {
+       const targetRequest = requests.find((item) => item.id === requestId) || null;
        const updates: TablesUpdate<"overtime_requests"> = {
          status: approved ? "approved" : "rejected",
          approved_by: approverId,
@@ -309,6 +341,35 @@ export function useOvertimeRequests(filters?: {
          .eq("id", requestId);
  
        if (error) throw error;
+
+       if (targetRequest) {
+         const {
+           data: { user },
+         } = await supabase.auth.getUser();
+        await logAuditIfEnabled({
+          tenantId: targetRequest.tenant_id,
+          payload: {
+            tenant_id: targetRequest.tenant_id,
+            employee_id: targetRequest.employee_id,
+            user_id: user?.id || null,
+            table_name: "overtime_requests",
+            action: approved ? "overtime_request_approved" : "overtime_request_rejected",
+            record_id: targetRequest.id,
+            old_values: {
+              status: targetRequest.status,
+              total_hours: targetRequest.total_hours,
+              request_number: targetRequest.request_number,
+            },
+            new_values: {
+              status: approved ? "approved" : "rejected",
+              total_hours: targetRequest.total_hours,
+              request_number: targetRequest.request_number,
+              approved_by: approverId,
+              rejection_reason: approved ? null : rejectionReason || null,
+            },
+          },
+        });
+      }
  
        toast.success(approved ? "Lembur disetujui" : "Lembur ditolak");
        await fetchRequests();
@@ -353,6 +414,7 @@ export function useOvertimeRequests(filters?: {
    return { 
      requests, 
      isLoading, 
+     isRetrying,
      loadError,
      totalCount,
      createRequest, 

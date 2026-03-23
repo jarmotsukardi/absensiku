@@ -10,6 +10,8 @@ import { MessageSquare, Phone, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import type { Json } from "@/integrations/supabase/types";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface OrgFloatingWhatsappSettingsProps {
   tenantId: string;
@@ -54,12 +56,16 @@ export function OrgFloatingWhatsappSettings({ tenantId }: OrgFloatingWhatsappSet
 
   const fetchSettings = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("organization_settings")
-        .select("*")
-        .eq("tenant_id", tenantId)
-        .eq("setting_key", "floating_whatsapp")
-        .maybeSingle();
+      const { data, error } = await withTimeout(
+        () =>
+          supabase
+            .from("organization_settings")
+            .select("*")
+            .eq("tenant_id", tenantId)
+            .eq("setting_key", "floating_whatsapp")
+            .maybeSingle(),
+        12000,
+      );
 
       if (error && error.code !== "PGRST116") throw error;
 
@@ -102,7 +108,8 @@ export function OrgFloatingWhatsappSettings({ tenantId }: OrgFloatingWhatsappSet
         setIsLegacySchema(false);
       }
     } catch (error) {
-      console.error("Error fetching floating WA settings:", error);
+      const errorRef = reportError(error, "org.floating_whatsapp.fetch_settings", { tenant_id: tenantId });
+      toast.error(appendErrorReference("Gagal memuat pengaturan Floating WhatsApp", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -120,34 +127,49 @@ export function OrgFloatingWhatsappSettings({ tenantId }: OrgFloatingWhatsappSet
 
     setIsSaving(true);
     try {
-      const { data: existing } = await supabase
-        .from("organization_settings")
-        .select("id")
-        .eq("tenant_id", tenantId)
-        .eq("setting_key", "floating_whatsapp")
-        .maybeSingle();
+      const { data: existing, error: existingError } = await withTimeout(
+        () =>
+          supabase
+            .from("organization_settings")
+            .select("id")
+            .eq("tenant_id", tenantId)
+            .eq("setting_key", "floating_whatsapp")
+            .maybeSingle(),
+        12000,
+      );
+      if (existingError) throw existingError;
 
       if (existing) {
-        await supabase
-          .from("organization_settings")
-          .update({
-            setting_value: settings,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", existing.id);
+        const { error: updateError } = await withTimeout(
+          () =>
+            supabase
+              .from("organization_settings")
+              .update({
+                setting_value: settings,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", existing.id),
+          12000,
+        );
+        if (updateError) throw updateError;
       } else {
-        await supabase.from("organization_settings").insert({
-          tenant_id: tenantId,
-          setting_key: "floating_whatsapp",
-          setting_value: settings,
-        });
+        const { error: insertError } = await withTimeout(
+          () =>
+            supabase.from("organization_settings").insert({
+              tenant_id: tenantId,
+              setting_key: "floating_whatsapp",
+              setting_value: settings,
+            }),
+          12000,
+        );
+        if (insertError) throw insertError;
       }
 
       setIsLegacySchema(false);
       toast.success("Pengaturan Floating WhatsApp berhasil disimpan");
     } catch (error) {
-      console.error("Error saving settings:", error);
-      toast.error("Gagal menyimpan pengaturan");
+      const errorRef = reportError(error, "org.floating_whatsapp.save_settings", { tenant_id: tenantId });
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan", errorRef));
     } finally {
       setIsSaving(false);
     }

@@ -23,6 +23,7 @@ export type PageGlossaryPreset =
   | "admin_notifications"
   | "admin_feedback"
   | "admin_audit_logs"
+  | "admin_error_logs"
   | "admin_stress_test"
   | "admin_cron_jobs"
   | "admin_org_onboarding_templates"
@@ -165,6 +166,31 @@ const PRESETS: Record<PageGlossaryPreset, GlossaryPresetConfig> = {
       "Fokus pada aksi DELETE/UPDATE untuk investigasi perubahan kritis.",
       "Ekspor dan arsipkan laporan untuk compliance berkala.",
     ],
+  },
+  admin_error_logs: {
+    title: "Glosary & Penjelasan Operasional Log Error",
+    description: "Panduan membaca daftar gagal muat data di /admin/log-errors berdasarkan nomor error, dampak, dan tindak lanjut.",
+    entries: [
+      { term: "Nomor Error (Ref)", description: "Kode unik format ERR-... yang dipakai untuk pelacakan, eskalasi, dan verifikasi perbaikan." },
+      { term: "Gagal Memuat Data", description: "Kondisi saat halaman/fitur tidak bisa memuat data karena error client, API, atau koneksi." },
+      { term: "Kritis", description: "Error yang mengganggu alur utama pengguna dan wajib diprioritaskan perbaikannya." },
+      { term: "Non Kritis", description: "Error ringan/intermiten yang tidak menghentikan layanan utama, tetapi tetap dicatat untuk perbaikan." },
+      { term: "Selesai", description: "Status insiden kritis yang sudah diperbaiki dan diverifikasi hasilnya." },
+      { term: "Arsip Kritis", description: "Riwayat insiden kritis yang tidak lagi aktif, disimpan untuk audit dan referensi." },
+      { term: "Arsip Non Kritis", description: "Riwayat log non-kritis yang sudah dipindahkan dari antrian aktif agar fokus monitoring tetap ke error prioritas." },
+      { term: "Copy Ref Error", description: "Tombol salin cepat nomor error agar mudah ditempel ke tiket, chat, atau catatan investigasi." },
+      { term: "Retensi Otomatis", description: "Pembersihan berkala log lama agar performa query tetap ringan dan daftar tetap relevan." },
+    ],
+    workflowTitle: "Alur Kerja Harian Tim Admin",
+    workflowSteps: [
+      "Pantau tab Kritis terlebih dahulu dan prioritaskan error terbaru dengan dampak terbesar.",
+      "Gunakan tombol Copy pada Ref Error untuk investigasi, koordinasi, dan pembuatan tiket.",
+      "Setelah perbaikan tervalidasi, ubah status ke Selesai agar keluar dari antrian kritis aktif.",
+      "Pindahkan insiden yang sudah final ke Arsip Kritis untuk menjaga daftar aktif tetap bersih.",
+      "Pakai export CSV/JSON saat diperlukan untuk audit, laporan teknis, atau eskalasi vendor.",
+    ],
+    note:
+      "Filter default adalah 24 jam agar fokus ke insiden terkini. Jika data terlihat kosong, cek filter konteks/rentang waktu dan ubah ke 7 hari, 30 hari, atau Semua Waktu.",
   },
   admin_stress_test: {
     title: "Glosary & Penjelasan Stress Test",
@@ -426,20 +452,24 @@ const PRESETS: Record<PageGlossaryPreset, GlossaryPresetConfig> = {
     ],
   },
   org_help_center: {
-    title: "Glosary & Penjelasan Pusat Bantuan",
-    description: "Cara memakai FAQ, kategori bantuan, dan kanal dukungan organisasi.",
+    title: "Glosary & Penjelasan FAQ & Bantuan",
+    description: "Cara memakai FAQ, kanal bantuan, dan mekanisme tiket dukungan organisasi.",
     entries: [
       { term: "FAQ Category", description: "Kelompok topik pertanyaan agar pengguna cepat menemukan jawaban." },
       { term: "Search FAQ", description: "Pencarian pertanyaan berdasarkan kata kunci pada judul/konten." },
       { term: "Support Email", description: "Kanal resmi dukungan teknis via email." },
       { term: "Support WhatsApp", description: "Kanal bantuan cepat untuk konsultasi operasional." },
+      { term: "Tiket Bantuan", description: "Laporan kendala resmi dari admin organisasi dengan subjek, kategori, prioritas, dan detail masalah." },
+      { term: "Status Tiket", description: "Status progres tiket, minimal Open (menunggu tindak lanjut) dan Resolved (selesai)." },
+      { term: "Prioritas Tiket", description: "Level dampak masalah (Rendah, Normal, Tinggi, Urgent) untuk membantu triase support." },
       { term: "Fallback FAQ", description: "Data FAQ cadangan saat sumber utama belum tersedia." },
     ],
     workflowTitle: "Alur Bantuan",
     workflowSteps: [
       "Cari FAQ sesuai kata kunci/kategori.",
-      "Jika belum terjawab, gunakan email atau WhatsApp support.",
-      "Catat isu berulang untuk perbaikan dokumentasi internal.",
+      "Jika belum terjawab, buka menu Buat Tiket dan isi detail kendala.",
+      "Pantau status tiket (Open/Resolved) pada daftar tiket organisasi.",
+      "Gunakan email atau WhatsApp support untuk eskalasi jika diperlukan.",
     ],
   },
   org_schedule_work_hours: {
@@ -520,11 +550,13 @@ const PRESETS: Record<PageGlossaryPreset, GlossaryPresetConfig> = {
       { term: "Keterangan", description: "Kondisi detail seperti telat/pulang cepat/tidak absen pulang." },
       { term: "Range Tanggal", description: "Periode data yang dipakai untuk query laporan." },
       { term: "Search NIP/Nama", description: "Pencarian cepat record pegawai tertentu." },
+      { term: "Batas Jam Sibuk", description: "Penarikan laporan dibatasi saat jam sibuk absensi (06:00-09:00 dan 15:00-18:00) untuk menjaga performa sistem." },
       { term: "Export CSV/PDF", description: "Ekspor laporan untuk arsip atau kebutuhan rapat evaluasi." },
     ],
     workflowTitle: "Alur Audit Kehadiran",
     workflowSteps: [
       "Terapkan filter tanggal dan unit organisasi.",
+      "Jalankan penarikan laporan di luar jam sibuk absensi.",
       "Tinjau anomali status/keterangan.",
       "Ekspor hasil untuk dokumentasi periodik.",
     ],
@@ -537,11 +569,13 @@ const PRESETS: Record<PageGlossaryPreset, GlossaryPresetConfig> = {
       { term: "RPC Rekap", description: "Sumber data agregat server-side untuk kinerja query lebih stabil." },
       { term: "Total Rows", description: "Jumlah pegawai yang masuk hasil rekap untuk filter aktif." },
       { term: "Paging", description: "Pembagian hasil agar halaman tetap ringan pada data besar." },
+      { term: "Batas Jam Sibuk", description: "Penarikan rekap dibatasi saat jam sibuk absensi (06:00-09:00 dan 15:00-18:00) untuk menjaga kestabilan layanan." },
       { term: "Export & Print", description: "Output laporan untuk pelaporan manajemen dan arsip." },
     ],
     workflowTitle: "Alur Pelaporan Bulanan",
     workflowSteps: [
       "Pilih periode bulan/tahun dan unit.",
+      "Tampilkan rekap di luar jam sibuk absensi.",
       "Tampilkan rekap lalu analisis indikator utama.",
       "Cetak atau ekspor untuk pelaporan resmi.",
     ],
@@ -633,19 +667,20 @@ const PRESETS: Record<PageGlossaryPreset, GlossaryPresetConfig> = {
   },
   org_news: {
     title: "Glosary & Penjelasan Berita/Pengumuman Organisasi",
-    description: "Istilah utama untuk publikasi informasi internal organisasi.",
+    description: "Istilah utama untuk publikasi pengumuman internal organisasi.",
     entries: [
-      { term: "Status Publish", description: "Menandai konten aktif/tayang atau nonaktif/arsip." },
-      { term: "Kategori Konten", description: "Pengelompokan berita, artikel, dan pengumuman agar mudah difilter." },
-      { term: "Pinned Content", description: "Konten prioritas yang ditampilkan lebih atas untuk visibilitas tinggi." },
+      { term: "Status Publish", description: "Menandai pengumuman tayang (dipublikasikan) atau tidak tayang (draft)." },
+      { term: "Editor Teks Biasa", description: "Konten ditulis dalam teks biasa (non-HTML) agar mudah dibaca dan konsisten." },
+      { term: "Batas 15 Pengumuman", description: "Setiap organisasi maksimal menyimpan 15 pengumuman terbaru." },
+      { term: "Auto Delete Terlama", description: "Saat jumlah melebihi 15, pengumuman paling lama dihapus otomatis oleh sistem." },
       { term: "Pagination", description: "Pembagian daftar berita agar halaman tetap ringan saat data besar." },
-      { term: "CRUD Konten", description: "Tambah, ubah, hapus berita langsung dari panel admin organisasi." },
+      { term: "Pinned Content", description: "Pengumuman prioritas yang ditampilkan lebih atas untuk visibilitas tinggi." },
     ],
     workflowTitle: "Alur Editorial Singkat",
     workflowSteps: [
-      "Buat konten dengan judul dan deskripsi jelas.",
-      "Aktifkan status publish setelah review.",
-      "Arsipkan atau hapus konten usang secara berkala.",
+      "Tulis judul dan konten pengumuman dengan bahasa yang jelas.",
+      "Atur status publish dan pin bila diperlukan.",
+      "Pantau jumlah pengumuman agar tetap pada 15 data terbaru (sisanya dibersihkan otomatis).",
     ],
   },
   org_profile: {

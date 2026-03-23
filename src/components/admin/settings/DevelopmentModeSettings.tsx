@@ -4,6 +4,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Code2, AlertTriangle, Info, Shield, Database } from "lucide-react";
+import { reportError } from "@/lib/errorLogger";
 
 interface DevelopmentModeSettingsState {
   bypassRLS: boolean;
@@ -32,7 +33,7 @@ export function DevelopmentModeSettings() {
           setSettings(parsed);
         }
       } catch (e) {
-        console.error("Failed to parse dev mode settings");
+        reportError(e, "admin.development_mode_settings.parse_local_storage");
       }
     }
   }, []);

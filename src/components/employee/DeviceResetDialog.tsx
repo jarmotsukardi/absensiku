@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
+import { supabasePublishableKey, supabaseUrl } from "@/integrations/supabase/env";
 import { toast } from "sonner";
 import { Loader2, Smartphone, Lock, AlertTriangle, Mail, RotateCcw, Eye, EyeOff } from "lucide-react";
 import SingleOTPInput, { SingleOTPInputRef } from "@/components/common/SingleOTPInput";
@@ -203,12 +204,12 @@ export function DeviceResetDialog({
     setIsSendingOtp(true);
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-password-otp`,
+        `${supabaseUrl}/functions/v1/send-password-otp`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "apikey": supabasePublishableKey,
           },
           body: JSON.stringify({
             email: employeeEmail.trim(),
@@ -330,13 +331,13 @@ export function DeviceResetDialog({
       const invokeVerifyDeviceOtp = async (accessToken?: string | null) => {
         const headers: Record<string, string> = {
           "Content-Type": "application/json",
-          "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          "apikey": supabasePublishableKey,
         };
         if (accessToken) {
           headers["Authorization"] = `Bearer ${accessToken}`;
         }
         return fetch(
-          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-device-otp`,
+          `${supabaseUrl}/functions/v1/verify-device-otp`,
           {
             method: "POST",
             headers,

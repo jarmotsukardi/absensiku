@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,6 +22,9 @@ import { AccountDeletionDialog } from "@/components/org/AccountDeletionDialog";
 import { ForgotPasswordDialog } from "@/components/auth/ForgotPasswordDialog";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import OrgLandingSettings from "@/pages/org/OrgLandingSettings";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 const ORGANIZATION_TYPES = [
   { value: "pemerintah_daerah", label: "Pemerintah Daerah" },
@@ -28,6 +32,8 @@ const ORGANIZATION_TYPES = [
   { value: "perusahaan", label: "Perusahaan" },
   { value: "sekolah", label: "Sekolah" },
 ];
+const ORG_SETTINGS_QUERY_TIMEOUT_MS = 12000;
+const ORG_SETTINGS_QUERY_RETRY_MAX = 2;
 
 const parseNumericSettingValue = (raw: unknown, fallback: number): number => {
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
@@ -49,8 +55,16 @@ const parseNumericSettingValue = (raw: unknown, fallback: number): number => {
 
 export default function OrgSettings() {
   const { organization, isLoading, updateOrganization, updateTimezone, refetch } = useOrganizationSettings();
-  const [activeTab, setActiveTab] = useState("general");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState(() => {
+    const tab = searchParams.get("tab");
+    return tab && ["general", "branding", "billing", "timezone", "whatsapp", "security", "landing", "danger"].includes(tab)
+      ? tab
+      : "general";
+  });
   const [isSaving, setIsSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [currentTime, setCurrentTime] = useState<string>("");
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   
@@ -69,26 +83,86 @@ export default function OrgSettings() {
   const [activeEmployeeCount, setActiveEmployeeCount] = useState(0);
 
   useEffect(() => {
+    const tab = searchParams.get("tab");
+    const resolvedTab =
+      tab && ["general", "branding", "billing", "timezone", "whatsapp", "security", "landing", "danger"].includes(tab)
+        ? tab
+        : "general";
+    if (resolvedTab !== activeTab) {
+      setActiveTab(resolvedTab);
+    }
+  }, [activeTab, searchParams]);
+
+  const handleTabChange = (value: string) => {
+    setActiveTab(value);
+    const next = new URLSearchParams(searchParams);
+    if (value === "general") {
+      next.delete("tab");
+    } else {
+      next.set("tab", value);
+    }
+    setSearchParams(next, { replace: true });
+  };
+
+  useEffect(() => {
     // Fetch B2B threshold from system settings
     const fetchB2bThreshold = async () => {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "b2b_negotiation_threshold")
-        .maybeSingle();
-      setB2bThreshold(Math.max(1, Math.floor(parseNumericSettingValue(data?.value, 2000))));
+      try {
+        setIsRetrying(false);
+        const { data } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("system_settings")
+                .select("value")
+                .eq("key", "b2b_negotiation_threshold")
+                .maybeSingle(),
+              ORG_SETTINGS_QUERY_TIMEOUT_MS,
+              "org.settings.fetch_b2b_threshold timeout"
+            ),
+          {
+            maxRetries: ORG_SETTINGS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
+        setB2bThreshold(Math.max(1, Math.floor(parseNumericSettingValue(data?.value, 2000))));
+      } catch (error) {
+        const errorRef = reportError(error, "org.settings.fetch_b2b_threshold");
+        const message = appendErrorReference("Gagal memuat threshold B2B", errorRef);
+        setLoadError((prev) => prev ?? message);
+      }
     };
-    fetchB2bThreshold();
+    void fetchB2bThreshold();
   }, []);
 
   useEffect(() => {
     if (organization?.id) {
-      supabase
-        .from("employees")
-        .select("id", { count: "exact", head: true })
-        .eq("tenant_id", organization.id)
-        .eq("is_active", true)
-        .then(({ count }) => setActiveEmployeeCount(count || 0));
+      void withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("id", { count: "exact", head: true })
+              .eq("tenant_id", organization.id)
+              .eq("is_active", true),
+            ORG_SETTINGS_QUERY_TIMEOUT_MS,
+            "org.settings.fetch_active_employee_count timeout"
+          ),
+        {
+          maxRetries: ORG_SETTINGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      )
+        .then(({ count }) => setActiveEmployeeCount(count || 0))
+        .catch((error) => {
+          const errorRef = reportError(error, "org.settings.fetch_active_employee_count", {
+            tenant_id: organization.id,
+          });
+          const message = appendErrorReference("Gagal memuat jumlah pegawai aktif", errorRef);
+          setLoadError((prev) => prev ?? message);
+        });
     }
   }, [organization?.id]);
   
@@ -182,13 +256,26 @@ export default function OrgSettings() {
 
     setIsSendingOtp(true);
     try {
+      setIsRetrying(false);
       // Use edge function to securely generate and send OTP
-      const { data, error } = await supabase.functions.invoke("send-org-type-otp", {
-        body: {
-          email: organization?.email || formData.email,
-          whatsapp: formData.whatsapp,
-        },
-      });
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.functions.invoke("send-org-type-otp", {
+              body: {
+                email: organization?.email || formData.email,
+                whatsapp: formData.whatsapp,
+              },
+            }),
+            ORG_SETTINGS_QUERY_TIMEOUT_MS,
+            "org.settings.send_org_type_otp timeout"
+          ),
+        {
+          maxRetries: ORG_SETTINGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
 
@@ -201,8 +288,8 @@ export default function OrgSettings() {
 
       setOtpSent(true);
     } catch (error: unknown) {
-      console.error("Error sending OTP:", error);
-      toast.error("Gagal mengirim OTP. Coba lagi.");
+      const errorRef = reportError(error, "org.settings.send_org_type_otp");
+      toast.error(appendErrorReference("Gagal mengirim OTP. Coba lagi.", errorRef));
     } finally {
       setIsSendingOtp(false);
     }
@@ -217,13 +304,26 @@ export default function OrgSettings() {
 
     setIsVerifyingOtp(true);
     try {
+      setIsRetrying(false);
       // Verify OTP via edge function (secure hash comparison)
-      const { data, error } = await supabase.functions.invoke("verify-org-type-otp", {
-        body: {
-          email: organization?.email || formData.email,
-          otp: otpCode,
-        },
-      });
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.functions.invoke("verify-org-type-otp", {
+              body: {
+                email: organization?.email || formData.email,
+                otp: otpCode,
+              },
+            }),
+            ORG_SETTINGS_QUERY_TIMEOUT_MS,
+            "org.settings.verify_org_type_otp timeout"
+          ),
+        {
+          maxRetries: ORG_SETTINGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error || !data?.success) {
         toast.error(data?.error || "Kode OTP tidak valid atau sudah kedaluwarsa");
@@ -239,8 +339,8 @@ export default function OrgSettings() {
       setShowOtpDialog(false);
       toast.success("Jenis organisasi berhasil diubah");
     } catch (error: unknown) {
-      console.error("Error verifying OTP:", error);
-      toast.error("Gagal verifikasi OTP");
+      const errorRef = reportError(error, "org.settings.verify_org_type_otp");
+      toast.error(appendErrorReference("Gagal verifikasi OTP", errorRef));
     } finally {
       setIsVerifyingOtp(false);
     }
@@ -286,6 +386,16 @@ export default function OrgSettings() {
   return (
     <OrganizationLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang memuat pengaturan organisasi...
+          </div>
+        )}
+        {loadError && (
+          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {loadError}
+          </div>
+        )}
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Settings className="h-6 w-6" />
@@ -294,37 +404,43 @@ export default function OrgSettings() {
           <p className="text-muted-foreground">Konfigurasi organisasi Anda</p>
         </div>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="flex flex-wrap h-auto gap-1 w-full lg:w-[900px] p-1">
-            <TabsTrigger value="general" className="flex items-center gap-2 flex-1 min-w-[80px]">
+        <Tabs value={activeTab} onValueChange={handleTabChange}>
+          <div className="overflow-x-auto pb-1">
+            <TabsList className="min-w-max h-auto gap-1.5 rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+            <TabsTrigger value="general" className="flex items-center gap-2 whitespace-nowrap">
               <Building2 className="h-4 w-4" />
               <span className="hidden sm:inline">Profil Organisasi</span>
             </TabsTrigger>
-            <TabsTrigger value="branding" className="flex items-center gap-2 flex-1 min-w-[80px]">
+            <TabsTrigger value="branding" className="flex items-center gap-2 whitespace-nowrap">
               <Image className="h-4 w-4" />
               <span className="hidden sm:inline">Branding</span>
             </TabsTrigger>
-            <TabsTrigger value="billing" className="flex items-center gap-2 flex-1 min-w-[80px]">
+            <TabsTrigger value="billing" className="flex items-center gap-2 whitespace-nowrap">
               <Wallet className="h-4 w-4" />
               <span className="hidden sm:inline">Pembiayaan</span>
             </TabsTrigger>
-            <TabsTrigger value="timezone" className="flex items-center gap-2 flex-1 min-w-[80px]">
+            <TabsTrigger value="timezone" className="flex items-center gap-2 whitespace-nowrap">
               <Clock className="h-4 w-4" />
               <span className="hidden sm:inline">Zona Waktu</span>
             </TabsTrigger>
-            <TabsTrigger value="whatsapp" className="flex items-center gap-2 flex-1 min-w-[80px]">
+            <TabsTrigger value="whatsapp" className="flex items-center gap-2 whitespace-nowrap">
               <MessageSquare className="h-4 w-4" />
               <span className="hidden sm:inline">WhatsApp</span>
             </TabsTrigger>
-            <TabsTrigger value="security" className="flex items-center gap-2 flex-1 min-w-[80px]">
+            <TabsTrigger value="security" className="flex items-center gap-2 whitespace-nowrap">
               <Key className="h-4 w-4" />
               <span className="hidden sm:inline">Keamanan</span>
             </TabsTrigger>
-            <TabsTrigger value="danger" className="flex items-center gap-2 flex-1 min-w-[80px] text-destructive data-[state=active]:text-destructive">
+            <TabsTrigger value="landing" className="flex items-center gap-2 whitespace-nowrap">
+              <Globe className="h-4 w-4" />
+              <span className="hidden sm:inline">Landing & Aplikasi</span>
+            </TabsTrigger>
+            <TabsTrigger value="danger" className="flex items-center gap-2 whitespace-nowrap text-destructive data-[state=active]:text-destructive">
               <Trash2 className="h-4 w-4" />
               <span className="hidden sm:inline">Hapus Akun</span>
             </TabsTrigger>
           </TabsList>
+          </div>
 
           <TabsContent value="general" className="space-y-4">
             <Card>
@@ -768,6 +884,10 @@ export default function OrgSettings() {
             </Card>
           </TabsContent>
 
+          <TabsContent value="landing" className="space-y-4">
+            <OrgLandingSettings embedded />
+          </TabsContent>
+
           {/* Danger Zone Tab */}
           <TabsContent value="danger" className="space-y-4">
             <Card className="border-destructive/30">
@@ -869,25 +989,28 @@ export default function OrgSettings() {
             )}
           </div>
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowOtpDialog(false)}>
-              Batal
-            </Button>
-            {otpSent && (
-              <Button
-                onClick={handleVerifyOtp}
-                disabled={isVerifyingOtp || !otpValid}
-              >
-                {isVerifyingOtp ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Memverifikasi...
-                  </>
-                ) : (
-                  "Verifikasi & Ubah"
-                )}
+          <DialogFooter className={dialogActionBarClassName}>
+            <DialogActionHint>Kode OTP berlaku terbatas. Lanjutkan verifikasi sebelum kedaluwarsa.</DialogActionHint>
+            <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+              <Button variant="outline" onClick={() => setShowOtpDialog(false)}>
+                Batal
               </Button>
-            )}
+              {otpSent && (
+                <Button
+                  onClick={handleVerifyOtp}
+                  disabled={isVerifyingOtp || !otpValid}
+                >
+                  {isVerifyingOtp ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Memverifikasi...
+                    </>
+                  ) : (
+                    "Verifikasi & Ubah"
+                  )}
+                </Button>
+              )}
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -927,17 +1050,29 @@ export default function OrgSettings() {
             {formData.whatsapp && !billingOtpSent && (
               <Button
                 onClick={async () => {
-                  setIsSendingBillingOtp(true);
-                  try {
-                    const { data, error } = await supabase.functions.invoke("send-billing-mode-otp", {
-                      body: {
-                        email: organization?.email || formData.email,
-                        whatsapp: formData.whatsapp,
-                        tenant_id: organization?.id,
-                        new_mode: pendingBillingMode,
-                      },
-                    });
-                    if (error) throw error;
+                    setIsSendingBillingOtp(true);
+                    try {
+                      const { data, error } = await withExponentialBackoff(
+                        () =>
+                          withTimeout(
+                            supabase.functions.invoke("send-billing-mode-otp", {
+                              body: {
+                                email: organization?.email || formData.email,
+                                whatsapp: formData.whatsapp,
+                                tenant_id: organization?.id,
+                                new_mode: pendingBillingMode,
+                              },
+                            }),
+                            ORG_SETTINGS_QUERY_TIMEOUT_MS,
+                            "org.settings.send_billing_mode_otp timeout",
+                          ),
+                        {
+                          maxRetries: ORG_SETTINGS_QUERY_RETRY_MAX,
+                          shouldRetry: isRetryableError,
+                          onRetry: () => setIsRetrying(true),
+                        },
+                      );
+                      if (error) throw error;
                     if (data.demo_otp) {
                       toast.info(`[DEMO] Kode OTP: ${data.demo_otp}`);
                     } else {
@@ -945,8 +1080,12 @@ export default function OrgSettings() {
                     }
                     setBillingOtpSent(true);
                   } catch (err: unknown) {
+                    const errorRef = reportError(err, "org.settings.send_billing_mode_otp", {
+                      tenant_id: organization?.id || null,
+                      pending_billing_mode: pendingBillingMode,
+                    });
                     const errorMessage = err instanceof Error ? err.message : "Coba lagi";
-                    toast.error("Gagal mengirim OTP: " + errorMessage);
+                    toast.error(appendErrorReference(`Gagal mengirim OTP: ${errorMessage}`, errorRef));
                   } finally {
                     setIsSendingBillingOtp(false);
                   }
@@ -974,19 +1113,35 @@ export default function OrgSettings() {
                   onClick={async () => {
                     setIsSendingBillingOtp(true);
                     try {
-                      const { data, error } = await supabase.functions.invoke("send-billing-mode-otp", {
-                        body: {
-                          email: organization?.email || formData.email,
-                          whatsapp: formData.whatsapp,
-                          tenant_id: organization?.id,
-                          new_mode: pendingBillingMode,
+                      const { data, error } = await withExponentialBackoff(
+                        () =>
+                          withTimeout(
+                            supabase.functions.invoke("send-billing-mode-otp", {
+                              body: {
+                                email: organization?.email || formData.email,
+                                whatsapp: formData.whatsapp,
+                                tenant_id: organization?.id,
+                                new_mode: pendingBillingMode,
+                              },
+                            }),
+                            ORG_SETTINGS_QUERY_TIMEOUT_MS,
+                            "org.settings.resend_billing_mode_otp timeout",
+                          ),
+                        {
+                          maxRetries: ORG_SETTINGS_QUERY_RETRY_MAX,
+                          shouldRetry: isRetryableError,
+                          onRetry: () => setIsRetrying(true),
                         },
-                      });
+                      );
                       if (error) throw error;
                       if (data.demo_otp) toast.info(`[DEMO] Kode OTP: ${data.demo_otp}`);
                       else toast.success("Kode OTP dikirim ulang");
                     } catch (err: unknown) {
-                      toast.error("Gagal mengirim OTP");
+                      const errorRef = reportError(err, "org.settings.resend_billing_mode_otp", {
+                        tenant_id: organization?.id || null,
+                        pending_billing_mode: pendingBillingMode,
+                      });
+                      toast.error(appendErrorReference("Gagal mengirim OTP", errorRef));
                     } finally {
                       setIsSendingBillingOtp(false);
                     }
@@ -999,57 +1154,72 @@ export default function OrgSettings() {
               </div>
             )}
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowBillingOtpDialog(false)}>Batal</Button>
-            {billingOtpSent && (
-              <Button
-                onClick={async () => {
-                  if (!organization?.id) {
-                    toast.error("Data organisasi belum tersedia");
-                    return;
-                  }
-                  const otpCode = billingOtpRef.current?.getValue() || "";
-                  if (otpCode.length !== 6) {
-                    toast.error("Masukkan 6 digit kode OTP");
-                    return;
-                  }
-                  setIsVerifyingBillingOtp(true);
-                  try {
-                    const { data, error } = await supabase.functions.invoke("verify-billing-mode-otp", {
-                      body: {
-                        email: organization?.email || formData.email,
-                        otp: otpCode,
-                        tenant_id: organization?.id,
-                        new_mode: pendingBillingMode,
-                      },
-                    });
-                    if (error || !data?.success) {
-                      toast.error(data?.error || "Kode OTP tidak valid atau sudah kedaluwarsa");
+          <DialogFooter className={dialogActionBarClassName}>
+            <DialogActionHint>Perubahan mode billing baru berlaku setelah OTP diverifikasi.</DialogActionHint>
+            <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+              <Button variant="outline" onClick={() => setShowBillingOtpDialog(false)}>Batal</Button>
+              {billingOtpSent && (
+                <Button
+                  onClick={async () => {
+                    if (!organization?.id) {
+                      toast.error("Data organisasi belum tersedia");
                       return;
                     }
-                    setShowBillingOtpDialog(false);
-                    toast.success(`Mode billing berhasil diubah ke ${pendingBillingMode === "individual" ? "Billing Mandiri" : "Billing Terpusat"}`);
-                    await refetch();
-                  } catch (err: unknown) {
-                    const errorRef = reportError(err, "org.settings.verify_billing_mode_otp", {
-                      tenant_id: organization.id,
-                      pending_billing_mode: pendingBillingMode,
-                    });
-                    const message = err instanceof Error ? err.message : "Coba lagi";
-                    toast.error(appendErrorReference(`Gagal verifikasi: ${message}`, errorRef));
-                  } finally {
-                    setIsVerifyingBillingOtp(false);
-                  }
-                }}
-                disabled={isVerifyingBillingOtp || !billingOtpValid}
-              >
-                {isVerifyingBillingOtp ? (
-                  <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Memverifikasi...</>
-                ) : (
-                  "Verifikasi & Ubah"
-                )}
-              </Button>
-            )}
+                    const otpCode = billingOtpRef.current?.getValue() || "";
+                    if (otpCode.length !== 6) {
+                      toast.error("Masukkan 6 digit kode OTP");
+                      return;
+                    }
+                    setIsVerifyingBillingOtp(true);
+                    try {
+                      const { data, error } = await withExponentialBackoff(
+                        () =>
+                          withTimeout(
+                            supabase.functions.invoke("verify-billing-mode-otp", {
+                              body: {
+                                email: organization?.email || formData.email,
+                                otp: otpCode,
+                                tenant_id: organization?.id,
+                                new_mode: pendingBillingMode,
+                              },
+                            }),
+                            ORG_SETTINGS_QUERY_TIMEOUT_MS,
+                            "org.settings.verify_billing_mode_otp timeout",
+                          ),
+                        {
+                          maxRetries: ORG_SETTINGS_QUERY_RETRY_MAX,
+                          shouldRetry: isRetryableError,
+                          onRetry: () => setIsRetrying(true),
+                        },
+                      );
+                      if (error || !data?.success) {
+                        toast.error(data?.error || "Kode OTP tidak valid atau sudah kedaluwarsa");
+                        return;
+                      }
+                      setShowBillingOtpDialog(false);
+                      toast.success(`Mode billing berhasil diubah ke ${pendingBillingMode === "individual" ? "Billing Mandiri" : "Billing Terpusat"}`);
+                      await refetch();
+                    } catch (err: unknown) {
+                      const errorRef = reportError(err, "org.settings.verify_billing_mode_otp", {
+                        tenant_id: organization.id,
+                        pending_billing_mode: pendingBillingMode,
+                      });
+                      const message = err instanceof Error ? err.message : "Coba lagi";
+                      toast.error(appendErrorReference(`Gagal verifikasi: ${message}`, errorRef));
+                    } finally {
+                      setIsVerifyingBillingOtp(false);
+                    }
+                  }}
+                  disabled={isVerifyingBillingOtp || !billingOtpValid}
+                >
+                  {isVerifyingBillingOtp ? (
+                    <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Memverifikasi...</>
+                  ) : (
+                    "Verifikasi & Ubah"
+                  )}
+                </Button>
+              )}
+            </div>
           </DialogFooter>
         </DialogContent>
       </Dialog>

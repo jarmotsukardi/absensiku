@@ -1,99 +1,88 @@
-import { useState, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { AlertTriangle, CreditCard, Loader2 } from "lucide-react";
+import { AlertTriangle, CreditCard, Loader2, X } from "lucide-react";
+import { hasActiveIndividualBillingCoverage } from "@/lib/employeeBillingCoverage";
 
 interface BillingActivationOverlayProps {
   tenantId: string;
   employeeId: string;
   billingMode: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }
 
-export function BillingActivationOverlay({ tenantId, employeeId, billingMode }: BillingActivationOverlayProps) {
+export function BillingActivationOverlay({
+  tenantId,
+  employeeId,
+  billingMode,
+  open,
+  onOpenChange,
+}: BillingActivationOverlayProps) {
   const navigate = useNavigate();
-  const [hasPaid, setHasPaid] = useState<boolean | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    if (billingMode === "individual") {
-      checkPaymentStatus();
-    } else {
-      setHasPaid(true);
-      setIsLoading(false);
-    }
-  }, [billingMode, employeeId, checkPaymentStatus]);
+  const [isBlocked, setIsBlocked] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   const checkPaymentStatus = useCallback(async () => {
-    const now = new Date();
+    if (!open) return;
+    setIsLoading(true);
     try {
-      // Check latest subscription snapshot first.
-      const { data: subscription, error: subscriptionError } = await supabase
-        .from("subscriptions")
-        .select("status, end_date, grace_period_end")
-        .eq("tenant_id", tenantId)
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
-      if (subscriptionError) {
-        const logId = `ERR-BILLING-OVERLAY-SUB-${Date.now()}`;
-        console.error(`[${logId}] Failed to load subscription`, subscriptionError);
-        setHasPaid(false);
+      const hasAccess = await hasActiveIndividualBillingCoverage({
+        tenantId,
+        employeeId,
+        billingMode,
+      });
+      if (hasAccess) {
+        setIsBlocked(false);
+        onOpenChange(false);
         return;
       }
-
-      if (subscription?.status === "expired" || subscription?.status === "cancelled") {
-        setHasPaid(false);
-        return;
-      }
-
-      if (subscription?.status === "active" && subscription?.end_date) {
-        const endDate = new Date(subscription.end_date);
-        if (endDate > now) {
-          setHasPaid(true);
-          return;
-        }
-      }
-
-      // Check streak status as fallback.
-      const { data: streak, error: streakError } = await supabase
-        .from("stability_streaks")
-        .select("status, reached_target, grace_period_end")
-        .eq("tenant_id", tenantId)
-        .maybeSingle();
-
-      if (streakError) {
-        const logId = `ERR-BILLING-OVERLAY-STREAK-${Date.now()}`;
-        console.error(`[${logId}] Failed to load streak`, streakError);
-        setHasPaid(false);
-        return;
-      }
-
-      if (streak?.status === "tracking" || !streak?.reached_target) {
-        setHasPaid(true); // Still in free/tracking period
-      } else if (streak?.grace_period_end) {
-        setHasPaid(new Date(streak.grace_period_end) > now);
-      } else {
-        setHasPaid(false);
-      }
+      setIsBlocked(true);
     } catch (error) {
-      const logId = `ERR-BILLING-OVERLAY-UNEXPECTED-${Date.now()}`;
+      const logId = `ERR-BILLING-OVERLAY-CHECK-${Date.now()}`;
       console.error(`[${logId}] Error checking payment`, error);
-      setHasPaid(false);
+      setIsBlocked(true);
     } finally {
       setIsLoading(false);
     }
-  }, [tenantId]);
+  }, [billingMode, employeeId, onOpenChange, open, tenantId]);
 
-  if (isLoading || hasPaid !== false) return null;
+  useEffect(() => {
+    void checkPaymentStatus();
+  }, [checkPaymentStatus]);
+
+  if (!open) return null;
+  if (isLoading) {
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+        <Card className="w-full max-w-md mx-4 shadow-2xl">
+          <CardContent className="py-8">
+            <div className="flex items-center justify-center gap-2 text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span className="text-sm">Memeriksa status pembayaran...</span>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+  if (!isBlocked) return null;
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm">
       <Card className="w-full max-w-md mx-4 border-destructive/50 shadow-2xl animate-in fade-in zoom-in-95 duration-300">
-        <CardHeader className="text-center pb-3">
+        <CardHeader className="text-center pb-3 relative">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="absolute right-2 top-2 h-8 w-8"
+            onClick={() => onOpenChange(false)}
+            aria-label="Tutup overlay billing"
+          >
+            <X className="h-4 w-4" />
+          </Button>
           <div className="mx-auto p-4 rounded-full bg-destructive/10 w-fit mb-3">
             <AlertTriangle className="h-10 w-10 text-destructive" />
           </div>
@@ -115,18 +104,24 @@ export function BillingActivationOverlay({ tenantId, employeeId, billingMode }: 
           </div>
 
           <div className="text-xs text-muted-foreground text-center">
-            <p>Hubungi admin organisasi Anda atau lakukan pembayaran melalui menu Aktivasi untuk membuka akses.</p>
+            <p>Silakan lanjut pembayaran lewat menu Billing. Anda tetap bisa menutup popup ini dulu.</p>
           </div>
 
-          <Button
-            className="w-full"
-            onClick={() => {
-              navigate("/employee/dashboard?tab=activation", { replace: true });
-            }}
-          >
-            <CreditCard className="h-4 w-4 mr-2" />
-            Lakukan Pembayaran
-          </Button>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)}>
+              Tutup
+            </Button>
+            <Button
+              className="w-full"
+              onClick={() => {
+                onOpenChange(false);
+                navigate("/employee/billing", { replace: true });
+              }}
+            >
+              <CreditCard className="h-4 w-4 mr-2" />
+              Lakukan Pembayaran
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>

@@ -4,6 +4,7 @@ import { OrganizationLayout } from "@/components/admin/organization/Organization
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -36,10 +37,11 @@ import { Plus, Pencil, Trash2, Search, Newspaper, Eye, EyeOff } from "lucide-rea
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
-import { RichTextEditor } from "@/components/editor/RichTextEditor";
 import { NewsThumbnailPreview } from "@/components/common/NewsThumbnailPreview";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 interface NewsItem {
   id: string;
@@ -52,10 +54,25 @@ interface NewsItem {
   tenant_id?: string;
 }
 
+const MAX_ANNOUNCEMENTS = 15;
+
+const htmlToPlainText = (value: string): string => {
+  if (!value) return "";
+  const withBreaks = value
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n");
+  const tmp = document.createElement("div");
+  tmp.innerHTML = withBreaks;
+  return (tmp.textContent || tmp.innerText || "").replace(/\n{3,}/g, "\n\n").trim();
+};
+
 export default function OrgNewsManagement() {
+  const ORG_NEWS_QUERY_TIMEOUT_MS = 15000;
+  const ORG_NEWS_QUERY_RETRY_MAX = 1;
   const [news, setNews] = useState<NewsItem[]>([]);
   const [totalNews, setTotalNews] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<"all" | "published" | "draft">("all");
@@ -72,7 +89,6 @@ export default function OrgNewsManagement() {
   const [formData, setFormData] = useState({
     title: "",
     content: "",
-    image_url: "",
     is_published: true,
     is_pinned: false,
   });
@@ -81,10 +97,64 @@ export default function OrgNewsManagement() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  const enforceAnnouncementLimit = useCallback(async (tid: string): Promise<number> => {
+    let totalDeleted = 0;
+    const batchSize = 100;
+
+    while (true) {
+      const { data: overflowRows, error: overflowError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("announcements")
+              .select("id")
+              .eq("tenant_id", tid)
+              .order("created_at", { ascending: false })
+              .range(MAX_ANNOUNCEMENTS, MAX_ANNOUNCEMENTS + batchSize - 1),
+            ORG_NEWS_QUERY_TIMEOUT_MS,
+            "org.news.enforce_limit.select_overflow timeout",
+          ),
+        {
+          maxRetries: ORG_NEWS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
+      if (overflowError) throw overflowError;
+
+      const idsToDelete = (overflowRows || []).map((row) => row.id);
+      if (idsToDelete.length === 0) break;
+
+      const { error: deleteError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("announcements")
+              .delete()
+              .in("id", idsToDelete),
+            ORG_NEWS_QUERY_TIMEOUT_MS,
+            "org.news.enforce_limit.delete_overflow timeout",
+          ),
+        {
+          maxRetries: ORG_NEWS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
+      if (deleteError) throw deleteError;
+
+      totalDeleted += idsToDelete.length;
+      if (idsToDelete.length < batchSize) break;
+    }
+
+    return totalDeleted;
+  }, []);
+
   const fetchNews = useCallback(async (tid: string) => {
     setIsLoading(true);
     setLoadError(null);
     try {
+      setIsRetrying(false);
       let query = supabase
         .from("announcements")
         .select("*", { count: "exact" })
@@ -102,10 +172,22 @@ export default function OrgNewsManagement() {
 
       const from = (currentPage - 1) * itemsPerPage;
       const to = from + itemsPerPage - 1;
-      const { data, error, count } = await query
-        .order("is_pinned", { ascending: false })
-        .order("created_at", { ascending: false })
-        .range(from, to);
+      const { data, error, count } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query
+              .order("is_pinned", { ascending: false })
+              .order("created_at", { ascending: false })
+              .range(from, to),
+            ORG_NEWS_QUERY_TIMEOUT_MS,
+            "org.news.fetch timeout",
+          ),
+        {
+          maxRetries: ORG_NEWS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
       setNews(data || []);
@@ -119,28 +201,44 @@ export default function OrgNewsManagement() {
       setTotalNews(0);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   }, [currentPage, filterStatus, itemsPerPage, searchQuery]);
 
   const fetchTenantAndNews = useCallback(async () => {
+    let shouldStopLoading = true;
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
+      setIsRetrying(false);
+      const resolvedTenantId = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            resolveOrgTenantId(),
+            ORG_NEWS_QUERY_TIMEOUT_MS,
+            "org.news.fetch_tenant_and_news timeout",
+          ),
+        {
+          maxRetries: ORG_NEWS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
-      const { data: roleData } = await supabase
-        .from("user_roles")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .single();
-
-      if (roleData?.tenant_id) {
-        setTenantId(roleData.tenant_id);
+      if (resolvedTenantId) {
+        shouldStopLoading = false;
+        setTenantId(resolvedTenantId);
+      } else {
+        setLoadError("Tenant organisasi tidak ditemukan. Hubungi admin.");
       }
     } catch (error) {
       const errorRef = reportError(error, "org.news.fetch_tenant_and_news");
       const message = appendErrorReference("Gagal memuat halaman pengumuman", errorRef);
       setLoadError(message);
       toast.error(message);
+    } finally {
+      setIsRetrying(false);
+      if (shouldStopLoading) {
+        setIsLoading(false);
+      }
     }
   }, []);
 
@@ -150,45 +248,81 @@ export default function OrgNewsManagement() {
 
   useEffect(() => {
     if (tenantId) {
-      void fetchNews(tenantId);
+      void (async () => {
+        try {
+          await enforceAnnouncementLimit(tenantId);
+        } catch (error) {
+          const errorRef = reportError(error, "org.news.enforce_limit", { tenant_id: tenantId });
+          toast.error(appendErrorReference("Gagal membersihkan pengumuman lama otomatis", errorRef));
+        }
+        await fetchNews(tenantId);
+      })();
     }
-  }, [fetchNews, tenantId]);
+  }, [enforceAnnouncementLimit, fetchNews, tenantId]);
 
   const handleSubmit = async () => {
-    if (!formData.title.trim() || !formData.content.trim()) {
+    const normalizedContent = htmlToPlainText(formData.content);
+    if (!formData.title.trim() || !normalizedContent) {
       toast.error("Judul dan konten harus diisi");
       return;
     }
 
     try {
+      setIsRetrying(false);
       if (isEditing && editingId) {
-        const { error } = await supabase
-          .from("announcements")
-          .update({
-            title: formData.title,
-            content: formData.content,
-            image_url: formData.image_url || null,
-            is_published: formData.is_published,
-            is_pinned: formData.is_pinned,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", editingId);
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("announcements")
+                .update({
+                  title: formData.title,
+                  content: normalizedContent,
+                  is_published: formData.is_published,
+                  is_pinned: formData.is_pinned,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", editingId),
+              ORG_NEWS_QUERY_TIMEOUT_MS,
+              "org.news.submit.update timeout",
+            ),
+          {
+            maxRetries: ORG_NEWS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
 
         if (error) throw error;
         toast.success("Pengumuman berhasil diperbarui");
       } else {
-        const { error } = await supabase
-          .from("announcements")
-          .insert({
-            title: formData.title,
-            content: formData.content,
-            image_url: formData.image_url || null,
-            is_published: formData.is_published,
-            is_pinned: formData.is_pinned,
-            tenant_id: tenantId,
-          });
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("announcements")
+                .insert({
+                  title: formData.title,
+                  content: normalizedContent,
+                  is_published: formData.is_published,
+                  is_pinned: formData.is_pinned,
+                  tenant_id: tenantId,
+                }),
+              ORG_NEWS_QUERY_TIMEOUT_MS,
+              "org.news.submit.insert timeout",
+            ),
+          {
+            maxRetries: ORG_NEWS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
 
         if (error) throw error;
+        const deletedCount = tenantId ? await enforceAnnouncementLimit(tenantId) : 0;
+        if (deletedCount > 0) {
+          toast.info(`${deletedCount} pengumuman terlama dihapus otomatis (maksimal ${MAX_ANNOUNCEMENTS} data).`);
+        }
         toast.success("Pengumuman berhasil ditambahkan");
       }
 
@@ -196,16 +330,20 @@ export default function OrgNewsManagement() {
       resetForm();
       if (tenantId) void fetchNews(tenantId);
     } catch (error) {
-      console.error("Error saving news:", error);
-      toast.error("Gagal menyimpan pengumuman");
+      const errorRef = reportError(error, "org.news.submit", {
+        is_editing: isEditing,
+        announcement_id: editingId,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan pengumuman", errorRef));
+    } finally {
+      setIsRetrying(false);
     }
   };
 
   const handleEdit = (item: NewsItem) => {
     setFormData({
       title: item.title,
-      content: item.content,
-      image_url: item.image_url || "",
+      content: htmlToPlainText(item.content),
       is_published: item.is_published,
       is_pinned: item.is_pinned,
     });
@@ -218,10 +356,23 @@ export default function OrgNewsManagement() {
     if (!deletingId) return;
 
     try {
-      const { error } = await supabase
-        .from("announcements")
-        .delete()
-        .eq("id", deletingId);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("announcements")
+              .delete()
+              .eq("id", deletingId),
+            ORG_NEWS_QUERY_TIMEOUT_MS,
+            "org.news.delete timeout",
+          ),
+        {
+          maxRetries: ORG_NEWS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
       toast.success("Pengumuman berhasil dihapus");
@@ -229,23 +380,44 @@ export default function OrgNewsManagement() {
       setDeletingId(null);
       if (tenantId) void fetchNews(tenantId);
     } catch (error) {
-      console.error("Error deleting news:", error);
-      toast.error("Gagal menghapus pengumuman");
+      const errorRef = reportError(error, "org.news.delete", { announcement_id: deletingId });
+      toast.error(appendErrorReference("Gagal menghapus pengumuman", errorRef));
+    } finally {
+      setIsRetrying(false);
     }
   };
 
   const togglePublish = async (id: string, currentStatus: boolean) => {
     try {
-      const { error } = await supabase
-        .from("announcements")
-        .update({ is_published: !currentStatus })
-        .eq("id", id);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("announcements")
+              .update({ is_published: !currentStatus })
+              .eq("id", id),
+            ORG_NEWS_QUERY_TIMEOUT_MS,
+            "org.news.toggle_publish timeout",
+          ),
+        {
+          maxRetries: ORG_NEWS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
       toast.success(currentStatus ? "Pengumuman disembunyikan" : "Pengumuman dipublikasikan");
       if (tenantId) void fetchNews(tenantId);
     } catch (error) {
-      toast.error("Gagal mengubah status");
+      const errorRef = reportError(error, "org.news.toggle_publish", {
+        announcement_id: id,
+        current_status: currentStatus,
+      });
+      toast.error(appendErrorReference("Gagal mengubah status", errorRef));
+    } finally {
+      setIsRetrying(false);
     }
   };
 
@@ -253,7 +425,6 @@ export default function OrgNewsManagement() {
     setFormData({
       title: "",
       content: "",
-      image_url: "",
       is_published: true,
       is_pinned: false,
     });
@@ -291,7 +462,7 @@ export default function OrgNewsManagement() {
               Kelola Pengumuman
             </h1>
             <p className="text-muted-foreground">
-              Kelola pengumuman dan informasi untuk pegawai
+              Kelola pengumuman dan informasi untuk pegawai. Konten ditulis dalam teks biasa (non-HTML).
             </p>
           </div>
 
@@ -310,6 +481,9 @@ export default function OrgNewsManagement() {
                 <DialogTitle>
                   {isEditing ? "Edit Pengumuman" : "Tambah Pengumuman Baru"}
                 </DialogTitle>
+                <p className="text-sm text-muted-foreground">
+                  Gunakan konten teks biasa. Sistem menyimpan maksimal {MAX_ANNOUNCEMENTS} pengumuman terbaru.
+                </p>
               </DialogHeader>
               <div className="space-y-4 py-4">
                 <div className="space-y-2">
@@ -322,25 +496,12 @@ export default function OrgNewsManagement() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>URL Cover Pengumuman (opsional)</Label>
-                  <Input
-                    placeholder="https://example.com/cover-image.jpg"
-                    value={formData.image_url || ""}
-                    onChange={(e) => setFormData({ ...formData, image_url: e.target.value })}
-                  />
-                  {formData.image_url && (
-                    <div className="h-24 rounded-lg bg-muted overflow-hidden">
-                      <img src={formData.image_url} alt="Cover preview" className="w-full h-full object-cover" />
-                    </div>
-                  )}
-                </div>
-
-                <div className="space-y-2">
                   <Label>Konten</Label>
-                  <RichTextEditor
+                  <Textarea
                     value={formData.content}
-                    onChange={(value) => setFormData({ ...formData, content: value })}
-                    placeholder="Tulis konten pengumuman..."
+                    onChange={(e) => setFormData({ ...formData, content: e.target.value })}
+                    placeholder="Tulis konten pengumuman"
+                    rows={10}
                   />
                 </div>
 
@@ -377,7 +538,30 @@ export default function OrgNewsManagement() {
         {loadError && (
           <Card className="border-destructive/40">
             <CardContent className="pt-6">
-              <p className="text-sm text-destructive">{loadError}</p>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-destructive">{loadError}</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    if (tenantId) {
+                      void fetchNews(tenantId);
+                    } else {
+                      void fetchTenantAndNews();
+                    }
+                  }}
+                >
+                  Coba Lagi
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        {isRetrying && (
+          <Card className="border-amber-300/60 bg-amber-50">
+            <CardContent className="pt-4">
+              <p className="text-sm text-amber-800">Sedang mencoba ulang koneksi data pengumuman...</p>
             </CardContent>
           </Card>
         )}
@@ -385,7 +569,7 @@ export default function OrgNewsManagement() {
         {/* Filters */}
         <Card>
           <CardContent className="p-4">
-            <div className="flex flex-col sm:flex-row gap-4">
+            <div className="flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-white/80 p-3 shadow-sm sm:flex-row sm:items-center">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
@@ -398,7 +582,7 @@ export default function OrgNewsManagement() {
                   }}
                 />
               </div>
-              <div className="flex gap-2">
+              <div className="flex flex-wrap gap-2">
                 <Button
                   variant={filterStatus === "all" ? "default" : "outline"}
                   size="sm"
@@ -429,6 +613,9 @@ export default function OrgNewsManagement() {
         <Card>
           <CardHeader>
             <CardTitle>Daftar Pengumuman ({totalNews})</CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Maksimal {MAX_ANNOUNCEMENTS} pengumuman per organisasi. Saat melebihi batas, pengumuman terlama dihapus otomatis.
+            </p>
           </CardHeader>
           <CardContent>
             {isLoading ? (
@@ -449,6 +636,7 @@ export default function OrgNewsManagement() {
                       <TableHead className="w-16">Cover</TableHead>
                       <TableHead>Judul</TableHead>
                       <TableHead>Tanggal</TableHead>
+                      <TableHead>Jam</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead className="text-right">Aksi</TableHead>
                     </TableRow>
@@ -472,6 +660,9 @@ export default function OrgNewsManagement() {
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
                           {format(new Date(item.created_at), "dd MMM yyyy", { locale: id })}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {format(new Date(item.created_at), "HH:mm")}
                         </TableCell>
                         <TableCell>
                           <Badge variant={item.is_published ? "default" : "secondary"}>

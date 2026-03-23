@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate, useSearchParams, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,8 @@ import { ForgotPasswordDialog } from "@/components/auth/ForgotPasswordDialog";
 import { SimpleCaptcha } from "@/components/common/SimpleCaptcha";
 import { useLoginRateLimit } from "@/hooks/useLoginRateLimit";
 import { OrgRegistrationForm } from "@/components/org/OrgRegistrationForm";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { z } from "zod";
 
 const loginSchema = z.object({
@@ -27,6 +29,11 @@ const registerSchema = z.object({
   organizationType: z.enum(["pemerintah_daerah", "instansi_pemerintah", "perusahaan", "sekolah"]),
   whatsapp: z.string().min(10, "No WhatsApp minimal 10 digit"),
 });
+
+const ORG_LOGIN_RETRY_MAX = 1;
+const ORG_LOGIN_TIMEOUT_MS = 12000;
+const ORG_ROLE_CHECK_TIMEOUT_MS = 6000;
+const ORG_ROLE_CHECK_RETRY_MAX = 0;
 
 export default function OrgLogin() {
   const navigate = useNavigate();
@@ -50,38 +57,60 @@ export default function OrgLogin() {
 
   // Rate limiting
   const rateLimit = useLoginRateLimit("org_login_rate_limit");
+  const isCaptchaBypassEnabled =
+    import.meta.env.DEV && import.meta.env.VITE_E2E_BYPASS_CAPTCHA === "true";
 
   // Check auth state - hanya cek session awal, tidak react ke setiap auth change
-  // PENTING: Hanya redirect ke /org jika user adalah admin_instansi
-  // Super admin tetap di halaman login /org/login karena mereka bisa memilih masuk sebagai org admin
+  // Redirect /org berlaku untuk admin_instansi dan atasan (operator).
+  // Super admin tetap di halaman login /org/login karena mereka bisa memilih masuk sebagai org admin.
   const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+
+  const fetchUserRoles = useCallback(async (userId: string): Promise<string[]> => {
+    const { data: roleRows, error: roleError } = await withExponentialBackoff(
+      () =>
+        withTimeout(
+          () => supabase.from("user_roles").select("role").eq("user_id", userId),
+          ORG_ROLE_CHECK_TIMEOUT_MS,
+        ),
+      {
+        maxRetries: ORG_ROLE_CHECK_RETRY_MAX,
+        shouldRetry: isRetryableError,
+      },
+    );
+
+    if (roleError) throw roleError;
+    return (roleRows || []).map((row) => row.role);
+  }, []);
   
   useEffect(() => {
     let isMounted = true;
     
     const checkSession = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const {
+          data: { session },
+        } = await withExponentialBackoff(
+          () => withTimeout(() => supabase.auth.getSession(), ORG_LOGIN_TIMEOUT_MS),
+          {
+            maxRetries: ORG_LOGIN_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
+        );
         
         if (!isMounted) return;
         
         if (session?.user) {
-          // Hanya cek role admin_instansi saja, TIDAK termasuk super_admin
-          // Ini mencegah redirect otomatis ke /admin saat super_admin mengakses /org/login
-          const { data: roleData } = await supabase
-            .from("user_roles")
-            .select("role")
-            .eq("user_id", session.user.id)
-            .eq("role", "admin_instansi")
-            .maybeSingle();
+          const roles = await fetchUserRoles(session.user.id);
+          const hasOrgAccessRole = roles.includes("admin_instansi") || roles.includes("atasan");
 
-          if (roleData && isMounted) {
-            navigate("/org", { replace: true });
+          if (hasOrgAccessRole && isMounted) {
+            const hasOperatorRole = roles.includes("atasan");
+            navigate(hasOperatorRole ? "/org/leave/requests" : "/org", { replace: true });
             return;
           }
         }
       } catch (error) {
-        console.error("Session check error:", error);
+        reportError(error, "org.login.check_session");
       } finally {
         if (isMounted) {
           setIsCheckingAuth(false);
@@ -94,14 +123,14 @@ export default function OrgLogin() {
     return () => {
       isMounted = false;
     };
-  }, [navigate]);
+  }, [fetchUserRoles, navigate]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrors({});
 
     // Check lockout
-    if (rateLimit.isEnabled && rateLimit.isLocked) {
+    if (!isCaptchaBypassEnabled && rateLimit.isEnabled && rateLimit.isLocked) {
       toast({
         variant: "destructive",
         title: "Akses Diblokir",
@@ -111,7 +140,7 @@ export default function OrgLogin() {
     }
 
     // Validate captcha
-    if (!loginCaptchaValid) {
+    if (!isCaptchaBypassEnabled && !loginCaptchaValid) {
       if (rateLimit.isEnabled) {
         const wasLocked = rateLimit.recordFailedAttempt();
         toast({
@@ -149,10 +178,21 @@ export default function OrgLogin() {
     setIsLoading(true);
 
     try {
-      const { data: authData, error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
+      const { data: authData, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase.auth.signInWithPassword({
+                email,
+                password,
+              }),
+            ORG_LOGIN_TIMEOUT_MS,
+          ),
+        {
+          maxRetries: ORG_LOGIN_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
       if (error) {
         const wasLocked = rateLimit.isEnabled ? rateLimit.recordFailedAttempt() : false;
@@ -174,14 +214,11 @@ export default function OrgLogin() {
 
       // Verify if user is admin
       if (authData.user) {
-        const { data: roles } = await supabase
-          .from("user_roles")
-          .select("role")
-          .eq("user_id", authData.user.id);
-
-        const isSuperAdmin = roles?.some((r) => r.role === "super_admin");
-        const isAdminInstansi = roles?.some((r) => r.role === "admin_instansi");
-        const isPegawai = roles?.some((r) => r.role === "pegawai");
+        const roles = await fetchUserRoles(authData.user.id);
+        const isSuperAdmin = roles.includes("super_admin");
+        const isAdminInstansi = roles.includes("admin_instansi");
+        const isOperator = roles.includes("atasan");
+        const isPegawai = roles.includes("pegawai");
 
         if (isSuperAdmin) {
           // Super admin bisa akses org juga, tapi redirect ke admin panel
@@ -199,6 +236,14 @@ export default function OrgLogin() {
             description: "Selamat datang, Admin!",
           });
           navigate("/org", { replace: true });
+          return;
+        } else if (isOperator) {
+          rateLimit.resetAttempts();
+          toast({
+            title: "Login Berhasil",
+            description: "Selamat datang, Operator!",
+          });
+          navigate("/org/leave/requests", { replace: true });
           return;
         } else if (isPegawai) {
           // Pegawai - redirect ke dashboard pegawai tanpa logout
@@ -219,10 +264,11 @@ export default function OrgLogin() {
         }
       }
     } catch (error) {
+      const errorRef = reportError(error, "org.login.handle_login", { email });
       toast({
         variant: "destructive",
         title: "Terjadi Kesalahan",
-        description: "Tidak dapat menghubungi server.",
+        description: appendErrorReference("Tidak dapat menghubungi server.", errorRef),
       });
     } finally {
       setIsLoading(false);
@@ -271,12 +317,12 @@ export default function OrgLogin() {
         <Card className="border-border/50 shadow-xl">
           <CardContent className="pt-6">
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-              <TabsList className="flex flex-col sm:flex-row h-auto gap-1 w-full mb-6 p-1">
-                <TabsTrigger value="login" className="flex items-center justify-center gap-2 w-full sm:flex-1 text-sm py-2.5">
+              <TabsList className="mb-6 h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+                <TabsTrigger value="login" className="flex items-center justify-center gap-2 whitespace-nowrap text-sm py-2.5">
                   <User className="w-4 h-4 flex-shrink-0" />
                   <span>Masuk</span>
                 </TabsTrigger>
-                <TabsTrigger value="register" className="flex items-center justify-center gap-2 w-full sm:flex-1 text-sm py-2.5">
+                <TabsTrigger value="register" className="flex items-center justify-center gap-2 whitespace-nowrap text-sm py-2.5">
                   <Building2 className="w-4 h-4 flex-shrink-0" />
                   <span>Daftar Organisasi</span>
                 </TabsTrigger>
@@ -336,7 +382,11 @@ export default function OrgLogin() {
                   <Button 
                     type="submit" 
                     className="w-full" 
-                    disabled={isLoading || !loginCaptchaValid || (rateLimit.isEnabled && rateLimit.isLocked)}
+                    disabled={
+                      isLoading ||
+                      (!isCaptchaBypassEnabled && !loginCaptchaValid) ||
+                      (!isCaptchaBypassEnabled && rateLimit.isEnabled && rateLimit.isLocked)
+                    }
                   >
                     {isLoading ? (
                       <>

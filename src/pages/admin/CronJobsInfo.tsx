@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
@@ -71,6 +72,8 @@ interface AppCronLogRow {
 }
 const RUNS_PER_PAGE = 20;
 const LOGS_PER_PAGE = 20;
+const CRON_JOBS_QUERY_TIMEOUT_MS = 12000;
+const CRON_JOBS_QUERY_RETRY_MAX = 2;
 
 const isKnownCronInfraError = (message: string) => {
   const m = message.toLowerCase();
@@ -170,6 +173,18 @@ const CRON_CATALOG_FALLBACK: CronTaskRow[] = [
     command_preview: null,
   },
   {
+    job_name: "invoice-number-health-daily",
+    category: "Billing",
+    target: "SQL/RPC",
+    description: "Snapshot harian kesehatan nomor faktur (valid vs invalid format).",
+    timezone: "UTC (WIB +7)",
+    expected_schedule: "15 17 * * *",
+    current_schedule: null,
+    is_scheduled: false,
+    is_active: false,
+    command_preview: null,
+  },
+  {
     job_name: "billing-grace-notifier-10m",
     category: "Billing",
     target: "Edge Function",
@@ -229,23 +244,35 @@ const callPublicRpc = async <T = unknown>(fn: string, payload?: Record<string, u
 
   const {
     data: { session },
-  } = await supabase.auth.getSession();
+  } = await withTimeout(
+    supabase.auth.getSession(),
+    CRON_JOBS_QUERY_TIMEOUT_MS,
+    "Memuat session untuk fallback RPC terlalu lama.",
+  );
   const accessToken = session?.access_token;
   if (!accessToken) {
     throw new Error("Session token tidak tersedia untuk fallback RPC.");
   }
 
-  const response = await fetch(`${supabaseUrl}/rest/v1/rpc/${fn}`, {
-    method: "POST",
-    headers: {
-      apikey: supabaseKey,
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify(payload || {}),
-  });
+  const response = await withTimeout(
+    fetch(`${supabaseUrl}/rest/v1/rpc/${fn}`, {
+      method: "POST",
+      headers: {
+        apikey: supabaseKey,
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(payload || {}),
+    }),
+    CRON_JOBS_QUERY_TIMEOUT_MS,
+    `Fallback RPC ${fn} timeout.`,
+  );
 
-  const text = await response.text();
+  const text = await withTimeout(
+    response.text(),
+    CRON_JOBS_QUERY_TIMEOUT_MS,
+    `Membaca respons fallback RPC ${fn} timeout.`,
+  );
   let parsed: unknown = null;
   try {
     parsed = text ? JSON.parse(text) : null;
@@ -264,13 +291,14 @@ const callPublicRpc = async <T = unknown>(fn: string, payload?: Record<string, u
   return parsed as T;
 };
 
-export default function CronJobsInfo() {
+export default function CronJobsInfo({ embedded = false }: { embedded?: boolean }) {
   const [tasks, setTasks] = useState<CronTaskRow[]>([]);
   const [runs, setRuns] = useState<CronRunRow[]>([]);
   const [appLogs, setAppLogs] = useState<AppCronLogRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [query, setQuery] = useState("");
   const [isFallbackMode, setIsFallbackMode] = useState(false);
   const [partialLoadNote, setPartialLoadNote] = useState<string | null>(null);
@@ -319,15 +347,52 @@ export default function CronJobsInfo() {
     setIsFallbackMode(false);
     setLoadError(null);
     setPartialLoadNote(null);
+    setIsRetrying(false);
     try {
       const [tasksRes, runsRes, logsRes] = await Promise.allSettled([
-        rpcUntyped("get_cron_jobs_overview"),
-        rpcUntyped("get_cron_recent_runs", { p_limit: 100 }),
-        supabase
-          .from("cron_job_logs")
-          .select("id, job_name, status, started_at, completed_at, error_message")
-          .order("started_at", { ascending: false })
-          .limit(100),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              rpcUntyped("get_cron_jobs_overview"),
+              CRON_JOBS_QUERY_TIMEOUT_MS,
+              "admin.cron_jobs.tasks timeout"
+            ),
+          {
+            maxRetries: CRON_JOBS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              rpcUntyped("get_cron_recent_runs", { p_limit: 100 }),
+              CRON_JOBS_QUERY_TIMEOUT_MS,
+              "admin.cron_jobs.runs timeout"
+            ),
+          {
+            maxRetries: CRON_JOBS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("cron_job_logs")
+                .select("id, job_name, status, started_at, completed_at, error_message")
+                .order("started_at", { ascending: false })
+                .limit(100),
+              CRON_JOBS_QUERY_TIMEOUT_MS,
+              "admin.cron_jobs.logs timeout"
+            ),
+          {
+            maxRetries: CRON_JOBS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
       ]);
 
       const warningRefs: string[] = [];
@@ -447,7 +512,20 @@ export default function CronJobsInfo() {
   const handleSyncJobs = async () => {
     setIsSyncing(true);
     try {
-      const { error } = await rpcUntyped("ensure_system_cron_jobs");
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            rpcUntyped("ensure_system_cron_jobs"),
+            CRON_JOBS_QUERY_TIMEOUT_MS,
+            "admin.cron_jobs.sync timeout"
+          ),
+        {
+          maxRetries: CRON_JOBS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw new Error(error.message || "Gagal sinkron jadwal cron");
       toast.success("Sinkron jadwal cron berhasil dijalankan.");
       await loadData();
@@ -459,13 +537,23 @@ export default function CronJobsInfo() {
     }
   };
 
-  return (
-    <SuperAdminLayout title="Informasi Cron Jobs" subtitle="Pusat informasi seluruh tugas cron sistem">
+  const pageContent = (
+    <>
       <div className="space-y-6">
+        {isRetrying && (
+          <Card className="border-amber-300 bg-amber-50/80 dark:bg-amber-950/20">
+            <CardContent className="pt-6 text-sm text-amber-900 dark:text-amber-200">
+              Sedang mencoba ulang memuat data cron...
+            </CardContent>
+          </Card>
+        )}
         {loadError && (
           <Card className="border-destructive/30 bg-destructive/5">
-            <CardContent className="pt-6 text-sm text-destructive">
-              {loadError}
+            <CardContent className="flex items-center justify-between gap-3 pt-6 text-sm text-destructive">
+              <span>{loadError}</span>
+              <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void loadData()}>
+                Coba Lagi
+              </Button>
             </CardContent>
           </Card>
         )}
@@ -526,7 +614,7 @@ export default function CronJobsInfo() {
                 <CardDescription>Semua tugas terjadwal penting dikumpulkan di satu halaman.</CardDescription>
               </div>
               <div className="flex gap-2">
-                <Button variant="outline" onClick={loadData} disabled={isLoading}>
+                <Button variant="outline" onClick={() => void loadData()} disabled={isLoading}>
                   {isLoading ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <RefreshCw className="h-4 w-4 mr-2" />}
                   Refresh
                 </Button>
@@ -599,9 +687,13 @@ export default function CronJobsInfo() {
         </Card>
 
         <Tabs defaultValue="runs">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="runs">Riwayat Run pg_cron</TabsTrigger>
-            <TabsTrigger value="app">Log Aplikasi</TabsTrigger>
+          <TabsList className="h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+            <TabsTrigger value="runs" className="whitespace-nowrap">
+              Riwayat Run pg_cron
+            </TabsTrigger>
+            <TabsTrigger value="app" className="whitespace-nowrap">
+              Log Aplikasi
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="runs">
@@ -806,6 +898,12 @@ export default function CronJobsInfo() {
 
         <PageGlossarySection preset="admin_cron_jobs" />
       </div>
+    </>
+  );
+  if (embedded) return pageContent;
+  return (
+    <SuperAdminLayout title="Informasi Cron Jobs" subtitle="Pusat informasi seluruh tugas cron sistem">
+      {pageContent}
     </SuperAdminLayout>
   );
 }

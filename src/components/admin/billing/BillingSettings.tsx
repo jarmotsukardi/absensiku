@@ -8,17 +8,55 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, Save, DollarSign, Percent, Clock, CreditCard, Landmark } from "lucide-react";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  BILLING_INVOICE_TEMPLATE_TOKENS,
+  DEFAULT_BILLING_INVOICE_TEMPLATE,
+} from "@/lib/billingInvoiceTemplate";
+import {
+  BILLING_DURATION_OPTIONS,
+  CENTRALIZED_MIN_DURATION_DEFAULTS,
+  CENTRALIZED_MIN_DURATION_SETTING_KEYS,
+  INDIVIDUAL_MIN_DURATION_DEFAULT,
+  INDIVIDUAL_MIN_DURATION_SETTING_KEY,
+  normalizeDurationOption,
+} from "@/lib/billingMinDuration";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
+const BILLING_SETTINGS_READ_TIMEOUT_MS = 12000;
+const BILLING_SETTINGS_WRITE_TIMEOUT_MS = 15000;
+const BILLING_SETTINGS_MAX_RETRIES = 2;
 
 export function BillingSettings() {
   const { settings, isLoading, getSetting, updateSetting } = useBillingSettings();
   const [isSaving, setIsSaving] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   
   const [pricePerEmployee, setPricePerEmployee] = useState(15000);
   const [vatPercentage, setVatPercentage] = useState(11);
+  const [pphPercentage, setPphPercentage] = useState(2);
   const [gracePeriodDays, setGracePeriodDays] = useState(3);
-  const [individualMinDuration, setIndividualMinDuration] = useState(6);
+  const [paymentArchiveRetentionDays, setPaymentArchiveRetentionDays] = useState(7);
+  const [individualMinDuration, setIndividualMinDuration] = useState(INDIVIDUAL_MIN_DURATION_DEFAULT);
+  const [centralizedPemdaMinDuration, setCentralizedPemdaMinDuration] = useState(
+    CENTRALIZED_MIN_DURATION_DEFAULTS.pemerintah_daerah,
+  );
+  const [centralizedInstansiMinDuration, setCentralizedInstansiMinDuration] = useState(
+    CENTRALIZED_MIN_DURATION_DEFAULTS.instansi_pemerintah,
+  );
+  const [centralizedPerusahaanMinDuration, setCentralizedPerusahaanMinDuration] = useState(
+    CENTRALIZED_MIN_DURATION_DEFAULTS.perusahaan,
+  );
+  const [centralizedSekolahMinDuration, setCentralizedSekolahMinDuration] = useState(
+    CENTRALIZED_MIN_DURATION_DEFAULTS.sekolah,
+  );
   const [xenditEnabled, setXenditEnabled] = useState(false);
   const [manualPaymentEnabled, setManualPaymentEnabled] = useState(true);
   const [initialized, setInitialized] = useState(false);
@@ -28,21 +66,67 @@ export function BillingSettings() {
   const [bankAccount, setBankAccount] = useState("");
   const [bankAccountName, setBankAccountName] = useState("");
   const [paymentInstructions, setPaymentInstructions] = useState("");
+  const [invoiceTemplateHtml, setInvoiceTemplateHtml] = useState(DEFAULT_BILLING_INVOICE_TEMPLATE);
 
   // Only initialize form values ONCE when settings first load
   useEffect(() => {
     if (!isLoading && settings.length > 0 && !initialized) {
       const price = getSetting("price_per_employee");
       const vat = getSetting("vat_percentage");
+      const pph = getSetting("pph_percentage");
       const grace = getSetting("grace_period_days");
-      const minDuration = getSetting("individual_min_duration_months");
+      const archiveRetention = getSetting("payment_archive_retention_days");
+      const minDuration = getSetting(INDIVIDUAL_MIN_DURATION_SETTING_KEY);
+      const centralizedPemdaDuration = getSetting(
+        CENTRALIZED_MIN_DURATION_SETTING_KEYS.pemerintah_daerah,
+      );
+      const centralizedInstansiDuration = getSetting(
+        CENTRALIZED_MIN_DURATION_SETTING_KEYS.instansi_pemerintah,
+      );
+      const centralizedPerusahaanDuration = getSetting(
+        CENTRALIZED_MIN_DURATION_SETTING_KEYS.perusahaan,
+      );
+      const centralizedSekolahDuration = getSetting(
+        CENTRALIZED_MIN_DURATION_SETTING_KEYS.sekolah,
+      );
       const xendit = getSetting("xendit_enabled");
       const manual = getSetting("manual_payment_enabled");
 
       if (price) setPricePerEmployee(price.amount || 15000);
       if (vat) setVatPercentage(vat.value || 11);
+      if (pph) setPphPercentage(pph.value || 2);
       if (grace) setGracePeriodDays(grace.value || 3);
-      if (minDuration) setIndividualMinDuration(minDuration.value || 6);
+      if (archiveRetention) {
+        const raw = Number(archiveRetention.value || 7);
+        setPaymentArchiveRetentionDays(Math.min(365, Math.max(1, Number.isFinite(raw) ? raw : 7)));
+      }
+      setIndividualMinDuration(
+        normalizeDurationOption(minDuration, INDIVIDUAL_MIN_DURATION_DEFAULT),
+      );
+      setCentralizedPemdaMinDuration(
+        normalizeDurationOption(
+          centralizedPemdaDuration,
+          CENTRALIZED_MIN_DURATION_DEFAULTS.pemerintah_daerah,
+        ),
+      );
+      setCentralizedInstansiMinDuration(
+        normalizeDurationOption(
+          centralizedInstansiDuration,
+          CENTRALIZED_MIN_DURATION_DEFAULTS.instansi_pemerintah,
+        ),
+      );
+      setCentralizedPerusahaanMinDuration(
+        normalizeDurationOption(
+          centralizedPerusahaanDuration,
+          CENTRALIZED_MIN_DURATION_DEFAULTS.perusahaan,
+        ),
+      );
+      setCentralizedSekolahMinDuration(
+        normalizeDurationOption(
+          centralizedSekolahDuration,
+          CENTRALIZED_MIN_DURATION_DEFAULTS.sekolah,
+        ),
+      );
       if (xendit) setXenditEnabled(xendit.value || false);
       if (manual) setManualPaymentEnabled(manual.value !== false);
       setInitialized(true);
@@ -52,21 +136,69 @@ export function BillingSettings() {
   // Fetch billing_settings (bank account info) from system_settings
   useEffect(() => {
     const fetchBankSettings = async () => {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "billing_settings")
-        .maybeSingle();
+      setIsRetrying(false);
+      setLoadError(null);
+      try {
+        const [bankRes, templateRes] = await Promise.all([
+          withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase.from("system_settings").select("value").eq("key", "billing_settings").maybeSingle(),
+                BILLING_SETTINGS_READ_TIMEOUT_MS,
+                "Permintaan pengaturan rekening billing timeout."
+              ),
+            {
+              maxRetries: BILLING_SETTINGS_MAX_RETRIES,
+              shouldRetry: isRetryableError,
+              onRetry: () => setIsRetrying(true),
+            }
+          ),
+          withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase.from("system_settings").select("value").eq("key", "billing_invoice_template").maybeSingle(),
+                BILLING_SETTINGS_READ_TIMEOUT_MS,
+                "Permintaan template invoice timeout."
+              ),
+            {
+              maxRetries: BILLING_SETTINGS_MAX_RETRIES,
+              shouldRetry: isRetryableError,
+              onRetry: () => setIsRetrying(true),
+            }
+          ),
+        ]);
 
-      if (data?.value && typeof data.value === "object" && !Array.isArray(data.value)) {
-        const value = data.value as Record<string, unknown>;
-        setBankName(typeof value.bank_name === "string" ? value.bank_name : "");
-        setBankAccount(typeof value.bank_account === "string" ? value.bank_account : "");
-        setBankAccountName(typeof value.bank_account_name === "string" ? value.bank_account_name : "");
-        setPaymentInstructions(typeof value.payment_instructions === "string" ? value.payment_instructions : "");
+        if (bankRes.error) {
+          const errorRef = reportError(bankRes.error, "admin.billing.settings.fetch_bank_settings");
+          setLoadError(appendErrorReference("Gagal memuat pengaturan rekening billing", errorRef));
+        }
+        if (templateRes.error) {
+          const errorRef = reportError(templateRes.error, "admin.billing.settings.fetch_invoice_template");
+          setLoadError((prev) => prev ?? appendErrorReference("Gagal memuat template invoice", errorRef));
+        }
+
+        if (bankRes.data?.value && typeof bankRes.data.value === "object" && !Array.isArray(bankRes.data.value)) {
+          const value = bankRes.data.value as Record<string, unknown>;
+          setBankName(typeof value.bank_name === "string" ? value.bank_name : "");
+          setBankAccount(typeof value.bank_account === "string" ? value.bank_account : "");
+          setBankAccountName(typeof value.bank_account_name === "string" ? value.bank_account_name : "");
+          setPaymentInstructions(typeof value.payment_instructions === "string" ? value.payment_instructions : "");
+        }
+
+        if (templateRes.data?.value && typeof templateRes.data.value === "object" && !Array.isArray(templateRes.data.value)) {
+          const value = templateRes.data.value as Record<string, unknown>;
+          if (typeof value.html_template === "string" && value.html_template.trim()) {
+            setInvoiceTemplateHtml(value.html_template);
+          }
+        }
+      } catch (error) {
+        const errorRef = reportError(error, "admin.billing.settings.fetch");
+        setLoadError((prev) => prev ?? appendErrorReference("Gagal memuat pengaturan billing", errorRef));
+      } finally {
+        setIsRetrying(false);
       }
     };
-    fetchBankSettings();
+    void fetchBankSettings();
   }, []);
 
   const handleSave = async () => {
@@ -76,8 +208,24 @@ export function BillingSettings() {
       await Promise.all([
         updateSetting("price_per_employee", { amount: pricePerEmployee, currency: "IDR" }),
         updateSetting("vat_percentage", { value: vatPercentage }),
+        updateSetting("pph_percentage", { value: pphPercentage }),
         updateSetting("grace_period_days", { value: gracePeriodDays }),
-        updateSetting("individual_min_duration_months", { value: individualMinDuration }),
+        updateSetting("payment_archive_retention_days", {
+          value: Math.min(365, Math.max(1, Number.isFinite(paymentArchiveRetentionDays) ? paymentArchiveRetentionDays : 7)),
+        }),
+        updateSetting(INDIVIDUAL_MIN_DURATION_SETTING_KEY, { value: individualMinDuration }),
+        updateSetting(CENTRALIZED_MIN_DURATION_SETTING_KEYS.pemerintah_daerah, {
+          value: centralizedPemdaMinDuration,
+        }),
+        updateSetting(CENTRALIZED_MIN_DURATION_SETTING_KEYS.instansi_pemerintah, {
+          value: centralizedInstansiMinDuration,
+        }),
+        updateSetting(CENTRALIZED_MIN_DURATION_SETTING_KEYS.perusahaan, {
+          value: centralizedPerusahaanMinDuration,
+        }),
+        updateSetting(CENTRALIZED_MIN_DURATION_SETTING_KEYS.sekolah, {
+          value: centralizedSekolahMinDuration,
+        }),
         updateSetting("xendit_enabled", { value: xenditEnabled }),
         updateSetting("manual_payment_enabled", { value: manualPaymentEnabled }),
       ]);
@@ -90,30 +238,79 @@ export function BillingSettings() {
         payment_instructions: paymentInstructions,
       };
 
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "billing_settings")
-        .maybeSingle();
+      const { data: existing } = await withTimeout(
+        supabase
+          .from("system_settings")
+          .select("id")
+          .eq("key", "billing_settings")
+          .maybeSingle(),
+        BILLING_SETTINGS_WRITE_TIMEOUT_MS,
+        "Permintaan cek billing settings timeout."
+      );
 
       if (existing) {
-        await supabase
-          .from("system_settings")
-          .update({ value: bankPayload, updated_at: new Date().toISOString() })
-          .eq("key", "billing_settings");
+        await withTimeout(
+          supabase
+            .from("system_settings")
+            .update({ value: bankPayload, updated_at: new Date().toISOString() })
+            .eq("key", "billing_settings"),
+          BILLING_SETTINGS_WRITE_TIMEOUT_MS,
+          "Simpan billing settings timeout."
+        );
       } else {
-        await supabase
+        await withTimeout(
+          supabase
+            .from("system_settings")
+            .insert({
+              key: "billing_settings",
+              value: bankPayload,
+              description: "Pengaturan rekening bank pemilik aplikasi",
+            }),
+          BILLING_SETTINGS_WRITE_TIMEOUT_MS,
+          "Simpan billing settings timeout."
+        );
+      }
+
+      const templatePayload: Json = {
+        html_template: invoiceTemplateHtml.trim() || DEFAULT_BILLING_INVOICE_TEMPLATE,
+      };
+      const { data: existingTemplate } = await withTimeout(
+        supabase
           .from("system_settings")
-          .insert({
-            key: "billing_settings",
-            value: bankPayload,
-            description: "Pengaturan rekening bank pemilik aplikasi",
-          });
+          .select("id")
+          .eq("key", "billing_invoice_template")
+          .maybeSingle(),
+        BILLING_SETTINGS_WRITE_TIMEOUT_MS,
+        "Permintaan cek template invoice timeout."
+      );
+
+      if (existingTemplate) {
+        await withTimeout(
+          supabase
+            .from("system_settings")
+            .update({ value: templatePayload, updated_at: new Date().toISOString() })
+            .eq("key", "billing_invoice_template"),
+          BILLING_SETTINGS_WRITE_TIMEOUT_MS,
+          "Simpan template invoice timeout."
+        );
+      } else {
+        await withTimeout(
+          supabase
+            .from("system_settings")
+            .insert({
+              key: "billing_invoice_template",
+              value: templatePayload,
+              description: "Template HTML lembar faktur yang digunakan saat print/download invoice organisasi.",
+            }),
+          BILLING_SETTINGS_WRITE_TIMEOUT_MS,
+          "Simpan template invoice timeout."
+        );
       }
 
       toast.success("Pengaturan billing berhasil disimpan");
     } catch (error) {
-      toast.error("Gagal menyimpan pengaturan");
+      const errorRef = reportError(error, "admin.billing.settings.save");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan", errorRef));
     } finally {
       setIsSaving(false);
     }
@@ -121,14 +318,30 @@ export function BillingSettings() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-32">
-        <Loader2 className="h-6 w-6 animate-spin" />
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-10 text-center">
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+        </div>
+        <p className="text-base font-medium text-slate-900">Memuat pengaturan billing</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Konfigurasi rekening, biaya, dan template invoice sedang diproses.
+        </p>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
+      {isRetrying && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+          Sedang mencoba ulang memuat pengaturan billing...
+        </div>
+      )}
+      {loadError && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {loadError}
+        </div>
+      )}
       {/* Bank Account Settings */}
       <Card className="border-primary/30">
         <CardHeader className="pb-3">
@@ -188,6 +401,51 @@ export function BillingSettings() {
         </CardContent>
       </Card>
 
+      <Card className="border-primary/30">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Landmark className="h-4 w-4" />
+            Format Lembar Faktur (Editable)
+          </CardTitle>
+          <CardDescription>
+            Template HTML untuk print/download faktur pada halaman organisasi.
+            Gunakan placeholder seperti {"{{invoice_number}}"} dan {"{{transaction_rows}}"}.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="rounded-md border bg-muted/30 p-3 text-xs">
+            <p className="mb-2 font-medium">Placeholder tersedia:</p>
+            <div className="flex flex-wrap gap-2">
+              {BILLING_INVOICE_TEMPLATE_TOKENS.map((token) => (
+                <code key={token} className="rounded bg-background px-2 py-1 text-[11px]">
+                  {`{{${token}}}`}
+                </code>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="invoiceTemplateHtml">Template HTML Faktur</Label>
+            <Textarea
+              id="invoiceTemplateHtml"
+              value={invoiceTemplateHtml}
+              onChange={(e) => setInvoiceTemplateHtml(e.target.value)}
+              rows={18}
+              className="font-mono text-xs"
+              placeholder="Masukkan HTML template faktur..."
+            />
+          </div>
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setInvoiceTemplateHtml(DEFAULT_BILLING_INVOICE_TEMPLATE)}
+            >
+              Reset Template Default
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Pricing Settings */}
       <Card>
         <CardHeader className="pb-3">
@@ -198,7 +456,7 @@ export function BillingSettings() {
           <CardDescription>Konfigurasi harga dasar dan perpajakan</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-3">
             <div className="space-y-2">
               <Label htmlFor="pricePerEmployee">Harga per Pegawai (per bulan)</Label>
               <div className="relative">
@@ -225,6 +483,19 @@ export function BillingSettings() {
                 <Percent className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               </div>
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="pphPercentage">PPH (%)</Label>
+              <div className="relative">
+                <Input
+                  id="pphPercentage"
+                  type="number"
+                  value={pphPercentage}
+                  onChange={(e) => setPphPercentage(Number(e.target.value))}
+                  className="pr-8"
+                />
+                <Percent className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              </div>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -236,10 +507,10 @@ export function BillingSettings() {
             <Clock className="h-4 w-4" />
             Pengaturan Langganan
           </CardTitle>
-          <CardDescription>Aturan durasi dan grace period</CardDescription>
+          <CardDescription>Aturan durasi, grace period, dan minimum pembayaran</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-3">
             <div className="space-y-2">
               <Label htmlFor="gracePeriodDays">Grace Period (hari)</Label>
               <Input
@@ -255,20 +526,154 @@ export function BillingSettings() {
               </p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="individualMinDuration">Min. Durasi Perorangan (bulan)</Label>
+              <Label htmlFor="paymentArchiveRetentionDays">Masa Simpan Arsip Pembayaran (hari)</Label>
               <Input
-                id="individualMinDuration"
+                id="paymentArchiveRetentionDays"
                 type="number"
-                value={individualMinDuration}
-                onChange={(e) => setIndividualMinDuration(Number(e.target.value))}
+                value={paymentArchiveRetentionDays}
+                onChange={(e) => setPaymentArchiveRetentionDays(Number(e.target.value))}
                 min={1}
-                max={12}
+                max={365}
               />
               <p className="text-xs text-muted-foreground">
-                Durasi minimum untuk langganan perorangan
+                Setelah validasi, bukti transfer masuk arsip dan dihapus otomatis saat melewati masa simpan.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="individualMinDuration">Min. Durasi Perorangan (bulan)</Label>
+              <Select
+                value={String(individualMinDuration)}
+                onValueChange={(value) =>
+                  setIndividualMinDuration(
+                    normalizeDurationOption(Number(value), INDIVIDUAL_MIN_DURATION_DEFAULT),
+                  )
+                }
+              >
+                <SelectTrigger id="individualMinDuration">
+                  <SelectValue placeholder="Pilih durasi" />
+                </SelectTrigger>
+                <SelectContent>
+                  {BILLING_DURATION_OPTIONS.map((duration) => (
+                    <SelectItem key={`individual-${duration}`} value={String(duration)}>
+                      {duration} bulan
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Berlaku untuk semua tenant dengan billing mandiri.
               </p>
             </div>
           </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Min. Durasi Terpusat - Pemerintah Daerah</Label>
+              <Select
+                value={String(centralizedPemdaMinDuration)}
+                onValueChange={(value) =>
+                  setCentralizedPemdaMinDuration(
+                    normalizeDurationOption(
+                      Number(value),
+                      CENTRALIZED_MIN_DURATION_DEFAULTS.pemerintah_daerah,
+                    ),
+                  )
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Pilih durasi" />
+                </SelectTrigger>
+                <SelectContent>
+                  {BILLING_DURATION_OPTIONS.map((duration) => (
+                    <SelectItem key={`pemda-${duration}`} value={String(duration)}>
+                      {duration} bulan
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Min. Durasi Terpusat - Instansi</Label>
+              <Select
+                value={String(centralizedInstansiMinDuration)}
+                onValueChange={(value) =>
+                  setCentralizedInstansiMinDuration(
+                    normalizeDurationOption(
+                      Number(value),
+                      CENTRALIZED_MIN_DURATION_DEFAULTS.instansi_pemerintah,
+                    ),
+                  )
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Pilih durasi" />
+                </SelectTrigger>
+                <SelectContent>
+                  {BILLING_DURATION_OPTIONS.map((duration) => (
+                    <SelectItem key={`instansi-${duration}`} value={String(duration)}>
+                      {duration} bulan
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Min. Durasi Terpusat - Perusahaan</Label>
+              <Select
+                value={String(centralizedPerusahaanMinDuration)}
+                onValueChange={(value) =>
+                  setCentralizedPerusahaanMinDuration(
+                    normalizeDurationOption(
+                      Number(value),
+                      CENTRALIZED_MIN_DURATION_DEFAULTS.perusahaan,
+                    ),
+                  )
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Pilih durasi" />
+                </SelectTrigger>
+                <SelectContent>
+                  {BILLING_DURATION_OPTIONS.map((duration) => (
+                    <SelectItem key={`perusahaan-${duration}`} value={String(duration)}>
+                      {duration} bulan
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Min. Durasi Terpusat - Sekolah</Label>
+              <Select
+                value={String(centralizedSekolahMinDuration)}
+                onValueChange={(value) =>
+                  setCentralizedSekolahMinDuration(
+                    normalizeDurationOption(
+                      Number(value),
+                      CENTRALIZED_MIN_DURATION_DEFAULTS.sekolah,
+                    ),
+                  )
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Pilih durasi" />
+                </SelectTrigger>
+                <SelectContent>
+                  {BILLING_DURATION_OPTIONS.map((duration) => (
+                    <SelectItem key={`sekolah-${duration}`} value={String(duration)}>
+                      {duration} bulan
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Opsi minimum pembayaran dibatasi ke 1, 3, 6, atau 12 bulan.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Validasi minimum diterapkan di server (invoice online/manual) dan paket di bawah minimum
+            otomatis disembunyikan pada flow aktivasi.
+          </p>
         </CardContent>
       </Card>
 

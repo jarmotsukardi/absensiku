@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ComponentType } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import type { Json } from "@/integrations/supabase/types";
@@ -7,10 +7,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { toast } from "sonner";
 import { 
-  GripVertical, Save, Layout, Image, FileText, Users, CreditCard, HelpCircle, Phone, Loader2, Megaphone, PanelRight, BarChart3, Newspaper, FileCheck, Share2, Info, Link2, Download, HeartHandshake, MessageSquare,
+  GripVertical, Save, Layout, Image, FileText, Users, CreditCard, HelpCircle, Phone, Loader2, Megaphone, PanelRight, BarChart3, Newspaper, FileCheck, Share2, Info, Link2, Download, HeartHandshake, MessageSquare, ChevronDown,
 } from "lucide-react";
 import { BannerPromoSettings } from "@/components/admin/settings/BannerPromoSettings";
 import { BannerSidebarSettings } from "@/components/admin/settings/BannerSidebarSettings";
@@ -34,7 +35,8 @@ import { PromoSidebarSettings } from "@/components/admin/settings/PromoSidebarSe
 import { TargetSegmentSettings } from "@/components/admin/settings/TargetSegmentSettings";
 import { HomepageChatAgentSettings } from "@/components/admin/settings/HomepageChatAgentSettings";
 import { useNavigate } from "react-router-dom";
-import { reportError } from "@/lib/errorLogger";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 interface HomepageSection {
   id: string;
@@ -52,6 +54,61 @@ const sectionIcons: Record<string, ComponentType<{ className?: string }>> = {
   news: Newspaper, promo_sidebar: Megaphone, app_download: Download, target_segment: HeartHandshake,
 };
 
+const HOMEPAGE_TAB_GROUPS: Array<{
+  title: string;
+  description: string;
+  items: Array<{
+    value: string;
+    label: string;
+    icon: ComponentType<{ className?: string }>;
+  }>;
+}> = [
+  {
+    title: "Struktur Utama",
+    description: "Kontrol susunan, hero, dan konten inti halaman utama.",
+    items: [
+      { value: "layout", label: "Tata Letak", icon: Layout },
+      { value: "hero", label: "Hero", icon: Image },
+      { value: "target_segment", label: "Solusi", icon: HeartHandshake },
+      { value: "statistics", label: "Statistik", icon: BarChart3 },
+      { value: "features", label: "Fitur", icon: Layout },
+      { value: "news", label: "Berita", icon: Newspaper },
+      { value: "articles", label: "Artikel", icon: FileText },
+      { value: "about", label: "Tentang", icon: Info },
+    ],
+  },
+  {
+    title: "Konversi & Engagement",
+    description: "Atur elemen yang mendorong konversi dan interaksi pengunjung.",
+    items: [
+      { value: "pricing", label: "Harga", icon: CreditCard },
+      { value: "testimonials", label: "Testimoni", icon: Users },
+      { value: "faq", label: "FAQ", icon: HelpCircle },
+      { value: "payment", label: "Pembayaran", icon: CreditCard },
+      { value: "cta", label: "CTA", icon: Phone },
+      { value: "chat_agent", label: "Chat Agent", icon: MessageSquare },
+      { value: "promo", label: "Promosi", icon: Megaphone },
+      { value: "download", label: "Download", icon: Download },
+    ],
+  },
+  {
+    title: "Navigasi & Branding",
+    description: "Kelola footer, link penting, branding, dan area promosi.",
+    items: [
+      { value: "footer", label: "Footer", icon: Layout },
+      { value: "quicklinks", label: "Quick Links", icon: Link2 },
+      { value: "legal", label: "Legal", icon: FileCheck },
+      { value: "social", label: "Sosmed", icon: Share2 },
+      { value: "banners", label: "Banner", icon: Megaphone },
+      { value: "sidebar", label: "Sidebar", icon: PanelRight },
+      { value: "clients", label: "Klien", icon: Users },
+    ],
+  },
+];
+const HOMEPAGE_TAB_ITEMS = HOMEPAGE_TAB_GROUPS.flatMap((group) => group.items);
+const HOMEPAGE_LAYOUT_QUERY_TIMEOUT_MS = 12000;
+const HOMEPAGE_LAYOUT_QUERY_RETRY_MAX = 2;
+
 export default function HomepageLayoutSettings() {
   const navigate = useNavigate();
   const [sections, setSections] = useState<HomepageSection[]>([]);
@@ -59,25 +116,63 @@ export default function HomepageLayoutSettings() {
   const [isSaving, setIsSaving] = useState(false);
   const [draggedItem, setDraggedItem] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState("layout");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({
+    "Konversi & Engagement": true,
+    "Navigasi & Branding": true,
+  });
 
-  useEffect(() => { fetchSections(); }, []);
-
-  const fetchSections = async () => {
+  const fetchSections = useCallback(async () => {
     try {
-      const { data, error } = await supabase.from("homepage_sections").select("*").order("sort_order");
+      setLoadError(null);
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.from("homepage_sections").select("*").order("sort_order"),
+            HOMEPAGE_LAYOUT_QUERY_TIMEOUT_MS,
+            "admin.homepage_layout.fetch_sections timeout"
+          ),
+        {
+          maxRetries: HOMEPAGE_LAYOUT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
       setSections(data || []);
     } catch (error) {
       const errorRef = reportError(error, "admin.homepage_layout.fetch_sections");
-      toast.error(`Gagal memuat data (Ref: ${errorRef})`);
+      const message = appendErrorReference("Gagal memuat data layout homepage", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => { void fetchSections(); }, [fetchSections]);
 
   const handleToggle = async (id: string, isEnabled: boolean) => {
     try {
-      const { error } = await supabase.from("homepage_sections").update({ is_enabled: isEnabled, updated_at: new Date().toISOString() }).eq("id", id);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("homepage_sections")
+              .update({ is_enabled: isEnabled, updated_at: new Date().toISOString() })
+              .eq("id", id),
+            HOMEPAGE_LAYOUT_QUERY_TIMEOUT_MS,
+            "admin.homepage_layout.toggle_section timeout"
+          ),
+        {
+          maxRetries: HOMEPAGE_LAYOUT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
       setSections(prev => prev.map(s => s.id === id ? { ...s, is_enabled: isEnabled } : s));
       toast.success("Status berhasil diubah");
@@ -107,14 +202,27 @@ export default function HomepageLayoutSettings() {
   const handleSaveOrder = async () => {
     setIsSaving(true);
     try {
+      setIsRetrying(false);
       const updatedAt = new Date().toISOString();
-      const results = await Promise.all(
-        sections.map((section) =>
-          supabase
-            .from("homepage_sections")
-            .update({ sort_order: section.sort_order, updated_at: updatedAt })
-            .eq("id", section.id),
-        ),
+      const results = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.all(
+              sections.map((section) =>
+                supabase
+                  .from("homepage_sections")
+                  .update({ sort_order: section.sort_order, updated_at: updatedAt })
+                  .eq("id", section.id),
+              )
+            ),
+            HOMEPAGE_LAYOUT_QUERY_TIMEOUT_MS,
+            "admin.homepage_layout.save_order timeout"
+          ),
+        {
+          maxRetries: HOMEPAGE_LAYOUT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
       );
       const failed = results.find((result) => result.error);
       if (failed?.error) {
@@ -130,6 +238,13 @@ export default function HomepageLayoutSettings() {
       setIsSaving(false);
     }
   };
+  const activeTabMeta = HOMEPAGE_TAB_ITEMS.find((item) => item.value === activeTab);
+  const toggleGroup = (title: string) => {
+    setCollapsedGroups((prev) => ({
+      ...prev,
+      [title]: !prev[title],
+    }));
+  };
 
   if (isLoading) {
     return (<SuperAdminLayout><div className="flex items-center justify-center h-64"><Loader2 className="h-8 w-8 animate-spin" /></div></SuperAdminLayout>);
@@ -137,38 +252,100 @@ export default function HomepageLayoutSettings() {
 
   return (
     <SuperAdminLayout>
-      <div className="space-y-6">
+      <div className="mx-auto w-full max-w-7xl space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang memuat pengaturan layout...
+          </div>
+        )}
+        {loadError && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void fetchSections()}>
+              Coba Lagi
+            </Button>
+          </div>
+        )}
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2"><Layout className="h-6 w-6" />Pengaturan Layout Halaman Depan</h1>
           <p className="text-muted-foreground">Atur section, banner, dan konten halaman utama</p>
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="h-auto flex flex-wrap gap-1 p-1">
-            <TabsTrigger value="layout" className="flex-shrink-0"><Layout className="h-4 w-4" /><span className="hidden sm:inline ml-1">Tata Letak</span></TabsTrigger>
-            <TabsTrigger value="hero" className="flex-shrink-0"><Image className="h-4 w-4" /><span className="hidden sm:inline ml-1">Hero</span></TabsTrigger>
-            <TabsTrigger value="target_segment" className="flex-shrink-0"><HeartHandshake className="h-4 w-4" /><span className="hidden sm:inline ml-1">Solusi</span></TabsTrigger>
-            <TabsTrigger value="statistics" className="flex-shrink-0"><BarChart3 className="h-4 w-4" /><span className="hidden sm:inline ml-1">Statistik</span></TabsTrigger>
-            <TabsTrigger value="features" className="flex-shrink-0"><Layout className="h-4 w-4" /><span className="hidden sm:inline ml-1">Fitur</span></TabsTrigger>
-            <TabsTrigger value="news" className="flex-shrink-0"><Newspaper className="h-4 w-4" /><span className="hidden sm:inline ml-1">Berita</span></TabsTrigger>
-            <TabsTrigger value="articles" className="flex-shrink-0"><FileText className="h-4 w-4" /><span className="hidden sm:inline ml-1">Artikel</span></TabsTrigger>
-            <TabsTrigger value="pricing" className="flex-shrink-0"><CreditCard className="h-4 w-4" /><span className="hidden sm:inline ml-1">Harga</span></TabsTrigger>
-            <TabsTrigger value="testimonials" className="flex-shrink-0"><Users className="h-4 w-4" /><span className="hidden sm:inline ml-1">Testimoni</span></TabsTrigger>
-            <TabsTrigger value="faq" className="flex-shrink-0"><HelpCircle className="h-4 w-4" /><span className="hidden sm:inline ml-1">FAQ</span></TabsTrigger>
-            <TabsTrigger value="payment" className="flex-shrink-0"><CreditCard className="h-4 w-4" /><span className="hidden sm:inline ml-1">Pembayaran</span></TabsTrigger>
-            <TabsTrigger value="cta" className="flex-shrink-0"><Phone className="h-4 w-4" /><span className="hidden sm:inline ml-1">CTA</span></TabsTrigger>
-            <TabsTrigger value="footer" className="flex-shrink-0"><Layout className="h-4 w-4" /><span className="hidden sm:inline ml-1">Footer</span></TabsTrigger>
-            <TabsTrigger value="quicklinks" className="flex-shrink-0"><Link2 className="h-4 w-4" /><span className="hidden sm:inline ml-1">Quick Links</span></TabsTrigger>
-            <TabsTrigger value="legal" className="flex-shrink-0"><FileCheck className="h-4 w-4" /><span className="hidden sm:inline ml-1">Legal</span></TabsTrigger>
-            <TabsTrigger value="social" className="flex-shrink-0"><Share2 className="h-4 w-4" /><span className="hidden sm:inline ml-1">Sosmed</span></TabsTrigger>
-            <TabsTrigger value="chat_agent" className="flex-shrink-0"><MessageSquare className="h-4 w-4" /><span className="hidden sm:inline ml-1">Chat Agent</span></TabsTrigger>
-            <TabsTrigger value="banners" className="flex-shrink-0"><Megaphone className="h-4 w-4" /><span className="hidden sm:inline ml-1">Banner</span></TabsTrigger>
-            <TabsTrigger value="sidebar" className="flex-shrink-0"><PanelRight className="h-4 w-4" /><span className="hidden sm:inline ml-1">Sidebar</span></TabsTrigger>
-            <TabsTrigger value="promo" className="flex-shrink-0"><Megaphone className="h-4 w-4" /><span className="hidden sm:inline ml-1">Promosi</span></TabsTrigger>
-            <TabsTrigger value="download" className="flex-shrink-0"><Download className="h-4 w-4" /><span className="hidden sm:inline ml-1">Download</span></TabsTrigger>
-            <TabsTrigger value="clients" className="flex-shrink-0"><Users className="h-4 w-4" /><span className="hidden sm:inline ml-1">Klien</span></TabsTrigger>
-            <TabsTrigger value="about" className="flex-shrink-0"><Info className="h-4 w-4" /><span className="hidden sm:inline ml-1">Tentang</span></TabsTrigger>
-          </TabsList>
+          <Card className="border-slate-200/80 bg-gradient-to-b from-white to-slate-50/70 shadow-sm">
+            <CardHeader className="pb-2 pt-4">
+              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <CardTitle className="text-base">Navigasi Pengaturan</CardTitle>
+                  <CardDescription>
+                    Mode compact aktif: lebih padat, tetap rapi, tanpa scroll horizontal panjang.
+                  </CardDescription>
+                </div>
+                {activeTabMeta && (
+                  <Badge variant="secondary" className="h-7 w-fit border border-primary/20 bg-primary/10 px-2.5 text-primary">
+                    Tab Aktif: {activeTabMeta.label}
+                  </Badge>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-2.5 pb-4">
+              {HOMEPAGE_TAB_GROUPS.map((group) => (
+                <Collapsible key={group.title} open={!collapsedGroups[group.title]}>
+                  <div className="rounded-xl border border-slate-200/70 bg-white/80 p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{group.title}</p>
+                        <p className="hidden text-[11px] text-muted-foreground lg:block">{group.description}</p>
+                      </div>
+                      {group.title !== "Struktur Utama" && (
+                        <CollapsibleTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => toggleGroup(group.title)}
+                            className="h-7 gap-1 px-2 text-[11px]"
+                          >
+                            {collapsedGroups[group.title] ? "Buka" : "Tutup"}
+                            <ChevronDown
+                              className={`h-3.5 w-3.5 transition-transform ${
+                                collapsedGroups[group.title] ? "" : "rotate-180"
+                              }`}
+                            />
+                          </Button>
+                        </CollapsibleTrigger>
+                      )}
+                    </div>
+                    <CollapsibleContent forceMount className={collapsedGroups[group.title] ? "hidden" : ""}>
+                      <div className="mt-2 grid grid-cols-2 gap-1.5 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+                        {group.items.map((item) => {
+                          const Icon = item.icon;
+                          const isActive = activeTab === item.value;
+                          return (
+                            <Button
+                              key={item.value}
+                              type="button"
+                              variant={isActive ? "default" : "outline"}
+                              size="sm"
+                              onClick={() => setActiveTab(item.value)}
+                              className={`h-8 justify-start gap-1.5 rounded-md px-2 text-left text-xs ${
+                                isActive
+                                  ? "shadow-sm"
+                                  : "border-slate-200/70 bg-white hover:bg-slate-50"
+                              }`}
+                            >
+                              <Icon className="h-3.5 w-3.5 shrink-0" />
+                              <span className="truncate">{item.label}</span>
+                            </Button>
+                          );
+                        })}
+                      </div>
+                    </CollapsibleContent>
+                  </div>
+                </Collapsible>
+              ))}
+            </CardContent>
+          </Card>
 
           <TabsContent value="layout" className="mt-6">
             <Card>

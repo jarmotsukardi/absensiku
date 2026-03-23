@@ -15,16 +15,28 @@ import { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { validateOfficeCoordinateInput } from "@/lib/officeCoordinates";
 import { LocationPicker } from "@/components/maps/LocationPicker";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 type Office = Tables<"offices">;
 type OPD = Tables<"opd">;
+const ADMIN_WORK_LOCATIONS_READ_TIMEOUT_MS = 12000;
+const ADMIN_WORK_LOCATIONS_WRITE_TIMEOUT_MS = 15000;
+const ADMIN_WORK_LOCATIONS_MAX_RETRIES = 2;
 
 export default function WorkLocationsManagement() {
+  const confirmDialog = useConfirmDialog();
   const ITEMS_PER_PAGE = 15;
   const [locations, setLocations] = useState<(Office & { opd?: OPD })[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -41,20 +53,45 @@ export default function WorkLocationsManagement() {
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
+      setIsRetrying(false);
       setLoadError(null);
       
-      const { data: opdData, error: opdError } = await supabase
-        .from("opd")
-        .select("*")
-        .order("name");
+      const { data: opdData, error: opdError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("opd")
+              .select("*")
+              .order("name"),
+            ADMIN_WORK_LOCATIONS_READ_TIMEOUT_MS,
+            "Permintaan daftar OPD timeout."
+          ),
+        {
+          maxRetries: ADMIN_WORK_LOCATIONS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (opdError) throw opdError;
       setOpdList(opdData || []);
 
-      const { data: officesData, error: officesError } = await supabase
-        .from("offices")
-        .select("*, opd:opd_id(*)")
-        .order("name");
+      const { data: officesData, error: officesError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("offices")
+              .select("*, opd:opd_id(*)")
+              .order("name"),
+            ADMIN_WORK_LOCATIONS_READ_TIMEOUT_MS,
+            "Permintaan daftar lokasi kerja timeout."
+          ),
+        {
+          maxRetries: ADMIN_WORK_LOCATIONS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (officesError) throw officesError;
       setLocations(officesData || []);
@@ -66,6 +103,7 @@ export default function WorkLocationsManagement() {
       setOpdList([]);
       toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, []);
@@ -93,28 +131,44 @@ export default function WorkLocationsManagement() {
       };
 
       if (editingLocation) {
-        const { error } = await supabase
-          .from("offices")
-          .update(locationData)
-          .eq("id", editingLocation.id);
+        const { error } = await withTimeout(
+          supabase
+            .from("offices")
+            .update(locationData)
+            .eq("id", editingLocation.id),
+          ADMIN_WORK_LOCATIONS_WRITE_TIMEOUT_MS,
+          "Perbarui lokasi kerja timeout."
+        );
 
         if (error) throw error;
         toast.success("Lokasi kerja berhasil diperbarui");
       } else {
-        const { data: { user } } = await supabase.auth.getUser();
+        const { data: { user } } = await withTimeout(
+          supabase.auth.getUser(),
+          ADMIN_WORK_LOCATIONS_WRITE_TIMEOUT_MS,
+          "Permintaan user auth timeout."
+        );
         if (!user) throw new Error("User not authenticated");
 
-        const { data: employee } = await supabase
-          .from("employees")
-          .select("tenant_id")
-          .eq("user_id", user.id)
-          .single();
+        const { data: employee } = await withTimeout(
+          supabase
+            .from("employees")
+            .select("tenant_id")
+            .eq("user_id", user.id)
+            .single(),
+          ADMIN_WORK_LOCATIONS_WRITE_TIMEOUT_MS,
+          "Permintaan tenant employee timeout."
+        );
 
         if (!employee?.tenant_id) throw new Error("Tenant not found");
 
-        const { error } = await supabase
-          .from("offices")
-          .insert({ ...locationData, tenant_id: employee.tenant_id });
+        const { error } = await withTimeout(
+          supabase
+            .from("offices")
+            .insert({ ...locationData, tenant_id: employee.tenant_id }),
+          ADMIN_WORK_LOCATIONS_WRITE_TIMEOUT_MS,
+          "Tambah lokasi kerja timeout."
+        );
 
         if (error) throw error;
         toast.success("Lokasi kerja berhasil ditambahkan");
@@ -146,10 +200,23 @@ export default function WorkLocationsManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin ingin menghapus lokasi kerja ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Lokasi Kerja",
+        description: "Yakin ingin menghapus lokasi kerja ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
-      const { error } = await supabase.from("offices").delete().eq("id", id);
+      const { error } = await withTimeout(
+        supabase.from("offices").delete().eq("id", id),
+        ADMIN_WORK_LOCATIONS_WRITE_TIMEOUT_MS,
+        "Hapus lokasi kerja timeout."
+      );
       if (error) throw error;
       toast.success("Lokasi kerja berhasil dihapus");
       await fetchData();
@@ -264,20 +331,32 @@ export default function WorkLocationsManagement() {
                     />
                   </div>
                 </div>
-                <DialogFooter>
-                  <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                    Batal
-                  </Button>
-                  <Button type="submit">Simpan</Button>
+                <DialogFooter className={dialogActionBarClassName}>
+                  <DialogActionHint>Koordinat dan radius dipakai untuk validasi absensi lokasi.</DialogActionHint>
+                  <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                    <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                      Batal
+                    </Button>
+                    <Button type="submit">Simpan</Button>
+                  </div>
                 </DialogFooter>
               </form>
             </DialogContent>
           </Dialog>
         </div>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+            Sedang mencoba ulang memuat data lokasi kerja...
+          </div>
+        )}
+
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 

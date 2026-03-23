@@ -6,6 +6,8 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Loader2, Save, Facebook, Instagram, Youtube, Linkedin, MessageCircle, Send, Twitter, Share2 } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface SocialMediaData {
   social_facebook: string;
@@ -44,11 +46,16 @@ export function SocialMediaSettings() {
   const fetchSettings = async () => {
     try {
       // Fetch from footer_settings
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "footer_settings")
-        .maybeSingle();
+      const { data } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "footer_settings")
+            .maybeSingle(),
+        10000,
+        "Load social media settings timeout"
+      );
 
       if (data?.value && typeof data.value === "object" && !Array.isArray(data.value)) {
         const footerData = data.value as Record<string, unknown>;
@@ -63,7 +70,8 @@ export function SocialMediaSettings() {
         });
       }
     } catch (error) {
-      console.error("Error:", error);
+      const errorRef = reportError(error, "admin.settings.social_media.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan social media", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -73,11 +81,16 @@ export function SocialMediaSettings() {
     setIsSaving(true);
     try {
       // Update footer_settings with social media data
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "footer_settings")
-        .maybeSingle();
+      const { data: existing } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "footer_settings")
+            .maybeSingle(),
+        10000,
+        "Load footer settings before social save timeout"
+      );
 
       const footerData =
         existing?.value && typeof existing.value === "object" && !Array.isArray(existing.value)
@@ -86,19 +99,32 @@ export function SocialMediaSettings() {
       const updatedFooter = { ...footerData, ...settings };
 
       if (existing) {
-        await supabase
-          .from("system_settings")
-          .update({ value: updatedFooter, updated_at: new Date().toISOString() })
-          .eq("key", "footer_settings");
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .update({ value: updatedFooter, updated_at: new Date().toISOString() })
+              .eq("key", "footer_settings"),
+          10000,
+          "Update footer social settings timeout"
+        );
+        if (error) throw error;
       } else {
-        await supabase
-          .from("system_settings")
-          .insert({ key: "footer_settings", value: updatedFooter });
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .insert({ key: "footer_settings", value: updatedFooter }),
+          10000,
+          "Insert footer social settings timeout"
+        );
+        if (error) throw error;
       }
 
       toast.success("Social media berhasil disimpan");
-    } catch (err) {
-      toast.error("Gagal menyimpan");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.social_media.save");
+      toast.error(appendErrorReference("Gagal menyimpan", errorRef));
     } finally {
       setIsSaving(false);
     }

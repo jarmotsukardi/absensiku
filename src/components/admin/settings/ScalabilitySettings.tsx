@@ -7,6 +7,8 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import {
   Activity,
   Zap,
@@ -48,6 +50,7 @@ type AttendanceScalabilitySetting = {
 
 const SCALABILITY_KEY = "attendance_scalability";
 const VALID_TIERS: ScalabilityTier[] = ["small", "medium", "large", "enterprise"];
+const SCALABILITY_OP_RETRY_MAX = 1;
 
 const isValidTier = (value: unknown): value is ScalabilityTier => {
   return typeof value === "string" && VALID_TIERS.includes(value as ScalabilityTier);
@@ -287,47 +290,78 @@ export function ScalabilitySettings() {
   ]);
 
   const loadActiveEmployeesCount = useCallback(async (): Promise<number> => {
-    const { count, error } = await supabase
-      .from("employees")
-      .select("id", { count: "exact", head: true })
-      .eq("is_active", true);
+    const { count, error } = await withTimeout(
+      () =>
+        supabase
+          .from("employees")
+          .select("id", { count: "exact", head: true })
+          .eq("is_active", true),
+      10000,
+      "Load active employees timeout"
+    );
 
     if (error) throw error;
     return count ?? 0;
   }, []);
 
   const upsertScalabilitySetting = useCallback(async (value: AttendanceScalabilitySetting) => {
-    const { data: existing, error: existingError } = await supabase
-      .from("system_settings")
-      .select("id")
-      .eq("key", SCALABILITY_KEY)
-      .maybeSingle();
+    const { data: existing, error: existingError } = await withTimeout(
+      () =>
+        supabase
+          .from("system_settings")
+          .select("id")
+          .eq("key", SCALABILITY_KEY)
+          .maybeSingle(),
+      10000,
+      "Load scalability setting timeout"
+    );
 
     if (existingError) throw existingError;
 
     if (existing?.id) {
-      const { error } = await supabase
-        .from("system_settings")
-        .update({ value, updated_at: new Date().toISOString() })
-        .eq("id", existing.id);
+      const { error } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .update({ value, updated_at: new Date().toISOString() })
+            .eq("id", existing.id),
+        10000,
+        "Update scalability setting timeout"
+      );
       if (error) throw error;
       return;
     }
 
-    const { error } = await supabase
-      .from("system_settings")
-      .insert({
-        key: SCALABILITY_KEY,
-        value,
-        description: "Konfigurasi skalabilitas absensi untuk sinkronisasi local-first",
-      });
+    const { error } = await withTimeout(
+      () =>
+        supabase
+          .from("system_settings")
+          .insert({
+            key: SCALABILITY_KEY,
+            value,
+            description: "Konfigurasi skalabilitas absensi untuk sinkronisasi local-first",
+          }),
+      10000,
+      "Insert scalability setting timeout"
+    );
     if (error) throw error;
   }, []);
 
   const loadIngestHealth = useCallback(async () => {
-    setIsHealthLoading(true);
+      setIsHealthLoading(true);
     try {
-      const { data, error } = await supabase.rpc("get_attendance_ingest_health");
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () => supabase.rpc("get_attendance_ingest_health"),
+            10000,
+            "Load ingest health timeout"
+          ),
+        {
+          maxRetries: SCALABILITY_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        }
+      );
       if (error) throw error;
 
       const row = Array.isArray(data) ? data[0] : null;
@@ -344,7 +378,7 @@ export function ScalabilitySettings() {
         max_pending_age_seconds: Number(row.max_pending_age_seconds) || 0,
       });
     } catch (error) {
-      console.error("Error loading ingest health:", error);
+      reportError(error, "admin.settings.scalability.load_ingest_health");
     } finally {
       setIsHealthLoading(false);
     }
@@ -407,10 +441,10 @@ export function ScalabilitySettings() {
             description: "Tier akan menyesuaikan jumlah pegawai aktif.",
           });
         } catch (error) {
-          console.error("Error enabling auto scalability mode:", error);
+          const errorRef = reportError(error, "admin.settings.scalability.enable_auto");
           toast({
             title: "Gagal Mengaktifkan Mode Otomatis",
-            description: "Periksa koneksi database lalu coba lagi.",
+            description: appendErrorReference("Periksa koneksi database lalu coba lagi.", errorRef),
             variant: "destructive",
           });
         } finally {
@@ -436,10 +470,10 @@ export function ScalabilitySettings() {
           description: `Tier dikunci ke ${activeProfile.label}.`,
         });
       } catch (error) {
-        console.error("Error enabling manual scalability mode:", error);
+        const errorRef = reportError(error, "admin.settings.scalability.enable_manual");
         toast({
           title: "Gagal Menyimpan Mode Manual",
-          description: "Perubahan mode belum tersimpan di server.",
+          description: appendErrorReference("Perubahan mode belum tersimpan di server.", errorRef),
           variant: "destructive",
         });
       } finally {
@@ -452,11 +486,16 @@ export function ScalabilitySettings() {
   useEffect(() => {
     const loadGlobalScalability = async () => {
       try {
-        const { data, error } = await supabase
-          .from("system_settings")
-          .select("value")
-          .eq("key", SCALABILITY_KEY)
-          .maybeSingle();
+        const { data, error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .select("value")
+              .eq("key", SCALABILITY_KEY)
+              .maybeSingle(),
+          10000,
+          "Load global scalability timeout"
+        );
 
         if (error) throw error;
 
@@ -482,12 +521,17 @@ export function ScalabilitySettings() {
         }
         saveScalabilityConfig(profile.tier);
       } catch (error) {
-        console.error("Error loading global scalability settings:", error);
+        const errorRef = reportError(error, "admin.settings.scalability.load_global");
+        toast({
+          title: "Gagal Memuat Skalabilitas Global",
+          description: appendErrorReference("Pengaturan global tidak dapat dimuat, memakai konfigurasi lokal.", errorRef),
+          variant: "destructive",
+        });
       }
     };
 
     loadGlobalScalability();
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     loadIngestHealth();
@@ -504,7 +548,7 @@ export function ScalabilitySettings() {
         await syncAutoScalability(false);
       } catch (error) {
         if (!cancelled) {
-          console.error("Error refreshing auto scalability profile:", error);
+          reportError(error, "admin.settings.scalability.refresh_auto");
         }
       }
     };
@@ -541,10 +585,13 @@ export function ScalabilitySettings() {
         description: `Konfigurasi "${profile.label}" aktif (mode manual).`,
       });
     } catch (error) {
-      console.error("Error saving scalability settings:", error);
+      const errorRef = reportError(error, "admin.settings.scalability.apply_profile", { tier });
       toast({
         title: "Gagal Menyimpan Profil",
-        description: "Profil lokal tetap aktif, tetapi sinkronisasi global gagal.",
+        description: appendErrorReference(
+          "Profil lokal tetap aktif, tetapi sinkronisasi global gagal.",
+          errorRef
+        ),
         variant: "destructive",
       });
     } finally {
@@ -601,9 +648,9 @@ export function ScalabilitySettings() {
         onValueChange={(value) => setActiveTab(value as "konfigurasi" | "kesehatan-kapasitas")}
         className="space-y-6"
       >
-        <TabsList className="grid w-full max-w-md grid-cols-2">
-          <TabsTrigger value="konfigurasi">Konfigurasi</TabsTrigger>
-          <TabsTrigger value="kesehatan-kapasitas">Kesehatan Kapasitas</TabsTrigger>
+        <TabsList className="h-auto w-full max-w-md justify-start gap-1.5 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+          <TabsTrigger value="konfigurasi" className="whitespace-nowrap">Konfigurasi</TabsTrigger>
+          <TabsTrigger value="kesehatan-kapasitas" className="whitespace-nowrap">Kesehatan Kapasitas</TabsTrigger>
         </TabsList>
 
         <TabsContent value="konfigurasi" className="space-y-6">

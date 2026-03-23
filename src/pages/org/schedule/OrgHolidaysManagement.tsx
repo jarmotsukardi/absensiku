@@ -18,7 +18,10 @@ import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 
 interface WorkHoliday {
   id: string;
@@ -56,12 +59,16 @@ const months = [
 
 const currentYear = new Date().getFullYear();
 const years = Array.from({ length: 5 }, (_, i) => currentYear - 2 + i);
+const ORG_HOLIDAYS_QUERY_TIMEOUT_MS = 12000;
+const ORG_HOLIDAYS_QUERY_RETRY_MAX = 2;
 
 export default function OrgHolidaysManagement() {
+  const confirmDialog = useConfirmDialog();
   const [holidays, setHolidays] = useState<WorkHoliday[]>([]);
   const [workHours, setWorkHours] = useState<{ day_of_week: number; institution_type: string }[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [isCopying, setIsCopying] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -85,18 +92,31 @@ export default function OrgHolidaysManagement() {
   const itemsPerPage = 15;
 
   useEffect(() => {
-    fetchData();
-    fetchWorkHours();
+    void fetchData();
+    void fetchWorkHours();
   }, []);
 
   const fetchData = async () => {
     try {
       setLoadError(null);
-      const { data, error } = await supabase
-        .from("work_holidays")
-        .select("*")
-        .order("year", { ascending: false })
-        .order("month", { ascending: true });
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("work_holidays")
+              .select("*")
+              .order("year", { ascending: false })
+              .order("month", { ascending: true }),
+            ORG_HOLIDAYS_QUERY_TIMEOUT_MS,
+            "org.schedule.holidays.fetch_data timeout"
+          ),
+        {
+          maxRetries: ORG_HOLIDAYS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setHolidays((data as WorkHoliday[]) || []);
@@ -113,10 +133,23 @@ export default function OrgHolidaysManagement() {
 
   const fetchWorkHours = async () => {
     try {
-      const { data } = await supabase
-        .from("work_hours")
-        .select("day_of_week, institution_type")
-        .eq("is_active", true);
+      setIsRetrying(false);
+      const { data } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("work_hours")
+              .select("day_of_week, institution_type")
+              .eq("is_active", true),
+            ORG_HOLIDAYS_QUERY_TIMEOUT_MS,
+            "org.schedule.holidays.fetch_work_hours timeout"
+          ),
+        {
+          maxRetries: ORG_HOLIDAYS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       
       setWorkHours(data || []);
     } catch (error: unknown) {
@@ -164,18 +197,51 @@ export default function OrgHolidaysManagement() {
     const targetYear = parseInt(filterYear === "all" ? currentYear.toString() : filterYear);
     const targetInstitution = filterInstitution === "all" ? "pemerintahan" : filterInstitution;
     
-    if (!confirm(`Salin semua libur dari tahun ${previousYear} ke tahun ${targetYear} untuk jenis instansi ${targetInstitution}?`)) return;
+    if (
+      !(await confirmDialog({
+        title: "Salin Libur Kerja",
+        description: `Salin semua libur dari tahun ${previousYear} ke tahun ${targetYear} untuk jenis instansi ${targetInstitution}?`,
+        confirmText: "Ya, salin",
+      }))
+    ) {
+      return;
+    }
     
     setIsCopying(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      setIsRetrying(false);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ORG_HOLIDAYS_QUERY_TIMEOUT_MS,
+            "org.schedule.holidays.copy.auth timeout"
+          ),
+        {
+          maxRetries: ORG_HOLIDAYS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (!user) return;
 
-      const { data: roleData } = await supabase
-        .from("user_roles")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .single();
+      const { data: roleData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("user_roles")
+              .select("tenant_id")
+              .eq("user_id", user.id)
+              .single(),
+            ORG_HOLIDAYS_QUERY_TIMEOUT_MS,
+            "org.schedule.holidays.copy.role timeout"
+          ),
+        {
+          maxRetries: ORG_HOLIDAYS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       // Get holidays from previous year
       const sourceHolidays = holidays.filter(h => 
@@ -198,20 +264,32 @@ export default function OrgHolidaysManagement() {
         );
         
         if (!exists) {
-          await supabase.from("work_holidays").insert({
-            tenant_id: roleData?.tenant_id,
-            institution_type: targetInstitution,
-            year: targetYear,
-            month: holiday.month,
-            dates: holiday.dates,
-            description: holiday.description,
-          });
+          await withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase.from("work_holidays").insert({
+                  tenant_id: roleData?.tenant_id,
+                  institution_type: targetInstitution,
+                  year: targetYear,
+                  month: holiday.month,
+                  dates: holiday.dates,
+                  description: holiday.description,
+                }),
+                ORG_HOLIDAYS_QUERY_TIMEOUT_MS,
+                "org.schedule.holidays.copy.insert timeout"
+              ),
+            {
+              maxRetries: ORG_HOLIDAYS_QUERY_RETRY_MAX,
+              shouldRetry: isRetryableError,
+              onRetry: () => setIsRetrying(true),
+            }
+          );
           copiedCount++;
         }
       }
       
       toast.success(`Berhasil menyalin ${copiedCount} data libur ke tahun ${targetYear}`);
-      fetchData();
+      void fetchData();
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.schedule.holidays.copy_previous_year", {
         institution_type: targetInstitution,
@@ -231,14 +309,39 @@ export default function OrgHolidaysManagement() {
     }
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      setIsRetrying(false);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ORG_HOLIDAYS_QUERY_TIMEOUT_MS,
+            "org.schedule.holidays.save.auth timeout"
+          ),
+        {
+          maxRetries: ORG_HOLIDAYS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (!user) return;
 
-      const { data: roleData } = await supabase
-        .from("user_roles")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .single();
+      const { data: roleData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("user_roles")
+              .select("tenant_id")
+              .eq("user_id", user.id)
+              .single(),
+            ORG_HOLIDAYS_QUERY_TIMEOUT_MS,
+            "org.schedule.holidays.save.role timeout"
+          ),
+        {
+          maxRetries: ORG_HOLIDAYS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       // Validasi duplikat tanggal
       const newDates = formData.dates.split(",").map(d => d.trim());
@@ -261,36 +364,60 @@ export default function OrgHolidaysManagement() {
       }
 
       if (isEditing) {
-        const { error } = await supabase
-          .from("work_holidays")
-          .update({
-            institution_type: formData.institution_type,
-            year: formData.year,
-            month: formData.month,
-            dates: formData.dates,
-            description: formData.description || null,
-          })
-          .eq("id", formData.id);
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("work_holidays")
+                .update({
+                  institution_type: formData.institution_type,
+                  year: formData.year,
+                  month: formData.month,
+                  dates: formData.dates,
+                  description: formData.description || null,
+                })
+                .eq("id", formData.id),
+              ORG_HOLIDAYS_QUERY_TIMEOUT_MS,
+              "org.schedule.holidays.update timeout"
+            ),
+          {
+            maxRetries: ORG_HOLIDAYS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (error) throw error;
         toast.success("Libur kerja berhasil diperbarui");
       } else {
-        const { error } = await supabase
-          .from("work_holidays")
-          .insert({
-            tenant_id: roleData?.tenant_id,
-            institution_type: formData.institution_type,
-            year: formData.year,
-            month: formData.month,
-            dates: formData.dates,
-            description: formData.description || null,
-          });
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("work_holidays")
+                .insert({
+                  tenant_id: roleData?.tenant_id,
+                  institution_type: formData.institution_type,
+                  year: formData.year,
+                  month: formData.month,
+                  dates: formData.dates,
+                  description: formData.description || null,
+                }),
+              ORG_HOLIDAYS_QUERY_TIMEOUT_MS,
+              "org.schedule.holidays.insert timeout"
+            ),
+          {
+            maxRetries: ORG_HOLIDAYS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (error) throw error;
         toast.success("Libur kerja berhasil ditambahkan");
       }
 
       setIsDialogOpen(false);
       resetForm();
-      fetchData();
+      void fetchData();
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.schedule.holidays.save", {
         holiday_id: formData.id || null,
@@ -328,13 +455,35 @@ export default function OrgHolidaysManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin ingin menghapus libur kerja ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Libur Kerja",
+        description: "Yakin ingin menghapus libur kerja ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
-      const { error } = await supabase.from("work_holidays").delete().eq("id", id);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.from("work_holidays").delete().eq("id", id),
+            ORG_HOLIDAYS_QUERY_TIMEOUT_MS,
+            "org.schedule.holidays.delete timeout"
+          ),
+        {
+          maxRetries: ORG_HOLIDAYS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
       toast.success("Libur kerja berhasil dihapus");
-      fetchData();
+      void fetchData();
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.schedule.holidays.delete", { holiday_id: id });
       toast.error(appendErrorReference("Gagal menghapus libur kerja", errorRef));
@@ -588,17 +737,28 @@ export default function OrgHolidaysManagement() {
                   />
                 </div>
               </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
-                <Button onClick={handleSubmit}>{isEditing ? "Simpan" : "Tambah"}</Button>
+              <DialogFooter className={dialogActionBarClassName}>
+                <DialogActionHint>Tanggal libur akan memengaruhi perhitungan absensi dan laporan.</DialogActionHint>
+                <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                  <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
+                  <Button onClick={handleSubmit}>{isEditing ? "Simpan" : "Tambah"}</Button>
+                </div>
               </DialogFooter>
             </DialogContent>
           </Dialog>
         </div>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang memuat data libur kerja...
+          </div>
+        )}
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void Promise.all([fetchData(), fetchWorkHours()])}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 

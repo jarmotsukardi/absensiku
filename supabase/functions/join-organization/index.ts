@@ -140,43 +140,178 @@ serve(async (req: Request): Promise<Response> => {
       .eq("user_id", user.id)
       .maybeSingle();
 
-    // Generate device ID for new employee
+    // Generate device ID for employee session bootstrap
     const deviceId = `WEB-${Date.now().toString(16).toUpperCase()}`;
 
-    // Create employee record
-    const { data: newEmployee, error: empError } = await supabase
-      .from("employees")
-      .insert({
-        user_id: user.id,
-        tenant_id: invitation.tenant_id,
-        name: invitation.name || selfRegData?.name || user.email?.split("@")[0] || "User",
-        email: invitation.email || user.email,
-        nik: invitation.nik || `NIK-${Date.now()}`,
-        phone: invitation.phone || selfRegData?.whatsapp,
-        whatsapp: selfRegData?.whatsapp,
-        address: selfRegData?.address,
-        opd_id: invitation.opd_id,
-        office_id: invitation.office_id,
-        android_id: deviceId,
-        is_active: true,
-      })
-      .select()
-      .single();
+    const normalizedInvitationEmail =
+      typeof invitation.email === "string" ? invitation.email.trim().toLowerCase() : "";
+    const normalizedInvitationNik = typeof invitation.nik === "string" ? invitation.nik.trim() : "";
+    const normalizedUserEmail = (user.email || "").trim().toLowerCase();
+    const userEmailFallback = user.email || `user-${user.id}@local.invalid`;
+    const isBulkInvitationEmail = normalizedInvitationEmail === "bulk@invitation.local";
+    const isPlaceholderNik =
+      !normalizedInvitationNik || /^0+$/.test(normalizedInvitationNik) || /^NIK-/i.test(normalizedInvitationNik);
+    const canMatchByNik = !isPlaceholderNik;
+    const canMatchByEmail = normalizedInvitationEmail.length > 0 && !isBulkInvitationEmail;
+    const fallbackEmail = normalizedUserEmail || normalizedInvitationEmail;
+    const candidateEmail = canMatchByEmail ? normalizedInvitationEmail : fallbackEmail;
+    const candidateNik = canMatchByNik ? normalizedInvitationNik : "";
+    const resolvedName =
+      invitation.name || selfRegData?.name || user.email?.split("@")[0] || "User";
 
-    if (empError) {
-      logTraceError(traceId, "Error creating employee", empError);
+    let existingImportedEmployee: {
+      id: string;
+      user_id: string | null;
+      name: string;
+      email: string;
+      nik: string;
+      phone: string | null;
+      whatsapp: string | null;
+      address: string | null;
+      opd_id: string | null;
+      office_id: string | null;
+    } | null = null;
+
+    const [existingByNikRes, existingByEmailRes] = await Promise.all([
+      canMatchByNik
+        ? supabase
+            .from("employees")
+            .select("id, user_id, name, email, nik, phone, whatsapp, address, opd_id, office_id")
+            .eq("tenant_id", invitation.tenant_id)
+            .eq("nik", candidateNik)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+      candidateEmail
+        ? supabase
+            .from("employees")
+            .select("id, user_id, name, email, nik, phone, whatsapp, address, opd_id, office_id")
+            .eq("tenant_id", invitation.tenant_id)
+            .ilike("email", candidateEmail)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+
+    if (existingByNikRes.error) {
+      logTraceError(traceId, "Error resolving imported employee by NIK", existingByNikRes.error);
       return new Response(
-        JSON.stringify(withTrace({ error: "Gagal membuat data pegawai", details: empError.message }, traceId)),
+        JSON.stringify(withTrace({ error: "Gagal memeriksa data pegawai existing", details: existingByNikRes.error.message }, traceId)),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    if (existingByEmailRes.error) {
+      logTraceError(traceId, "Error resolving imported employee by email", existingByEmailRes.error);
+      return new Response(
+        JSON.stringify(withTrace({ error: "Gagal memeriksa data pegawai existing", details: existingByEmailRes.error.message }, traceId)),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
+    existingImportedEmployee =
+      (existingByNikRes.data as typeof existingImportedEmployee) ??
+      (existingByEmailRes.data as typeof existingImportedEmployee);
+
+    let employeeId: string;
+    if (existingImportedEmployee) {
+      if (existingImportedEmployee.user_id && existingImportedEmployee.user_id !== user.id) {
+        return new Response(
+          JSON.stringify(
+            withTrace(
+              {
+                error: "Data pegawai sudah terhubung ke akun lain. Hubungi admin organisasi.",
+                code: "EMPLOYEE_ALREADY_LINKED",
+              },
+              traceId
+            )
+          ),
+          { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      const { data: updatedEmployee, error: updateEmployeeError } = await supabase
+        .from("employees")
+        .update({
+          user_id: user.id,
+          name: existingImportedEmployee.name || resolvedName,
+          email: existingImportedEmployee.email || candidateEmail || userEmailFallback,
+          nik: existingImportedEmployee.nik || candidateNik || `NIK-${Date.now()}`,
+          phone: existingImportedEmployee.phone || invitation.phone || selfRegData?.whatsapp || null,
+          whatsapp: existingImportedEmployee.whatsapp || selfRegData?.whatsapp || invitation.phone || null,
+          address: existingImportedEmployee.address || selfRegData?.address || null,
+          opd_id: existingImportedEmployee.opd_id || invitation.opd_id,
+          office_id: existingImportedEmployee.office_id || invitation.office_id,
+          android_id: deviceId,
+          is_active: true,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", existingImportedEmployee.id)
+        .select("id")
+        .single();
+
+      if (updateEmployeeError) {
+        logTraceError(traceId, "Error linking existing employee", updateEmployeeError);
+        return new Response(
+          JSON.stringify(withTrace({ error: "Gagal menghubungkan akun ke data pegawai existing", details: updateEmployeeError.message }, traceId)),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      employeeId = updatedEmployee.id;
+    } else {
+      const { data: newEmployee, error: empError } = await supabase
+        .from("employees")
+        .insert({
+          user_id: user.id,
+          tenant_id: invitation.tenant_id,
+          name: resolvedName,
+          email: candidateEmail || userEmailFallback,
+          nik: candidateNik || `NIK-${Date.now()}`,
+          phone: invitation.phone || selfRegData?.whatsapp,
+          whatsapp: selfRegData?.whatsapp || invitation.phone,
+          address: selfRegData?.address,
+          opd_id: invitation.opd_id,
+          office_id: invitation.office_id,
+          android_id: deviceId,
+          is_active: true,
+        })
+        .select("id")
+        .single();
+
+      if (empError) {
+        logTraceError(traceId, "Error creating employee", empError);
+        return new Response(
+          JSON.stringify(withTrace({ error: "Gagal membuat data pegawai", details: empError.message }, traceId)),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      employeeId = newEmployee.id;
+    }
+
     // Assign pegawai role
-    await supabase.from("user_roles").insert({
-      user_id: user.id,
-      tenant_id: invitation.tenant_id,
-      role: "pegawai",
-    });
+    const { error: roleError } = await supabase.from("user_roles").upsert(
+      {
+        user_id: user.id,
+        tenant_id: invitation.tenant_id,
+        role: "pegawai",
+      },
+      {
+        onConflict: "user_id,tenant_id,role",
+        ignoreDuplicates: true,
+      }
+    );
+    if (roleError) {
+      logTraceError(traceId, "Error assigning user role", roleError);
+      return new Response(
+        JSON.stringify(withTrace({ error: "Gagal menyiapkan role pegawai", details: roleError.message }, traceId)),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const joinAuditAction = existingImportedEmployee
+      ? "INVITATION_JOIN_LINK_EXISTING_EMPLOYEE"
+      : "INVITATION_JOIN_CREATE_NEW_EMPLOYEE";
 
     // Mark invitation as used
     await supabase
@@ -197,10 +332,34 @@ serve(async (req: Request): Promise<Response> => {
         .eq("id", selfRegData.id);
     }
 
+    const { error: invitationAuditError } = await supabase.from("audit_logs").insert({
+      tenant_id: invitation.tenant_id,
+      user_id: user.id,
+      employee_id: employeeId,
+      action: joinAuditAction,
+      table_name: "employee_invitations",
+      record_id: invitation.id,
+      new_values: {
+        event: joinAuditAction,
+        invitation_id: invitation.id,
+        invitation_code: invitation.invitation_code,
+        employee_id: employeeId,
+        linked_existing_employee: Boolean(existingImportedEmployee),
+        existing_employee_id: existingImportedEmployee?.id ?? null,
+        user_id: user.id,
+        trace_id: traceId,
+        joined_at: new Date().toISOString(),
+      },
+    });
+
+    if (invitationAuditError) {
+      logTraceError(traceId, "Error writing invitation join audit log", invitationAuditError);
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
-        employee_id: newEmployee.id,
+        employee_id: employeeId,
         tenant_name: invitation.tenants?.name,
         message: `Berhasil bergabung ke ${invitation.tenants?.name}`,
       }),

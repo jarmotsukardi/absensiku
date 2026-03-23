@@ -17,7 +17,11 @@ import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { logAuditIfEnabled } from "@/lib/auditLoggingPolicy";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 // Mapping ikon untuk jenis alasan
 const REASON_ICONS: Record<string, React.ElementType> = {
@@ -57,8 +61,11 @@ interface FlexibleRequest {
 const ITEMS_PER_PAGE = 10;
 
 export default function OrgFlexibleAttendanceRequests() {
+  const FLEXIBLE_REQUESTS_QUERY_TIMEOUT_MS = 15000;
+  const FLEXIBLE_REQUESTS_QUERY_RETRY_MAX = 1;
   const [requests, setRequests] = useState<FlexibleRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("menunggu");
   const [currentPage, setCurrentPage] = useState(1);
@@ -72,23 +79,28 @@ export default function OrgFlexibleAttendanceRequests() {
   const [isProcessing, setIsProcessing] = useState(false);
 
   // Fetch tenant_id from current user
-  useEffect(() => {
-    const fetchTenantId = async () => {
-      try {
-        const resolved = await resolveOrgTenantId();
-        setTenantId(resolved);
-        setLoadError(null);
-      } catch {
-        const errorRef = reportError(new Error("Tenant organisasi tidak dapat ditentukan"), "org.flexible_requests.resolve_tenant");
-        const message = appendErrorReference("Gagal menentukan tenant organisasi", errorRef);
-        toast.error(message);
-        setLoadError(message);
-        setTenantId(null);
-        setIsLoading(false);
-      }
-    };
-    void fetchTenantId();
+  const initializeTenant = useCallback(async () => {
+    try {
+      const resolved = await withTimeout(
+        resolveOrgTenantId(),
+        FLEXIBLE_REQUESTS_QUERY_TIMEOUT_MS,
+        "org.flexible_requests.resolve_tenant timeout",
+      );
+      setTenantId(resolved);
+      setLoadError(null);
+    } catch {
+      const errorRef = reportError(new Error("Tenant organisasi tidak dapat ditentukan"), "org.flexible_requests.resolve_tenant");
+      const message = appendErrorReference("Gagal menentukan tenant organisasi", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setTenantId(null);
+      setIsLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void initializeTenant();
+  }, [initializeTenant]);
 
   const fetchData = useCallback(async () => {
     if (!tenantId) return;
@@ -96,6 +108,7 @@ export default function OrgFlexibleAttendanceRequests() {
     setIsLoading(true);
     try {
       setLoadError(null);
+      setIsRetrying(false);
       let query = supabase
         .from("flexible_attendance_requests")
         .select(`
@@ -112,7 +125,19 @@ export default function OrgFlexibleAttendanceRequests() {
         query = query.eq("status", statusFilter);
       }
 
-      const { data, error } = await query;
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query,
+            FLEXIBLE_REQUESTS_QUERY_TIMEOUT_MS,
+            "org.flexible_requests.fetch_data.query timeout",
+          ),
+        {
+          maxRetries: FLEXIBLE_REQUESTS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
       setRequests((data || []) as FlexibleRequest[]);
@@ -127,6 +152,7 @@ export default function OrgFlexibleAttendanceRequests() {
       setRequests([]);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   }, [statusFilter, tenantId]);
 
@@ -170,6 +196,29 @@ export default function OrgFlexibleAttendanceRequests() {
         .eq("id", selectedRequest.id);
 
       if (error) throw error;
+
+      await logAuditIfEnabled({
+        tenantId,
+        payload: {
+          tenant_id: tenantId,
+          employee_id: selectedRequest.employee_id,
+          user_id: user.id,
+          table_name: "flexible_attendance_requests",
+          action: "flexible_attendance_approved",
+          record_id: selectedRequest.id,
+          old_values: {
+            status: selectedRequest.status,
+            request_date: selectedRequest.request_date,
+            reason_type: selectedRequest.reason_type,
+          },
+          new_values: {
+            status: "disetujui",
+            request_date: selectedRequest.request_date,
+            reason_type: selectedRequest.reason_type,
+            approved_by: empData?.id || null,
+          },
+        },
+      });
 
       // Optional: Update employee's allow_flexible_attendance flag for that date
       // This could be handled via a separate approval mechanism
@@ -220,6 +269,30 @@ export default function OrgFlexibleAttendanceRequests() {
 
       if (error) throw error;
 
+      await logAuditIfEnabled({
+        tenantId,
+        payload: {
+          tenant_id: tenantId,
+          employee_id: selectedRequest.employee_id,
+          user_id: user.id,
+          table_name: "flexible_attendance_requests",
+          action: "flexible_attendance_rejected",
+          record_id: selectedRequest.id,
+          old_values: {
+            status: selectedRequest.status,
+            request_date: selectedRequest.request_date,
+            reason_type: selectedRequest.reason_type,
+          },
+          new_values: {
+            status: "ditolak",
+            request_date: selectedRequest.request_date,
+            reason_type: selectedRequest.reason_type,
+            approved_by: empData?.id || null,
+            rejection_reason: rejectionReason.trim(),
+          },
+        },
+      });
+
       toast.success("Permohonan berhasil ditolak");
       setDialogMode(null);
       setSelectedRequest(null);
@@ -233,6 +306,13 @@ export default function OrgFlexibleAttendanceRequests() {
       toast.error(appendErrorReference(errorMessage, errorRef));
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const handleRetryLoad = async () => {
+    await initializeTenant();
+    if (tenantId) {
+      await fetchData();
     }
   };
 
@@ -282,29 +362,39 @@ export default function OrgFlexibleAttendanceRequests() {
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <MapPinOff className="h-6 w-6" />
-            Permohonan Absensi Khusus
+            Absensi Khusus
           </h1>
           <p className="text-muted-foreground">
-            Kelola permohonan absensi khusus dari pegawai
+            Kelola data permohonan absensi khusus pegawai
           </p>
         </div>
+        <LeaveRequestTabs />
 
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button size="sm" variant="outline" onClick={handleRetryLoad} className="border-destructive/30 text-destructive hover:bg-destructive/10">
+              Coba Lagi
+            </Button>
+          </div>
+        )}
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            Sedang mencoba ulang koneksi data...
           </div>
         )}
 
         <Card>
           <CardHeader>
-            <CardTitle>Daftar Permohonan</CardTitle>
+            <CardTitle>Daftar Absensi Khusus</CardTitle>
             <CardDescription>
               {filteredRequests.length} permohonan ditemukan
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-col sm:flex-row gap-4 mb-4">
-              <div className="relative flex-1">
+            <div className="mb-4 rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder="Cari nama, NIP, atau alasan..."
@@ -314,7 +404,7 @@ export default function OrgFlexibleAttendanceRequests() {
                 />
               </div>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[180px]">
+                <SelectTrigger className="w-full sm:w-[180px]">
                   <SelectValue placeholder="Filter status" />
                 </SelectTrigger>
                 <SelectContent>
@@ -324,6 +414,7 @@ export default function OrgFlexibleAttendanceRequests() {
                   <SelectItem value="ditolak">Ditolak</SelectItem>
                 </SelectContent>
               </Select>
+              </div>
             </div>
 
             <div className="rounded-md border">
@@ -471,14 +562,17 @@ export default function OrgFlexibleAttendanceRequests() {
                 </div>
               </div>
             )}
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setDialogMode(null)} disabled={isProcessing}>
-                Batal
-              </Button>
-              <Button onClick={handleApprove} disabled={isProcessing} className="bg-green-600 hover:bg-green-700">
-                {isProcessing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />}
-                Setujui
-              </Button>
+            <DialogFooter className={dialogActionBarClassName}>
+              <DialogActionHint>Pastikan detail permohonan sudah diverifikasi sebelum disetujui.</DialogActionHint>
+              <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                <Button variant="outline" onClick={() => setDialogMode(null)} disabled={isProcessing}>
+                  Batal
+                </Button>
+                <Button onClick={handleApprove} disabled={isProcessing} className="bg-green-600 hover:bg-green-700">
+                  {isProcessing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Check className="h-4 w-4 mr-2" />}
+                  Setujui
+                </Button>
+              </div>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -512,14 +606,17 @@ export default function OrgFlexibleAttendanceRequests() {
                 </div>
               </div>
             )}
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setDialogMode(null)} disabled={isProcessing}>
-                Batal
-              </Button>
-              <Button onClick={handleReject} disabled={isProcessing || !rejectionReason.trim()} variant="destructive">
-                {isProcessing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <X className="h-4 w-4 mr-2" />}
-                Tolak
-              </Button>
+            <DialogFooter className={dialogActionBarClassName}>
+              <DialogActionHint>Isi alasan penolakan agar pegawai dapat melakukan perbaikan.</DialogActionHint>
+              <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                <Button variant="outline" onClick={() => setDialogMode(null)} disabled={isProcessing}>
+                  Batal
+                </Button>
+                <Button onClick={handleReject} disabled={isProcessing || !rejectionReason.trim()} variant="destructive">
+                  {isProcessing ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <X className="h-4 w-4 mr-2" />}
+                  Tolak
+                </Button>
+              </div>
             </DialogFooter>
           </DialogContent>
         </Dialog>

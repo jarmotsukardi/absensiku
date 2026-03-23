@@ -9,12 +9,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import { Bell, Plus, Send, Trash2, Search, Loader2, RefreshCw } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import {
@@ -40,6 +42,8 @@ interface TenantOption {
   id: string;
   name: string;
 }
+const NOTIFICATION_QUERY_TIMEOUT_MS = 12000;
+const NOTIFICATION_QUERY_RETRY_MAX = 2;
 
 export default function NotificationManagement() {
   const PAGE_SIZE = 20;
@@ -52,6 +56,7 @@ export default function NotificationManagement() {
   const [filterType, setFilterType] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [totalCount, setTotalCount] = useState(0);
   const [readCount, setReadCount] = useState(0);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -91,6 +96,7 @@ export default function NotificationManagement() {
     setIsLoading(true);
     setLoadError(null);
     try {
+      setIsRetrying(false);
       const pagedQuery = applyNotificationFilters(
         supabase
           .from("notifications")
@@ -113,11 +119,19 @@ export default function NotificationManagement() {
           .eq("is_read", false)
       );
 
-      const [{ data, error, count }, readRes, unreadRes] = await Promise.all([
-        pagedQuery,
-        readCountQuery,
-        unreadCountQuery,
-      ]);
+      const [{ data, error, count }, readRes, unreadRes] = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.all([pagedQuery, readCountQuery, unreadCountQuery]),
+            NOTIFICATION_QUERY_TIMEOUT_MS,
+            "admin.notifications.fetch timeout"
+          ),
+        {
+          maxRetries: NOTIFICATION_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
       if (readRes.error) throw readRes.error;
       if (unreadRes.error) throw unreadRes.error;
@@ -145,11 +159,24 @@ export default function NotificationManagement() {
 
   const fetchTenants = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("tenants")
-        .select("id, name")
-        .eq("is_active", true)
-        .order("name");
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("tenants")
+              .select("id, name")
+              .eq("is_active", true)
+              .order("name"),
+            NOTIFICATION_QUERY_TIMEOUT_MS,
+            "admin.notifications.fetch_tenants timeout"
+          ),
+        {
+          maxRetries: NOTIFICATION_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setTenants((data || []) as TenantOption[]);
@@ -192,31 +219,68 @@ export default function NotificationManagement() {
     setIsSending(true);
     
     try {
+      setIsRetrying(false);
       // Get all users based on target
       let uniqueUserIds: string[] = [];
 
       if (targetType === "all_admin") {
-        const { data: users, error: usersError } = await supabase
-          .from("user_roles")
-          .select("user_id")
-          .in("role", ["super_admin", "admin_instansi"]);
+        const { data: users, error: usersError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("user_roles")
+                .select("user_id")
+                .in("role", ["super_admin", "admin_instansi"]),
+              NOTIFICATION_QUERY_TIMEOUT_MS,
+              "admin.notifications.send.fetch_all_admin timeout"
+            ),
+          {
+            maxRetries: NOTIFICATION_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (usersError) throw usersError;
         uniqueUserIds = Array.from(new Set((users || []).map((u) => u.user_id).filter(Boolean))) as string[];
       } else if (targetType === "org_admin") {
-        const { data: users, error: usersError } = await supabase
-          .from("user_roles")
-          .select("user_id")
-          .eq("tenant_id", selectedTenantId)
-          .eq("role", "admin_instansi");
+        const { data: users, error: usersError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("user_roles")
+                .select("user_id")
+                .eq("tenant_id", selectedTenantId)
+                .eq("role", "admin_instansi"),
+              NOTIFICATION_QUERY_TIMEOUT_MS,
+              "admin.notifications.send.fetch_org_admin timeout"
+            ),
+          {
+            maxRetries: NOTIFICATION_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (usersError) throw usersError;
         uniqueUserIds = Array.from(new Set((users || []).map((u) => u.user_id).filter(Boolean))) as string[];
       } else if (targetType === "org_employee") {
-        const { data: employeeRows, error: employeeError } = await supabase
-          .from("employees")
-          .select("user_id")
-          .eq("tenant_id", selectedTenantId)
-          .eq("is_active", true)
-          .not("user_id", "is", null);
+        const { data: employeeRows, error: employeeError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("employees")
+                .select("user_id")
+                .eq("tenant_id", selectedTenantId)
+                .eq("is_active", true)
+                .not("user_id", "is", null),
+              NOTIFICATION_QUERY_TIMEOUT_MS,
+              "admin.notifications.send.fetch_org_employee timeout"
+            ),
+          {
+            maxRetries: NOTIFICATION_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (employeeError) throw employeeError;
         uniqueUserIds = Array.from(new Set((employeeRows || []).map((e) => e.user_id).filter(Boolean))) as string[];
       }
@@ -235,9 +299,21 @@ export default function NotificationManagement() {
         is_read: false,
       }));
 
-      const { error: insertError } = await supabase
-        .from('notifications')
-        .insert(notificationsToInsert);
+      const { error: insertError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from('notifications')
+              .insert(notificationsToInsert),
+            NOTIFICATION_QUERY_TIMEOUT_MS,
+            "admin.notifications.send.insert timeout"
+          ),
+        {
+          maxRetries: NOTIFICATION_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (insertError) throw insertError;
 
@@ -268,11 +344,24 @@ export default function NotificationManagement() {
 
   const deleteNotification = async (id: string) => {
     try {
+      setIsRetrying(false);
       const deletedNotification = notifications.find((notification) => notification.id === id) || null;
-      const { error } = await supabase
-        .from("notifications")
-        .delete()
-        .eq("id", id);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("notifications")
+              .delete()
+              .eq("id", id),
+            NOTIFICATION_QUERY_TIMEOUT_MS,
+            "admin.notifications.delete timeout"
+          ),
+        {
+          maxRetries: NOTIFICATION_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
       toast.success("Notifikasi berhasil dihapus");
       setNotifications((prev) => prev.filter((n) => n.id !== id));
@@ -326,6 +415,11 @@ export default function NotificationManagement() {
       subtitle="Kelola dan kirim notifikasi ke pengguna"
     >
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang memuat data notifikasi...
+          </div>
+        )}
         {/* Stats Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Card>
@@ -449,14 +543,17 @@ export default function NotificationManagement() {
                       />
                     </div>
                   </div>
-                  <DialogFooter>
-                    <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
-                      Batal
-                    </Button>
-                    <Button onClick={sendBroadcastNotification} disabled={isSending || (requiresTenantTarget && !selectedTenantId)}>
-                      <Send className="h-4 w-4 mr-2" />
-                      {isSending ? "Mengirim..." : "Kirim"}
-                    </Button>
+                  <DialogFooter className={dialogActionBarClassName}>
+                    <DialogActionHint>Notifikasi broadcast akan dikirim ke seluruh target sesuai filter.</DialogActionHint>
+                    <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                      <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
+                        Batal
+                      </Button>
+                      <Button onClick={sendBroadcastNotification} disabled={isSending || (requiresTenantTarget && !selectedTenantId)}>
+                        <Send className="h-4 w-4 mr-2" />
+                        {isSending ? "Mengirim..." : "Kirim"}
+                      </Button>
+                    </div>
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
@@ -466,8 +563,9 @@ export default function NotificationManagement() {
 
         <Card>
           <CardContent className="p-4">
-            <div className="flex flex-col sm:flex-row gap-4">
-              <div className="relative flex-1">
+            <div className="rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   placeholder="Cari judul/pesan notifikasi..."
@@ -491,6 +589,7 @@ export default function NotificationManagement() {
               <Button variant="outline" size="icon" onClick={() => void fetchNotifications()}>
                 <RefreshCw className="h-4 w-4" />
               </Button>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -508,8 +607,11 @@ export default function NotificationManagement() {
           </CardHeader>
           <CardContent>
             {loadError && (
-              <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                {loadError}
+              <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <span>{loadError}</span>
+                <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void fetchNotifications()}>
+                  Coba Lagi
+                </Button>
               </div>
             )}
             <Table>

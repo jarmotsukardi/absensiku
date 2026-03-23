@@ -14,6 +14,12 @@ import {
 } from "@/components/ui/table";
 import { Users, Search, Plus, Mail, Phone, UserCheck, UserX } from "lucide-react";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 interface Employee {
   id: string;
@@ -29,28 +35,53 @@ interface Employee {
 interface OrganizationEmployeesProps {
   tenantId: string;
 }
+const ORG_EMPLOYEES_READ_TIMEOUT_MS = 12000;
+const ORG_EMPLOYEES_WRITE_TIMEOUT_MS = 15000;
+const ORG_EMPLOYEES_MAX_RETRIES = 2;
 
 export function OrganizationEmployees({ tenantId }: OrganizationEmployeesProps) {
   const ITEMS_PER_PAGE = 10;
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
 
   const fetchEmployees = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("employees")
-        .select("*")
-        .eq("tenant_id", tenantId)
-        .order("name");
+      setIsRetrying(false);
+      setLoadError(null);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("*")
+              .eq("tenant_id", tenantId)
+              .order("name"),
+            ORG_EMPLOYEES_READ_TIMEOUT_MS,
+            "Permintaan data pegawai organisasi timeout."
+          ),
+        {
+          maxRetries: ORG_EMPLOYEES_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setEmployees(data || []);
     } catch (error) {
-      console.error("Error fetching employees:", error);
-      toast.error("Gagal memuat data pegawai");
+      const errorRef = reportError(error, "admin.components.organization_employees.fetch", {
+        tenant_id: tenantId,
+      });
+      const message = appendErrorReference("Gagal memuat data pegawai", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setEmployees([]);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [tenantId]);
@@ -61,17 +92,26 @@ export function OrganizationEmployees({ tenantId }: OrganizationEmployeesProps) 
 
   const toggleEmployeeStatus = async (employeeId: string, currentStatus: boolean) => {
     try {
-      const { error } = await supabase
-        .from("employees")
-        .update({ is_active: !currentStatus })
-        .eq("id", employeeId);
+      const { error } = await withTimeout(
+        supabase
+          .from("employees")
+          .update({ is_active: !currentStatus })
+          .eq("id", employeeId),
+        ORG_EMPLOYEES_WRITE_TIMEOUT_MS,
+        "Perbarui status pegawai timeout."
+      );
 
       if (error) throw error;
       toast.success(`Status pegawai berhasil diperbarui`);
-      fetchEmployees();
+      void fetchEmployees();
     } catch (error) {
-      console.error("Error updating employee:", error);
-      toast.error("Gagal memperbarui status");
+      const errorRef = reportError(error, "admin.components.organization_employees.toggle_status", {
+        tenant_id: tenantId,
+        employee_id: employeeId,
+      });
+      const message = appendErrorReference("Gagal memperbarui status", errorRef);
+      toast.error(message);
+      setLoadError(message);
     }
   };
 
@@ -111,6 +151,19 @@ export function OrganizationEmployees({ tenantId }: OrganizationEmployeesProps) 
         </div>
       </CardHeader>
       <CardContent>
+        {isRetrying && (
+          <div className="mb-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+            Sedang mencoba ulang memuat data pegawai...
+          </div>
+        )}
+        {loadError && (
+          <div className="mb-4 flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchEmployees()}>
+              Coba Lagi
+            </Button>
+          </div>
+        )}
         <div className="relative max-w-sm mb-6">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input

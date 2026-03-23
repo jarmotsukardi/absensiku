@@ -8,6 +8,8 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Loader2, Save, Megaphone } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface PromoSidebarSettings {
   enabled: boolean;
@@ -34,17 +36,23 @@ export function PromoSidebarSettings() {
 
   const fetchSettings = async () => {
     try {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "promo_sidebar_settings")
-        .maybeSingle();
+      const { data } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "promo_sidebar_settings")
+            .maybeSingle(),
+        10000,
+        "Load promo sidebar settings timeout"
+      );
 
       if (data?.value) {
         setSettings({ ...defaultSettings, ...(data.value as Partial<PromoSidebarSettings>) });
       }
     } catch (error) {
-      console.error("Error:", error);
+      const errorRef = reportError(error, "admin.settings.promo_sidebar.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan promo sidebar", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -53,38 +61,62 @@ export function PromoSidebarSettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "promo_sidebar_settings")
-        .maybeSingle();
+      const { data: existing } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("id")
+            .eq("key", "promo_sidebar_settings")
+            .maybeSingle(),
+        10000,
+        "Load promo sidebar existing setting timeout"
+      );
 
       const jsonValue = JSON.parse(JSON.stringify(settings));
 
       if (existing) {
-        await supabase
-          .from("system_settings")
-          .update({ value: jsonValue, updated_at: new Date().toISOString() })
-          .eq("key", "promo_sidebar_settings");
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .update({ value: jsonValue, updated_at: new Date().toISOString() })
+              .eq("key", "promo_sidebar_settings"),
+          10000,
+          "Update promo sidebar settings timeout"
+        );
+        if (error) throw error;
       } else {
-        await supabase
-          .from("system_settings")
-          .insert({ key: "promo_sidebar_settings", value: jsonValue });
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .insert({ key: "promo_sidebar_settings", value: jsonValue }),
+          10000,
+          "Insert promo sidebar settings timeout"
+        );
+        if (error) throw error;
       }
 
       // Also update homepage_sections table for promo_sidebar
-      await supabase
-        .from("homepage_sections")
-        .update({ 
-          is_enabled: settings.enabled,
-          settings: jsonValue,
-          updated_at: new Date().toISOString() 
-        })
-        .eq("section_key", "promo_sidebar");
+      const { error: sectionUpdateError } = await withTimeout(
+        () =>
+          supabase
+            .from("homepage_sections")
+            .update({ 
+              is_enabled: settings.enabled,
+              settings: jsonValue,
+              updated_at: new Date().toISOString() 
+            })
+            .eq("section_key", "promo_sidebar"),
+        10000,
+        "Update promo sidebar homepage section timeout"
+      );
+      if (sectionUpdateError) throw sectionUpdateError;
 
       toast.success("Pengaturan Promosi & Info berhasil disimpan");
-    } catch (err) {
-      toast.error("Gagal menyimpan");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.promo_sidebar.save");
+      toast.error(appendErrorReference("Gagal menyimpan", errorRef));
     } finally {
       setIsSaving(false);
     }

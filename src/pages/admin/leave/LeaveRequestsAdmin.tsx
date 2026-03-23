@@ -21,17 +21,37 @@ import { Enums, Tables } from "@/integrations/supabase/types";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { processLeaveApprovalStep, processLeaveRejection } from "@/lib/leaveApprovalActions";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
-type LeaveRequest = Tables<"leave_requests">;
+type LeaveRequest = Tables<"leave_requests"> & {
+  leave_type_id?: string | null;
+  approval_type_code?: string | null;
+  current_approval_level?: number | null;
+  required_approval_levels?: number | null;
+  approval_history?: Array<Record<string, unknown>> | null;
+  document_reference_number?: string | null;
+  document_reference_date?: string | null;
+  document_reference_issuer?: string | null;
+  document_reference_notes?: string | null;
+};
 type Employee = Tables<"employees">;
 type RequestStatus = Enums<"request_status">;
 type LeaveRequestWithEmployee = LeaveRequest & { employee?: Employee | null };
+const ADMIN_LEAVE_REQUESTS_READ_TIMEOUT_MS = 12000;
+const ADMIN_LEAVE_REQUESTS_WRITE_TIMEOUT_MS = 15000;
+const ADMIN_LEAVE_REQUESTS_MAX_RETRIES = 2;
 
 export default function LeaveRequestsAdmin() {
   const ITEMS_PER_PAGE = 15;
   const [requests, setRequests] = useState<LeaveRequestWithEmployee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("menunggu");
   const [currentPage, setCurrentPage] = useState(1);
@@ -39,6 +59,7 @@ export default function LeaveRequestsAdmin() {
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
+      setIsRetrying(false);
       setLoadError(null);
       
       let query = supabase
@@ -50,7 +71,19 @@ export default function LeaveRequestsAdmin() {
         query = query.eq("status", statusFilter as RequestStatus);
       }
 
-      const { data, error } = await query;
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query,
+            ADMIN_LEAVE_REQUESTS_READ_TIMEOUT_MS,
+            "Permintaan data permohonan cuti timeout."
+          ),
+        {
+          maxRetries: ADMIN_LEAVE_REQUESTS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setRequests((data as LeaveRequestWithEmployee[]) || []);
@@ -63,27 +96,36 @@ export default function LeaveRequestsAdmin() {
       setRequests([]);
       toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [statusFilter]);
 
   useEffect(() => {
-    fetchData();
+    void fetchData();
   }, [fetchData]);
 
   const getCurrentEmployeeId = useCallback(async () => {
     const {
       data: { user },
       error: authError,
-    } = await supabase.auth.getUser();
+    } = await withTimeout(
+      supabase.auth.getUser(),
+      ADMIN_LEAVE_REQUESTS_WRITE_TIMEOUT_MS,
+      "Permintaan user auth timeout."
+    );
     if (authError) throw authError;
     if (!user) throw new Error("Sesi login tidak valid. Silakan login ulang.");
 
-    const { data: currentEmployee, error: employeeError } = await supabase
-      .from("employees")
-      .select("id")
-      .eq("user_id", user.id)
-      .single();
+    const { data: currentEmployee, error: employeeError } = await withTimeout(
+      supabase
+        .from("employees")
+        .select("id")
+        .eq("user_id", user.id)
+        .single(),
+      ADMIN_LEAVE_REQUESTS_WRITE_TIMEOUT_MS,
+      "Permintaan profil pegawai timeout."
+    );
     if (employeeError) throw employeeError;
     return currentEmployee?.id ?? null;
   }, []);
@@ -91,18 +133,35 @@ export default function LeaveRequestsAdmin() {
   const handleApprove = async (id: string) => {
     try {
       const currentEmployeeId = await getCurrentEmployeeId();
+      const { data: { user } } = await withTimeout(
+        supabase.auth.getUser(),
+        ADMIN_LEAVE_REQUESTS_WRITE_TIMEOUT_MS,
+        "Permintaan user auth timeout."
+      );
+      if (!user) throw new Error("Sesi login tidak valid. Silakan login ulang.");
+      const targetRequest = requests.find((request) => request.id === id);
+      if (!targetRequest) throw new Error("Data permohonan cuti tidak ditemukan.");
 
-      const { error } = await supabase
-        .from("leave_requests")
-        .update({ 
-          status: "disetujui", 
-          approved_by: currentEmployeeId,
-          approved_at: new Date().toISOString()
-        })
-        .eq("id", id);
+      const result = await withTimeout(
+        processLeaveApprovalStep({
+          request: targetRequest,
+          approverUserId: user.id,
+          approverEmployeeId: currentEmployeeId,
+        }),
+        ADMIN_LEAVE_REQUESTS_WRITE_TIMEOUT_MS,
+        "Persetujuan permohonan cuti timeout."
+      );
 
-      if (error) throw error;
-      toast.success("Permohonan cuti disetujui");
+      if (!result.updated) {
+        toast.warning("Permohonan sudah diproses admin lain. Data disegarkan.");
+        await fetchData();
+        return;
+      }
+      toast.success(
+        result.isFinalApproval
+          ? `Permohonan cuti disetujui pada level ${result.requiredApprovalLevels}/${result.requiredApprovalLevels}`
+          : `Tahap persetujuan ${result.currentApprovalLevel}/${result.requiredApprovalLevels} tersimpan`,
+      );
       await fetchData();
     } catch (error: unknown) {
       const errorRef = reportError(error, "admin.leave-requests.approve", { request_id: id });
@@ -115,15 +174,31 @@ export default function LeaveRequestsAdmin() {
     if (!reason) return;
 
     try {
-      const { error } = await supabase
-        .from("leave_requests")
-        .update({ 
-          status: "ditolak", 
-          rejection_reason: reason 
-        })
-        .eq("id", id);
+      const { data: { user } } = await withTimeout(
+        supabase.auth.getUser(),
+        ADMIN_LEAVE_REQUESTS_WRITE_TIMEOUT_MS,
+        "Permintaan user auth timeout."
+      );
+      const currentEmployeeId = await getCurrentEmployeeId();
+      const targetRequest = requests.find((request) => request.id === id);
+      if (!targetRequest) throw new Error("Data permohonan cuti tidak ditemukan.");
 
-      if (error) throw error;
+      const result = await withTimeout(
+        processLeaveRejection({
+          request: targetRequest,
+          approverUserId: user?.id || null,
+          approverEmployeeId: currentEmployeeId,
+          rejectionReason: reason,
+        }),
+        ADMIN_LEAVE_REQUESTS_WRITE_TIMEOUT_MS,
+        "Penolakan permohonan cuti timeout."
+      );
+
+      if (!result.updated) {
+        toast.warning("Permohonan sudah diproses admin lain. Data disegarkan.");
+        await fetchData();
+        return;
+      }
       toast.success("Permohonan cuti ditolak");
       await fetchData();
     } catch (error: unknown) {
@@ -184,9 +259,18 @@ export default function LeaveRequestsAdmin() {
           </p>
         </div>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+            Sedang mencoba ulang memuat data permohonan...
+          </div>
+        )}
+
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 
@@ -234,6 +318,7 @@ export default function LeaveRequestsAdmin() {
                     <TableHead>Jenis</TableHead>
                     <TableHead>Tanggal</TableHead>
                     <TableHead>Alasan</TableHead>
+                    <TableHead>Referensi Dokumen</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="w-32 text-right">Aksi</TableHead>
                   </TableRow>
@@ -241,13 +326,13 @@ export default function LeaveRequestsAdmin() {
                 <TableBody>
                   {isLoading ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center py-8">
+                      <TableCell colSpan={8} className="text-center py-8">
                         Memuat data...
                       </TableCell>
                     </TableRow>
                   ) : paginatedRequests.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7} className="text-center py-8">
+                      <TableCell colSpan={8} className="text-center py-8">
                         Tidak ada permohonan
                       </TableCell>
                     </TableRow>
@@ -265,6 +350,11 @@ export default function LeaveRequestsAdmin() {
                           {format(new Date(req.start_date), "dd MMM yyyy", { locale: localeId })} - {format(new Date(req.end_date), "dd MMM yyyy", { locale: localeId })}
                         </TableCell>
                         <TableCell className="max-w-[200px] truncate">{req.reason}</TableCell>
+                        <TableCell className="max-w-[220px] text-xs text-muted-foreground">
+                          {req.document_reference_number
+                            ? `${req.document_reference_number}${req.document_reference_issuer ? ` • ${req.document_reference_issuer}` : ""}`
+                            : "-"}
+                        </TableCell>
                         <TableCell>{getStatusBadge(req.status || "menunggu")}</TableCell>
                         <TableCell className="text-right">
                           {req.status === "menunggu" && (

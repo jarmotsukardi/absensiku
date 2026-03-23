@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import { 
   Users, 
   MapPin,
@@ -32,7 +33,7 @@ import { StabilityStreakWidget } from "@/components/dashboard/StabilityStreakWid
 import { FloatingBugReport } from "@/components/common/FloatingBugReport";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
-import { withTimeout } from "@/lib/attendanceResilience";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 interface SubscriptionInfo {
   id: string;
@@ -100,6 +101,7 @@ interface OrgDashboardSnapshotRow {
 }
 
 const DASHBOARD_FETCH_TIMEOUT_MS = 30000;
+const DASHBOARD_FETCH_RETRY_MAX = 1;
 const DASHBOARD_LOADING_WATCHDOG_MS = 70000;
 const ORG_ACTIVE_TENANT_STORAGE_KEY = "org_active_tenant_id";
 const ORG_DASHBOARD_SNAPSHOT_MAX_AGE_SECONDS = 180;
@@ -189,10 +191,17 @@ export default function OrgDashboard() {
   const fetchDashboardData = useCallback(async () => {
     let resolvedTenantIdForLog: string | null = null;
     try {
-      const { data: { user } } = await withTimeout(
-        Promise.resolve(supabase.auth.getUser()),
-        DASHBOARD_FETCH_TIMEOUT_MS,
-        "Timeout verifikasi sesi dashboard organisasi"
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.resolve(supabase.auth.getUser()),
+            DASHBOARD_FETCH_TIMEOUT_MS,
+            "Timeout verifikasi sesi dashboard organisasi",
+          ),
+        {
+          maxRetries: DASHBOARD_FETCH_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
       );
       
       if (!user) {
@@ -203,16 +212,23 @@ export default function OrgDashboard() {
       // Resolve tenant context from roles and optional query param.
       let isSuperAdmin = false;
       let resolvedTenantId: string | null = null;
-      const { data: roleRows, error: roleRowsError } = await withTimeout(
-        Promise.resolve(
-          supabase
-            .from("user_roles")
-            .select("role, tenant_id")
-            .eq("user_id", user.id)
-            .in("role", ["admin_instansi", "super_admin"])
-        ),
-        DASHBOARD_FETCH_TIMEOUT_MS,
-        "Timeout membaca role pengguna organisasi"
+      const { data: roleRows, error: roleRowsError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.resolve(
+              supabase
+                .from("user_roles")
+                .select("role, tenant_id")
+                .eq("user_id", user.id)
+                .in("role", ["admin_instansi", "super_admin"]),
+            ),
+            DASHBOARD_FETCH_TIMEOUT_MS,
+            "Timeout membaca role pengguna organisasi",
+          ),
+        {
+          maxRetries: DASHBOARD_FETCH_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
       );
       if (roleRowsError) throw roleRowsError;
 
@@ -241,17 +257,24 @@ export default function OrgDashboard() {
       setTenantId(resolvedTenantId);
 
       // Fetch subscription
-      const { data: subData, error: subError } = await withTimeout(
-        Promise.resolve(
-          supabase
-            .from("subscriptions")
-            .select("*")
-            .eq("tenant_id", resolvedTenantId)
-            .order("created_at", { ascending: false })
-            .limit(1)
-        ),
-        DASHBOARD_FETCH_TIMEOUT_MS,
-        "Timeout membaca data langganan organisasi"
+      const { data: subData, error: subError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.resolve(
+              supabase
+                .from("subscriptions")
+                .select("*")
+                .eq("tenant_id", resolvedTenantId)
+                .order("created_at", { ascending: false })
+                .limit(1),
+            ),
+            DASHBOARD_FETCH_TIMEOUT_MS,
+            "Timeout membaca data langganan organisasi",
+          ),
+        {
+          maxRetries: DASHBOARD_FETCH_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
       );
       if (subError) {
         const subRef = reportError(subError, "org.dashboard.fetch_subscription", { tenant_id: resolvedTenantId });
@@ -263,32 +286,46 @@ export default function OrgDashboard() {
 
       // Fetch display name (tenant name for super admin context, otherwise employee name).
       if (isSuperAdmin && queryTenantId) {
-        const { data: tenantData, error: tenantDataError } = await withTimeout(
-          Promise.resolve(
-            supabase
-              .from("tenants")
-              .select("name")
-              .eq("id", queryTenantId)
-              .maybeSingle()
-          ),
-          DASHBOARD_FETCH_TIMEOUT_MS,
-          "Timeout membaca tenant dashboard organisasi"
+        const { data: tenantData, error: tenantDataError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              Promise.resolve(
+                supabase
+                  .from("tenants")
+                  .select("name")
+                  .eq("id", queryTenantId)
+                  .maybeSingle(),
+              ),
+              DASHBOARD_FETCH_TIMEOUT_MS,
+              "Timeout membaca tenant dashboard organisasi",
+            ),
+          {
+            maxRetries: DASHBOARD_FETCH_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
         );
         if (tenantDataError) throw tenantDataError;
         setUserName(tenantData?.name || "Admin Organisasi");
       } else {
-        const { data: empData, error: empDataError } = await withTimeout(
-          Promise.resolve(
-            supabase
-              .from("employees")
-              .select("name")
-              .eq("user_id", user.id)
-              .eq("tenant_id", resolvedTenantId)
-              .order("updated_at", { ascending: false })
-              .limit(1)
-          ),
-          DASHBOARD_FETCH_TIMEOUT_MS,
-          "Timeout membaca profil admin organisasi"
+        const { data: empData, error: empDataError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              Promise.resolve(
+                supabase
+                  .from("employees")
+                  .select("name")
+                  .eq("user_id", user.id)
+                  .eq("tenant_id", resolvedTenantId)
+                  .order("updated_at", { ascending: false })
+                  .limit(1),
+              ),
+              DASHBOARD_FETCH_TIMEOUT_MS,
+              "Timeout membaca profil admin organisasi",
+            ),
+          {
+            maxRetries: DASHBOARD_FETCH_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
         );
         if (empDataError) {
           const empRef = reportError(empDataError, "org.dashboard.fetch_org_admin_profile", { tenant_id: resolvedTenantId });
@@ -311,16 +348,23 @@ export default function OrgDashboard() {
 
       let snapshotApplied = false;
       try {
-        const { data: snapshotData, error: snapshotError } = await withTimeout(
-          Promise.resolve(
-            supabase.rpc("get_org_dashboard_snapshot", {
-              p_tenant_id: resolvedTenantId,
-              p_force_refresh: false,
-              p_max_age_seconds: ORG_DASHBOARD_SNAPSHOT_MAX_AGE_SECONDS,
-            })
-          ),
-          DASHBOARD_FETCH_TIMEOUT_MS,
-          "Timeout membaca snapshot dashboard organisasi"
+        const { data: snapshotData, error: snapshotError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              Promise.resolve(
+                supabase.rpc("get_org_dashboard_snapshot", {
+                  p_tenant_id: resolvedTenantId,
+                  p_force_refresh: false,
+                  p_max_age_seconds: ORG_DASHBOARD_SNAPSHOT_MAX_AGE_SECONDS,
+                })
+              ),
+              DASHBOARD_FETCH_TIMEOUT_MS,
+              "Timeout membaca snapshot dashboard organisasi"
+            ),
+          {
+            maxRetries: DASHBOARD_FETCH_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
         );
         if (snapshotError) throw snapshotError;
 
@@ -374,16 +418,23 @@ export default function OrgDashboard() {
       }
 
       if (snapshotApplied) {
-        const { data: apkSettings, error: apkSettingsError } = await withTimeout(
-          Promise.resolve(
-            supabase
-              .from("system_settings")
-              .select("value")
-              .eq("key", "apk_settings")
-              .maybeSingle()
-          ),
-          DASHBOARD_FETCH_TIMEOUT_MS,
-          "Timeout membaca konfigurasi APK organisasi"
+        const { data: apkSettings, error: apkSettingsError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              Promise.resolve(
+                supabase
+                  .from("system_settings")
+                  .select("value")
+                  .eq("key", "apk_settings")
+                  .maybeSingle(),
+              ),
+              DASHBOARD_FETCH_TIMEOUT_MS,
+              "Timeout membaca konfigurasi APK organisasi",
+            ),
+          {
+            maxRetries: DASHBOARD_FETCH_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
         );
         if (!apkSettingsError && apkSettings?.value && typeof apkSettings.value === "object") {
           const apkData = apkSettings.value as Record<string, unknown>;
@@ -402,15 +453,22 @@ export default function OrgDashboard() {
       setSnapshotCountMode("planned");
       setSnapshotComputedAt(new Date().toISOString());
 
-      const { data: officeRows, error: officeRowsError } = await withTimeout(
-        Promise.resolve(
-          supabase
-            .from("offices")
-            .select("id")
-            .eq("tenant_id", resolvedTenantId)
-        ),
-        DASHBOARD_FETCH_TIMEOUT_MS,
-        "Timeout membaca daftar kantor organisasi"
+      const { data: officeRows, error: officeRowsError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.resolve(
+              supabase
+                .from("offices")
+                .select("id")
+                .eq("tenant_id", resolvedTenantId),
+            ),
+            DASHBOARD_FETCH_TIMEOUT_MS,
+            "Timeout membaca daftar kantor organisasi",
+          ),
+        {
+          maxRetries: DASHBOARD_FETCH_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
       );
       if (officeRowsError) {
         const officeRef = reportError(officeRowsError, "org.dashboard.fetch_offices", { tenant_id: resolvedTenantId });
@@ -433,10 +491,23 @@ export default function OrgDashboard() {
           .lte("date", today)
         : Promise.resolve({ data: [] as { date: string }[], error: null });
 
-      const { data: tenantEmployeeRows, error: tenantEmployeeRowsError } = await supabase
-        .from("employees")
-        .select("id")
-        .eq("tenant_id", resolvedTenantId);
+      const { data: tenantEmployeeRows, error: tenantEmployeeRowsError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.resolve(
+              supabase
+                .from("employees")
+                .select("id")
+                .eq("tenant_id", resolvedTenantId),
+            ),
+            DASHBOARD_FETCH_TIMEOUT_MS,
+            "Timeout membaca daftar employee organisasi",
+          ),
+        {
+          maxRetries: DASHBOARD_FETCH_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (tenantEmployeeRowsError) {
         throw tenantEmployeeRowsError;
       }
@@ -470,54 +541,61 @@ export default function OrgDashboard() {
           .gte("created_at", thirtyDaysAgoIso)
         : Promise.resolve({ data: [] as { created_at: string | null; approved_at: string | null; status: string | null }[], error: null });
 
-      const [employeesRes, linkedEmployeesRes, officesRes, attendanceRes, attendanceTrendRes, leavesRes, wfhRes, overtimeRes, leaveApprovalsRes, wfhApprovalsRes, overtimeApprovalsRes, invitationsRes, apkSettings] = await withTimeout(
-        Promise.all([
-          supabase
-            .from("employees")
-            .select("id", { count: "exact", head: true })
-            .eq("tenant_id", resolvedTenantId)
-            .eq("is_active", true),
-          supabase
-            .from("employees")
-            .select("id", { count: "exact", head: true })
-            .eq("tenant_id", resolvedTenantId)
-            .eq("is_active", true)
-            .not("user_id", "is", null),
-          supabase
-            .from("offices")
-            .select("id", { count: "exact", head: true })
-            .eq("tenant_id", resolvedTenantId)
-            .eq("is_active", true),
-          attendancePromise,
-          attendanceTrendPromise,
-          leavePendingPromise,
-          wfhPendingPromise,
-          supabase
-            .from("overtime_requests")
-            .select("id", { count: "exact", head: true })
-            .eq("tenant_id", resolvedTenantId)
-            .eq("status", "pending"),
-          leaveApprovalsPromise,
-          wfhApprovalsPromise,
-          supabase
-            .from("overtime_requests")
-            .select("created_at, approved_at, status")
-            .eq("tenant_id", resolvedTenantId)
-            .gte("created_at", thirtyDaysAgoIso),
-          supabase
-            .from("employee_invitations")
-            .select("id", { count: "exact", head: true })
-            .eq("tenant_id", resolvedTenantId)
-            .eq("status", "pending")
-            .lt("expires_at", new Date().toISOString()),
-          supabase
-            .from("system_settings")
-            .select("value")
-            .eq("key", "apk_settings")
-            .maybeSingle(),
-        ]),
-        DASHBOARD_FETCH_TIMEOUT_MS,
-        "Timeout memuat statistik dashboard organisasi"
+      const [employeesRes, linkedEmployeesRes, officesRes, attendanceRes, attendanceTrendRes, leavesRes, wfhRes, overtimeRes, leaveApprovalsRes, wfhApprovalsRes, overtimeApprovalsRes, invitationsRes, apkSettings] = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.all([
+              supabase
+                .from("employees")
+                .select("id", { count: "exact", head: true })
+                .eq("tenant_id", resolvedTenantId)
+                .eq("is_active", true),
+              supabase
+                .from("employees")
+                .select("id", { count: "exact", head: true })
+                .eq("tenant_id", resolvedTenantId)
+                .eq("is_active", true)
+                .not("user_id", "is", null),
+              supabase
+                .from("offices")
+                .select("id", { count: "exact", head: true })
+                .eq("tenant_id", resolvedTenantId)
+                .eq("is_active", true),
+              attendancePromise,
+              attendanceTrendPromise,
+              leavePendingPromise,
+              wfhPendingPromise,
+              supabase
+                .from("overtime_requests")
+                .select("id", { count: "exact", head: true })
+                .eq("tenant_id", resolvedTenantId)
+                .eq("status", "pending"),
+              leaveApprovalsPromise,
+              wfhApprovalsPromise,
+              supabase
+                .from("overtime_requests")
+                .select("created_at, approved_at, status")
+                .eq("tenant_id", resolvedTenantId)
+                .gte("created_at", thirtyDaysAgoIso),
+              supabase
+                .from("employee_invitations")
+                .select("id", { count: "exact", head: true })
+                .eq("tenant_id", resolvedTenantId)
+                .eq("status", "pending")
+                .lt("expires_at", new Date().toISOString()),
+              supabase
+                .from("system_settings")
+                .select("value")
+                .eq("key", "apk_settings")
+                .maybeSingle(),
+            ]),
+            DASHBOARD_FETCH_TIMEOUT_MS,
+            "Timeout memuat statistik dashboard organisasi",
+          ),
+        {
+          maxRetries: DASHBOARD_FETCH_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
       );
 
       const queryScopes: Array<[string, unknown]> = [
@@ -799,7 +877,6 @@ export default function OrgDashboard() {
   const attendanceCoveragePct = stats.totalEmployees > 0
     ? Math.min(100, Math.round((stats.todayPresent / stats.totalEmployees) * 100))
     : 0;
-
   return (
     <OrganizationLayout>
       <OverdueRequestsOverlay tenantId={tenantId} />
@@ -831,7 +908,7 @@ export default function OrgDashboard() {
                   <Button
                     size="sm"
                     className="bg-amber-600 hover:bg-amber-700"
-                    onClick={() => navigate("/org/activation")}
+                    onClick={() => navigate("/org/billing?menu=offers")}
                   >
                     Upgrade Sekarang
                   </Button>
@@ -1127,7 +1204,7 @@ export default function OrgDashboard() {
               {subscription?.status === "expired" && (
                 <div 
                   className="flex items-center gap-3 p-3 rounded-lg bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 cursor-pointer hover:bg-red-100 dark:hover:bg-red-500/20 transition-colors"
-                  onClick={() => navigate("/org/activation")}
+                  onClick={() => navigate("/org/billing?menu=offers")}
                 >
                   <CreditCard className="h-5 w-5 text-red-500 flex-shrink-0" />
                   <div className="flex-1 min-w-0">
@@ -1300,21 +1377,21 @@ export default function OrgDashboard() {
             <div className="grid gap-4 md:grid-cols-3">
               <div
                 className="cursor-pointer rounded-lg bg-muted/50 p-4 transition-colors hover:bg-muted"
-                onClick={() => navigate("/org/activation")}
+                onClick={() => navigate("/org/billing?menu=offers")}
               >
                 <p className="text-sm text-muted-foreground">Status</p>
                 <Badge variant={status.variant} className="mt-1">{status.label}</Badge>
               </div>
               <div
                 className="cursor-pointer rounded-lg bg-muted/50 p-4 transition-colors hover:bg-muted"
-                onClick={() => navigate("/org/activation")}
+                onClick={() => navigate("/org/billing?menu=offers")}
               >
                 <p className="text-sm text-muted-foreground">Kebijakan Akses</p>
                 <p className="font-semibold mt-1">Streak Monitoring</p>
               </div>
               <div
                 className="cursor-pointer rounded-lg bg-muted/50 p-4 transition-colors hover:bg-muted"
-                onClick={() => navigate("/org/activation")}
+                onClick={() => navigate("/org/billing?menu=offers")}
               >
                 <p className="text-sm text-muted-foreground">Berakhir</p>
                 <p className="font-semibold mt-1">
@@ -1406,12 +1483,13 @@ export default function OrgDashboard() {
             )}
           </div>
 
-          <DialogFooter className="flex flex-col gap-2 sm:flex-row sm:justify-between">
-            <Button variant="outline" onClick={() => navigate("/org/notifications")}>
-              Lihat Riwayat Notifikasi
-            </Button>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => navigate("/org/activation")}>
+          <DialogFooter className={dialogActionBarClassName}>
+            <DialogActionHint>Notifikasi billing penting tetap tersimpan di riwayat notifikasi organisasi.</DialogActionHint>
+            <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+              <Button variant="outline" className="w-full sm:w-auto bg-white" onClick={() => navigate("/org/notifications")}>
+                Lihat Riwayat Notifikasi
+              </Button>
+              <Button variant="outline" onClick={() => navigate("/org/billing?menu=offers")}>
                 Buka Aktivasi
               </Button>
               <Button variant="destructive" onClick={() => void markBillingAlertsAsRead()}>

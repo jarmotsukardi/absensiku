@@ -11,6 +11,8 @@ import { Loader2, Save, Key, Webhook, Shield, ExternalLink, Copy, CheckCircle, A
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import type { Json } from "@/integrations/supabase/types";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 const parseNumericSettingValue = (raw: unknown, fallback: number): number => {
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
@@ -31,9 +33,13 @@ const parseNumericSettingValue = (raw: unknown, fallback: number): number => {
 };
 
 export function XenditSettings() {
+  const OP_TIMEOUT_MS = 12000;
+  const OP_RETRY_MAX = 2;
   const { settings, isLoading, getSetting, updateSetting } = useBillingSettings();
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   
   const [xenditEnabled, setXenditEnabled] = useState(false);
@@ -78,12 +84,34 @@ export function XenditSettings() {
   // Fetch B2B threshold from system_settings
   useEffect(() => {
     const fetchB2b = async () => {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "b2b_negotiation_threshold")
-        .maybeSingle();
-      setB2bThreshold(String(Math.max(1, Math.floor(parseNumericSettingValue(data?.value, 2000)))));
+      setLoadError(null);
+      try {
+        const { data, error } = await withExponentialBackoff(
+          async () =>
+            withTimeout(
+              supabase
+                .from("system_settings")
+                .select("value")
+                .eq("key", "b2b_negotiation_threshold")
+                .maybeSingle(),
+              OP_TIMEOUT_MS,
+              "Memuat ambang batas B2B terlalu lama",
+            ),
+          {
+            maxRetries: OP_RETRY_MAX,
+            baseDelay: 450,
+            shouldRetry: (err) => isRetryableError(err),
+            onRetry: () => setIsRetrying(true),
+          },
+        );
+        if (error) throw error;
+        setB2bThreshold(String(Math.max(1, Math.floor(parseNumericSettingValue(data?.value, 2000)))));
+      } catch (error) {
+        const errorRef = reportError(error, "admin.billing.xendit.fetch_b2b_threshold");
+        setLoadError(appendErrorReference("Gagal memuat ambang batas B2B.", errorRef));
+      } finally {
+        setIsRetrying(false);
+      }
     };
     fetchB2b();
   }, []);
@@ -91,22 +119,27 @@ export function XenditSettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      await Promise.all([
-        updateSetting("xendit_enabled", { value: xenditEnabled }),
-        updateSetting("xendit_config", {
-          secret_key: secretKey,
-          callback_token: callbackToken,
-          is_production: !secretKey.includes("xnd_development"),
-        }),
-        updateSetting("manual_bank_account", {
-          bank_name: bankName,
-          account_number: bankAccountNumber,
-          account_name: bankAccountName,
-        }),
-      ]);
+      await withTimeout(
+        Promise.all([
+          updateSetting("xendit_enabled", { value: xenditEnabled }),
+          updateSetting("xendit_config", {
+            secret_key: secretKey,
+            callback_token: callbackToken,
+            is_production: !secretKey.includes("xnd_development"),
+          }),
+          updateSetting("manual_bank_account", {
+            bank_name: bankName,
+            account_number: bankAccountNumber,
+            account_name: bankAccountName,
+          }),
+        ]),
+        OP_TIMEOUT_MS,
+        "Menyimpan pengaturan Xendit terlalu lama",
+      );
       toast.success("Pengaturan Xendit berhasil disimpan");
     } catch (error) {
-      toast.error("Gagal menyimpan pengaturan");
+      const errorRef = reportError(error, "admin.billing.xendit.save_settings");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan", errorRef));
     } finally {
       setIsSaving(false);
     }
@@ -115,31 +148,44 @@ export function XenditSettings() {
   const handleSaveB2bThreshold = async () => {
     setIsSavingB2b(true);
     try {
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "b2b_negotiation_threshold")
-        .maybeSingle();
+      const { data: existing } = await withTimeout(
+        supabase
+          .from("system_settings")
+          .select("id")
+          .eq("key", "b2b_negotiation_threshold")
+          .maybeSingle(),
+        OP_TIMEOUT_MS,
+        "Membaca pengaturan B2B terlalu lama",
+      );
 
       const valuePayload: Json = Math.max(1, parseInt(b2bThreshold, 10) || 2000);
 
       if (existing) {
-        await supabase
-          .from("system_settings")
-          .update({ value: valuePayload, updated_at: new Date().toISOString() })
-          .eq("id", existing.id);
+        await withTimeout(
+          supabase
+            .from("system_settings")
+            .update({ value: valuePayload, updated_at: new Date().toISOString() })
+            .eq("id", existing.id),
+          OP_TIMEOUT_MS,
+          "Menyimpan pengaturan B2B terlalu lama",
+        );
       } else {
-        await supabase
-          .from("system_settings")
-          .insert({
-            key: "b2b_negotiation_threshold",
-            value: valuePayload,
-            description: "Ambang batas pegawai untuk negosiasi B2B",
-          });
+        await withTimeout(
+          supabase
+            .from("system_settings")
+            .insert({
+              key: "b2b_negotiation_threshold",
+              value: valuePayload,
+              description: "Ambang batas pegawai untuk negosiasi B2B",
+            }),
+          OP_TIMEOUT_MS,
+          "Menyimpan pengaturan B2B terlalu lama",
+        );
       }
       toast.success("Ambang batas B2B berhasil disimpan");
     } catch (error) {
-      toast.error("Gagal menyimpan");
+      const errorRef = reportError(error, "admin.billing.xendit.save_b2b_threshold");
+      toast.error(appendErrorReference("Gagal menyimpan", errorRef));
     } finally {
       setIsSavingB2b(false);
     }
@@ -156,20 +202,32 @@ export function XenditSettings() {
 
     try {
       // Simple test by checking Xendit balance endpoint
-      const response = await fetch("https://api.xendit.co/balance", {
-        headers: {
-          "Authorization": `Basic ${btoa(secretKey + ":")}`,
-        },
-      });
+      const response = await withTimeout(
+        fetch("https://api.xendit.co/balance", {
+          headers: {
+            "Authorization": `Basic ${btoa(secretKey + ":")}`,
+          },
+        }),
+        OP_TIMEOUT_MS,
+        "Tes koneksi Xendit terlalu lama",
+      );
 
       if (response.ok) {
-        const data = await response.json();
+        const data = await withTimeout(
+          response.json(),
+          OP_TIMEOUT_MS,
+          "Membaca respons tes koneksi Xendit terlalu lama",
+        );
         setTestResult({
           success: true,
           message: `Koneksi berhasil! Saldo: Rp ${data.balance?.toLocaleString("id-ID") || 0}`,
         });
       } else {
-        const error = await response.text();
+        const error = await withTimeout(
+          response.text(),
+          OP_TIMEOUT_MS,
+          "Membaca respons error Xendit terlalu lama",
+        );
         setTestResult({
           success: false,
           message: `Koneksi gagal: ${response.status} - ${error}`,
@@ -177,6 +235,7 @@ export function XenditSettings() {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error";
+      reportError(error, "admin.billing.xendit.test_connection");
       setTestResult({
         success: false,
         message: `Error: ${message}`,
@@ -186,15 +245,30 @@ export function XenditSettings() {
     }
   };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success("Disalin ke clipboard");
+  const copyToClipboard = async (text: string) => {
+    try {
+      await withTimeout(
+        navigator.clipboard.writeText(text),
+        OP_TIMEOUT_MS,
+        "Menyalin ke clipboard terlalu lama",
+      );
+      toast.success("Disalin ke clipboard");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.billing.xendit.copy_clipboard");
+      toast.error(appendErrorReference("Gagal menyalin ke clipboard", errorRef));
+    }
   };
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-32">
-        <Loader2 className="h-6 w-6 animate-spin" />
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-10 text-center">
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+        </div>
+        <p className="text-base font-medium text-slate-900">Memuat integrasi Xendit</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Pengaturan API key, mode, dan koneksi pembayaran sedang disiapkan.
+        </p>
       </div>
     );
   }
@@ -206,6 +280,12 @@ export function XenditSettings() {
       {/* Status Badge */}
       <div className="flex items-center gap-3">
         <h3 className="text-lg font-semibold">Integrasi Xendit</h3>
+        {isRetrying ? (
+          <Badge variant="outline" className="gap-1">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            Mencoba ulang...
+          </Badge>
+        ) : null}
         {secretKey ? (
           <Badge variant={isProduction ? "default" : "secondary"}>
             {isProduction ? "Production" : "Development"}
@@ -214,6 +294,18 @@ export function XenditSettings() {
           <Badge variant="outline">Belum Dikonfigurasi</Badge>
         )}
       </div>
+
+      {loadError ? (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription className="flex flex-wrap items-center justify-between gap-2">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
+              Muat Ulang
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {/* Enable/Disable Switch */}
       <Card>

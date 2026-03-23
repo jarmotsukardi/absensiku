@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { 
   Globe, 
@@ -36,10 +37,18 @@ interface APKInfo {
 
 type Tenant = Tables<"tenants">;
 
-export default function OrgLandingSettings() {
+interface OrgLandingSettingsProps {
+  embedded?: boolean;
+}
+const ORG_LANDING_SETTINGS_QUERY_TIMEOUT_MS = 12000;
+const ORG_LANDING_SETTINGS_QUERY_RETRY_MAX = 2;
+
+export default function OrgLandingSettings({ embedded = false }: OrgLandingSettingsProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [tenant, setTenant] = useState<Tenant | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   
   // APK Global dari SuperAdmin
   const [apkReguler, setApkReguler] = useState<APKInfo | null>(null);
@@ -60,54 +69,119 @@ export default function OrgLandingSettings() {
 
   const fetchGlobalAPKs = async () => {
     try {
+      setIsRetrying(false);
       // Fetch Aplikasi Reguler
-      const { data: regulerData } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "global_apk")
-        .maybeSingle();
+      const { data: regulerData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("value")
+              .eq("key", "global_apk")
+              .maybeSingle(),
+            ORG_LANDING_SETTINGS_QUERY_TIMEOUT_MS,
+            "org.landing_settings.fetch_global_apk_reguler timeout"
+          ),
+        {
+          maxRetries: ORG_LANDING_SETTINGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (regulerData?.value && typeof regulerData.value === "object" && !Array.isArray(regulerData.value)) {
         setApkReguler(regulerData.value as unknown as APKInfo);
       }
 
       // Fetch Aplikasi Pemda
-      const { data: pemdaData } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "global_apk_pemda")
-        .maybeSingle();
+      const { data: pemdaData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("value")
+              .eq("key", "global_apk_pemda")
+              .maybeSingle(),
+            ORG_LANDING_SETTINGS_QUERY_TIMEOUT_MS,
+            "org.landing_settings.fetch_global_apk_pemda timeout"
+          ),
+        {
+          maxRetries: ORG_LANDING_SETTINGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (pemdaData?.value && typeof pemdaData.value === "object" && !Array.isArray(pemdaData.value)) {
         setApkPemda(pemdaData.value as unknown as APKInfo);
       }
     } catch (error) {
       const errorRef = reportError(error, "org.landing_settings.fetch_global_apks");
-      toast.error(appendErrorReference("Gagal memuat data aplikasi global", errorRef));
+      const message = appendErrorReference("Gagal memuat data aplikasi global", errorRef);
+      setLoadError((prev) => prev ?? message);
+      toast.error(message);
     }
   };
 
   const fetchTenant = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      setLoadError(null);
+      setIsRetrying(false);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ORG_LANDING_SETTINGS_QUERY_TIMEOUT_MS,
+            "org.landing_settings.fetch_tenant.auth timeout"
+          ),
+        {
+          maxRetries: ORG_LANDING_SETTINGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (!user) return;
 
-      const { data: roleData } = await supabase
-        .from("user_roles")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      const { data: roleData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("user_roles")
+              .select("tenant_id")
+              .eq("user_id", user.id)
+              .maybeSingle(),
+            ORG_LANDING_SETTINGS_QUERY_TIMEOUT_MS,
+            "org.landing_settings.fetch_tenant.role timeout"
+          ),
+        {
+          maxRetries: ORG_LANDING_SETTINGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (!roleData?.tenant_id) {
         toast.error("Tenant organisasi tidak ditemukan");
         return;
       }
 
-      const { data, error } = await supabase
-        .from("tenants")
-        .select("*")
-        .eq("id", roleData.tenant_id)
-        .single();
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("tenants")
+              .select("*")
+              .eq("id", roleData.tenant_id)
+              .single(),
+            ORG_LANDING_SETTINGS_QUERY_TIMEOUT_MS,
+            "org.landing_settings.fetch_tenant.row timeout"
+          ),
+        {
+          maxRetries: ORG_LANDING_SETTINGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
 
@@ -121,7 +195,9 @@ export default function OrgLandingSettings() {
       });
     } catch (error) {
       const errorRef = reportError(error, "org.landing_settings.fetch_tenant");
-      toast.error(appendErrorReference("Gagal memuat data tenant", errorRef));
+      const message = appendErrorReference("Gagal memuat data tenant", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
@@ -132,10 +208,23 @@ export default function OrgLandingSettings() {
     setIsSaving(true);
 
     try {
-      const { error } = await supabase
-        .from("tenants")
-        .update(settings)
-        .eq("id", tenant.id);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("tenants")
+              .update(settings)
+              .eq("id", tenant.id),
+            ORG_LANDING_SETTINGS_QUERY_TIMEOUT_MS,
+            "org.landing_settings.save timeout"
+          ),
+        {
+          maxRetries: ORG_LANDING_SETTINGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       toast.success("Pengaturan berhasil disimpan");
@@ -162,6 +251,13 @@ export default function OrgLandingSettings() {
   const loginUrl = `${window.location.origin}/employee/login`;
 
   if (isLoading) {
+    if (embedded) {
+      return (
+        <div className="flex items-center justify-center h-48">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      );
+    }
     return (
       <OrganizationLayout>
         <div className="flex items-center justify-center h-64">
@@ -171,9 +267,19 @@ export default function OrgLandingSettings() {
     );
   }
 
-  return (
-    <OrganizationLayout>
-      <div className="space-y-6">
+  const content = (
+    <div className="space-y-6">
+      {isRetrying && (
+        <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Sedang mencoba ulang memuat pengaturan landing...
+        </div>
+      )}
+      {loadError && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {loadError}
+        </div>
+      )}
+      {!embedded && (
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Globe className="h-6 w-6" />
@@ -181,18 +287,19 @@ export default function OrgLandingSettings() {
           </h1>
           <p className="text-muted-foreground">Kelola halaman publik dan aplikasi mobile organisasi</p>
         </div>
+      )}
 
         <Tabs defaultValue="links" className="space-y-4">
-          <TabsList className="grid w-full grid-cols-3 lg:w-[500px]">
-            <TabsTrigger value="links" className="flex items-center gap-2">
+          <TabsList className="h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70 lg:w-[500px]">
+            <TabsTrigger value="links" className="flex items-center gap-2 whitespace-nowrap">
               <Link2 className="h-4 w-4" />
               Link Aplikasi
             </TabsTrigger>
-            <TabsTrigger value="apk" className="flex items-center gap-2">
+            <TabsTrigger value="apk" className="flex items-center gap-2 whitespace-nowrap">
               <Smartphone className="h-4 w-4" />
               Aplikasi Mobile
             </TabsTrigger>
-            <TabsTrigger value="landing" className="flex items-center gap-2">
+            <TabsTrigger value="landing" className="flex items-center gap-2 whitespace-nowrap">
               <Settings className="h-4 w-4" />
               Landing Page
             </TabsTrigger>
@@ -486,8 +593,13 @@ export default function OrgLandingSettings() {
           </TabsContent>
         </Tabs>
 
-        <PageGlossarySection preset="org_landing_settings" />
-      </div>
-    </OrganizationLayout>
+      {!embedded && <PageGlossarySection preset="org_landing_settings" />}
+    </div>
   );
+
+  if (embedded) {
+    return content;
+  }
+
+  return <OrganizationLayout>{content}</OrganizationLayout>;
 }

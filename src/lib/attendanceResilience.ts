@@ -416,7 +416,16 @@ export function getAdaptiveTimeout(retryCount: number = 0): number {
   return Math.min(timeout, cfg.RPC_TIMEOUT_MAX_MS);
 }
 
-export function withTimeout<T>(promise: Promise<T>, ms: number, msg: string): Promise<T> {
+export function withTimeout<T>(
+  promiseOrFactory: Promise<T> | (() => Promise<T>),
+  ms: number,
+  msg = `Request timeout after ${ms}ms`,
+): Promise<T> {
+  const promise =
+    typeof promiseOrFactory === "function"
+      ? (promiseOrFactory as () => Promise<T>)()
+      : promiseOrFactory;
+
   return Promise.race([
     promise,
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error(msg)), ms)),

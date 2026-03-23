@@ -15,6 +15,8 @@ import {
   X,
 } from "lucide-react";
 import { differenceInHours } from "date-fns";
+import { reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface OverdueItem {
   type: "leave" | "overtime" | "wfh" | "flexible" | "mutation";
@@ -39,11 +41,30 @@ export function OverdueRequestsOverlay({ tenantId }: { tenantId: string | null }
     const items: OverdueItem[] = [];
 
     try {
-      // Cek leave requests menunggu
-      const { data: leaves } = await supabase
-        .from("leave_requests")
-        .select("id, created_at")
-        .eq("status", "menunggu");
+      // Cek leave/overtime/wfh/mutation secara paralel
+      const [
+        { data: leaves, error: leavesError },
+        { data: overtimes, error: overtimesError },
+        { data: wfhs, error: wfhsError },
+        { data: mutations, error: mutationsError },
+      ] = await withTimeout(
+        () =>
+          Promise.all([
+            supabase.from("leave_requests").select("id, created_at").eq("status", "menunggu"),
+            supabase.from("overtime_requests").select("id, created_at").eq("status", "menunggu"),
+            supabase.from("wfh_requests").select("id, created_at").eq("status", "menunggu"),
+            supabase
+              .from("mutation_requests")
+              .select("id, created_at")
+              .eq("status", "menunggu")
+              .eq("tenant_id", tenantId),
+          ]),
+        12000,
+      );
+      if (leavesError) throw leavesError;
+      if (overtimesError) throw overtimesError;
+      if (wfhsError) throw wfhsError;
+      if (mutationsError) throw mutationsError;
 
       if (leaves && leaves.length > 0) {
         const overdue = leaves.filter(
@@ -64,12 +85,6 @@ export function OverdueRequestsOverlay({ tenantId }: { tenantId: string | null }
         }
       }
 
-      // Cek overtime requests menunggu
-      const { data: overtimes } = await supabase
-        .from("overtime_requests")
-        .select("id, created_at")
-        .eq("status", "menunggu");
-
       if (overtimes && overtimes.length > 0) {
         const overdue = overtimes.filter(
           (o) => differenceInHours(now, new Date(o.created_at)) >= OVERDUE_THRESHOLD_HOURS
@@ -89,12 +104,6 @@ export function OverdueRequestsOverlay({ tenantId }: { tenantId: string | null }
         }
       }
 
-      // Cek WFH requests menunggu
-      const { data: wfhs } = await supabase
-        .from("wfh_requests")
-        .select("id, created_at")
-        .eq("status", "menunggu");
-
       if (wfhs && wfhs.length > 0) {
         const overdue = wfhs.filter(
           (w) => differenceInHours(now, new Date(w.created_at)) >= OVERDUE_THRESHOLD_HOURS
@@ -113,13 +122,6 @@ export function OverdueRequestsOverlay({ tenantId }: { tenantId: string | null }
           });
         }
       }
-
-      // Cek mutation requests menunggu
-      const { data: mutations } = await supabase
-        .from("mutation_requests")
-        .select("id, created_at")
-        .eq("status", "menunggu")
-        .eq("tenant_id", tenantId);
 
       if (mutations && mutations.length > 0) {
         const overdue = mutations.filter(
@@ -143,7 +145,9 @@ export function OverdueRequestsOverlay({ tenantId }: { tenantId: string | null }
       setOverdueItems(items);
       setIsVisible(items.length > 0);
     } catch (error) {
-      console.error("Error checking overdue requests:", error);
+      reportError(error, "org.overdue_requests_overlay.check_overdue", {
+        tenant_id: tenantId,
+      });
     }
   }, [tenantId]);
 

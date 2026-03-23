@@ -9,6 +9,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { Loader2, Save, Plus, Trash2, Edit, MapPin, Clock, Shield, Smartphone, Users, Building2, FileText, BarChart3, Lock, Zap, Calendar, Bell, Timer, Fingerprint, Globe, ClipboardList, UserCheck, PieChart, Eye } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface Feature {
   id: string;
@@ -31,6 +33,7 @@ const defaultFeatures: Feature[] = [
 ];
 
 export function FeaturesSettings() {
+  const REQUEST_TIMEOUT_MS = 12000;
   const [features, setFeatures] = useState<Feature[]>(defaultFeatures);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -46,12 +49,17 @@ export function FeaturesSettings() {
 
   const fetchSettings = async () => {
     try {
-      const { data } = await supabase.from("system_settings").select("value").eq("key", "features_settings").maybeSingle();
+      const { data } = await withTimeout(
+        supabase.from("system_settings").select("value").eq("key", "features_settings").maybeSingle(),
+        REQUEST_TIMEOUT_MS,
+        "Memuat pengaturan fitur terlalu lama",
+      );
       if (data?.value && Array.isArray(data.value)) {
         setFeatures(data.value as unknown as Feature[]);
       }
     } catch (error) {
-      console.error("Error:", error);
+      const errorRef = reportError(error, "admin.settings.features.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan fitur.", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -60,16 +68,29 @@ export function FeaturesSettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const { data: existing } = await supabase.from("system_settings").select("id").eq("key", "features_settings").maybeSingle();
+      const { data: existing } = await withTimeout(
+        supabase.from("system_settings").select("id").eq("key", "features_settings").maybeSingle(),
+        REQUEST_TIMEOUT_MS,
+        "Membaca konfigurasi fitur terlalu lama",
+      );
       const jsonValue = JSON.parse(JSON.stringify(features));
       if (existing) {
-        await supabase.from("system_settings").update({ value: jsonValue, updated_at: new Date().toISOString() }).eq("key", "features_settings");
+        await withTimeout(
+          supabase.from("system_settings").update({ value: jsonValue, updated_at: new Date().toISOString() }).eq("key", "features_settings"),
+          REQUEST_TIMEOUT_MS,
+          "Menyimpan konfigurasi fitur terlalu lama",
+        );
       } else {
-        await supabase.from("system_settings").insert({ key: "features_settings", value: jsonValue });
+        await withTimeout(
+          supabase.from("system_settings").insert({ key: "features_settings", value: jsonValue }),
+          REQUEST_TIMEOUT_MS,
+          "Menyimpan konfigurasi fitur terlalu lama",
+        );
       }
       toast.success("Fitur berhasil disimpan");
-    } catch (err) {
-      toast.error("Gagal menyimpan");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.features.save");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan fitur.", errorRef));
     } finally {
       setIsSaving(false);
     }

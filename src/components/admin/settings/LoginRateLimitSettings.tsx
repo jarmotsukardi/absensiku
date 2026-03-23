@@ -7,6 +7,8 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Loader2, Save, Shield } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface RateLimitConfig {
   enabled: boolean;
@@ -51,11 +53,16 @@ export function LoginRateLimitSettings() {
 
   const fetchConfig = async () => {
     try {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "login_rate_limit_config")
-        .maybeSingle();
+      const { data } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "login_rate_limit_config")
+            .maybeSingle(),
+        10000,
+        "Load login rate limit config timeout"
+      );
 
       if (data?.value && typeof data.value === "object" && !Array.isArray(data.value)) {
         const value = data.value as Partial<RateLimitConfig>;
@@ -69,7 +76,8 @@ export function LoginRateLimitSettings() {
         });
       }
     } catch (error) {
-      console.error("Error:", error);
+      const errorRef = reportError(error, "admin.settings.login_rate_limit.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan rate limit login", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -79,24 +87,29 @@ export function LoginRateLimitSettings() {
     setIsSaving(true);
     try {
       const jsonValue = JSON.parse(JSON.stringify(config));
-      const { error } = await supabase
-        .from("system_settings")
-        .upsert(
-          {
-            key: "login_rate_limit_config",
-            value: jsonValue,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "key" }
-        );
+      const { error } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .upsert(
+              {
+                key: "login_rate_limit_config",
+                value: jsonValue,
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "key" }
+            ),
+        10000,
+        "Save login rate limit config timeout"
+      );
 
       if (error) throw error;
 
       toast.success("Pengaturan rate limit berhasil disimpan");
     } catch (error) {
+      const errorRef = reportError(error, "admin.settings.login_rate_limit.save");
       const message = error instanceof Error ? error.message : "Gagal menyimpan";
-      console.error("Error saving login rate limit config:", error);
-      toast.error(message);
+      toast.error(appendErrorReference(message, errorRef));
     } finally {
       setIsSaving(false);
     }

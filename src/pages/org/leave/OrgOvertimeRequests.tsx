@@ -16,6 +16,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import {
   Table,
   TableBody,
@@ -38,6 +39,12 @@ import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 import {
   Pagination,
   PaginationContent,
@@ -46,6 +53,8 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
+const ORG_OVERTIME_INIT_TIMEOUT_MS = 12000;
+const ORG_OVERTIME_INIT_MAX_RETRIES = 2;
  
  const statusConfig: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
    pending: { label: "Menunggu", variant: "secondary" },
@@ -64,7 +73,18 @@ export default function OrgOvertimeRequests() {
     const initContext = async () => {
       const {
         data: { user },
-      } = await supabase.auth.getUser();
+      } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ORG_OVERTIME_INIT_TIMEOUT_MS,
+            "Permintaan user auth timeout."
+          ),
+        {
+          maxRetries: ORG_OVERTIME_INIT_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+        }
+      );
       if (!user) {
         setIsTenantReady(true);
         return;
@@ -77,11 +97,22 @@ export default function OrgOvertimeRequests() {
         setIsTenantReady(true);
       }
 
-      const { data } = await supabase
-        .from("employees")
-        .select("id")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      const { data } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("id")
+              .eq("user_id", user.id)
+              .maybeSingle(),
+            ORG_OVERTIME_INIT_TIMEOUT_MS,
+            "Permintaan profil pegawai timeout."
+          ),
+        {
+          maxRetries: ORG_OVERTIME_INIT_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+        }
+      );
 
       if (data) setEmployee(data);
     };
@@ -104,9 +135,11 @@ export default function OrgOvertimeRequests() {
   const {
     requests: pendingRequests,
     isLoading: loadingPending,
+    isRetrying: retryingPending,
     loadError: pendingLoadError,
     totalCount: pendingTotalCount,
     approveRequest,
+    refetch: refetchPendingRequests,
   } = useOvertimeRequests({
     tenantId: tenantId || undefined,
     status: "pending",
@@ -117,8 +150,10 @@ export default function OrgOvertimeRequests() {
   const {
     requests: allRequests,
     isLoading: loadingAll,
+    isRetrying: retryingAll,
     loadError: allLoadError,
     totalCount: allTotalCount,
+    refetch: refetchAllRequests,
   } = useOvertimeRequests({
     tenantId: tenantId || undefined,
     page: allPage,
@@ -129,10 +164,18 @@ export default function OrgOvertimeRequests() {
   const displayRequests = activeTab === "pending" ? pendingRequests : allRequests;
   const isLoading = !isTenantReady || (activeTab === "pending" ? loadingPending : loadingAll);
   const activeLoadError = activeTab === "pending" ? pendingLoadError : allLoadError;
+  const isRetrying = activeTab === "pending" ? retryingPending : retryingAll;
   const totalRows = activeTab === "pending" ? pendingTotalCount : allTotalCount;
   const activePage = activeTab === "pending" ? pendingPage : allPage;
   const setActivePage = activeTab === "pending" ? setPendingPage : setAllPage;
   const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
+  const handleRetryLoad = async () => {
+    if (activeTab === "pending") {
+      await refetchPendingRequests();
+      return;
+    }
+    await refetchAllRequests();
+  };
 
   const handleApprove = async (approved: boolean) => {
     if (!selectedRequest || !employee?.id) return;
@@ -161,28 +204,39 @@ export default function OrgOvertimeRequests() {
       <div className="space-y-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Pengajuan Lembur</h1>
-          <p className="text-sm text-muted-foreground">Kelola pengajuan lembur pegawai</p>
+          <p className="text-sm text-muted-foreground">Kelola data pengajuan lembur pegawai</p>
         </div>
+        <LeaveRequestTabs />
         {activeLoadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {activeLoadError}
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{activeLoadError}</span>
+            <Button size="sm" variant="outline" onClick={handleRetryLoad} className="border-destructive/30 text-destructive hover:bg-destructive/10">
+              Coba Lagi
+            </Button>
+          </div>
+        )}
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            Sedang mencoba ulang koneksi data...
           </div>
         )}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-             <TabsList>
-               <TabsTrigger value="pending" className="relative">
-                 Menunggu
-                 {pendingTotalCount > 0 && (
-                   <Badge className="ml-2 h-5 w-5 p-0 justify-center">
-                     {pendingTotalCount}
-                   </Badge>
-                 )}
-               </TabsTrigger>
-               <TabsTrigger value="all">Semua</TabsTrigger>
-             </TabsList>
+           <div className="flex flex-col justify-between gap-3 rounded-2xl border border-slate-200/80 bg-white/80 p-3 shadow-sm sm:flex-row sm:items-center">
+             <div className="overflow-x-auto pb-1">
+               <TabsList className="min-w-max h-auto gap-1.5 rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+                 <TabsTrigger value="pending" className="relative whitespace-nowrap">
+                   Menunggu
+                   {pendingTotalCount > 0 && (
+                     <Badge className="ml-2 h-5 w-5 p-0 justify-center">
+                       {pendingTotalCount}
+                     </Badge>
+                   )}
+                 </TabsTrigger>
+                 <TabsTrigger value="all" className="whitespace-nowrap">Semua</TabsTrigger>
+               </TabsList>
+             </div>
  
-             <div className="relative max-w-xs">
+             <div className="relative w-full sm:w-auto sm:max-w-xs">
                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                <Input
                  placeholder="Cari pegawai atau nomor..."
@@ -336,24 +390,28 @@ export default function OrgOvertimeRequests() {
                        />
                      </div>
  
-                     <DialogFooter className="gap-2">
-                       <Button variant="outline" onClick={() => setSelectedRequest(null)}>
-                         Tutup
-                       </Button>
-                       <Button
-                         variant="destructive"
-                         onClick={() => handleApprove(false)}
-                         disabled={isProcessing || !rejectionReason.trim()}
-                       >
-                         {isProcessing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                         <XCircle className="mr-2 h-4 w-4" />
-                         Tolak
-                       </Button>
-                       <Button onClick={() => handleApprove(true)} disabled={isProcessing}>
-                         {isProcessing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                         <CheckCircle className="mr-2 h-4 w-4" />
-                         Setujui
-                       </Button>
+                     <DialogFooter className={dialogActionBarClassName}>
+                       <DialogActionHint>Tambahkan alasan jika menolak agar pengaju memahami koreksi yang dibutuhkan.</DialogActionHint>
+                       <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                         <Button variant="outline" className="w-full sm:w-auto bg-white" onClick={() => setSelectedRequest(null)}>
+                           Tutup
+                         </Button>
+                         <Button
+                           className="w-full sm:w-auto"
+                           variant="destructive"
+                           onClick={() => handleApprove(false)}
+                           disabled={isProcessing || !rejectionReason.trim()}
+                         >
+                           {isProcessing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                           <XCircle className="mr-2 h-4 w-4" />
+                           Tolak
+                         </Button>
+                         <Button className="w-full sm:w-auto sm:min-w-[140px]" onClick={() => handleApprove(true)} disabled={isProcessing}>
+                           {isProcessing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                           <CheckCircle className="mr-2 h-4 w-4" />
+                           Setujui
+                         </Button>
+                       </div>
                      </DialogFooter>
                    </>
                  )}

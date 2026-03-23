@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -33,6 +33,26 @@ import {
 } from "lucide-react";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { isRealOfficeCoordinate } from "@/lib/officeCoordinates";
+import { EmployeeDataTabs } from "@/components/org/employees/EmployeeDataTabs";
+import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import {
+  DEFAULT_EMPLOYEE_CATEGORY_OPTIONS,
+  fetchTenantEmployeeCategories,
+  getActiveEmployeeCategoryOptions,
+  type EmployeeCategoryOption,
+} from "@/lib/employeeCategories";
+import {
+  DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS,
+  fetchTenantEmployeeGolongan,
+  getActiveEmployeeGolonganOptions,
+  type EmployeeGolonganOption,
+} from "@/lib/employeeGolongan";
+import {
+  DEFAULT_ORG_MASTER_DATA_MODULES,
+  fetchTenantOrgMasterDataModules,
+  type OrgMasterDataModuleKey,
+} from "@/lib/orgMasterDataModules";
 
 interface ImportRow {
   rowNum: number;
@@ -46,7 +66,9 @@ interface ImportRow {
   whatsapp: string;
   position: string;
   golongan: string;
+  employee_category: string;
   opd_code: string;
+  office_name: string;
   address: string;
   gender: string;
   status: "valid" | "error" | "warning";
@@ -58,27 +80,93 @@ interface OfficeOption {
   name: string;
 }
 
+type ImportColumnKey =
+  | "nik"
+  | "nip"
+  | "name"
+  | "gelar_depan"
+  | "gelar_belakang"
+  | "email"
+  | "phone"
+  | "whatsapp"
+  | "gender"
+  | "position"
+  | "golongan"
+  | "employee_category"
+  | "opd_code"
+  | "office_name"
+  | "address";
+
+interface ImportColumnDefinition {
+  key: ImportColumnKey;
+  label: string;
+  moduleKey?: OrgMasterDataModuleKey;
+}
+
+const IMPORT_COLUMN_DEFINITIONS: ImportColumnDefinition[] = [
+  { key: "nik", label: "NIK" },
+  { key: "nip", label: "NIP" },
+  { key: "name", label: "Nama Lengkap" },
+  { key: "gelar_depan", label: "Gelar Depan" },
+  { key: "gelar_belakang", label: "Gelar Belakang" },
+  { key: "email", label: "Email" },
+  { key: "phone", label: "No. Telepon" },
+  { key: "whatsapp", label: "WhatsApp" },
+  { key: "gender", label: "Jenis Kelamin (L/P)" },
+  { key: "position", label: "Jabatan", moduleKey: "positions" },
+  { key: "golongan", label: "Golongan", moduleKey: "employee_golongan" },
+  { key: "employee_category", label: "Kategori Pegawai", moduleKey: "employee_categories" },
+  { key: "opd_code", label: "Kode OPD" },
+  { key: "office_name", label: "Lokasi Kerja" },
+  { key: "address", label: "Alamat" },
+];
+
+const TEMPLATE_EXAMPLE_ROWS: Array<Record<ImportColumnKey, string>> = [
+  {
+    nik: "1234567890123456",
+    nip: "199001012020011001",
+    name: "Ahmad Surya",
+    gelar_depan: "Dr.",
+    gelar_belakang: "M.Si.",
+    email: "ahmad.surya@example.com",
+    phone: "081234567890",
+    whatsapp: "081234567890",
+    gender: "L",
+    position: "Kepala Seksi",
+    golongan: "III/c",
+    employee_category: "ASN",
+    opd_code: "DISKOMINFO",
+    office_name: "KANTOR PUSAT",
+    address: "Jl. Merdeka No. 1",
+  },
+  {
+    nik: "9876543210123456",
+    nip: "199505152021012001",
+    name: "Siti Nurhaliza",
+    gelar_depan: "",
+    gelar_belakang: "S.Kom.",
+    email: "siti.nurhaliza@example.com",
+    phone: "089876543210",
+    whatsapp: "089876543210",
+    gender: "P",
+    position: "Analis Data",
+    golongan: "III/a",
+    employee_category: "P3K",
+    opd_code: "BAPPEDA",
+    office_name: "KANTOR BAPPEDA",
+    address: "Jl. Pembangunan No. 5",
+  },
+];
+
 export default function OrgEmployeeImport() {
+  const ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS = 15000;
+  const ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX = 1;
   const PREVIEW_PAGE_SIZE = 20;
   const MAX_IMPORT_ROWS = 100;
-  const CSV_HEADERS = [
-    "NIK",
-    "NIP",
-    "Nama Lengkap",
-    "Gelar Depan",
-    "Gelar Belakang",
-    "Email",
-    "No. Telepon",
-    "WhatsApp",
-    "Jenis Kelamin (L/P)",
-    "Jabatan",
-    "Golongan",
-    "Kode OPD",
-    "Alamat",
-  ];
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [previewData, setPreviewData] = useState<ImportRow[]>([]);
   const [previewPage, setPreviewPage] = useState(1);
@@ -87,10 +175,47 @@ export default function OrgEmployeeImport() {
   const [offices, setOffices] = useState<OfficeOption[]>([]);
   const [selectedOfficeId, setSelectedOfficeId] = useState("");
   const [isLoadingOffices, setIsLoadingOffices] = useState(false);
+  const [employeeGolonganOptions, setEmployeeGolonganOptions] = useState<EmployeeGolonganOption[]>(
+    DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS
+  );
+  const [isLoadingGolongan, setIsLoadingGolongan] = useState(false);
+  const [employeeCategoryOptions, setEmployeeCategoryOptions] = useState<EmployeeCategoryOption[]>(
+    DEFAULT_EMPLOYEE_CATEGORY_OPTIONS
+  );
+  const [isLoadingCategories, setIsLoadingCategories] = useState(false);
+  const [masterDataModules, setMasterDataModules] = useState(DEFAULT_ORG_MASTER_DATA_MODULES);
+  const [isLoadingModules, setIsLoadingModules] = useState(false);
 
   const normalizeHeader = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();
 
-  const parseCsvLine = (line: string): string[] => {
+  const activeColumns = useMemo(
+    () =>
+      IMPORT_COLUMN_DEFINITIONS.filter((column) =>
+        column.moduleKey ? masterDataModules[column.moduleKey] : true
+      ),
+    [masterDataModules]
+  );
+
+  const expectedHeaders = useMemo(
+    () => activeColumns.map((column) => column.label),
+    [activeColumns]
+  );
+
+  const columnIndexByKey = useMemo(
+    () =>
+      new Map<ImportColumnKey, number>(
+        activeColumns.map((column, index) => [column.key, index] as const)
+      ),
+    [activeColumns]
+  );
+
+  const isLoadingReferenceData =
+    isLoadingModules ||
+    isLoadingOffices ||
+    (masterDataModules.employee_golongan && isLoadingGolongan) ||
+    (masterDataModules.employee_categories && isLoadingCategories);
+
+  const parseDelimitedLine = (line: string, delimiter: "," | "\t"): string[] => {
     const values: string[] = [];
     let current = "";
     let inQuotes = false;
@@ -107,7 +232,7 @@ export default function OrgEmployeeImport() {
         continue;
       }
 
-      if (char === "," && !inQuotes) {
+      if (char === delimiter && !inQuotes) {
         values.push(current.trim());
         current = "";
         continue;
@@ -120,6 +245,28 @@ export default function OrgEmployeeImport() {
     return values.map((value) => value.replace(/\r/g, ""));
   };
 
+  const detectDelimiter = (line: string, fallback: "," | "\t"): "," | "\t" => {
+    const commaCount = (line.match(/,/g) || []).length;
+    const tabCount = (line.match(/\t/g) || []).length;
+    if (tabCount > commaCount) return "\t";
+    if (commaCount > 0) return ",";
+    return fallback;
+  };
+
+  const buildDelimitedLine = (values: string[], delimiter: "," | "\t"): string =>
+    values
+      .map((value) => {
+        const normalized = value ?? "";
+        const needsQuotes =
+          normalized.includes("\"") ||
+          normalized.includes("\n") ||
+          normalized.includes("\r") ||
+          normalized.includes(delimiter);
+        if (!needsQuotes) return normalized;
+        return `"${normalized.replace(/"/g, "\"\"")}"`;
+      })
+      .join(delimiter);
+
   useEffect(() => {
     void fetchUserTenant();
   }, []);
@@ -127,36 +274,90 @@ export default function OrgEmployeeImport() {
   const fetchUserTenant = async () => {
     setLoadError(null);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data: employee, error } = await supabase
-          .from("employees")
-          .select("tenant_id")
-          .eq("user_id", user.id)
-          .single();
-        if (error) throw error;
-
-        if (employee) {
-          setTenantId(employee.tenant_id);
-        }
+      setIsRetrying(false);
+      const resolvedTenantId = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            resolveOrgTenantId(),
+            ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+            "org.employee_import.fetch_user_tenant timeout",
+          ),
+        {
+          maxRetries: ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
+      if (!resolvedTenantId) {
+        const message = "Tenant organisasi tidak ditemukan. Pastikan akun memiliki akses admin instansi.";
+        setTenantId(null);
+        setLoadError(message);
+        toast.error(message);
+        return;
       }
+      setTenantId(resolvedTenantId);
     } catch (error) {
       const errorRef = reportError(error, "org.employee_import.fetch_user_tenant");
       const message = appendErrorReference("Gagal menentukan tenant import", errorRef);
       setLoadError(message);
       toast.error(message);
+    } finally {
+      setIsRetrying(false);
     }
   };
+
+  const fetchMasterDataModules = useCallback(async (currentTenantId: string) => {
+    setIsLoadingModules(true);
+    try {
+      const moduleSetting = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            fetchTenantOrgMasterDataModules(currentTenantId),
+            ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+            "org.employee_import.master_data_modules.fetch timeout"
+          ),
+        {
+          maxRetries: ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+      setMasterDataModules(moduleSetting.modules);
+    } catch (error) {
+      const errorRef = reportError(error, "org.employee_import.master_data_modules.fetch", {
+        tenant_id: currentTenantId,
+      });
+      const message = appendErrorReference("Gagal memuat pengaturan modul master data", errorRef);
+      setLoadError((prev) => prev ?? message);
+      setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
+      toast.error(message);
+    } finally {
+      setIsLoadingModules(false);
+      setIsRetrying(false);
+    }
+  }, []);
 
   const fetchValidOffices = useCallback(async (currentTenantId: string) => {
     setIsLoadingOffices(true);
     try {
-      const { data, error } = await supabase
-        .from("offices")
-        .select("id, name, latitude, longitude")
-        .eq("tenant_id", currentTenantId)
-        .eq("is_active", true)
-        .order("name");
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("offices")
+              .select("id, name, latitude, longitude")
+              .eq("tenant_id", currentTenantId)
+              .eq("is_active", true)
+              .order("name"),
+            ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+            "org.employee_import.valid_offices.fetch timeout",
+          ),
+        {
+          maxRetries: ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
 
@@ -179,83 +380,155 @@ export default function OrgEmployeeImport() {
       toast.error(message);
     } finally {
       setIsLoadingOffices(false);
+      setIsRetrying(false);
     }
   }, []);
+
+  const fetchEmployeeGolongan = useCallback(async (currentTenantId: string) => {
+    setIsLoadingGolongan(true);
+    try {
+      const { golongan } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            fetchTenantEmployeeGolongan(currentTenantId),
+            ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+            "org.employee_import.employee_golongan.fetch timeout"
+          ),
+        {
+          maxRetries: ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+      const activeOptions = getActiveEmployeeGolonganOptions(golongan);
+      setEmployeeGolonganOptions(
+        activeOptions.length > 0 ? activeOptions : DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS
+      );
+    } catch (error) {
+      const errorRef = reportError(error, "org.employee_import.employee_golongan.fetch", {
+        tenant_id: currentTenantId,
+      });
+      const message = appendErrorReference("Gagal memuat master golongan pegawai", errorRef);
+      setLoadError((prev) => prev ?? message);
+      setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
+      toast.error(message);
+    } finally {
+      setIsLoadingGolongan(false);
+      setIsRetrying(false);
+    }
+  }, []);
+
+  const fetchEmployeeCategories = useCallback(async (currentTenantId: string) => {
+    setIsLoadingCategories(true);
+    try {
+      const { categories } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            fetchTenantEmployeeCategories(currentTenantId),
+            ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+            "org.employee_import.employee_categories.fetch timeout"
+          ),
+        {
+          maxRetries: ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+      const activeOptions = getActiveEmployeeCategoryOptions(categories);
+      setEmployeeCategoryOptions(
+        activeOptions.length > 0 ? activeOptions : DEFAULT_EMPLOYEE_CATEGORY_OPTIONS
+      );
+    } catch (error) {
+      const errorRef = reportError(error, "org.employee_import.employee_categories.fetch", {
+        tenant_id: currentTenantId,
+      });
+      const message = appendErrorReference("Gagal memuat master kategori pegawai", errorRef);
+      setLoadError((prev) => prev ?? message);
+      setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
+      toast.error(message);
+    } finally {
+      setIsLoadingCategories(false);
+      setIsRetrying(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!tenantId) return;
+    void fetchMasterDataModules(tenantId);
+  }, [fetchMasterDataModules, tenantId]);
 
   useEffect(() => {
     if (!tenantId) return;
     void fetchValidOffices(tenantId);
   }, [fetchValidOffices, tenantId]);
 
-  const downloadTemplate = () => {
-    // Create CSV template with comprehensive headers
-    const headers = [
-      "NIK",
-      "NIP",
-      "Nama Lengkap",
-      "Gelar Depan",
-      "Gelar Belakang",
-      "Email",
-      "No. Telepon",
-      "WhatsApp",
-      "Jenis Kelamin (L/P)",
-      "Jabatan",
-      "Golongan",
-      "Kode OPD",
-      "Alamat"
-    ];
-    
-    const exampleRow1 = [
-      "1234567890123456",
-      "199001012020011001",
-      "Ahmad Surya",
-      "Dr.",
-      "M.Si.",
-      "ahmad.surya@example.com",
-      "081234567890",
-      "081234567890",
-      "L",
-      "Kepala Seksi",
-      "III/c",
-      "DISKOMINFO",
-      "Jl. Merdeka No. 1"
-    ];
+  useEffect(() => {
+    if (!tenantId) return;
+    if (!masterDataModules.employee_golongan) {
+      setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
+      setIsLoadingGolongan(false);
+      return;
+    }
+    void fetchEmployeeGolongan(tenantId);
+  }, [fetchEmployeeGolongan, masterDataModules.employee_golongan, tenantId]);
 
-    const exampleRow2 = [
-      "9876543210123456",
-      "199505152021012001",
-      "Siti Nurhaliza",
-      "",
-      "S.Kom.",
-      "siti.nurhaliza@example.com",
-      "089876543210",
-      "089876543210",
-      "P",
-      "Analis Data",
-      "III/a",
-      "BAPPEDA",
-      "Jl. Pembangunan No. 5"
-    ];
+  useEffect(() => {
+    if (!tenantId) return;
+    if (!masterDataModules.employee_categories) {
+      setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
+      setIsLoadingCategories(false);
+      return;
+    }
+    void fetchEmployeeCategories(tenantId);
+  }, [fetchEmployeeCategories, masterDataModules.employee_categories, tenantId]);
 
-    const csvContent = [
-      headers.join(","),
-      exampleRow1.join(","),
-      exampleRow2.join(","),
-    ].join("\n");
+  const buildTemplateRows = useCallback(
+    () => [
+      expectedHeaders,
+      ...TEMPLATE_EXAMPLE_ROWS.map((exampleRow) =>
+        activeColumns.map((column) => exampleRow[column.key] ?? "")
+      ),
+    ],
+    [activeColumns, expectedHeaders]
+  );
 
-    const blob = new Blob(["\ufeff" + csvContent], { type: "text/csv;charset=utf-8;" });
+  const triggerDownload = (content: string, fileName: string, mimeType: string) => {
+    const blob = new Blob(["\ufeff" + content], { type: mimeType });
     const link = document.createElement("a");
     link.href = URL.createObjectURL(blob);
-    link.download = "template_import_pegawai.csv";
+    link.download = fileName;
     link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
+  const downloadTemplateCsv = () => {
+    const rows = buildTemplateRows();
+    const csvContent = rows.map((row) => buildDelimitedLine(row, ",")).join("\n");
+    triggerDownload(csvContent, "template_import_pegawai.csv", "text/csv;charset=utf-8;");
+  };
+
+  const downloadTemplateXls = () => {
+    const rows = buildTemplateRows();
+    const tabDelimitedContent = rows.map((row) => buildDelimitedLine(row, "\t")).join("\n");
+    triggerDownload(
+      tabDelimitedContent,
+      "template_import_pegawai.xls",
+      "application/vnd.ms-excel;charset=utf-8;"
+    );
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
 
-    if (!selectedFile.name.endsWith(".csv")) {
-      toast.error("Hanya file CSV yang diperbolehkan");
+    if (isLoadingReferenceData) {
+      toast.info("Master data import masih dimuat. Coba upload lagi beberapa saat.");
+      return;
+    }
+
+    const normalizedName = selectedFile.name.toLowerCase();
+    if (!normalizedName.endsWith(".csv") && !normalizedName.endsWith(".xls")) {
+      toast.error("Hanya file CSV atau XLS template yang diperbolehkan");
       return;
     }
 
@@ -263,36 +536,39 @@ export default function OrgEmployeeImport() {
     await parseCSV(selectedFile);
   };
 
-  const parseCSV = async (file: File) => {
+  const parseCSV = useCallback(async (selectedFile: File) => {
     if (!tenantId) {
       toast.error("Tenant tidak ditemukan");
       return;
     }
 
     setIsLoading(true);
+    setIsRetrying(false);
     setLoadError(null);
     setPreviewData([]);
     setImportResult(null);
     setPreviewPage(1);
 
     try {
-      const text = (await file.text()).replace(/^\uFEFF/, "");
+      const text = (await selectedFile.text()).replace(/^\uFEFF/, "");
       const lines = text.split(/\r?\n/).filter((line) => line.trim());
-      
+
       if (lines.length < 2) {
-        toast.error("File CSV kosong atau hanya berisi header");
+        toast.error("File kosong atau hanya berisi header");
         return;
       }
 
-      const headerColumns = parseCsvLine(lines[0]);
-      const expectedHeader = CSV_HEADERS.map(normalizeHeader);
+      const fallbackDelimiter = selectedFile.name.toLowerCase().endsWith(".xls") ? "\t" : ",";
+      const delimiter = detectDelimiter(lines[0], fallbackDelimiter);
+      const headerColumns = parseDelimitedLine(lines[0], delimiter);
+      const expectedHeader = expectedHeaders.map(normalizeHeader);
       const uploadedHeader = headerColumns.map(normalizeHeader);
       const headerValid =
         uploadedHeader.length === expectedHeader.length &&
         expectedHeader.every((header, index) => uploadedHeader[index] === header);
 
       if (!headerValid) {
-        const message = "Header CSV tidak sesuai template. Gunakan file hasil Download Template CSV.";
+        const message = "Header file tidak sesuai template aktif. Gunakan file dari Download Template CSV/XLS.";
         setLoadError(message);
         toast.error(message);
         return;
@@ -309,50 +585,89 @@ export default function OrgEmployeeImport() {
       const parsedRows: ImportRow[] = [];
       const seenNiksInFile = new Set<string>();
       const seenEmailsInFile = new Set<string>();
+      const activeGolonganSet = new Set(
+        employeeGolonganOptions.map((option) => option.value.trim().toLowerCase())
+      );
+      const activeCategorySet = new Set(
+        employeeCategoryOptions.map((option) => option.value.trim().toLowerCase())
+      );
+      const validOfficeNameSet = new Set(offices.map((office) => normalizeHeader(office.name)));
+
+      const getValueByKey = (values: string[], key: ImportColumnKey): string => {
+        const index = columnIndexByKey.get(key);
+        if (index === undefined) return "";
+        return values[index]?.trim() || "";
+      };
 
       // Get existing NIKs and emails for validation
-      const { data: existingEmployees } = await supabase
-        .from("employees")
-        .select("nik, email")
-        .eq("tenant_id", tenantId);
+      const { data: existingEmployees } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("nik, email")
+              .eq("tenant_id", tenantId),
+            ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+            "org.employee_import.parse_csv.existing_employees timeout"
+          ),
+        {
+          maxRetries: ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
-      const existingNiks = new Set(existingEmployees?.map(e => e.nik) || []);
-      const existingEmails = new Set(existingEmployees?.map(e => e.email?.toLowerCase()) || []);
+      const existingNiks = new Set(existingEmployees?.map((employee) => employee.nik) || []);
+      const existingEmails = new Set(existingEmployees?.map((employee) => employee.email?.toLowerCase()) || []);
 
       // Get OPDs for validation
-      const { data: opds } = await supabase
-        .from("opd")
-        .select("code, name")
-        .eq("tenant_id", tenantId);
+      const { data: opds } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("opd")
+              .select("code, name")
+              .eq("tenant_id", tenantId),
+            ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+            "org.employee_import.parse_csv.opd timeout"
+          ),
+        {
+          maxRetries: ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
-      const opdCodes = new Set(opds?.map(o => o.code.toUpperCase()) || []);
+      const opdCodes = new Set(opds?.map((opd) => opd.code.toUpperCase()) || []);
 
       for (let i = 0; i < dataLines.length; i++) {
         const line = dataLines[i];
-        const values = parseCsvLine(line);
-        
+        const values = parseDelimitedLine(line, delimiter);
+
         const row: ImportRow = {
           rowNum: i + 2,
-          nik: values[0] || "",
-          nip: values[1] || "",
-          name: values[2] || "",
-          gelar_depan: values[3] || "",
-          gelar_belakang: values[4] || "",
-          email: values[5] || "",
-          phone: values[6] || "",
-          whatsapp: values[7] || "",
-          position: values[9] || "",
-          golongan: values[10] || "",
-          opd_code: values[11] || "",
-          address: values[12] || "",
-          gender: values[8] || "",
+          nik: getValueByKey(values, "nik"),
+          nip: getValueByKey(values, "nip"),
+          name: getValueByKey(values, "name"),
+          gelar_depan: getValueByKey(values, "gelar_depan"),
+          gelar_belakang: getValueByKey(values, "gelar_belakang"),
+          email: getValueByKey(values, "email"),
+          phone: getValueByKey(values, "phone"),
+          whatsapp: getValueByKey(values, "whatsapp"),
+          position: getValueByKey(values, "position"),
+          golongan: getValueByKey(values, "golongan"),
+          employee_category: getValueByKey(values, "employee_category"),
+          opd_code: getValueByKey(values, "opd_code"),
+          office_name: getValueByKey(values, "office_name"),
+          address: getValueByKey(values, "address"),
+          gender: getValueByKey(values, "gender"),
           status: "valid",
           errors: [],
         };
 
         // Validation
-        if (values.length !== CSV_HEADERS.length) {
-          row.errors.push(`Jumlah kolom tidak sesuai template (${values.length}/${CSV_HEADERS.length})`);
+        if (values.length !== expectedHeaders.length) {
+          row.errors.push(`Jumlah kolom tidak sesuai template (${values.length}/${expectedHeaders.length})`);
         }
 
         if (!row.nik) {
@@ -403,6 +718,26 @@ export default function OrgEmployeeImport() {
           row.errors.push(`Kode OPD "${row.opd_code}" tidak ditemukan`);
         }
 
+        if (
+          masterDataModules.employee_golongan &&
+          row.golongan &&
+          !activeGolonganSet.has(row.golongan.trim().toLowerCase())
+        ) {
+          row.errors.push(`Golongan "${row.golongan}" tidak ada di master golongan aktif`);
+        }
+
+        if (
+          masterDataModules.employee_categories &&
+          row.employee_category &&
+          !activeCategorySet.has(row.employee_category.trim().toLowerCase())
+        ) {
+          row.errors.push(`Kategori pegawai "${row.employee_category}" tidak ada di master kategori aktif`);
+        }
+
+        if (row.office_name && !validOfficeNameSet.has(normalizeHeader(row.office_name))) {
+          row.errors.push(`Lokasi kerja "${row.office_name}" tidak ditemukan atau belum valid koordinat`);
+        }
+
         row.status = row.errors.length > 0 ? "error" : "valid";
         parsedRows.push(row);
       }
@@ -410,21 +745,35 @@ export default function OrgEmployeeImport() {
       setPreviewData(parsedRows);
     } catch (error) {
       const errorRef = reportError(error, "org.employee_import.parse_csv");
-      const message = appendErrorReference("Gagal membaca file CSV", errorRef);
+      const message = appendErrorReference("Gagal membaca file import", errorRef);
       setLoadError(message);
       toast.error(message);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
-  };
+  }, [
+    ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+    ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+    columnIndexByKey,
+    employeeCategoryOptions,
+    employeeGolonganOptions,
+    expectedHeaders,
+    masterDataModules.employee_categories,
+    masterDataModules.employee_golongan,
+    offices,
+    tenantId,
+  ]);
+
+  useEffect(() => {
+    if (!file) return;
+    if (isLoadingReferenceData) return;
+    void parseCSV(file);
+  }, [file, isLoadingReferenceData, parseCSV]);
 
   const handleImport = async () => {
     if (!tenantId) {
       toast.error("Tenant tidak ditemukan");
-      return;
-    }
-    if (!selectedOfficeId) {
-      toast.error("Pilih lokasi kerja valid untuk mapping pegawai import.");
       return;
     }
 
@@ -438,55 +787,102 @@ export default function OrgEmployeeImport() {
       toast.error("Tidak ada data valid untuk diimport");
       return;
     }
+    const requiresOfficeMapping = validRows.some((row) => !row.office_name.trim());
+    if (requiresOfficeMapping && !selectedOfficeId) {
+      toast.error("Sebagian baris belum punya kolom Lokasi Kerja. Pilih Lokasi Kerja Mapping sebagai fallback.");
+      return;
+    }
 
     setIsImporting(true);
     setLoadError(null);
+    setIsRetrying(false);
     let success = 0;
     let failed = 0;
 
     try {
       // Get OPDs for this tenant
-      const { data: opds } = await supabase
-        .from("opd")
-        .select("id, code")
-        .eq("tenant_id", tenantId);
+      const { data: opds } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("opd")
+              .select("id, code")
+              .eq("tenant_id", tenantId),
+            ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+            "org.employee_import.import.opd timeout",
+          ),
+        {
+          maxRetries: ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       const opdMap = new Map(opds?.map(o => [o.code.toUpperCase(), o.id]) || []);
+      const officeNameMap = new Map(
+        offices.map((office) => [normalizeHeader(office.name), office.id] as const)
+      );
 
       for (let i = 0; i < validRows.length; i++) {
         try {
           const row = validRows[i];
           const opdId = row.opd_code ? opdMap.get(row.opd_code.toUpperCase()) : null;
+          const officeIdFromRow = row.office_name
+            ? officeNameMap.get(normalizeHeader(row.office_name))
+            : null;
+          const resolvedOfficeId = officeIdFromRow || selectedOfficeId || null;
 
-          const { error } = await supabase.from("employees").insert({
-            tenant_id: tenantId,
-            nik: row.nik,
-            nip: row.nip || null,
-            name: row.name,
-            gelar_depan: row.gelar_depan || null,
-            gelar_belakang: row.gelar_belakang || null,
-            email: row.email,
-            phone: row.phone || null,
-            whatsapp: row.whatsapp || null,
-            gender: row.gender?.toUpperCase() === "L" ? "L" : row.gender?.toUpperCase() === "P" ? "P" : null,
-            position: row.position || null,
-            golongan: row.golongan || null,
-            opd_id: opdId,
-            office_id: selectedOfficeId,
-            address: row.address || null,
-            is_active: true,
-          });
+          if (!resolvedOfficeId) {
+            throw new Error(`Lokasi kerja belum ditentukan pada baris ${row.rowNum}`);
+          }
+
+          const { error } = await withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase.from("employees").insert({
+                  tenant_id: tenantId,
+                  nik: row.nik,
+                  nip: row.nip || null,
+                  name: row.name,
+                  gelar_depan: row.gelar_depan || null,
+                  gelar_belakang: row.gelar_belakang || null,
+                  email: row.email,
+                  phone: row.phone || null,
+                  whatsapp: row.whatsapp || null,
+                  gender: row.gender?.toUpperCase() === "L" ? "L" : row.gender?.toUpperCase() === "P" ? "P" : null,
+                  position: masterDataModules.positions ? (row.position || null) : null,
+                  golongan: masterDataModules.employee_golongan ? (row.golongan || null) : null,
+                  employee_category: masterDataModules.employee_categories ? (row.employee_category || null) : null,
+                  opd_id: opdId,
+                  office_id: resolvedOfficeId,
+                  address: row.address || null,
+                  is_active: true,
+                }),
+                ORG_EMPLOYEE_IMPORT_QUERY_TIMEOUT_MS,
+                "org.employee_import.import.insert_row timeout",
+              ),
+            {
+              maxRetries: ORG_EMPLOYEE_IMPORT_QUERY_RETRY_MAX,
+              shouldRetry: isRetryableError,
+            },
+          );
 
           if (error) throw error;
           success++;
         } catch (error) {
-          console.error("Error importing row:", error);
+          reportError(error, "org.employee_import.import.row_failed", {
+            row_num: i + 1,
+            nik: validRows[i]?.nik || null,
+            tenant_id: tenantId,
+          });
           failed++;
         }
       }
 
       setImportResult({ success, failed });
-      toast.success(`Import selesai: ${success} berhasil, ${failed} gagal`);
+      toast.success(
+        `Import selesai: ${success} berhasil, ${failed} gagal. Lanjutkan aktivasi akun melalui menu Undangan Pegawai/Pegawai Aktif.`
+      );
       
       if (failed === 0) {
         setFile(null);
@@ -502,12 +898,21 @@ export default function OrgEmployeeImport() {
       toast.error(message);
     } finally {
       setIsImporting(false);
+      setIsRetrying(false);
     }
   };
 
   const validCount = previewData.filter(r => r.status === "valid").length;
   const errorCount = previewData.filter(r => r.status === "error").length;
-  const importDisabled = validCount === 0 || errorCount > 0 || isImporting || !selectedOfficeId;
+  const requiresFallbackOfficeMapping = previewData.some(
+    (row) => row.status === "valid" && !row.office_name.trim()
+  );
+  const importDisabled =
+    validCount === 0 ||
+    errorCount > 0 ||
+    isImporting ||
+    (requiresFallbackOfficeMapping && !selectedOfficeId) ||
+    isLoadingReferenceData;
   const previewTotalPages = Math.max(1, Math.ceil(previewData.length / PREVIEW_PAGE_SIZE));
   const paginatedPreviewRows = previewData.slice(
     (previewPage - 1) * PREVIEW_PAGE_SIZE,
@@ -524,13 +929,49 @@ export default function OrgEmployeeImport() {
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Import Pegawai</h1>
-          <p className="text-sm text-muted-foreground">Import data pegawai dari file CSV</p>
+          <p className="text-sm text-muted-foreground">Import data pegawai dari file CSV/XLS template</p>
         </div>
+        <EmployeeDataTabs />
 
         {loadError && (
           <Card className="border-destructive/40">
             <CardContent className="pt-6">
-              <p className="text-sm text-destructive">{loadError}</p>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-destructive">{loadError}</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    void (async () => {
+                      if (!tenantId) {
+                        await fetchUserTenant();
+                        return;
+                      }
+                      await fetchMasterDataModules(tenantId);
+                      await fetchValidOffices(tenantId);
+                      if (masterDataModules.employee_golongan) {
+                        await fetchEmployeeGolongan(tenantId);
+                      }
+                      if (masterDataModules.employee_categories) {
+                        await fetchEmployeeCategories(tenantId);
+                      }
+                      if (file) {
+                        await parseCSV(file);
+                      }
+                    })();
+                  }}
+                >
+                  Coba Lagi
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        {isRetrying && (
+          <Card className="border-amber-300/60 bg-amber-50">
+            <CardContent className="pt-4">
+              <p className="text-sm text-amber-800">Sedang mencoba ulang koneksi data import pegawai...</p>
             </CardContent>
           </Card>
         )}
@@ -549,11 +990,10 @@ export default function OrgEmployeeImport() {
                 <AccordionTrigger>Langkah-langkah Import</AccordionTrigger>
                 <AccordionContent>
                   <ol className="list-decimal list-inside space-y-2 text-sm text-muted-foreground">
-                    <li><strong>Download Template:</strong> Klik tombol "Download Template CSV" untuk mendapatkan format yang benar</li>
+                    <li><strong>Download Template:</strong> Klik tombol "Download Template CSV/XLS" agar format mengikuti modul aktif</li>
                     <li><strong>Isi Data:</strong> Buka file dengan Excel/Google Sheets dan isi data pegawai sesuai kolom</li>
-                    <li><strong>Simpan sebagai CSV:</strong> Simpan file dengan format CSV (Comma Separated Values)</li>
-                    <li><strong>Pilih Lokasi Kerja:</strong> Wajib pilih lokasi kerja dengan koordinat real</li>
-                    <li><strong>Upload File:</strong> Pilih file CSV yang sudah diisi</li>
+                    <li><strong>Lokasi Kerja:</strong> Isi kolom "Lokasi Kerja" per baris, atau gunakan mapping fallback di bawah</li>
+                    <li><strong>Upload File:</strong> Pilih file CSV/XLS template yang sudah diisi</li>
                     <li><strong>Periksa Preview:</strong> Pastikan tidak ada error pada data yang akan diimport</li>
                     <li><strong>Import:</strong> Klik tombol Import untuk memproses data</li>
                   </ol>
@@ -590,8 +1030,20 @@ export default function OrgEmployeeImport() {
                         <span className="text-muted-foreground">L = Laki-laki, P = Perempuan</span>
                       </div>
                       <div className="flex justify-between border-b pb-1">
+                        <span className="font-medium">Golongan</span>
+                        <span className="text-muted-foreground">Muncul saat modul golongan aktif</span>
+                      </div>
+                      <div className="flex justify-between border-b pb-1">
+                        <span className="font-medium">Kategori Pegawai</span>
+                        <span className="text-muted-foreground">Muncul saat modul kategori pegawai aktif</span>
+                      </div>
+                      <div className="flex justify-between border-b pb-1">
                         <span className="font-medium">Kode OPD</span>
                         <span className="text-muted-foreground">Sesuai dengan kode OPD yang sudah dibuat</span>
+                      </div>
+                      <div className="flex justify-between border-b pb-1">
+                        <span className="font-medium">Lokasi Kerja</span>
+                        <span className="text-muted-foreground">Nama lokasi kerja valid, atau gunakan mapping fallback</span>
                       </div>
                     </div>
                   </div>
@@ -604,8 +1056,9 @@ export default function OrgEmployeeImport() {
                   <ul className="list-disc list-inside space-y-2 text-sm text-muted-foreground">
                     <li>Pastikan NIK dan Email belum terdaftar di sistem</li>
                     <li>Kode OPD harus sesuai dengan OPD yang sudah dibuat di menu Master OPD</li>
-                    <li>Gunakan format file CSV (bukan Excel .xlsx)</li>
-                    <li>Jika menggunakan Excel, Save As dengan tipe "CSV UTF-8"</li>
+                    <li>Gunakan file template CSV/XLS yang diunduh dari halaman ini</li>
+                    <li>Kolom template otomatis menyesuaikan modul aktif/nonaktif</li>
+                    <li>Jika ada baris tanpa kolom Lokasi Kerja, pilih Lokasi Kerja Mapping fallback</li>
                     <li>Periksa preview sebelum import untuk menghindari kesalahan</li>
                     <li>Maksimal 100 pegawai per import untuk performa optimal</li>
                   </ul>
@@ -627,10 +1080,19 @@ export default function OrgEmployeeImport() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Button onClick={downloadTemplate} variant="outline">
-              <Download className="h-4 w-4 mr-2" />
-              Download Template CSV
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={downloadTemplateCsv} variant="outline">
+                <Download className="h-4 w-4 mr-2" />
+                Download Template CSV
+              </Button>
+              <Button onClick={downloadTemplateXls} variant="outline">
+                <Download className="h-4 w-4 mr-2" />
+                Download Template XLS
+              </Button>
+            </div>
+            <p className="mt-3 text-xs text-muted-foreground">
+              Kolom template aktif: {expectedHeaders.join(", ")}
+            </p>
           </CardContent>
         </Card>
 
@@ -644,14 +1106,14 @@ export default function OrgEmployeeImport() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label>Lokasi Kerja Mapping (Wajib)</Label>
+              <Label>Lokasi Kerja Mapping (Fallback)</Label>
               <Select
                 value={selectedOfficeId}
                 onValueChange={setSelectedOfficeId}
                 disabled={isLoadingOffices || offices.length === 0}
               >
                 <SelectTrigger className="max-w-md">
-                  <SelectValue placeholder={isLoadingOffices ? "Memuat lokasi kerja..." : "Pilih lokasi kerja valid"} />
+                  <SelectValue placeholder={isLoadingOffices ? "Memuat lokasi kerja..." : "Pilih lokasi kerja fallback"} />
                 </SelectTrigger>
                 <SelectContent>
                   {offices.map((office) => (
@@ -661,20 +1123,41 @@ export default function OrgEmployeeImport() {
                   ))}
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground">
+                Digunakan hanya untuk baris yang kolom "Lokasi Kerja"-nya kosong.
+              </p>
               {!isLoadingOffices && offices.length === 0 && (
                 <p className="text-xs text-destructive">
-                  Belum ada kantor koordinat real, import pegawai belum bisa dijalankan.
+                  Belum ada kantor koordinat real. Baris tanpa kolom Lokasi Kerja tidak bisa diimport.
                 </p>
               )}
             </div>
             <div className="space-y-2">
-              <Label>File CSV</Label>
+              <Label>File CSV/XLS</Label>
               <Input
                 type="file"
-                accept=".csv"
+                accept=".csv,.xls"
                 onChange={handleFileChange}
                 className="max-w-md"
+                disabled={isLoadingReferenceData}
               />
+              {isLoadingReferenceData ? (
+                <p className="text-xs text-muted-foreground">Memuat referensi master data import...</p>
+              ) : masterDataModules.employee_golongan ? (
+                <p className="text-xs text-muted-foreground">
+                  Golongan valid mengikuti master data aktif:{" "}
+                  {employeeGolonganOptions.map((option) => option.label).join(", ")}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Modul golongan nonaktif: kolom golongan otomatis dihilangkan.</p>
+              )}
+              {masterDataModules.employee_categories ? (
+                <p className="text-xs text-muted-foreground">
+                  Kategori pegawai aktif: {employeeCategoryOptions.map((option) => option.label).join(", ")}
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Modul kategori pegawai nonaktif: kolom kategori otomatis dihilangkan.</p>
+              )}
               {file && (
                 <p className="text-sm text-muted-foreground">
                   File: {file.name} ({(file.size / 1024).toFixed(2)} KB)
@@ -713,6 +1196,11 @@ export default function OrgEmployeeImport() {
               {errorCount > 0 && (
                 <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
                   Import dikunci sampai semua error diperbaiki (saat ini masih ada {errorCount} baris error).
+                </div>
+              )}
+              {requiresFallbackOfficeMapping && !selectedOfficeId && (
+                <div className="mb-4 rounded-md border border-amber-300/70 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  Ada baris valid tanpa kolom Lokasi Kerja. Pilih Lokasi Kerja Mapping fallback agar import bisa dijalankan.
                 </div>
               )}
               <div className="rounded-md border overflow-x-auto">

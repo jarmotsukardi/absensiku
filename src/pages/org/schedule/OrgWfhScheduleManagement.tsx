@@ -16,6 +16,13 @@ import { toast } from "sonner";
 import { useEmployee } from "@/hooks/useEmployee";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 import type { Tables, TablesInsert, TablesUpdate } from "@/integrations/supabase/types";
 
 type WfhSchedule = Tables<"wfh_schedules">;
@@ -33,6 +40,10 @@ const DAYS_OF_WEEK = [
   { value: 6, label: "Sabtu" },
 ];
 
+const WFH_READ_TIMEOUT_MS = 12000;
+const WFH_WRITE_TIMEOUT_MS = 15000;
+const WFH_READ_MAX_RETRIES = 2;
+
 interface ScheduleFormData {
   scope: "organization" | "opd" | "work_unit" | "employee";
   opd_id: string | null;
@@ -48,12 +59,15 @@ interface ScheduleFormData {
 }
 
 export default function OrgWfhScheduleManagement() {
-  const { employee: currentUser } = useEmployee(null);
+  const confirmDialog = useConfirmDialog();
+  useEmployee(null);
   const [schedules, setSchedules] = useState<WfhSchedule[]>([]);
   const [opds, setOpds] = useState<OPD[]>([]);
   const [workUnits, setWorkUnits] = useState<WorkUnit[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<WfhSchedule | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
@@ -76,19 +90,46 @@ export default function OrgWfhScheduleManagement() {
 
   const fetchTenantId = useCallback(async () => {
     try {
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      setLoadError(null);
+      setIsRetrying(false);
+      const { data: { user }, error: userError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            WFH_READ_TIMEOUT_MS,
+            "Permintaan user auth timeout."
+          ),
+        {
+          maxRetries: WFH_READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (userError) throw userError;
       if (!user) {
         setTenantId(null);
         setIsLoading(false);
+        setIsRetrying(false);
         return;
       }
 
-      const { data: roleRows, error: roleError } = await supabase
-        .from("user_roles")
-        .select("role, tenant_id")
-        .eq("user_id", user.id)
-        .in("role", ["admin_instansi", "super_admin"]);
+      const { data: roleRows, error: roleError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("user_roles")
+              .select("role, tenant_id")
+              .eq("user_id", user.id)
+              .in("role", ["admin_instansi", "super_admin"]),
+            WFH_READ_TIMEOUT_MS,
+            "Permintaan role user timeout."
+          ),
+        {
+          maxRetries: WFH_READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (roleError) throw roleError;
 
       const adminRole = roleRows?.find((r) => r.role === "admin_instansi" && r.tenant_id);
@@ -98,11 +139,23 @@ export default function OrgWfhScheduleManagement() {
       }
 
       // Fallback for accounts that do not have admin role row but still tied to employee record.
-      const { data: emp, error: empError } = await supabase
-        .from("employees")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      const { data: emp, error: empError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("tenant_id")
+              .eq("user_id", user.id)
+              .maybeSingle(),
+            WFH_READ_TIMEOUT_MS,
+            "Permintaan data pegawai timeout."
+          ),
+        {
+          maxRetries: WFH_READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (empError) throw empError;
 
       if (emp?.tenant_id) {
@@ -115,9 +168,13 @@ export default function OrgWfhScheduleManagement() {
       toast.error("Tenant organisasi tidak ditemukan untuk akun ini.");
     } catch (error) {
       const errorRef = reportError(error, "org.wfh_schedule.resolve_tenant");
-      toast.error(appendErrorReference("Gagal menentukan tenant organisasi", errorRef));
+      const message = appendErrorReference("Gagal menentukan tenant organisasi", errorRef);
+      setLoadError(message);
+      toast.error(message);
       setTenantId(null);
       setIsLoading(false);
+    } finally {
+      setIsRetrying(false);
     }
   }, []);
 
@@ -129,12 +186,31 @@ export default function OrgWfhScheduleManagement() {
     
     setIsLoading(true);
     try {
-      const [schedulesRes, opdsRes, workUnitsRes, employeesRes] = await Promise.all([
-        supabase.from("wfh_schedules").select("*").eq("tenant_id", tenantId).order("created_at", { ascending: false }),
-        supabase.from("opd").select("*").eq("tenant_id", tenantId).eq("is_active", true).order("name"),
-        supabase.from("work_units").select("*").eq("tenant_id", tenantId).eq("is_active", true).order("name"),
-        supabase.from("employees").select("*").eq("tenant_id", tenantId).eq("is_active", true).order("name"),
-      ]);
+      setLoadError(null);
+      setIsRetrying(false);
+      const [schedulesRes, opdsRes, workUnitsRes, employeesRes] = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.all([
+              supabase.from("wfh_schedules").select("*").eq("tenant_id", tenantId).order("created_at", { ascending: false }),
+              supabase.from("opd").select("*").eq("tenant_id", tenantId).eq("is_active", true).order("name"),
+              supabase.from("work_units").select("*").eq("tenant_id", tenantId).eq("is_active", true).order("name"),
+              supabase.from("employees").select("*").eq("tenant_id", tenantId).eq("is_active", true).order("name"),
+            ]),
+            WFH_READ_TIMEOUT_MS,
+            "Permintaan data jadwal WFH timeout."
+          ),
+        {
+          maxRetries: WFH_READ_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+
+      if (schedulesRes.error) throw schedulesRes.error;
+      if (opdsRes.error) throw opdsRes.error;
+      if (workUnitsRes.error) throw workUnitsRes.error;
+      if (employeesRes.error) throw employeesRes.error;
 
       setSchedules(schedulesRes.data || []);
       setOpds(opdsRes.data || []);
@@ -142,8 +218,15 @@ export default function OrgWfhScheduleManagement() {
       setEmployees(employeesRes.data || []);
     } catch (error) {
       const errorRef = reportError(error, "org.wfh_schedule.fetch_data", { tenant_id: tenantId });
-      toast.error(appendErrorReference("Gagal memuat data", errorRef));
+      const message = appendErrorReference("Gagal memuat data", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setSchedules([]);
+      setOpds([]);
+      setWorkUnits([]);
+      setEmployees([]);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [tenantId]);
@@ -221,16 +304,24 @@ export default function OrgWfhScheduleManagement() {
       };
 
       if (editingSchedule) {
-        const { error } = await supabase
-          .from("wfh_schedules")
-          .update(scheduleData)
-          .eq("id", editingSchedule.id);
+        const { error } = await withTimeout(
+          supabase
+            .from("wfh_schedules")
+            .update(scheduleData)
+            .eq("id", editingSchedule.id),
+          WFH_WRITE_TIMEOUT_MS,
+          "Simpan update jadwal WFH timeout."
+        );
         if (error) throw error;
         toast.success("Jadwal WFH berhasil diperbarui");
       } else {
-        const { error } = await supabase
-          .from("wfh_schedules")
-          .insert(scheduleData as TablesInsert<"wfh_schedules">);
+        const { error } = await withTimeout(
+          supabase
+            .from("wfh_schedules")
+            .insert(scheduleData as TablesInsert<"wfh_schedules">),
+          WFH_WRITE_TIMEOUT_MS,
+          "Tambah jadwal WFH timeout."
+        );
         if (error) throw error;
         toast.success("Jadwal WFH berhasil ditambahkan");
       }
@@ -248,10 +339,23 @@ export default function OrgWfhScheduleManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin ingin menghapus jadwal ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Jadwal WFH",
+        description: "Yakin ingin menghapus jadwal ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
-      const { error } = await supabase.from("wfh_schedules").delete().eq("id", id);
+      const { error } = await withTimeout(
+        supabase.from("wfh_schedules").delete().eq("id", id),
+        WFH_WRITE_TIMEOUT_MS,
+        "Hapus jadwal WFH timeout."
+      );
       if (error) throw error;
       toast.success("Jadwal berhasil dihapus");
       void fetchData();
@@ -305,6 +409,21 @@ export default function OrgWfhScheduleManagement() {
   return (
     <OrganizationLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+            Mencoba ulang memuat data jadwal WFH...
+          </div>
+        )}
+
+        {loadError && (
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+              Muat Ulang
+            </Button>
+          </div>
+        )}
+
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -461,9 +580,12 @@ export default function OrgWfhScheduleManagement() {
                 </div>
               </div>
 
-              <DialogFooter>
-                <Button variant="outline" onClick={() => { setIsDialogOpen(false); resetForm(); }}>Batal</Button>
-                <Button onClick={handleSubmit}>{editingSchedule ? "Simpan" : "Tambah"}</Button>
+              <DialogFooter className={dialogActionBarClassName}>
+                <DialogActionHint>Periksa periode dan target jadwal WFH sebelum menyimpan.</DialogActionHint>
+                <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                  <Button variant="outline" onClick={() => { setIsDialogOpen(false); resetForm(); }}>Batal</Button>
+                  <Button onClick={handleSubmit}>{editingSchedule ? "Simpan" : "Tambah"}</Button>
+                </div>
               </DialogFooter>
             </DialogContent>
           </Dialog>

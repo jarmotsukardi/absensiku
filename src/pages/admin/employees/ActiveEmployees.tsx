@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,25 @@ import { toast } from "sonner";
 import { Tables } from "@/integrations/supabase/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
+import {
+  DEFAULT_EMPLOYEE_CATEGORY_OPTIONS,
+  fetchTenantEmployeeCategories,
+  getActiveEmployeeCategoryOptions,
+  type EmployeeCategoryOption,
+} from "@/lib/employeeCategories";
+import {
+  DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS,
+  fetchTenantEmployeeGolongan,
+  getActiveEmployeeGolonganOptions,
+  type EmployeeGolonganOption,
+} from "@/lib/employeeGolongan";
 import {
   Pagination,
   PaginationContent,
@@ -32,30 +51,33 @@ const GENDER_OPTIONS = [
   { value: "P", label: "Perempuan" },
 ];
 
-const EMPLOYEE_CATEGORIES = [
-  { value: "asn", label: "ASN" },
-  { value: "p3k", label: "P3K" },
-  { value: "honorer", label: "Honorer" },
-];
-
-const GOLONGAN_OPTIONS = [
-  "I/a", "I/b", "I/c", "I/d",
-  "II/a", "II/b", "II/c", "II/d",
-  "III/a", "III/b", "III/c", "III/d",
-  "IV/a", "IV/b", "IV/c", "IV/d", "IV/e",
-];
 const ITEMS_PER_PAGE = 15;
+const ADMIN_ACTIVE_EMP_READ_TIMEOUT_MS = 12000;
+const ADMIN_ACTIVE_EMP_WRITE_TIMEOUT_MS = 15000;
+const ADMIN_ACTIVE_EMP_MAX_RETRIES = 2;
 
 export default function ActiveEmployees() {
+  const confirmDialog = useConfirmDialog();
   const [employees, setEmployees] = useState<(Employee & { opd?: OPD; office?: Office })[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [officeList, setOfficeList] = useState<Office[]>([]);
+  const [employeeCategoryOptions, setEmployeeCategoryOptions] = useState<EmployeeCategoryOption[]>(
+    DEFAULT_EMPLOYEE_CATEGORY_OPTIONS
+  );
+  const [employeeGolonganOptions, setEmployeeGolonganOptions] = useState<EmployeeGolonganOption[]>(
+    DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS
+  );
+  const [employeeCategoryCache, setEmployeeCategoryCache] = useState<Record<string, EmployeeCategoryOption[]>>({});
+  const [employeeGolonganCache, setEmployeeGolonganCache] = useState<Record<string, EmployeeGolonganOption[]>>({});
+  const [isLoadingEmployeeCategories, setIsLoadingEmployeeCategories] = useState(false);
+  const [isLoadingEmployeeGolongan, setIsLoadingEmployeeGolongan] = useState(false);
   const [totalEmployees, setTotalEmployees] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterOpd, setFilterOpd] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
   const [formData, setFormData] = useState({
@@ -75,11 +97,173 @@ export default function ActiveEmployees() {
     nik: "",
   });
 
+  const loadEmployeeCategoriesByTenant = useCallback(
+    async (tenantId: string | null | undefined) => {
+      if (!tenantId) {
+        setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
+        return;
+      }
+
+      const cached = employeeCategoryCache[tenantId];
+      if (cached) {
+        setEmployeeCategoryOptions(cached);
+        return;
+      }
+
+      setIsLoadingEmployeeCategories(true);
+      try {
+        const { categories } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              fetchTenantEmployeeCategories(tenantId),
+              ADMIN_ACTIVE_EMP_READ_TIMEOUT_MS,
+              "Permintaan master kategori pegawai timeout."
+            ),
+          {
+            maxRetries: ADMIN_ACTIVE_EMP_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+          }
+        );
+
+        const nextOptions = getActiveEmployeeCategoryOptions(categories);
+        const normalizedOptions = nextOptions.length > 0 ? nextOptions : DEFAULT_EMPLOYEE_CATEGORY_OPTIONS;
+        setEmployeeCategoryOptions(normalizedOptions);
+        setEmployeeCategoryCache((prev) => ({ ...prev, [tenantId]: normalizedOptions }));
+      } catch (error) {
+        const errorRef = reportError(error, "admin.active_employees.fetch_employee_categories", { tenant_id: tenantId });
+        toast.error(appendErrorReference("Gagal memuat kategori pegawai", errorRef));
+        setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
+      } finally {
+        setIsLoadingEmployeeCategories(false);
+      }
+    },
+    [employeeCategoryCache]
+  );
+
+  const loadEmployeeGolonganByTenant = useCallback(
+    async (tenantId: string | null | undefined) => {
+      if (!tenantId) {
+        setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
+        return;
+      }
+
+      const cached = employeeGolonganCache[tenantId];
+      if (cached) {
+        setEmployeeGolonganOptions(cached);
+        return;
+      }
+
+      setIsLoadingEmployeeGolongan(true);
+      try {
+        const { golongan } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              fetchTenantEmployeeGolongan(tenantId),
+              ADMIN_ACTIVE_EMP_READ_TIMEOUT_MS,
+              "Permintaan master golongan pegawai timeout."
+            ),
+          {
+            maxRetries: ADMIN_ACTIVE_EMP_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+          }
+        );
+
+        const nextOptions = getActiveEmployeeGolonganOptions(golongan);
+        const normalizedOptions = nextOptions.length > 0 ? nextOptions : DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS;
+        setEmployeeGolonganOptions(normalizedOptions);
+        setEmployeeGolonganCache((prev) => ({ ...prev, [tenantId]: normalizedOptions }));
+      } catch (error) {
+        const errorRef = reportError(error, "admin.active_employees.fetch_employee_golongan", { tenant_id: tenantId });
+        toast.error(appendErrorReference("Gagal memuat golongan pegawai", errorRef));
+        setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
+      } finally {
+        setIsLoadingEmployeeGolongan(false);
+      }
+    },
+    [employeeGolonganCache]
+  );
+
+  const handleOpdChange = useCallback(
+    (opdId: string) => {
+      setFormData((prev) => ({
+        ...prev,
+        opd_id: opdId,
+        kategori_pegawai:
+          prev.kategori_pegawai &&
+          employeeCategoryOptions.some((option) => option.value === prev.kategori_pegawai)
+            ? prev.kategori_pegawai
+            : "",
+        golongan:
+          prev.golongan &&
+          employeeGolonganOptions.some((option) => option.value === prev.golongan)
+            ? prev.golongan
+            : "",
+      }));
+      const selectedOpd = opdList.find((opd) => opd.id === opdId);
+      void loadEmployeeCategoriesByTenant(selectedOpd?.tenant_id);
+      void loadEmployeeGolonganByTenant(selectedOpd?.tenant_id);
+    },
+    [
+      employeeCategoryOptions,
+      employeeGolonganOptions,
+      loadEmployeeCategoriesByTenant,
+      loadEmployeeGolonganByTenant,
+      opdList,
+    ]
+  );
+
+  const resolvedEmployeeCategoryOptions = useMemo(() => {
+    if (!formData.kategori_pegawai) return employeeCategoryOptions;
+    if (employeeCategoryOptions.some((option) => option.value === formData.kategori_pegawai)) {
+      return employeeCategoryOptions;
+    }
+    return [
+      { value: formData.kategori_pegawai, label: `${formData.kategori_pegawai} (nonaktif)` },
+      ...employeeCategoryOptions,
+    ];
+  }, [employeeCategoryOptions, formData.kategori_pegawai]);
+
+  const resolvedEmployeeGolonganOptions = useMemo(() => {
+    if (!formData.golongan) return employeeGolonganOptions;
+    if (employeeGolonganOptions.some((option) => option.value === formData.golongan)) {
+      return employeeGolonganOptions;
+    }
+    return [
+      { value: formData.golongan, label: `${formData.golongan} (nonaktif)` },
+      ...employeeGolonganOptions,
+    ];
+  }, [employeeGolonganOptions, formData.golongan]);
+
   const fetchMasterData = async () => {
     try {
+      setIsRetrying(false);
       const [opdResult, officeResult] = await Promise.all([
-        supabase.from("opd").select("*").order("name"),
-        supabase.from("offices").select("*").order("name"),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("opd").select("*").order("name"),
+              ADMIN_ACTIVE_EMP_READ_TIMEOUT_MS,
+              "Permintaan daftar OPD timeout."
+            ),
+          {
+            maxRetries: ADMIN_ACTIVE_EMP_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("offices").select("*").order("name"),
+              ADMIN_ACTIVE_EMP_READ_TIMEOUT_MS,
+              "Permintaan daftar lokasi kerja timeout."
+            ),
+          {
+            maxRetries: ADMIN_ACTIVE_EMP_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
       ]);
 
       if (opdResult.error) throw opdResult.error;
@@ -92,12 +276,15 @@ export default function ActiveEmployees() {
       const message = appendErrorReference("Gagal memuat data referensi pegawai", errorRef);
       toast.error(message);
       setLoadError(message);
+    } finally {
+      setIsRetrying(false);
     }
   };
 
   const fetchEmployees = useCallback(async () => {
     try {
       setIsLoading(true);
+      setIsRetrying(false);
       setLoadError(null);
       const page = Math.max(1, currentPage);
       const from = (page - 1) * ITEMS_PER_PAGE;
@@ -116,9 +303,21 @@ export default function ActiveEmployees() {
         query = query.or(`name.ilike.%${escaped}%,nip.ilike.%${escaped}%,email.ilike.%${escaped}%`);
       }
 
-      const { data, error, count } = await query
-        .order("name")
-        .range(from, to);
+      const { data, error, count } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            query
+              .order("name")
+              .range(from, to),
+            ADMIN_ACTIVE_EMP_READ_TIMEOUT_MS,
+            "Permintaan daftar pegawai aktif timeout."
+          ),
+        {
+          maxRetries: ADMIN_ACTIVE_EMP_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setEmployees(data || []);
@@ -131,6 +330,7 @@ export default function ActiveEmployees() {
       setEmployees([]);
       setTotalEmployees(0);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [currentPage, filterOpd, searchTerm]);
@@ -155,32 +355,50 @@ export default function ActiveEmployees() {
         position: formData.position || null,
         opd_id: formData.opd_id || null,
         office_id: formData.office_id || null,
+        golongan: formData.golongan || null,
+        employee_category: formData.kategori_pegawai || null,
         nik: formData.nik,
       };
 
       if (editingEmployee) {
-        const { error } = await supabase
-          .from("employees")
-          .update(employeeData)
-          .eq("id", editingEmployee.id);
+        const { error } = await withTimeout(
+          supabase
+            .from("employees")
+            .update(employeeData)
+            .eq("id", editingEmployee.id),
+          ADMIN_ACTIVE_EMP_WRITE_TIMEOUT_MS,
+          "Perbarui data pegawai timeout."
+        );
 
         if (error) throw error;
         toast.success("Pegawai berhasil diperbarui");
       } else {
-        const { data: { user } } = await supabase.auth.getUser();
+        const { data: { user } } = await withTimeout(
+          supabase.auth.getUser(),
+          ADMIN_ACTIVE_EMP_WRITE_TIMEOUT_MS,
+          "Permintaan user auth timeout."
+        );
         if (!user) throw new Error("User not authenticated");
 
-        const { data: currentEmployee } = await supabase
-          .from("employees")
-          .select("tenant_id")
-          .eq("user_id", user.id)
-          .single();
+        const { data: currentEmployee } = await withTimeout(
+          supabase
+            .from("employees")
+            .select("tenant_id")
+            .eq("user_id", user.id)
+            .single(),
+          ADMIN_ACTIVE_EMP_WRITE_TIMEOUT_MS,
+          "Permintaan tenant employee timeout."
+        );
 
         if (!currentEmployee?.tenant_id) throw new Error("Tenant not found");
 
-        const { error } = await supabase
-          .from("employees")
-          .insert({ ...employeeData, tenant_id: currentEmployee.tenant_id, is_active: true });
+        const { error } = await withTimeout(
+          supabase
+            .from("employees")
+            .insert({ ...employeeData, tenant_id: currentEmployee.tenant_id, is_active: true }),
+          ADMIN_ACTIVE_EMP_WRITE_TIMEOUT_MS,
+          "Tambah pegawai baru timeout."
+        );
 
         if (error) throw error;
         toast.success("Pegawai berhasil ditambahkan");
@@ -233,22 +451,37 @@ export default function ActiveEmployees() {
       opd_id: employee.opd_id || "",
       office_id: employee.office_id || "",
       position: employee.position || "",
-      golongan: "",
-      kategori_pegawai: "",
+      golongan: employee.golongan || "",
+      kategori_pegawai: employee.employee_category || "",
       nik: employee.nik,
     });
+    void loadEmployeeCategoriesByTenant(employee.tenant_id);
+    void loadEmployeeGolonganByTenant(employee.tenant_id);
     setIsDialogOpen(true);
   };
 
   const handleDeactivate = async (id: string) => {
-    if (!confirm("Yakin ingin menonaktifkan pegawai ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Nonaktifkan Pegawai",
+        description: "Yakin ingin menonaktifkan pegawai ini?",
+        confirmText: "Ya, nonaktifkan",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
       setLoadError(null);
-      const { error } = await supabase
-        .from("employees")
-        .update({ is_active: false })
-        .eq("id", id);
+      const { error } = await withTimeout(
+        supabase
+          .from("employees")
+          .update({ is_active: false })
+          .eq("id", id),
+        ADMIN_ACTIVE_EMP_WRITE_TIMEOUT_MS,
+        "Nonaktifkan pegawai timeout."
+      );
 
       if (error) throw error;
       toast.success("Pegawai berhasil dinonaktifkan");
@@ -290,7 +523,14 @@ export default function ActiveEmployees() {
           </div>
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
-              <Button onClick={() => { setEditingEmployee(null); resetForm(); }}>
+              <Button
+                onClick={() => {
+                  setEditingEmployee(null);
+                  resetForm();
+                  setEmployeeCategoryOptions(DEFAULT_EMPLOYEE_CATEGORY_OPTIONS);
+                  setEmployeeGolonganOptions(DEFAULT_EMPLOYEE_GOLONGAN_OPTIONS);
+                }}
+              >
                 <Plus className="mr-2 h-4 w-4" />
                 Tambah Pegawai
               </Button>
@@ -415,10 +655,10 @@ export default function ActiveEmployees() {
                           onValueChange={(value) => setFormData({ ...formData, kategori_pegawai: value })}
                         >
                           <SelectTrigger>
-                            <SelectValue placeholder="Pilih Kategori" />
+                            <SelectValue placeholder={isLoadingEmployeeCategories ? "Memuat kategori..." : "Pilih Kategori"} />
                           </SelectTrigger>
                           <SelectContent>
-                            {EMPLOYEE_CATEGORIES.map((c) => (
+                            {resolvedEmployeeCategoryOptions.map((c) => (
                               <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
                             ))}
                           </SelectContent>
@@ -431,7 +671,7 @@ export default function ActiveEmployees() {
                         <Label htmlFor="opd_id">OPD</Label>
                         <Select
                           value={formData.opd_id}
-                          onValueChange={(value) => setFormData({ ...formData, opd_id: value })}
+                          onValueChange={handleOpdChange}
                         >
                           <SelectTrigger>
                             <SelectValue placeholder="Pilih OPD" />
@@ -480,24 +720,30 @@ export default function ActiveEmployees() {
                         <Select
                           value={formData.golongan}
                           onValueChange={(value) => setFormData({ ...formData, golongan: value })}
+                          disabled={isLoadingEmployeeGolongan}
                         >
                           <SelectTrigger>
-                            <SelectValue placeholder="Pilih Golongan" />
+                            <SelectValue placeholder={isLoadingEmployeeGolongan ? "Memuat golongan..." : "Pilih Golongan"} />
                           </SelectTrigger>
                           <SelectContent>
-                            {GOLONGAN_OPTIONS.map((g) => (
-                              <SelectItem key={g} value={g}>{g}</SelectItem>
+                            {resolvedEmployeeGolonganOptions.map((golongan) => (
+                              <SelectItem key={golongan.value} value={golongan.value}>
+                                {golongan.label}
+                              </SelectItem>
                             ))}
                           </SelectContent>
                         </Select>
                       </div>
                     </div>
                   </div>
-                  <DialogFooter>
-                    <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
-                      Batal
-                    </Button>
-                    <Button type="submit">Simpan</Button>
+                  <DialogFooter className={dialogActionBarClassName}>
+                    <DialogActionHint>Perubahan data pegawai akan memengaruhi data master dan laporan.</DialogActionHint>
+                    <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                      <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
+                        Batal
+                      </Button>
+                      <Button type="submit">Simpan</Button>
+                    </div>
                   </DialogFooter>
                 </form>
               </ScrollArea>
@@ -505,9 +751,18 @@ export default function ActiveEmployees() {
           </Dialog>
         </div>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+            Sedang mencoba ulang memuat data pegawai aktif...
+          </div>
+        )}
+
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchEmployees()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 

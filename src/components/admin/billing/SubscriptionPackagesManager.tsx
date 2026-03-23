@@ -32,6 +32,9 @@ import {
 } from "@/components/ui/table";
 import { Plus, Pencil, Trash2, Loader2, Package, Info, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat("id-ID", {
@@ -41,7 +44,24 @@ const formatCurrency = (amount: number) => {
   }).format(amount);
 };
 
+const getNumericSettingValue = (value: unknown, fallback: number): number => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const objectValue = value as Record<string, unknown>;
+    if ("value" in objectValue) return getNumericSettingValue(objectValue.value, fallback);
+    if ("amount" in objectValue) return getNumericSettingValue(objectValue.amount, fallback);
+  }
+  return fallback;
+};
+
 export function SubscriptionPackagesManager() {
+  const OP_TIMEOUT_MS = 12000;
+  const OP_RETRY_MAX = 2;
+  const confirmDialog = useConfirmDialog();
   const ITEMS_PER_PAGE = 10;
   const { packages, isLoading, createPackage, updatePackage, deletePackage } = useSubscriptionPackages();
   const { settings, isLoading: isLoadingSettings, getSetting } = useBillingSettings();
@@ -52,8 +72,9 @@ export function SubscriptionPackagesManager() {
   const [currentPage, setCurrentPage] = useState(1);
 
   // Global billing settings
-  const globalPrice = getSetting("price_per_employee")?.amount || 15000;
-  const globalVat = getSetting("vat_percentage")?.value || 11;
+  const globalPrice = getNumericSettingValue(getSetting("price_per_employee"), 15000);
+  const globalVat = getNumericSettingValue(getSetting("vat_percentage"), 11);
+  const globalPph = getNumericSettingValue(getSetting("pph_percentage"), 2);
 
   const getEmptyPackage = (): Partial<SubscriptionPackage> => ({
     name: "",
@@ -81,21 +102,37 @@ export function SubscriptionPackagesManager() {
     setIsSaving(true);
     try {
       if (editingPackage.id) {
-        await updatePackage(editingPackage.id, editingPackage);
+        await withTimeout(
+          updatePackage(editingPackage.id, editingPackage),
+          OP_TIMEOUT_MS,
+          "Menyimpan perubahan paket terlalu lama",
+        );
       } else {
-        await createPackage(editingPackage);
+        await withTimeout(
+          createPackage(editingPackage),
+          OP_TIMEOUT_MS,
+          "Membuat paket baru terlalu lama",
+        );
       }
       setShowDialog(false);
       setEditingPackage(null);
+    } catch (error) {
+      const errorRef = reportError(error, "admin.billing.packages.save");
+      toast.error(appendErrorReference("Gagal menyimpan paket", errorRef));
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleDelete = async (id: string) => {
-    if (confirm("Hapus paket ini?")) {
-      await deletePackage(id);
-    }
+    const confirmed = await confirmDialog({
+      title: "Hapus Paket",
+      description: "Hapus paket ini?",
+      confirmText: "Ya, hapus",
+      variant: "destructive",
+    });
+    if (!confirmed) return;
+    await deletePackage(id);
   };
 
   // Sync all packages to use the current global price
@@ -106,18 +143,37 @@ export function SubscriptionPackagesManager() {
       return;
     }
 
-    if (!confirm(`${outOfSync.length} paket memiliki harga berbeda dari pengaturan global (${formatCurrency(globalPrice)}/bulan). Sinkronkan semua?`)) {
+    if (
+      !(await confirmDialog({
+        title: "Sinkronkan Harga Paket",
+        description: `${outOfSync.length} paket memiliki harga berbeda dari pengaturan global (${formatCurrency(globalPrice)}/bulan). Sinkronkan semua?`,
+        confirmText: "Ya, sinkronkan",
+      }))
+    ) {
       return;
     }
 
     setIsSyncing(true);
     try {
-      await Promise.all(
-        outOfSync.map(pkg => updatePackage(pkg.id, { base_price_per_month: globalPrice }))
+      await withExponentialBackoff(
+        async () =>
+          withTimeout(
+            Promise.all(
+              outOfSync.map(pkg => updatePackage(pkg.id, { base_price_per_month: globalPrice }))
+            ),
+            OP_TIMEOUT_MS,
+            "Sinkronisasi harga paket terlalu lama",
+          ),
+        {
+          maxRetries: OP_RETRY_MAX,
+          baseDelay: 500,
+          shouldRetry: (err) => isRetryableError(err),
+        },
       );
       toast.success(`${outOfSync.length} paket berhasil disinkronkan`);
-    } catch {
-      toast.error("Gagal menyinkronkan paket");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.billing.packages.sync_all_prices");
+      toast.error(appendErrorReference("Gagal menyinkronkan paket", errorRef));
     } finally {
       setIsSyncing(false);
     }
@@ -129,9 +185,10 @@ export function SubscriptionPackagesManager() {
     return base - discount;
   };
 
-  const calculateWithVat = (subtotal: number) => {
-    const vatAmount = subtotal * (globalVat / 100);
-    return { vatAmount, total: subtotal + vatAmount };
+  const calculateWithTax = (subtotal: number) => {
+    const ppnAmount = subtotal * (globalVat / 100);
+    const pphAmount = subtotal * (globalPph / 100);
+    return { ppnAmount, pphAmount, total: subtotal + ppnAmount + pphAmount };
   };
 
   // Check if any package is out of sync
@@ -148,8 +205,14 @@ export function SubscriptionPackagesManager() {
 
   if (isLoading || isLoadingSettings) {
     return (
-      <div className="flex items-center justify-center h-32">
-        <Loader2 className="h-6 w-6 animate-spin" />
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-10 text-center">
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+        </div>
+        <p className="text-base font-medium text-slate-900">Memuat paket langganan</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Data paket dan konfigurasi billing global sedang disiapkan.
+        </p>
       </div>
     );
   }
@@ -168,6 +231,10 @@ export function SubscriptionPackagesManager() {
               <div>
                 <p className="text-xs text-muted-foreground">PPN</p>
                 <p className="text-lg font-bold">{globalVat}%</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">PPH</p>
+                <p className="text-lg font-bold">{globalPph}%</p>
               </div>
             </div>
             <p className="text-xs text-muted-foreground flex items-center gap-1">
@@ -211,7 +278,9 @@ export function SubscriptionPackagesManager() {
               <TableHead>Harga/Bulan</TableHead>
               <TableHead>Diskon</TableHead>
               <TableHead>Subtotal/Pegawai</TableHead>
-              <TableHead>+ PPN ({globalVat}%)</TableHead>
+              <TableHead>PPN ({globalVat}%)</TableHead>
+              <TableHead>PPH ({globalPph}%)</TableHead>
+              <TableHead>Total/Pegawai</TableHead>
               <TableHead>Target</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="w-[100px]">Aksi</TableHead>
@@ -220,14 +289,22 @@ export function SubscriptionPackagesManager() {
           <TableBody>
             {packages.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center text-muted-foreground">
-                  Belum ada paket langganan
+                <TableCell colSpan={11} className="py-10">
+                  <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
+                    <div className="rounded-full bg-slate-100 p-3">
+                      <Package className="h-5 w-5 text-slate-500" />
+                    </div>
+                    <p className="text-base font-medium text-slate-800">Belum ada paket langganan</p>
+                    <p className="text-sm text-muted-foreground">
+                      Tambahkan paket baru agar organisasi bisa membuat invoice dari penawaran.
+                    </p>
+                  </div>
                 </TableCell>
               </TableRow>
             ) : (
               paginatedPackages.map((pkg) => {
                 const subtotal = calculateSubtotal(pkg);
-                const { total } = calculateWithVat(subtotal);
+                const { ppnAmount, pphAmount, total } = calculateWithTax(subtotal);
                 const isOutOfSync = pkg.base_price_per_month !== globalPrice;
 
                 return (
@@ -253,6 +330,12 @@ export function SubscriptionPackagesManager() {
                     </TableCell>
                     <TableCell className="font-medium">
                       {formatCurrency(subtotal)}
+                    </TableCell>
+                    <TableCell className="font-medium text-blue-600">
+                      {formatCurrency(ppnAmount)}
+                    </TableCell>
+                    <TableCell className="font-medium text-indigo-600">
+                      {formatCurrency(pphAmount)}
                     </TableCell>
                     <TableCell className="font-bold text-primary">
                       {formatCurrency(total)}
@@ -443,11 +526,15 @@ export function SubscriptionPackagesManager() {
                   </div>
                   <div className="flex justify-between text-sm text-blue-600">
                     <span>PPN {globalVat}%</span>
-                    <span>+{formatCurrency(calculateWithVat(calculateSubtotal(editingPackage)).vatAmount)}</span>
+                    <span>+{formatCurrency(calculateWithTax(calculateSubtotal(editingPackage)).ppnAmount)}</span>
+                  </div>
+                  <div className="flex justify-between text-sm text-indigo-600">
+                    <span>PPH {globalPph}%</span>
+                    <span>+{formatCurrency(calculateWithTax(calculateSubtotal(editingPackage)).pphAmount)}</span>
                   </div>
                   <div className="border-t pt-1 flex justify-between">
                     <span className="font-semibold">Total/pegawai</span>
-                    <span className="text-lg font-bold">{formatCurrency(calculateWithVat(calculateSubtotal(editingPackage)).total)}</span>
+                    <span className="text-lg font-bold">{formatCurrency(calculateWithTax(calculateSubtotal(editingPackage)).total)}</span>
                   </div>
                   <p className="text-xs text-muted-foreground text-right">
                     untuk {editingPackage.duration_months || 1} bulan

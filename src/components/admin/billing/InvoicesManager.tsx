@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useInvoices, Invoice } from "@/hooks/useBilling";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,10 +35,28 @@ import {
   Loader2, 
   ExternalLink,
   FileText,
-  Building2
+  Building2,
+  AlertTriangle
 } from "lucide-react";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
+import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
+
+type InvoicesFilterMode = "all" | "invalid_number";
+
+interface InvoicesManagerProps {
+  filterMode?: InvoicesFilterMode;
+  onClearFilterMode?: () => void;
+}
+
+const INVOICE_NUMBER_PATTERN = /^INV-\d{6}-\d{4,}$/;
+
+const isInvoiceNumberValid = (invoiceNumber: string | null | undefined): boolean => {
+  if (!invoiceNumber) return false;
+  return INVOICE_NUMBER_PATTERN.test(invoiceNumber.trim());
+};
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat("id-ID", {
@@ -51,6 +69,10 @@ const formatCurrency = (amount: number) => {
 const statusColors: Record<string, string> = {
   PENDING: "bg-yellow-100 text-yellow-800",
   AWAITING_VERIFICATION: "bg-blue-100 text-blue-800",
+  AWAITING_VERIFICATION_FULL: "bg-blue-100 text-blue-800",
+  PENDING_VERIFICATION_PARTIAL: "bg-indigo-100 text-indigo-800",
+  PARTIALLY_PAID: "bg-indigo-100 text-indigo-800",
+  REJECTED_NEEDS_REVISION: "bg-red-100 text-red-800",
   PAID: "bg-green-100 text-green-800",
   EXPIRED: "bg-gray-100 text-gray-800",
   CANCELLED: "bg-red-100 text-red-800",
@@ -60,13 +82,18 @@ const statusColors: Record<string, string> = {
 const statusLabels: Record<string, string> = {
   PENDING: "Menunggu",
   AWAITING_VERIFICATION: "Verifikasi",
+  AWAITING_VERIFICATION_FULL: "Verifikasi Penuh",
+  PENDING_VERIFICATION_PARTIAL: "Verifikasi Parsial",
+  PARTIALLY_PAID: "Cicilan Aktif",
+  REJECTED_NEEDS_REVISION: "Ditolak - Revisi",
   PAID: "Lunas",
   EXPIRED: "Kedaluwarsa",
   CANCELLED: "Dibatalkan",
   REFUNDED: "Refund",
 };
 
-export function InvoicesManager() {
+export function InvoicesManager({ filterMode = "all", onClearFilterMode }: InvoicesManagerProps) {
+  const VERIFY_TIMEOUT_MS = 12000;
   const ITEMS_PER_PAGE = 10;
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -81,15 +108,23 @@ export function InvoicesManager() {
   const [rejectionReason, setRejectionReason] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
 
-  const filteredInvoices = invoices.filter((inv) => {
-    if (!searchQuery) return true;
-    const query = searchQuery.toLowerCase();
-    return (
-      inv.invoice_number.toLowerCase().includes(query) ||
-      inv.tenant?.name?.toLowerCase().includes(query) ||
-      inv.tenant?.code?.toLowerCase().includes(query)
-    );
-  });
+  const filteredInvoices = useMemo(
+    () =>
+      invoices.filter((inv) => {
+        if (filterMode === "invalid_number" && isInvoiceNumberValid(inv.invoice_number)) {
+          return false;
+        }
+
+        if (!searchQuery) return true;
+        const query = searchQuery.toLowerCase();
+        return (
+          (inv.invoice_number || "").toLowerCase().includes(query) ||
+          inv.tenant?.name?.toLowerCase().includes(query) ||
+          inv.tenant?.code?.toLowerCase().includes(query)
+        );
+      }),
+    [filterMode, invoices, searchQuery],
+  );
   const totalPages = Math.max(1, Math.ceil(filteredInvoices.length / ITEMS_PER_PAGE));
   const paginatedInvoices = filteredInvoices.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
@@ -99,6 +134,12 @@ export function InvoicesManager() {
   useEffect(() => {
     setCurrentPage(1);
   }, [searchQuery, statusFilter, invoices.length]);
+
+  useEffect(() => {
+    if (filterMode === "invalid_number" && statusFilter !== "all") {
+      setStatusFilter("all");
+    }
+  }, [filterMode, statusFilter]);
 
   const handleViewDetail = (invoice: Invoice) => {
     setSelectedInvoice(invoice);
@@ -115,9 +156,19 @@ export function InvoicesManager() {
     if (!selectedInvoice) return;
     setIsProcessing(true);
     try {
-      await verifyPayment(selectedInvoice.id, approved, approved ? undefined : rejectionReason);
+      await withTimeout(
+        verifyPayment(selectedInvoice.id, approved, approved ? undefined : rejectionReason),
+        VERIFY_TIMEOUT_MS,
+        "Memproses verifikasi invoice terlalu lama",
+      );
       setShowVerifyDialog(false);
       setSelectedInvoice(null);
+    } catch (error) {
+      const errorRef = reportError(error, "admin.billing.invoices.verify_payment", {
+        invoice_id: selectedInvoice.id,
+        approved,
+      });
+      toast.error(appendErrorReference("Gagal memproses verifikasi invoice.", errorRef));
     } finally {
       setIsProcessing(false);
     }
@@ -125,8 +176,14 @@ export function InvoicesManager() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-32">
-        <Loader2 className="h-6 w-6 animate-spin" />
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-10 text-center">
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+        </div>
+        <p className="text-base font-medium text-slate-900">Memuat daftar invoice</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Data tagihan organisasi sedang disiapkan. Mohon tunggu sebentar.
+        </p>
       </div>
     );
   }
@@ -152,12 +209,26 @@ export function InvoicesManager() {
             <SelectItem value="all">Semua Status</SelectItem>
             <SelectItem value="PENDING">Menunggu</SelectItem>
             <SelectItem value="AWAITING_VERIFICATION">Perlu Verifikasi</SelectItem>
+            <SelectItem value="AWAITING_VERIFICATION_FULL">Verifikasi Penuh</SelectItem>
+            <SelectItem value="PENDING_VERIFICATION_PARTIAL">Verifikasi Parsial</SelectItem>
+            <SelectItem value="PARTIALLY_PAID">Cicilan Aktif</SelectItem>
+            <SelectItem value="REJECTED_NEEDS_REVISION">Ditolak - Revisi</SelectItem>
             <SelectItem value="PAID">Lunas</SelectItem>
             <SelectItem value="EXPIRED">Kedaluwarsa</SelectItem>
             <SelectItem value="CANCELLED">Dibatalkan</SelectItem>
           </SelectContent>
         </Select>
       </div>
+
+      {filterMode === "invalid_number" && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          <AlertTriangle className="h-4 w-4" />
+          Menampilkan hanya invoice dengan format nomor faktur tidak valid.
+          <Button variant="link" className="h-auto p-0 text-red-700" onClick={onClearFilterMode}>
+            Tampilkan semua
+          </Button>
+        </div>
+      )}
 
       {/* Table */}
       <Card>
@@ -177,14 +248,30 @@ export function InvoicesManager() {
           <TableBody>
             {filteredInvoices.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center text-muted-foreground">
-                  Tidak ada invoice ditemukan
+                <TableCell colSpan={8} className="py-10">
+                  <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
+                    <div className="rounded-full bg-slate-100 p-3">
+                      <Search className="h-5 w-5 text-slate-500" />
+                    </div>
+                    <p className="text-base font-medium text-slate-800">
+                      {filterMode === "invalid_number"
+                        ? "Tidak ada invoice dengan format nomor faktur tidak valid"
+                        : "Tidak ada invoice ditemukan"}
+                    </p>
+                    <p className="text-sm text-muted-foreground">
+                      Ubah filter status, kata kunci pencarian, atau cek periode data invoice.
+                    </p>
+                  </div>
                 </TableCell>
               </TableRow>
             ) : (
               paginatedInvoices.map((invoice) => (
                 <TableRow key={invoice.id}>
-                  <TableCell className="font-mono text-sm">{invoice.invoice_number}</TableCell>
+                  <TableCell className="font-mono text-sm">
+                    <span className={!isInvoiceNumberValid(invoice.invoice_number) ? "text-red-700 font-semibold" : undefined}>
+                      {invoice.invoice_number}
+                    </span>
+                  </TableCell>
                   <TableCell>
                     <div>
                       <p className="font-medium">{invoice.tenant?.name || "-"}</p>
@@ -325,8 +412,16 @@ export function InvoicesManager() {
                     </div>
                   )}
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">PPN ({selectedInvoice.vat_percentage}%)</span>
-                    <span>{formatCurrency(selectedInvoice.vat_amount)}</span>
+                    <span className="text-muted-foreground">
+                      PPN ({selectedInvoice.ppn_percentage ?? 11}%)
+                    </span>
+                    <span>{formatCurrency(selectedInvoice.ppn_amount ?? selectedInvoice.vat_amount)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">
+                      PPH ({selectedInvoice.pph_percentage ?? 0}%)
+                    </span>
+                    <span>{formatCurrency(selectedInvoice.pph_amount ?? 0)}</span>
                   </div>
                   {selectedInvoice.xendit_fee > 0 && (
                     <div className="flex justify-between">

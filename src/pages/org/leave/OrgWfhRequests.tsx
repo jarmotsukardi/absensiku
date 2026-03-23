@@ -26,6 +26,9 @@ import type { Tables } from "@/integrations/supabase/types";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { logAuditIfEnabled } from "@/lib/auditLoggingPolicy";
+import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 type WfhRequest = Tables<"wfh_requests"> & {
   employees: {
@@ -37,8 +40,11 @@ type WfhRequest = Tables<"wfh_requests"> & {
 
 export default function OrgWfhRequests() {
   const PAGE_SIZE = 20;
+  const WFH_REQUEST_QUERY_TIMEOUT_MS = 15000;
+  const WFH_REQUEST_QUERY_RETRY_MAX = 1;
   const [requests, setRequests] = useState<WfhRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [user, setUser] = useState<User | null>(null);
   const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -55,45 +61,76 @@ export default function OrgWfhRequests() {
 
   const { employee } = useEmployee(user);
 
-  useEffect(() => {
-    const initTenant = async () => {
-      try {
-        setTenantId(await resolveOrgTenantId());
-        setLoadError(null);
-      } catch (error) {
-        const errorRef = reportError(error, "org.wfh_requests.resolve_tenant");
-        const message = appendErrorReference("Gagal menentukan tenant organisasi", errorRef);
-        setLoadError(message);
-        toast.error(message);
-        setTenantId(null);
-      }
-    };
-    void initTenant();
+  const initializeTenant = useCallback(async () => {
+    try {
+      const resolvedTenantId = await withTimeout(
+        resolveOrgTenantId(),
+        WFH_REQUEST_QUERY_TIMEOUT_MS,
+        "org.wfh_requests.resolve_tenant timeout",
+      );
+      setTenantId(resolvedTenantId);
+      setLoadError(null);
+    } catch (error) {
+      const errorRef = reportError(error, "org.wfh_requests.resolve_tenant");
+      const message = appendErrorReference("Gagal menentukan tenant organisasi", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setTenantId(null);
+    }
   }, []);
+
+  useEffect(() => {
+    void initializeTenant();
+  }, [initializeTenant]);
 
   const fetchRequests = useCallback(async () => {
     setIsLoading(true);
     try {
       setLoadError(null);
+      setIsRetrying(false);
       if (!tenantId) {
         setRequests([]);
         setTotalCount(0);
         return;
       }
 
-      const employeeIds = await getTenantEmployeeIds(tenantId);
+      const employeeIds = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            getTenantEmployeeIds(tenantId),
+            WFH_REQUEST_QUERY_TIMEOUT_MS,
+            "org.wfh_requests.fetch.employee_ids timeout",
+          ),
+        {
+          maxRetries: WFH_REQUEST_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (employeeIds.length === 0) {
         setRequests([]);
         setTotalCount(0);
         return;
       }
 
-      const { data, error, count } = await supabase
-        .from("wfh_requests")
-        .select("*, employees!wfh_requests_employee_id_fkey(name, nip, opd(name, code))", { count: "exact" })
-        .in("employee_id", employeeIds)
-        .order("created_at", { ascending: false })
-        .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
+      const { data, error, count } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("wfh_requests")
+              .select("*, employees!wfh_requests_employee_id_fkey(name, nip, opd(name, code))", { count: "exact" })
+              .in("employee_id", employeeIds)
+              .order("created_at", { ascending: false })
+              .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1),
+            WFH_REQUEST_QUERY_TIMEOUT_MS,
+            "org.wfh_requests.fetch.query timeout",
+          ),
+        {
+          maxRetries: WFH_REQUEST_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       
       if (error) throw error;
 
@@ -111,6 +148,7 @@ export default function OrgWfhRequests() {
       setTotalCount(0);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   }, [currentPage, tenantId]);
 
@@ -127,12 +165,39 @@ export default function OrgWfhRequests() {
     if (!employee?.id) return;
     setIsSubmitting(true);
     try {
+      const targetRequest = requests.find((item) => item.id === id) || null;
       const { error } = await supabase
         .from("wfh_requests")
         .update({ status: "disetujui", approved_by: employee.id, approved_at: new Date().toISOString() })
         .eq("id", id);
 
       if (error) throw error;
+
+      if (tenantId && targetRequest) {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        await logAuditIfEnabled({
+          tenantId,
+          payload: {
+            tenant_id: tenantId,
+            employee_id: targetRequest.employee_id,
+            user_id: user?.id || null,
+            table_name: "wfh_requests",
+            action: "wfh_request_approved",
+            record_id: targetRequest.id,
+            old_values: {
+              status: targetRequest.status,
+              request_date: targetRequest.request_date,
+            },
+            new_values: {
+              status: "disetujui",
+              request_date: targetRequest.request_date,
+              approved_by: employee.id,
+            },
+          },
+        });
+      }
 
       toast.success("Pengajuan WFH disetujui");
       void fetchRequests();
@@ -148,12 +213,40 @@ export default function OrgWfhRequests() {
     if (!employee?.id || !selectedRequest) return;
     setIsSubmitting(true);
     try {
+      const targetRequest = requests.find((item) => item.id === selectedRequest) || null;
       const { error } = await supabase
         .from("wfh_requests")
         .update({ status: "ditolak", approved_by: employee.id, approved_at: new Date().toISOString(), rejection_reason: rejectionReason })
         .eq("id", selectedRequest);
 
       if (error) throw error;
+
+      if (tenantId && targetRequest) {
+        const {
+          data: { user },
+        } = await supabase.auth.getUser();
+        await logAuditIfEnabled({
+          tenantId,
+          payload: {
+            tenant_id: tenantId,
+            employee_id: targetRequest.employee_id,
+            user_id: user?.id || null,
+            table_name: "wfh_requests",
+            action: "wfh_request_rejected",
+            record_id: targetRequest.id,
+            old_values: {
+              status: targetRequest.status,
+              request_date: targetRequest.request_date,
+            },
+            new_values: {
+              status: "ditolak",
+              request_date: targetRequest.request_date,
+              approved_by: employee.id,
+              rejection_reason: rejectionReason,
+            },
+          },
+        });
+      }
 
       toast.success("Pengajuan WFH ditolak");
       setRejectDialogOpen(false);
@@ -164,6 +257,13 @@ export default function OrgWfhRequests() {
       toast.error(appendErrorReference("Gagal menolak pengajuan WFH", errorRef));
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleRetryLoad = async () => {
+    await initializeTenant();
+    if (tenantId) {
+      await fetchRequests();
     }
   };
 
@@ -183,18 +283,27 @@ export default function OrgWfhRequests() {
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2"><Home className="h-6 w-6" />Pengajuan WFH</h1>
-          <p className="text-muted-foreground">Kelola pengajuan work from home pegawai</p>
+          <p className="text-muted-foreground">Kelola data pengajuan WFH pegawai</p>
         </div>
+        <LeaveRequestTabs />
 
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button size="sm" variant="outline" onClick={handleRetryLoad} className="border-destructive/30 text-destructive hover:bg-destructive/10">
+              Coba Lagi
+            </Button>
+          </div>
+        )}
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            Sedang mencoba ulang koneksi data...
           </div>
         )}
 
         <Card>
           <CardHeader>
-            <CardTitle>Daftar Pengajuan</CardTitle>
+            <CardTitle>Daftar Pengajuan WFH</CardTitle>
             <CardDescription>Total {totalCount} pengajuan WFH</CardDescription>
           </CardHeader>
           <CardContent>

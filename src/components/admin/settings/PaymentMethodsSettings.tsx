@@ -8,6 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { toast } from "sonner";
 import { Loader2, Save, CreditCard, Plus, Trash2, X } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 // Default Xendit payment method logos with reliable CDN URLs
 const xenditPaymentMethods = {
@@ -90,17 +92,23 @@ export function PaymentMethodsSettings() {
 
   const fetchSettings = async () => {
     try {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "xendit_payment_methods_settings")
-        .maybeSingle();
+      const { data } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "xendit_payment_methods_settings")
+            .maybeSingle(),
+        10000,
+        "Load payment methods settings timeout"
+      );
 
       if (data?.value) {
         setConfig({ ...defaultConfig, ...(data.value as Partial<PaymentMethodsConfig>) });
       }
     } catch (error) {
-      console.error("Error:", error);
+      const errorRef = reportError(error, "admin.settings.payment_methods.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan metode pembayaran", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -111,30 +119,47 @@ export function PaymentMethodsSettings() {
     try {
       const configValue = JSON.parse(JSON.stringify(config));
       
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "xendit_payment_methods_settings")
-        .maybeSingle();
+      const { data: existing } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("id")
+            .eq("key", "xendit_payment_methods_settings")
+            .maybeSingle(),
+        10000,
+        "Load payment methods existing setting timeout"
+      );
 
       if (existing) {
-        await supabase
-          .from("system_settings")
-          .update({ value: configValue, updated_at: new Date().toISOString() })
-          .eq("key", "xendit_payment_methods_settings");
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .update({ value: configValue, updated_at: new Date().toISOString() })
+              .eq("key", "xendit_payment_methods_settings"),
+          10000,
+          "Update payment methods settings timeout"
+        );
+        if (error) throw error;
       } else {
-        await supabase
-          .from("system_settings")
-          .insert([{
-            key: "xendit_payment_methods_settings",
-            value: configValue,
-            description: "Pengaturan metode pembayaran Xendit",
-          }]);
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .insert([{
+                key: "xendit_payment_methods_settings",
+                value: configValue,
+                description: "Pengaturan metode pembayaran Xendit",
+              }]),
+          10000,
+          "Insert payment methods settings timeout"
+        );
+        if (error) throw error;
       }
       toast.success("Pengaturan berhasil disimpan");
     } catch (err) {
-      console.error(err);
-      toast.error("Gagal menyimpan");
+      const errorRef = reportError(err, "admin.settings.payment_methods.save");
+      toast.error(appendErrorReference("Gagal menyimpan", errorRef));
     } finally {
       setIsSaving(false);
     }

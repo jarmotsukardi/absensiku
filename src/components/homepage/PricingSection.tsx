@@ -141,7 +141,7 @@ export function PricingSection({
             return (
               <Card
                 key={plan.id}
-                className={`relative h-full overflow-hidden transition-all duration-300 hover:-translate-y-1 ${
+                className={`relative h-full overflow-hidden transition-all duration-300 hover:-translate-y-1 flex flex-col ${
                   plan.is_popular
                     ? "border-2 border-accent shadow-lg scale-[1.02]"
                     : "border-border/50 hover:shadow-md"

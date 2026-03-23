@@ -1,5 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { isFaqVisibleToPublic } from "@/lib/faqAudience";
+import type { FaqAudience } from "@/lib/faqAudience";
 import { getHomepageSectionOrder, isHomepageSectionEnabled } from "@/lib/homepageLayout";
 import { mapSubscriptionPackagesToPricingPlans } from "@/lib/pricingPlans";
 
@@ -101,6 +103,7 @@ interface FAQ {
   answer: string;
   category: string;
   sort_order: number;
+  audience?: FaqAudience;
 }
 
 interface Testimonial {
@@ -392,11 +395,19 @@ export function useHomepageData() {
               break;
             case "faq_settings":
               if (Array.isArray(setting.value)) {
-                setFaqs((setting.value as unknown as FAQ[]).sort((a, b) => a.sort_order - b.sort_order));
+                setFaqs(
+                  (setting.value as unknown as FAQ[])
+                    .filter(isPublicAudienceFaq)
+                    .sort((a, b) => a.sort_order - b.sort_order),
+                );
               } else if (setting.value && typeof setting.value === "object" && !Array.isArray(setting.value)) {
                 const faqValue = setting.value as { items?: unknown };
                 if (Array.isArray(faqValue.items)) {
-                  setFaqs((faqValue.items as FAQ[]).sort((a, b) => a.sort_order - b.sort_order));
+                  setFaqs(
+                    (faqValue.items as FAQ[])
+                      .filter(isPublicAudienceFaq)
+                      .sort((a, b) => a.sort_order - b.sort_order),
+                  );
                 }
               }
               break;
@@ -543,4 +554,12 @@ export type {
   CTASettings,
   FooterSettings,
   Article,
+};
+const isPublicAudienceFaq = (faq: FAQ): boolean => {
+  return isFaqVisibleToPublic({
+    audience: faq.audience,
+    category: faq.category,
+    question: faq.question,
+    answer: faq.answer,
+  });
 };

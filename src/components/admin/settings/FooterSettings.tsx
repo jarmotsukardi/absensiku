@@ -7,6 +7,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Loader2, Save, Plus, Trash2, Facebook, Instagram, Youtube, Linkedin, MessageCircle, Send } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface FooterLink {
   id: string;
@@ -72,17 +74,23 @@ export function FooterSettings() {
 
   const fetchSettings = async () => {
     try {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "footer_settings")
-        .maybeSingle();
+      const { data } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "footer_settings")
+            .maybeSingle(),
+        10000,
+        "Load footer settings timeout"
+      );
 
       if (data?.value) {
         setSettings({ ...defaultSettings, ...(data.value as Record<string, unknown>) });
       }
     } catch (error) {
-      console.error("Error:", error);
+      const errorRef = reportError(error, "admin.settings.footer.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan footer", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -91,28 +99,46 @@ export function FooterSettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "footer_settings")
-        .maybeSingle();
+      const { data: existing } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("id")
+            .eq("key", "footer_settings")
+            .maybeSingle(),
+        10000,
+        "Load footer existing setting timeout"
+      );
 
       const jsonValue = JSON.parse(JSON.stringify(settings));
 
       if (existing) {
-        await supabase
-          .from("system_settings")
-          .update({ value: jsonValue, updated_at: new Date().toISOString() })
-          .eq("key", "footer_settings");
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .update({ value: jsonValue, updated_at: new Date().toISOString() })
+              .eq("key", "footer_settings"),
+          10000,
+          "Update footer settings timeout"
+        );
+        if (error) throw error;
       } else {
-        await supabase
-          .from("system_settings")
-          .insert({ key: "footer_settings", value: jsonValue });
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .insert({ key: "footer_settings", value: jsonValue }),
+          10000,
+          "Insert footer settings timeout"
+        );
+        if (error) throw error;
       }
       
       toast.success("Pengaturan footer berhasil disimpan");
-    } catch (err) {
-      toast.error("Gagal menyimpan pengaturan");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.footer.save");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan", errorRef));
     } finally {
       setIsSaving(false);
     }

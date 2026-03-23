@@ -32,6 +32,7 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 interface TableStats {
   name: string;
@@ -65,12 +66,15 @@ const TABLES_PER_PAGE = 10;
 const SETTINGS_PER_PAGE = 10;
 
 export default function DatabaseManagement({ embedded = false }: { embedded?: boolean }) {
+  const ADMIN_DATABASE_QUERY_TIMEOUT_MS = 15000;
+  const ADMIN_DATABASE_QUERY_RETRY_MAX = 1;
   const [tableStats, setTableStats] = useState<TableStats[]>([]);
   const [systemSettings, setSystemSettings] = useState<SystemSetting[]>([]);
   const [autoFixOffices, setAutoFixOffices] = useState<AutoFixOffice[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("overview");
+  const [isRetrying, setIsRetrying] = useState(false);
   const [tablesPage, setTablesPage] = useState(1);
   const [settingsPage, setSettingsPage] = useState(1);
   const [resolvingOfficeId, setResolvingOfficeId] = useState<string | null>(null);
@@ -81,6 +85,7 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
     setIsLoading(true);
     
     try {
+      setIsRetrying(false);
       setLoadError(null);
       const [
         tenantsRes,
@@ -93,15 +98,42 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
         auditLogsRes,
         notificationsRes,
       ] = await Promise.all([
-        supabase.from('tenants').select('id', { count: 'exact', head: true }),
-        supabase.from('employees').select('id', { count: 'exact', head: true }),
-        supabase.from('offices').select('id', { count: 'exact', head: true }),
-        supabase.from('attendance_records_partitioned').select('id', { count: 'exact', head: true }),
-        supabase.from('leave_requests').select('id', { count: 'exact', head: true }),
-        supabase.from('user_roles').select('id', { count: 'exact', head: true }),
-        supabase.from('holidays').select('id', { count: 'exact', head: true }),
-        supabase.from('audit_logs').select('id', { count: 'exact', head: true }),
-        supabase.from('notifications').select('id', { count: 'exact', head: true }),
+        withExponentialBackoff(
+          () => withTimeout(supabase.from('tenants').select('id', { count: 'exact', head: true }), ADMIN_DATABASE_QUERY_TIMEOUT_MS, "admin.database.fetch_table_stats.tenants timeout"),
+          { maxRetries: ADMIN_DATABASE_QUERY_RETRY_MAX, shouldRetry: isRetryableError, onRetry: () => setIsRetrying(true) },
+        ),
+        withExponentialBackoff(
+          () => withTimeout(supabase.from('employees').select('id', { count: 'exact', head: true }), ADMIN_DATABASE_QUERY_TIMEOUT_MS, "admin.database.fetch_table_stats.employees timeout"),
+          { maxRetries: ADMIN_DATABASE_QUERY_RETRY_MAX, shouldRetry: isRetryableError, onRetry: () => setIsRetrying(true) },
+        ),
+        withExponentialBackoff(
+          () => withTimeout(supabase.from('offices').select('id', { count: 'exact', head: true }), ADMIN_DATABASE_QUERY_TIMEOUT_MS, "admin.database.fetch_table_stats.offices timeout"),
+          { maxRetries: ADMIN_DATABASE_QUERY_RETRY_MAX, shouldRetry: isRetryableError, onRetry: () => setIsRetrying(true) },
+        ),
+        withExponentialBackoff(
+          () => withTimeout(supabase.from('attendance_records_partitioned').select('id', { count: 'exact', head: true }), ADMIN_DATABASE_QUERY_TIMEOUT_MS, "admin.database.fetch_table_stats.attendance timeout"),
+          { maxRetries: ADMIN_DATABASE_QUERY_RETRY_MAX, shouldRetry: isRetryableError, onRetry: () => setIsRetrying(true) },
+        ),
+        withExponentialBackoff(
+          () => withTimeout(supabase.from('leave_requests').select('id', { count: 'exact', head: true }), ADMIN_DATABASE_QUERY_TIMEOUT_MS, "admin.database.fetch_table_stats.leave_requests timeout"),
+          { maxRetries: ADMIN_DATABASE_QUERY_RETRY_MAX, shouldRetry: isRetryableError, onRetry: () => setIsRetrying(true) },
+        ),
+        withExponentialBackoff(
+          () => withTimeout(supabase.from('user_roles').select('id', { count: 'exact', head: true }), ADMIN_DATABASE_QUERY_TIMEOUT_MS, "admin.database.fetch_table_stats.user_roles timeout"),
+          { maxRetries: ADMIN_DATABASE_QUERY_RETRY_MAX, shouldRetry: isRetryableError, onRetry: () => setIsRetrying(true) },
+        ),
+        withExponentialBackoff(
+          () => withTimeout(supabase.from('holidays').select('id', { count: 'exact', head: true }), ADMIN_DATABASE_QUERY_TIMEOUT_MS, "admin.database.fetch_table_stats.holidays timeout"),
+          { maxRetries: ADMIN_DATABASE_QUERY_RETRY_MAX, shouldRetry: isRetryableError, onRetry: () => setIsRetrying(true) },
+        ),
+        withExponentialBackoff(
+          () => withTimeout(supabase.from('audit_logs').select('id', { count: 'exact', head: true }), ADMIN_DATABASE_QUERY_TIMEOUT_MS, "admin.database.fetch_table_stats.audit_logs timeout"),
+          { maxRetries: ADMIN_DATABASE_QUERY_RETRY_MAX, shouldRetry: isRetryableError, onRetry: () => setIsRetrying(true) },
+        ),
+        withExponentialBackoff(
+          () => withTimeout(supabase.from('notifications').select('id', { count: 'exact', head: true }), ADMIN_DATABASE_QUERY_TIMEOUT_MS, "admin.database.fetch_table_stats.notifications timeout"),
+          { maxRetries: ADMIN_DATABASE_QUERY_RETRY_MAX, shouldRetry: isRetryableError, onRetry: () => setIsRetrying(true) },
+        ),
       ]);
 
       const responses = [
@@ -137,15 +169,29 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
       toast.error(message);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   }, []);
 
   const fetchSystemSettings = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from('system_settings')
-        .select('*')
-        .order('key');
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from('system_settings')
+              .select('*')
+              .order('key'),
+            ADMIN_DATABASE_QUERY_TIMEOUT_MS,
+            "admin.database.fetch_system_settings timeout",
+          ),
+        {
+          maxRetries: ADMIN_DATABASE_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
       if (data) {
@@ -160,17 +206,32 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
       setLoadError((prev) => prev ?? message);
       setSystemSettings([]);
       toast.error(message);
+    } finally {
+      setIsRetrying(false);
     }
   }, []);
 
   const fetchAutoFixOffices = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("offices")
-        .select("id,name,address,latitude,longitude,updated_at,tenant:tenants(name,code)")
-        .or("name.ilike.[AUTO-FIX]%,address.ilike.%autogenerated for data consistency%")
-        .order("updated_at", { ascending: false })
-        .limit(20);
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("offices")
+              .select("id,name,address,latitude,longitude,updated_at,tenant:tenants(name,code)")
+              .or("name.ilike.[AUTO-FIX]%,address.ilike.%autogenerated for data consistency%")
+              .order("updated_at", { ascending: false })
+              .limit(20),
+            ADMIN_DATABASE_QUERY_TIMEOUT_MS,
+            "admin.database.fetch_auto_fix_offices timeout",
+          ),
+        {
+          maxRetries: ADMIN_DATABASE_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
 
@@ -193,6 +254,8 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
       setLoadError((prev) => prev ?? message);
       setAutoFixOffices([]);
       toast.error(message);
+    } finally {
+      setIsRetrying(false);
     }
   }, []);
 
@@ -209,20 +272,33 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
 
     setResolvingOfficeId(office.id);
     try {
+      setIsRetrying(false);
       const cleanedName = office.name.replace(/^\[AUTO-FIX\]\s*/i, "").trim();
       const cleanedAddress = (office.address || "")
         .replace(/\s*\(perlu update koordinat real\)\s*/gi, " ")
         .replace(/Default office autogenerated for data consistency/gi, "")
         .trim();
 
-      const { error } = await supabase
-        .from("offices")
-        .update({
-          name: cleanedName || office.name,
-          address: cleanedAddress || null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", office.id);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("offices")
+              .update({
+                name: cleanedName || office.name,
+                address: cleanedAddress || null,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", office.id),
+            ADMIN_DATABASE_QUERY_TIMEOUT_MS,
+            "admin.database.auto_fix.resolve_one timeout",
+          ),
+        {
+          maxRetries: ADMIN_DATABASE_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
 
@@ -233,6 +309,7 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
       toast.error(appendErrorReference("Gagal menandai data auto-fix sebagai selesai", errorRef));
     } finally {
       setResolvingOfficeId(null);
+      setIsRetrying(false);
     }
   };
 
@@ -248,6 +325,7 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
 
     setIsResolvingBulk(true);
     try {
+      setIsRetrying(false);
       for (const office of validOffices) {
         const cleanedName = office.name.replace(/^\[AUTO-FIX\]\s*/i, "").trim();
         const cleanedAddress = (office.address || "")
@@ -255,14 +333,26 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
           .replace(/Default office autogenerated for data consistency/gi, "")
           .trim();
 
-        const { error } = await supabase
-          .from("offices")
-          .update({
-            name: cleanedName || office.name,
-            address: cleanedAddress || null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", office.id);
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("offices")
+                .update({
+                  name: cleanedName || office.name,
+                  address: cleanedAddress || null,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", office.id),
+              ADMIN_DATABASE_QUERY_TIMEOUT_MS,
+              "admin.database.auto_fix.resolve_bulk_row timeout",
+            ),
+          {
+            maxRetries: ADMIN_DATABASE_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
 
         if (error) throw error;
       }
@@ -276,6 +366,7 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
       toast.error(appendErrorReference("Gagal menandai data auto-fix secara massal", errorRef));
     } finally {
       setIsResolvingBulk(false);
+      setIsRetrying(false);
     }
   };
 
@@ -357,10 +448,23 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
     const jsonValue = isNaN(Number(value)) ? `"${value}"` : value;
 
     try {
-      const { error } = await supabase
-        .from('system_settings')
-        .update({ value: JSON.parse(jsonValue), updated_at: new Date().toISOString() })
-        .eq('key', key);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from('system_settings')
+              .update({ value: JSON.parse(jsonValue), updated_at: new Date().toISOString() })
+              .eq('key', key),
+            ADMIN_DATABASE_QUERY_TIMEOUT_MS,
+            "admin.database.update_system_setting timeout",
+          ),
+        {
+          maxRetries: ADMIN_DATABASE_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
       toast.success("Pengaturan berhasil diperbarui");
@@ -368,6 +472,8 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
     } catch (error: unknown) {
       const errorRef = reportError(error, "admin.database.system_settings.update", { key });
       toast.error(appendErrorReference("Gagal memperbarui pengaturan", errorRef));
+    } finally {
+      setIsRetrying(false);
     }
   };
 
@@ -376,10 +482,23 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
 
     try {
       // Simplified export - in real app would use proper export logic
-      const { data, error } = await supabase
-        .from(tableName as 'tenants')
-        .select('*')
-        .limit(1000);
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from(tableName as 'tenants')
+              .select('*')
+              .limit(1000),
+            ADMIN_DATABASE_QUERY_TIMEOUT_MS,
+            "admin.database.export_table timeout",
+          ),
+        {
+          maxRetries: ADMIN_DATABASE_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       if (error) throw error;
       if (!data) {
@@ -398,6 +517,8 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
     } catch (error: unknown) {
       const errorRef = reportError(error, "admin.database.export_table", { table_name: tableName });
       toast.error(appendErrorReference(`Gagal mengekspor data ${tableName}`, errorRef));
+    } finally {
+      setIsRetrying(false);
     }
   };
 
@@ -440,27 +561,48 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
   const content = (
     <>
       <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-        {loadError && (
-          <Card className="border-destructive/30 bg-destructive/5">
-            <CardContent className="pt-6 text-sm text-destructive">
-              {loadError}
+        {isRetrying && (
+          <Card className="border-amber-300/60 bg-amber-50">
+            <CardContent className="pt-4 text-sm text-amber-800">
+              Sedang mencoba ulang koneksi data database...
             </CardContent>
           </Card>
         )}
-        <TabsList>
-          <TabsTrigger value="overview">
-            <Database className="h-4 w-4 mr-2" />
-            Overview
-          </TabsTrigger>
-          <TabsTrigger value="tables">
-            <Table2 className="h-4 w-4 mr-2" />
-            Tabel
-          </TabsTrigger>
-          <TabsTrigger value="settings">
-            <Settings className="h-4 w-4 mr-2" />
-            Pengaturan Sistem
-          </TabsTrigger>
-        </TabsList>
+        {loadError && (
+          <Card className="border-destructive/30 bg-destructive/5">
+            <CardContent className="pt-6 text-sm text-destructive">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <span>{loadError}</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    void Promise.all([fetchTableStats(), fetchSystemSettings(), fetchAutoFixOffices()]);
+                  }}
+                >
+                  Coba Lagi
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        <div className="overflow-x-auto pb-1">
+          <TabsList className="min-w-max h-auto gap-1.5 rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+            <TabsTrigger value="overview" className="whitespace-nowrap">
+              <Database className="h-4 w-4 mr-2" />
+              Overview
+            </TabsTrigger>
+            <TabsTrigger value="tables" className="whitespace-nowrap">
+              <Table2 className="h-4 w-4 mr-2" />
+              Tabel
+            </TabsTrigger>
+            <TabsTrigger value="settings" className="whitespace-nowrap">
+              <Settings className="h-4 w-4 mr-2" />
+              Pengaturan Sistem
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
         <TabsContent value="overview" className="space-y-6">
           {autoFixOffices.length > 0 && (

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,14 +12,16 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import { Textarea } from "@/components/ui/textarea";
-import { Star, Bug, Lightbulb, Download, Search, MessageSquare, CheckCircle2, Loader2, Printer, ShieldAlert } from "lucide-react";
+import { Star, Bug, Lightbulb, Download, Search, MessageSquare, CheckCircle2, Loader2, Printer, ShieldAlert, Ticket } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import {
   Pagination,
   PaginationContent,
@@ -53,6 +56,7 @@ interface FeedbackBugSettings {
 }
 
 type FeedbackQueryBuilder = ReturnType<typeof supabase.from<"feedback_reports", FeedbackItem>>;
+type FeedbackTypeFilter = "all" | "bug" | "saran" | "ticket";
 
 const escapeHtml = (text: string) =>
   text
@@ -76,11 +80,15 @@ const normalizeFeedbackSettings = (raw: unknown): FeedbackBugSettings => {
 
 export default function FeedbackManagement() {
   const PAGE_SIZE = 20;
+  const ADMIN_FEEDBACK_QUERY_TIMEOUT_MS = 15000;
+  const ADMIN_FEEDBACK_QUERY_RETRY_MAX = 1;
+  const location = useLocation();
+  const isTicketRoute = location.pathname === "/admin/help/tickets";
   const [feedbacks, setFeedbacks] = useState<FeedbackItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("all");
   const [filterRating, setFilterRating] = useState("all");
-  const [filterType, setFilterType] = useState("all");
+  const [filterType, setFilterType] = useState<FeedbackTypeFilter>(isTicketRoute ? "ticket" : "all");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedFeedback, setSelectedFeedback] = useState<FeedbackItem | null>(null);
   const [resolutionNotes, setResolutionNotes] = useState("");
@@ -95,9 +103,10 @@ export default function FeedbackManagement() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   // Stats
-  const [stats, setStats] = useState({ total: 0, avgRating: 0, openBugs: 0 });
+  const [stats, setStats] = useState({ total: 0, avgRating: 0, openIssues: 0 });
 
   const applyFeedbackFilters = useCallback((query: FeedbackQueryBuilder): FeedbackQueryBuilder => {
     let nextQuery = query;
@@ -126,34 +135,74 @@ export default function FeedbackManagement() {
 
   const fetchAccessRole = async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      setIsRetrying(false);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+            "admin.feedback.fetch_access_role.get_user timeout",
+          ),
+        {
+          maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (!user) {
         setIsSuperAdminUser(false);
         return;
       }
 
-      const { data, error } = await supabase
-        .from("user_roles")
-        .select("role")
-        .eq("user_id", user.id)
-        .eq("role", "super_admin")
-        .maybeSingle();
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("user_roles")
+              .select("role")
+              .eq("user_id", user.id)
+              .eq("role", "super_admin")
+              .maybeSingle(),
+            ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+            "admin.feedback.fetch_access_role.query timeout",
+          ),
+        {
+          maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setIsSuperAdminUser(Boolean(data));
     } catch (error) {
       reportError(error, "admin.feedback.fetch_access_role");
       setIsSuperAdminUser(false);
+    } finally {
+      setIsRetrying(false);
     }
   };
 
   const fetchFeedbackSettings = async () => {
     try {
-      const { data, error } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "feedback_bug_settings")
-        .maybeSingle();
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("value")
+              .eq("key", "feedback_bug_settings")
+              .maybeSingle(),
+            ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+            "admin.feedback.fetch_settings timeout",
+          ),
+        {
+          maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setFeedbackSettings(normalizeFeedbackSettings(data?.value));
@@ -167,6 +216,8 @@ export default function FeedbackManagement() {
         bugs_enabled: true,
         suggestions_enabled: true,
       });
+    } finally {
+      setIsRetrying(false);
     }
   };
 
@@ -227,6 +278,7 @@ export default function FeedbackManagement() {
     setIsLoading(true);
     setLoadError(null);
     try {
+      setIsRetrying(false);
       const pagedQuery = applyFeedbackFilters(
         supabase
         .from("feedback_reports")
@@ -235,11 +287,11 @@ export default function FeedbackManagement() {
         .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1)
       );
 
-      const openBugCountQuery = applyFeedbackFilters(
+      const openIssueCountQuery = applyFeedbackFilters(
         supabase
           .from("feedback_reports")
           .select("id", { count: "exact", head: true })
-          .eq("feedback_type", "bug")
+          .eq("feedback_type", isTicketRoute ? "ticket" : "bug")
           .eq("status", "open")
       );
 
@@ -262,19 +314,67 @@ export default function FeedbackManagement() {
 
       const [
         { data, error, count },
-        { count: openBugCount, error: openBugCountError },
+        { count: openIssueCount, error: openIssueCountError },
         { data: ratingRows, error: ratingRowsError },
         { data: statsRows, error: statsRpcError },
       ] = await Promise.all([
-        pagedQuery,
-        openBugCountQuery,
-        ratingRowsQuery,
-        supabase.rpc("get_feedback_stats_filtered", {
-          p_reporter_role: reporterRoleFilter,
-          p_feedback_type: feedbackTypeFilter,
-          p_rating: ratingFilter,
-          p_search: searchFilter,
-        }),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              pagedQuery,
+              ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+              "admin.feedback.fetch_reports.paged timeout",
+            ),
+          {
+            maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              openIssueCountQuery,
+              ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+              "admin.feedback.fetch_reports.open_issue_count timeout",
+            ),
+          {
+            maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              ratingRowsQuery,
+              ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+              "admin.feedback.fetch_reports.rating_rows timeout",
+            ),
+          {
+            maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.rpc("get_feedback_stats_filtered", {
+                p_reporter_role: reporterRoleFilter,
+                p_feedback_type: feedbackTypeFilter,
+                p_rating: ratingFilter,
+                p_search: searchFilter,
+              }),
+              ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+              "admin.feedback.fetch_reports.stats_rpc timeout",
+            ),
+          {
+            maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
       ]);
 
       if (error) throw error;
@@ -284,7 +384,7 @@ export default function FeedbackManagement() {
       setFeedbacks(items);
 
       // Calculate stats
-      if (!statsRpcError && Array.isArray(statsRows) && statsRows.length > 0) {
+      if (!isTicketRoute && !statsRpcError && Array.isArray(statsRows) && statsRows.length > 0) {
         const row = statsRows[0] as {
           total_count: number | null;
           avg_rating: number | null;
@@ -293,18 +393,18 @@ export default function FeedbackManagement() {
         setStats({
           total: Number(row.total_count || 0),
           avgRating: Number(row.avg_rating || 0),
-          openBugs: Number(row.open_bug_count || 0),
+          openIssues: Number(row.open_bug_count || 0),
         });
       } else {
-        if (openBugCountError) throw openBugCountError;
+        if (openIssueCountError) throw openIssueCountError;
         if (ratingRowsError) throw ratingRowsError;
         const total = count || 0;
         const ratings = (ratingRows || [])
           .map((row) => row.rating)
           .filter((rating): rating is number => typeof rating === "number");
         const avgRating = ratings.length > 0 ? ratings.reduce((a, b) => a + b, 0) / ratings.length : 0;
-        const openBugs = openBugCount || 0;
-        setStats({ total, avgRating: Math.round(avgRating * 10) / 10, openBugs });
+        const openIssues = openIssueCount || 0;
+        setStats({ total, avgRating: Math.round(avgRating * 10) / 10, openIssues });
       }
     } catch (error) {
       const errorRef = reportError(error, "admin.feedback.fetch_reports", {
@@ -318,11 +418,12 @@ export default function FeedbackManagement() {
       setLoadError(message);
       setFeedbacks([]);
       setTotalCount(0);
-      setStats({ total: 0, avgRating: 0, openBugs: 0 });
+      setStats({ total: 0, avgRating: 0, openIssues: 0 });
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
-  }, [activeTab, applyFeedbackFilters, currentPage, filterRating, filterType, searchQuery]);
+  }, [activeTab, applyFeedbackFilters, currentPage, filterRating, filterType, isTicketRoute, searchQuery]);
 
   useEffect(() => {
     void fetchFeedbackSettings();
@@ -334,6 +435,13 @@ export default function FeedbackManagement() {
   }, [fetchFeedbacks]);
 
   useEffect(() => {
+    if (isTicketRoute) {
+      setFilterType("ticket");
+      setFilterRating("all");
+    }
+  }, [isTicketRoute]);
+
+  useEffect(() => {
     setCurrentPage(1);
   }, [activeTab, filterRating, filterType, searchQuery]);
 
@@ -341,16 +449,41 @@ export default function FeedbackManagement() {
     if (!selectedFeedback) return;
     setIsResolving(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      const { error } = await supabase.from("feedback_reports")
-        .update({
-          status: "resolved",
-          resolved_at: new Date().toISOString(),
-          resolved_by: user?.id,
-          resolution_notes: resolutionNotes,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", selectedFeedback.id);
+      setIsRetrying(false);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+            "admin.feedback.resolve.get_user timeout",
+          ),
+        {
+          maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.from("feedback_reports")
+              .update({
+                status: "resolved",
+                resolved_at: new Date().toISOString(),
+                resolved_by: user?.id,
+                resolution_notes: resolutionNotes,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", selectedFeedback.id),
+            ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+            "admin.feedback.resolve.update timeout",
+          ),
+        {
+          maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (error) throw error;
 
       toast.success("Feedback ditandai selesai");
@@ -364,6 +497,7 @@ export default function FeedbackManagement() {
       toast.error(appendErrorReference("Gagal mengupdate feedback", errorRef));
     } finally {
       setIsResolving(false);
+      setIsRetrying(false);
     }
   };
 
@@ -375,7 +509,19 @@ export default function FeedbackManagement() {
       .order("created_at", { ascending: false })
     );
 
-    const { data, error } = await query;
+    const { data, error } = await withExponentialBackoff(
+      () =>
+        withTimeout(
+          query,
+          ADMIN_FEEDBACK_QUERY_TIMEOUT_MS,
+          "admin.feedback.fetch_all_filtered timeout",
+        ),
+      {
+        maxRetries: ADMIN_FEEDBACK_QUERY_RETRY_MAX,
+        shouldRetry: isRetryableError,
+        onRetry: () => setIsRetrying(true),
+      }
+    );
     if (error) throw error;
     return (data || []) as FeedbackItem[];
   };
@@ -529,14 +675,19 @@ export default function FeedbackManagement() {
           ? [totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages]
           : [currentPage - 2, currentPage - 1, currentPage, currentPage + 1, currentPage + 2];
 
+  const pageTitle = isTicketRoute ? "Tiket Bantuan Org" : "Feedback & Bug Report";
+  const pageSubtitle = isTicketRoute
+    ? "Tiket dari /org/help/tickets untuk tindak lanjut super admin."
+    : "Kelola feedback dan laporan bug dari pengguna";
+
   return (
-    <SuperAdminLayout title="Feedback & Bug Report" subtitle="Kelola feedback dan laporan bug dari pengguna">
+    <SuperAdminLayout title={pageTitle} subtitle={pageSubtitle}>
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <Card>
           <CardContent className="p-4 flex items-center gap-3">
             <div className="p-2 rounded-lg bg-primary/10"><MessageSquare className="w-5 h-5 text-primary" /></div>
-            <div><p className="text-2xl font-bold">{stats.total}</p><p className="text-xs text-muted-foreground">Total Feedback</p></div>
+            <div><p className="text-2xl font-bold">{stats.total}</p><p className="text-xs text-muted-foreground">{isTicketRoute ? "Total Tiket" : "Total Feedback"}</p></div>
           </CardContent>
         </Card>
         <Card>
@@ -547,8 +698,10 @@ export default function FeedbackManagement() {
         </Card>
         <Card>
           <CardContent className="p-4 flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-destructive/10"><Bug className="w-5 h-5 text-destructive" /></div>
-            <div><p className="text-2xl font-bold">{stats.openBugs}</p><p className="text-xs text-muted-foreground">Bug Terbuka</p></div>
+            <div className="p-2 rounded-lg bg-destructive/10">
+              {isTicketRoute ? <Ticket className="w-5 h-5 text-destructive" /> : <Bug className="w-5 h-5 text-destructive" />}
+            </div>
+            <div><p className="text-2xl font-bold">{stats.openIssues}</p><p className="text-xs text-muted-foreground">{isTicketRoute ? "Tiket Open" : "Bug Terbuka"}</p></div>
           </CardContent>
         </Card>
       </div>
@@ -593,7 +746,7 @@ export default function FeedbackManagement() {
             </div>
           )}
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-            <CardTitle>Daftar Feedback</CardTitle>
+            <CardTitle>{isTicketRoute ? "Daftar Tiket Bantuan Org" : "Daftar Feedback"}</CardTitle>
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" onClick={printPdf}>
                 <Printer className="w-4 h-4 mr-2" /> Print PDF
@@ -605,37 +758,55 @@ export default function FeedbackManagement() {
           </div>
         </CardHeader>
         <CardContent>
+          {isRetrying && (
+            <div className="mb-4 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              Sedang mencoba ulang koneksi data feedback...
+            </div>
+          )}
           {loadError && (
             <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-              {loadError}
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <span>{loadError}</span>
+                <Button type="button" variant="outline" size="sm" onClick={() => void fetchFeedbacks()}>
+                  Coba Lagi
+                </Button>
+              </div>
             </div>
           )}
           <Tabs value={activeTab} onValueChange={setActiveTab} className="mb-4">
-            <TabsList>
-              <TabsTrigger value="all">Semua</TabsTrigger>
-              <TabsTrigger value="admin">Admin Organisasi</TabsTrigger>
-              <TabsTrigger value="pegawai">Pegawai</TabsTrigger>
-            </TabsList>
+            <div className="overflow-x-auto pb-1">
+              <TabsList className="min-w-max h-auto gap-1.5 rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+                <TabsTrigger value="all" className="whitespace-nowrap">Semua</TabsTrigger>
+                <TabsTrigger value="admin" className="whitespace-nowrap">Admin Organisasi</TabsTrigger>
+                <TabsTrigger value="pegawai" className="whitespace-nowrap">Pegawai</TabsTrigger>
+              </TabsList>
+            </div>
           </Tabs>
 
-          <div className="flex flex-col sm:flex-row gap-3 mb-4">
+          <div className="mb-4 flex flex-col gap-3 rounded-2xl border border-slate-200/80 bg-white/80 p-3 shadow-sm sm:flex-row sm:items-center">
             <div className="relative flex-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Cari feedback..." className="pl-10" />
+              <Input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={isTicketRoute ? "Cari tiket..." : "Cari feedback..."}
+                className="pl-10"
+              />
             </div>
             <Select value={filterRating} onValueChange={setFilterRating}>
-              <SelectTrigger className="w-[140px]"><SelectValue placeholder="Rating" /></SelectTrigger>
+              <SelectTrigger className="w-full sm:w-[160px]"><SelectValue placeholder="Rating" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Semua Rating</SelectItem>
                 {[1, 2, 3, 4, 5].map(r => <SelectItem key={r} value={r.toString()}>⭐ {r}</SelectItem>)}
               </SelectContent>
             </Select>
-            <Select value={filterType} onValueChange={setFilterType}>
-              <SelectTrigger className="w-[140px]"><SelectValue placeholder="Tipe" /></SelectTrigger>
+            <Select value={filterType} onValueChange={(value) => setFilterType(value as FeedbackTypeFilter)}>
+              <SelectTrigger className="w-full sm:w-[170px]"><SelectValue placeholder="Tipe" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Semua Tipe</SelectItem>
                 <SelectItem value="bug">Bug</SelectItem>
                 <SelectItem value="saran">Saran</SelectItem>
+                <SelectItem value="ticket">Tiket</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -643,7 +814,7 @@ export default function FeedbackManagement() {
           {isLoading ? (
             <div className="flex justify-center py-8"><Loader2 className="w-6 h-6 animate-spin" /></div>
           ) : filtered.length === 0 ? (
-            <p className="text-center text-muted-foreground py-8">Belum ada feedback</p>
+            <p className="text-center text-muted-foreground py-8">{isTicketRoute ? "Belum ada tiket" : "Belum ada feedback"}</p>
           ) : (
             <div className="rounded-md border overflow-x-auto">
               <Table>
@@ -666,8 +837,15 @@ export default function FeedbackManagement() {
                       <TableCell className="text-sm">{f.reporter_name || "-"}</TableCell>
                       <TableCell>{renderStars(f.rating)}</TableCell>
                       <TableCell>
-                        <Badge variant={f.feedback_type === "bug" ? "destructive" : "secondary"} className="text-xs">
-                          {f.feedback_type === "bug" ? <Bug className="w-3 h-3 mr-1" /> : <Lightbulb className="w-3 h-3 mr-1" />}
+                        <Badge
+                          variant={f.feedback_type === "bug" ? "destructive" : f.feedback_type === "ticket" ? "outline" : "secondary"}
+                          className={cn("text-xs", f.feedback_type === "ticket" && "border-blue-500 text-blue-700")}
+                        >
+                          {f.feedback_type === "bug"
+                            ? <Bug className="w-3 h-3 mr-1" />
+                            : f.feedback_type === "ticket"
+                              ? <Ticket className="w-3 h-3 mr-1" />
+                              : <Lightbulb className="w-3 h-3 mr-1" />}
                           {f.feedback_type}
                         </Badge>
                       </TableCell>
@@ -734,7 +912,7 @@ export default function FeedbackManagement() {
       <Dialog open={!!selectedFeedback} onOpenChange={(open) => !open && setSelectedFeedback(null)}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Detail Feedback</DialogTitle>
+            <DialogTitle>{selectedFeedback?.feedback_type === "ticket" ? "Detail Tiket" : "Detail Feedback"}</DialogTitle>
           </DialogHeader>
           {selectedFeedback && (
             <div className="space-y-4">
@@ -742,7 +920,10 @@ export default function FeedbackManagement() {
                 <div><span className="text-muted-foreground">Organisasi:</span><p className="font-medium">{selectedFeedback.tenants?.name || "-"}</p></div>
                 <div><span className="text-muted-foreground">Nama:</span><p className="font-medium">{selectedFeedback.reporter_name}</p></div>
                 <div><span className="text-muted-foreground">Role:</span><p className="font-medium">{selectedFeedback.reporter_role}</p></div>
-                <div><span className="text-muted-foreground">Rating:</span><div>{renderStars(selectedFeedback.rating)}</div></div>
+                <div><span className="text-muted-foreground">Tipe:</span><p className="font-medium">{selectedFeedback.feedback_type}</p></div>
+                {selectedFeedback.feedback_type !== "ticket" && (
+                  <div><span className="text-muted-foreground">Rating:</span><div>{renderStars(selectedFeedback.rating)}</div></div>
+                )}
                 {selectedFeedback.survey_day && (
                   <div><span className="text-muted-foreground">Survei Hari:</span><p className="font-medium">Ke-{selectedFeedback.survey_day}</p></div>
                 )}
@@ -765,10 +946,13 @@ export default function FeedbackManagement() {
               )}
             </div>
           )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSelectedFeedback(null)}>Tutup</Button>
+          <DialogFooter className={dialogActionBarClassName}>
+            <DialogActionHint>
+              Gunakan resolusi singkat dan jelas agar riwayat penanganan mudah diaudit.
+            </DialogActionHint>
+            <Button variant="outline" className="bg-white" onClick={() => setSelectedFeedback(null)}>Tutup</Button>
             {selectedFeedback?.status === "open" && (
-              <Button onClick={handleResolve} disabled={isResolving}>
+              <Button className="min-w-[170px]" onClick={handleResolve} disabled={isResolving}>
                 {isResolving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
                 Tandai Resolved
               </Button>

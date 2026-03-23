@@ -4,17 +4,18 @@ import { EmployeeActivationPage } from "@/components/employee/EmployeeActivation
 interface ReadonlyActivationTabProps {
   panelClass: string;
   tenantId: string;
+  employeeId: string;
 }
 
-export function ReadonlyActivationTab({ panelClass, tenantId }: ReadonlyActivationTabProps) {
+export function ReadonlyActivationTab({ panelClass, tenantId, employeeId }: ReadonlyActivationTabProps) {
   return (
     <Card className={panelClass}>
       <CardHeader>
-        <CardTitle>Aktivasi</CardTitle>
-        <CardDescription>Status aktivasi akun individual</CardDescription>
+        <CardTitle>Billing</CardTitle>
+        <CardDescription>Status billing akun individual</CardDescription>
       </CardHeader>
       <CardContent>
-        <EmployeeActivationPage tenantId={tenantId} />
+        <EmployeeActivationPage tenantId={tenantId} employeeId={employeeId} />
       </CardContent>
     </Card>
   );

@@ -33,7 +33,16 @@ import {
 import { toast } from "sonner";
 import { format, addMonths } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
+import { useNavigate } from "react-router-dom";
 import type { Json, Tables } from "@/integrations/supabase/types";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { ACTIVE_INVOICE_STATUSES, isActiveInvoiceStatus } from "@/lib/billingGuards";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import {
+  CENTRALIZED_MIN_DURATION_SETTING_KEYS,
+  INDIVIDUAL_MIN_DURATION_SETTING_KEY,
+  resolveMinimumBillingDuration,
+} from "@/lib/billingMinDuration";
 
 type SubscriptionPackage = Tables<"subscription_packages">;
 
@@ -43,6 +52,46 @@ interface BillingSettingsValue {
   bank_account_name?: string;
 }
 
+interface CreateOrGetManualInvoiceResult {
+  id: string;
+  invoice_number: string;
+  gross_amount: number;
+  status: string;
+  due_date: string;
+  payment_method_type: string;
+  unique_code: number;
+  reused: boolean;
+  wallet_applied?: boolean;
+  wallet_apply?: {
+    applied?: boolean;
+    wallet_balance_after?: number;
+    [key: string]: unknown;
+  };
+}
+
+const PPN_PERCENTAGE = 11;
+const PPH_PERCENTAGE = 2;
+const INTERNAL_TAX_PERCENTAGE = PPN_PERCENTAGE + PPH_PERCENTAGE;
+const MANUAL_PAYMENT_OP_TIMEOUT_MS = 15000;
+const MANUAL_PAYMENT_OP_RETRY_MAX = 1;
+
+interface ActiveManualInvoiceSnapshot {
+  id: string;
+  invoice_number: string;
+  status: string;
+  due_date: string;
+  gross_amount: number;
+}
+
+interface ActiveManualInvoiceQueryRow extends ActiveManualInvoiceSnapshot {
+  metadata?: unknown;
+}
+
+interface BillingSettingRow {
+  setting_key: string;
+  setting_value: unknown;
+}
+
 const toJsonObject = (value: Json | null | undefined): Record<string, Json> | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -50,11 +99,19 @@ const toJsonObject = (value: Json | null | undefined): Record<string, Json> | nu
   return value as Record<string, Json>;
 };
 
+const parseInvoiceBillingScope = (metadata: unknown): "individual" | "centralized" => {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return "centralized";
+  const raw = metadata as Record<string, unknown>;
+  return raw.billing_scope === "individual" ? "individual" : "centralized";
+};
+
 interface ManualPaymentFlowProps {
   tenantId: string;
   tenantName: string;
   currentEmployeeCount: number;
   subscriptionId?: string;
+  initialPackageId?: string;
+  initialEmployeeCount?: number;
 }
 
 export function ManualPaymentFlow({
@@ -62,12 +119,22 @@ export function ManualPaymentFlow({
   tenantName,
   currentEmployeeCount,
   subscriptionId,
+  initialPackageId,
+  initialEmployeeCount,
 }: ManualPaymentFlowProps) {
+  const navigate = useNavigate();
   const [packages, setPackages] = useState<SubscriptionPackage[]>([]);
   const [selectedPackage, setSelectedPackage] = useState<string>("");
   const [employeeCount, setEmployeeCount] = useState(currentEmployeeCount || 5);
+  const [prefilledPackage, setPrefilledPackage] = useState(false);
+  const [prefilledEmployeeCount, setPrefilledEmployeeCount] = useState(false);
+  const [flashPrefilledPackage, setFlashPrefilledPackage] = useState(false);
+  const [flashPrefilledEmployeeCount, setFlashPrefilledEmployeeCount] = useState(false);
   const [negotiatedPricePerEmployee, setNegotiatedPricePerEmployee] = useState<number | null>(null);
+  const [minDurationMonths, setMinDurationMonths] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
+  const [isCheckingActiveInvoice, setIsCheckingActiveInvoice] = useState(false);
+  const [activeInvoice, setActiveInvoice] = useState<ActiveManualInvoiceSnapshot | null>(null);
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [paymentResult, setPaymentResult] = useState<{
@@ -95,19 +162,63 @@ export function ManualPaymentFlow({
             .limit(1)
             .maybeSingle();
 
-      const [{ data, error }, subscriptionRes] = await Promise.all([
-        supabase
-          .from("subscription_packages")
-          .select("*")
-          .eq("is_active", true)
-          .order("sort_order"),
-        subscriptionPricePromise,
-      ]);
+      const [{ data, error }, subscriptionRes, tenantRes, minDurationRes] = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              Promise.all([
+                supabase.from("subscription_packages").select("*").eq("is_active", true).order("sort_order"),
+                subscriptionPricePromise,
+                supabase.from("tenants").select("billing_mode, organization_type").eq("id", tenantId).maybeSingle(),
+                supabase
+                  .from("billing_settings")
+                  .select("setting_key, setting_value")
+                  .in("setting_key", [
+                    INDIVIDUAL_MIN_DURATION_SETTING_KEY,
+                    CENTRALIZED_MIN_DURATION_SETTING_KEYS.pemerintah_daerah,
+                    CENTRALIZED_MIN_DURATION_SETTING_KEYS.instansi_pemerintah,
+                    CENTRALIZED_MIN_DURATION_SETTING_KEYS.perusahaan,
+                    CENTRALIZED_MIN_DURATION_SETTING_KEYS.sekolah,
+                  ]),
+              ]),
+            MANUAL_PAYMENT_OP_TIMEOUT_MS,
+            "org.activation.manual_payment.fetch_packages timeout",
+          ),
+        {
+          maxRetries: MANUAL_PAYMENT_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
       if (error) throw error;
-      setPackages(data || []);
-      if (data && data.length > 0) {
-        setSelectedPackage(data[0].id);
+      if (tenantRes.error) throw tenantRes.error;
+      if (minDurationRes.error) throw minDurationRes.error;
+
+      const minDurationRows = (minDurationRes.data || []) as BillingSettingRow[];
+      const minDurationMap = new Map(minDurationRows.map((row) => [row.setting_key, row.setting_value]));
+      const resolvedMinDuration = resolveMinimumBillingDuration({
+        billingMode: tenantRes.data?.billing_mode,
+        organizationType: tenantRes.data?.organization_type,
+        getSettingValue: (key) => minDurationMap.get(key),
+      });
+      setMinDurationMonths(resolvedMinDuration);
+
+      const eligiblePackages = (data || []).filter(
+        (pkg) => Number(pkg.duration_months || 0) >= resolvedMinDuration,
+      );
+      setPackages(eligiblePackages);
+      if (eligiblePackages.length > 0) {
+        const initialPkgIsValid =
+          Boolean(initialPackageId) && eligiblePackages.some((pkg) => pkg.id === initialPackageId);
+        setSelectedPackage((prev) => {
+          if (initialPkgIsValid) return initialPackageId as string;
+          if (eligiblePackages.some((pkg) => pkg.id === prev)) return prev;
+          return eligiblePackages[0].id;
+        });
+        setPrefilledPackage(initialPkgIsValid);
+      } else {
+        setSelectedPackage("");
+        setPrefilledPackage(false);
       }
       if (subscriptionRes.error) {
         console.warn("Failed to load subscription negotiated price:", subscriptionRes.error);
@@ -120,27 +231,159 @@ export function ManualPaymentFlow({
         setNegotiatedPricePerEmployee(parsedPrice);
       }
     } catch (error) {
-      console.error("Error fetching packages:", error);
+      const errorRef = reportError(error, "org.activation.manual_payment.fetch_packages", {
+        tenant_id: tenantId,
+        subscription_id: subscriptionId || null,
+      });
+      toast.error(appendErrorReference("Gagal memuat paket langganan", errorRef));
     } finally {
       setIsLoading(false);
     }
-  }, [subscriptionId, tenantId]);
+  }, [initialPackageId, subscriptionId, tenantId]);
 
   useEffect(() => {
     void fetchPackages();
   }, [fetchPackages]);
 
+  const fetchActiveInvoice = useCallback(async () => {
+    setIsCheckingActiveInvoice(true);
+    try {
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase
+                .from("invoices")
+                .select("id, invoice_number, status, due_date, gross_amount, metadata")
+                .eq("tenant_id", tenantId)
+                .in("status", [...ACTIVE_INVOICE_STATUSES])
+                .order("created_at", { ascending: false })
+                .limit(100),
+            MANUAL_PAYMENT_OP_TIMEOUT_MS,
+          ),
+        {
+          maxRetries: MANUAL_PAYMENT_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
+
+      if (error) throw error;
+      const latestCentralized =
+        ((data || []) as ActiveManualInvoiceQueryRow[]).find(
+          (invoice) => parseInvoiceBillingScope(invoice.metadata) !== "individual",
+        ) || null;
+      setActiveInvoice(
+        latestCentralized
+          ? {
+              id: latestCentralized.id,
+              invoice_number: latestCentralized.invoice_number,
+              status: latestCentralized.status,
+              due_date: latestCentralized.due_date,
+              gross_amount: latestCentralized.gross_amount,
+            }
+          : null,
+      );
+    } catch (error) {
+      const errorRef = reportError(error, "org.activation.manual_payment.fetch_active_invoice", {
+        tenant_id: tenantId,
+      });
+      toast.error(appendErrorReference("Gagal memeriksa invoice aktif", errorRef));
+      setActiveInvoice(null);
+    } finally {
+      setIsCheckingActiveInvoice(false);
+    }
+  }, [tenantId]);
+
+  const checkLatestActiveInvoice = useCallback(async (): Promise<ActiveManualInvoiceSnapshot | null> => {
+    try {
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase
+                .from("invoices")
+                .select("id, invoice_number, status, due_date, gross_amount, metadata")
+                .eq("tenant_id", tenantId)
+                .in("status", [...ACTIVE_INVOICE_STATUSES])
+                .order("created_at", { ascending: false })
+                .limit(100),
+            MANUAL_PAYMENT_OP_TIMEOUT_MS,
+          ),
+        {
+          maxRetries: MANUAL_PAYMENT_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
+      if (error) throw error;
+      const latestCentralized =
+        ((data || []) as ActiveManualInvoiceQueryRow[]).find(
+          (invoice) => parseInvoiceBillingScope(invoice.metadata) !== "individual",
+        ) || null;
+      const latest =
+        latestCentralized
+          ? {
+              id: latestCentralized.id,
+              invoice_number: latestCentralized.invoice_number,
+              status: latestCentralized.status,
+              due_date: latestCentralized.due_date,
+              gross_amount: latestCentralized.gross_amount,
+            }
+          : null;
+      setActiveInvoice(latest);
+      return latest;
+    } catch (error) {
+      reportError(error, "org.activation.manual_payment.check_latest_active_invoice", { tenant_id: tenantId });
+      return null;
+    }
+  }, [tenantId]);
+
+  useEffect(() => {
+    void fetchActiveInvoice();
+  }, [fetchActiveInvoice]);
+
+  useEffect(() => {
+    if (!initialPackageId || packages.length === 0) return;
+    if (packages.some((pkg) => pkg.id === initialPackageId)) {
+      setSelectedPackage(initialPackageId);
+      setPrefilledPackage(true);
+    }
+  }, [initialPackageId, packages]);
+
+  useEffect(() => {
+    if (typeof initialEmployeeCount !== "number" || !Number.isFinite(initialEmployeeCount)) return;
+    setEmployeeCount(Math.max(1, Math.floor(initialEmployeeCount)));
+    setPrefilledEmployeeCount(true);
+  }, [initialEmployeeCount]);
+
+  useEffect(() => {
+    if (!prefilledPackage) return;
+    setFlashPrefilledPackage(true);
+    const timer = window.setTimeout(() => setFlashPrefilledPackage(false), 1200);
+    return () => window.clearTimeout(timer);
+  }, [prefilledPackage, selectedPackage]);
+
+  useEffect(() => {
+    if (!prefilledEmployeeCount) return;
+    setFlashPrefilledEmployeeCount(true);
+    const timer = window.setTimeout(() => setFlashPrefilledEmployeeCount(false), 1200);
+    return () => window.clearTimeout(timer);
+  }, [prefilledEmployeeCount, employeeCount]);
+
   const getSelectedPackageData = () => packages.find((p) => p.id === selectedPackage);
 
   const calculateTotal = () => {
     const pkg = getSelectedPackageData();
-    if (!pkg) return { unitPrice: 0, subtotal: 0, discount: 0, total: 0 };
+    if (!pkg) {
+      return { unitPrice: 0, subtotal: 0, discount: 0, baseAmount: 0, internalTaxAmount: 0, total: 0 };
+    }
 
     const unitPrice = negotiatedPricePerEmployee ?? pkg.base_price_per_month;
     const subtotal = unitPrice * employeeCount * pkg.duration_months;
     const discount = subtotal * (pkg.discount_percentage / 100);
-    const total = subtotal - discount;
-    return { unitPrice, subtotal, discount, total };
+    const baseAmount = subtotal - discount;
+    const internalTaxAmount = Math.round(baseAmount * (INTERNAL_TAX_PERCENTAGE / 100));
+    const total = baseAmount + internalTaxAmount;
+    return { unitPrice, subtotal, discount, baseAmount, internalTaxAmount, total };
   };
 
   const generateUniqueCode = () => {
@@ -155,6 +398,12 @@ export function ManualPaymentFlow({
     }).format(amount);
 
   const handleInitiatePayment = async () => {
+    const latestActive = await checkLatestActiveInvoice();
+    if (latestActive && isActiveInvoiceStatus(latestActive.status)) {
+      toast.info(`Invoice aktif ${latestActive.invoice_number} masih berjalan. Selesaikan invoice tersebut terlebih dahulu.`);
+      navigate(`/org/billing?menu=invoices&invoice=${encodeURIComponent(latestActive.invoice_number)}&focus=payment-proof`);
+      return;
+    }
     setShowConfirmDialog(true);
   };
 
@@ -164,42 +413,77 @@ export function ManualPaymentFlow({
 
     setIsSubmitting(true);
     try {
-      const { unitPrice, subtotal, discount, total } = calculateTotal();
-      const uniqueCode = generateUniqueCode();
-      const finalAmount = total + uniqueCode;
-      const invoiceNumber = `INV-${format(new Date(), "yyyyMMdd")}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+      const latestActive = await checkLatestActiveInvoice();
+      if (latestActive && isActiveInvoiceStatus(latestActive.status)) {
+        toast.info(`Invoice aktif ${latestActive.invoice_number} masih berjalan. Selesaikan invoice tersebut terlebih dahulu.`);
+        navigate(`/org/billing?menu=invoices&invoice=${encodeURIComponent(latestActive.invoice_number)}&focus=payment-proof`);
+        return;
+      }
 
-      const { error: invoiceError } = await supabase.from("invoices").insert({
-        tenant_id: tenantId,
-        subscription_id: subscriptionId || null,
-        package_id: pkg.id,
-        package_name: pkg.name,
-        package_duration_months: pkg.duration_months,
-        package_discount_percentage: pkg.discount_percentage,
-        employee_count: employeeCount,
-        price_per_employee: unitPrice,
-        subtotal,
-        discount_amount: discount,
-        vat_percentage: 0,
-        vat_amount: 0,
-        gross_amount: finalAmount,
-        xendit_fee: 0,
-        net_amount: finalAmount,
-        invoice_number: invoiceNumber,
-        status: "PENDING",
-        payment_method_type: "MANUAL_TRANSFER",
-        due_date: format(addMonths(new Date(), 0), "yyyy-MM-dd"),
-        metadata: { unique_code: uniqueCode },
-        notes: `Angka unik: ${uniqueCode}`,
-      });
+      const { unitPrice, subtotal, discount, total, internalTaxAmount } = calculateTotal();
+      const proposedUniqueCode = generateUniqueCode();
+      const proposedFinalAmount = total + proposedUniqueCode;
+
+      const { data: invoiceResult, error: invoiceError } = (await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () =>
+              supabase.rpc("create_or_get_manual_invoice" as never, {
+                p_tenant_id: tenantId,
+                p_subscription_id: subscriptionId || null,
+                p_package_id: pkg.id,
+                p_package_name: pkg.name,
+                p_package_duration_months: pkg.duration_months,
+                p_package_discount_percentage: pkg.discount_percentage,
+                p_employee_count: employeeCount,
+                p_price_per_employee: unitPrice,
+                p_subtotal: subtotal,
+                p_discount_amount: discount,
+                p_vat_percentage: INTERNAL_TAX_PERCENTAGE,
+                p_vat_amount: internalTaxAmount,
+                p_gross_amount: proposedFinalAmount,
+                p_xendit_fee: 0,
+                p_net_amount: proposedFinalAmount,
+                p_due_date: format(addMonths(new Date(), 0), "yyyy-MM-dd"),
+                p_unique_code: proposedUniqueCode,
+                p_notes: `Angka unik: ${proposedUniqueCode}`,
+              } as never),
+            MANUAL_PAYMENT_OP_TIMEOUT_MS,
+          ),
+        {
+          maxRetries: MANUAL_PAYMENT_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      )) as { data: CreateOrGetManualInvoiceResult | null; error: Error | null };
 
       if (invoiceError) throw invoiceError;
+      if (!invoiceResult?.invoice_number) {
+        throw new Error("Gagal membuat atau mengambil invoice aktif");
+      }
 
-      const { data: billingSettings } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "billing_settings")
-        .maybeSingle();
+      const resolvedUniqueCode =
+        typeof invoiceResult.unique_code === "number" && Number.isFinite(invoiceResult.unique_code)
+          ? invoiceResult.unique_code
+          : proposedUniqueCode;
+      const resolvedFinalAmount =
+        typeof invoiceResult.gross_amount === "number" && Number.isFinite(invoiceResult.gross_amount)
+          ? invoiceResult.gross_amount
+          : proposedFinalAmount;
+      const resolvedBaseAmount = Math.max(0, resolvedFinalAmount - resolvedUniqueCode);
+
+      const { data: billingSettings, error: billingSettingsError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            () => supabase.from("system_settings").select("value").eq("key", "billing_settings").maybeSingle(),
+            MANUAL_PAYMENT_OP_TIMEOUT_MS,
+            "org.activation.manual_payment.fetch_billing_settings timeout",
+          ),
+        {
+          maxRetries: MANUAL_PAYMENT_OP_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
+      if (billingSettingsError) throw billingSettingsError;
 
       const billingValue = toJsonObject(billingSettings?.value);
       const settings = billingValue as BillingSettingsValue | null;
@@ -217,33 +501,61 @@ export function ManualPaymentFlow({
           };
 
       setPaymentResult({
-        invoiceNumber,
-        totalAmount: total,
-        uniqueCode,
-        finalAmount,
+        invoiceNumber: invoiceResult.invoice_number,
+        totalAmount: resolvedBaseAmount,
+        uniqueCode: resolvedUniqueCode,
+        finalAmount: resolvedFinalAmount,
         bankInfo,
       });
 
-      toast.success("Invoice pembayaran berhasil dibuat. Langganan aktif setelah pembayaran tervalidasi.");
+      if (invoiceResult.wallet_applied || invoiceResult.status === "PAID") {
+        toast.success("Invoice otomatis lunas menggunakan saldo wallet.");
+      } else if (invoiceResult.reused) {
+        toast.info("Invoice aktif sebelumnya ditemukan. Silakan lanjutkan pembayaran pada invoice yang sama.");
+      } else {
+        toast.success("Invoice berhasil dibuat. Lanjutkan transfer lalu konfirmasi pembayaran pada detail invoice.");
+      }
+      const targetUrl =
+        invoiceResult.wallet_applied || invoiceResult.status === "PAID"
+          ? `/org/billing?menu=invoices&invoice=${encodeURIComponent(invoiceResult.invoice_number)}`
+          : `/org/billing?menu=invoices&invoice=${encodeURIComponent(invoiceResult.invoice_number)}&focus=payment-proof`;
+      navigate(targetUrl);
+      void fetchActiveInvoice();
     } catch (error: unknown) {
-      console.error("Error creating payment:", error);
       const errorMessage = error instanceof Error ? error.message : "Unknown error";
-      toast.error("Gagal membuat pembayaran: " + errorMessage);
+      const errorRef = reportError(error, "org.activation.manual_payment.create", {
+        tenant_id: tenantId,
+        subscription_id: subscriptionId ?? null,
+        selected_package_id: selectedPackage || null,
+        employee_count: employeeCount,
+      });
+      toast.error(appendErrorReference("Gagal membuat pembayaran: " + errorMessage, errorRef));
     } finally {
       setIsSubmitting(false);
       setShowConfirmDialog(false);
     }
   };
 
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success("Disalin ke clipboard");
+  const copyToClipboard = async (text: string) => {
+    try {
+      await withTimeout(() => navigator.clipboard.writeText(text), 5000);
+      toast.success("Disalin ke clipboard");
+    } catch (error) {
+      const errorRef = reportError(error, "org.activation.manual_payment.copy_clipboard");
+      toast.error(appendErrorReference("Gagal menyalin ke clipboard", errorRef));
+    }
   };
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center py-8">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-10 text-center">
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+        </div>
+        <p className="text-base font-medium text-slate-900">Memuat formulir pembayaran manual</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Paket langganan, invoice aktif, dan konfigurasi rekening sedang disiapkan.
+        </p>
       </div>
     );
   }
@@ -262,7 +574,7 @@ export function ManualPaymentFlow({
                 Invoice Pembayaran Berhasil Dibuat!
               </CardTitle>
               <CardDescription>
-                Silakan transfer sesuai nominal berikut untuk proses verifikasi pembayaran
+                Silakan transfer sesuai nominal berikut, lalu lanjut ke konfirmasi pembayaran.
               </CardDescription>
             </div>
           </div>
@@ -332,7 +644,8 @@ export function ManualPaymentFlow({
                 <p className="font-medium mb-1">Penting:</p>
                 <ul className="list-disc list-inside space-y-0.5">
                   <li>Transfer harus sesuai nominal <strong>persis</strong> (termasuk angka unik)</li>
-                  <li>Langganan akan aktif setelah pembayaran diverifikasi admin</li>
+                  <li>Setelah transfer, lakukan <strong>Konfirmasi Pembayaran</strong> pada detail invoice</li>
+                  <li>Langganan aktif hanya setelah verifikasi admin (status invoice menjadi Lunas)</li>
                   <li>Jika pembayaran tidak valid, Anda akan menerima notifikasi lanjutan</li>
                 </ul>
               </div>
@@ -352,10 +665,10 @@ export function ManualPaymentFlow({
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <CreditCard className="h-5 w-5 text-primary" />
-            Pembayaran Manual
+            Mau Bayar (Buat Invoice)
           </CardTitle>
           <CardDescription>
-            Pilih paket langganan dan lakukan transfer bank dengan angka unik
+            Pilih paket untuk membuat invoice, lalu konfirmasi pembayaran setelah transfer.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -365,11 +678,59 @@ export function ManualPaymentFlow({
             </div>
           )}
 
+          {activeInvoice && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100 space-y-2">
+              <p>
+                Invoice aktif terdeteksi: <strong>{activeInvoice.invoice_number}</strong>. Pembuatan invoice baru dinonaktifkan
+                sampai invoice ini selesai.
+              </p>
+              <p className="text-xs">
+                Status: <strong>{activeInvoice.status}</strong> • Jatuh tempo:{" "}
+                <strong>{format(new Date(activeInvoice.due_date), "d MMM yyyy", { locale: idLocale })}</strong> • Nilai:{" "}
+                <strong>{formatCurrency(activeInvoice.gross_amount)}</strong>
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void fetchActiveInvoice()}
+                disabled={isCheckingActiveInvoice}
+              >
+                {isCheckingActiveInvoice ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                    Mengecek...
+                  </>
+                ) : (
+                  "Cek Ulang Status Invoice"
+                )}
+              </Button>
+            </div>
+          )}
+
           {/* Package Selection */}
           <div className="space-y-2">
-            <Label>Paket Langganan</Label>
-            <Select value={selectedPackage} onValueChange={setSelectedPackage}>
-              <SelectTrigger>
+            <div className="flex items-center justify-between">
+              <Label>Paket Langganan</Label>
+              {prefilledPackage && <Badge variant="secondary">Terisi dari kalkulator</Badge>}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Minimum durasi pembayaran tenant ini: <strong>{minDurationMonths} bulan</strong>.
+            </p>
+            <Select
+              value={selectedPackage}
+              onValueChange={(value) => {
+                setSelectedPackage(value);
+                setPrefilledPackage(false);
+              }}
+            >
+              <SelectTrigger
+                className={
+                  prefilledPackage
+                    ? `border-blue-400 ring-1 ring-blue-300 ${flashPrefilledPackage ? "animate-pulse" : ""}`
+                    : undefined
+                }
+              >
                 <SelectValue placeholder="Pilih paket" />
               </SelectTrigger>
               <SelectContent>
@@ -381,16 +742,32 @@ export function ManualPaymentFlow({
                 ))}
               </SelectContent>
             </Select>
+            {packages.length === 0 && (
+              <p className="text-xs text-amber-700 dark:text-amber-300">
+                Tidak ada paket aktif yang memenuhi minimum {minDurationMonths} bulan.
+              </p>
+            )}
           </div>
 
           {/* Employee Count */}
           <div className="space-y-2">
-            <Label>Jumlah Pegawai</Label>
+            <div className="flex items-center justify-between">
+              <Label>Jumlah Pegawai</Label>
+              {prefilledEmployeeCount && <Badge variant="secondary">Terisi dari kalkulator</Badge>}
+            </div>
             <Input
               type="number"
               min={1}
               value={employeeCount}
-              onChange={(e) => setEmployeeCount(parseInt(e.target.value) || 1)}
+              className={
+                prefilledEmployeeCount
+                  ? `border-blue-400 ring-1 ring-blue-300 ${flashPrefilledEmployeeCount ? "animate-pulse" : ""}`
+                  : undefined
+              }
+              onChange={(e) => {
+                setEmployeeCount(parseInt(e.target.value) || 1);
+                setPrefilledEmployeeCount(false);
+              }}
             />
             <p className="text-xs text-muted-foreground">
               Digunakan untuk perhitungan billing invoice. Harga per pegawai: {pkg ? formatCurrency(unitPrice) : "-"}/bulan
@@ -419,7 +796,7 @@ export function ManualPaymentFlow({
                 <span className="text-primary">{formatCurrency(total)}</span>
               </div>
               <p className="text-xs text-muted-foreground">
-                + angka unik 3 digit akan ditambahkan saat konfirmasi
+                Total tagihan sudah final sesuai kebijakan biaya internal. + angka unik 3 digit ditambahkan saat konfirmasi.
               </p>
             </div>
           )}
@@ -427,11 +804,11 @@ export function ManualPaymentFlow({
           <Button
             className="w-full"
             size="lg"
-            disabled={!selectedPackage || employeeCount < 1}
+            disabled={!selectedPackage || employeeCount < 1 || isCheckingActiveInvoice || Boolean(activeInvoice)}
             onClick={handleInitiatePayment}
           >
             <Receipt className="h-4 w-4 mr-2" />
-            Konfirmasi & Buat Invoice
+            Mau Bayar
           </Button>
         </CardContent>
       </Card>
@@ -440,10 +817,10 @@ export function ManualPaymentFlow({
       <Dialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Konfirmasi Pembayaran</DialogTitle>
+            <DialogTitle>Konfirmasi Mau Bayar</DialogTitle>
             <DialogDescription>
-              Langganan akan langsung aktif setelah konfirmasi. Validasi transfer dilakukan
-              kemudian oleh admin.
+              Langkah ini hanya membuat invoice. Langganan belum aktif sampai pembayaran dikonfirmasi
+              dan diverifikasi admin.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-4">
@@ -469,14 +846,14 @@ export function ManualPaymentFlow({
             <Button variant="outline" onClick={() => setShowConfirmDialog(false)}>
               Batal
             </Button>
-            <Button onClick={handleSubmitPayment} disabled={isSubmitting}>
+            <Button onClick={handleSubmitPayment} disabled={isSubmitting || !pkg}>
               {isSubmitting ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                   Memproses...
                 </>
               ) : (
-                "Konfirmasi & Aktifkan"
+                "Mau Bayar & Buat Invoice"
               )}
             </Button>
           </DialogFooter>

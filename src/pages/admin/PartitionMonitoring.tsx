@@ -21,6 +21,11 @@ import { id as idLocale } from "date-fns/locale";
 import { useNavigate } from "react-router-dom";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
+import {
   Database,
   HardDrive,
   RefreshCw,
@@ -112,7 +117,11 @@ const isJwtAuthError = (message?: string | null) =>
   Boolean(message) && /(invalid jwt|jwt expired|token.*expired|invalid token|401)/i.test(message);
 
 const ensureValidFunctionAccessToken = async (): Promise<string> => {
-  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  const { data: sessionData, error: sessionError } = await withTimeout(
+    supabase.auth.getSession(),
+    12000,
+    "admin.partition_monitoring.ensure_token.get_session timeout",
+  );
   if (sessionError) {
     throw new Error(`Gagal memeriksa sesi login: ${sessionError.message}`);
   }
@@ -125,7 +134,11 @@ const ensureValidFunctionAccessToken = async (): Promise<string> => {
   let accessToken = currentSession.access_token;
 
   const validateToken = async (token: string) => {
-    const { data: userData, error: userError } = await supabase.auth.getUser(token);
+    const { data: userData, error: userError } = await withTimeout(
+      supabase.auth.getUser(token),
+      12000,
+      "admin.partition_monitoring.ensure_token.validate_token timeout",
+    );
     return { isValid: Boolean(userData.user && !userError), errorMessage: userError?.message };
   };
 
@@ -136,10 +149,18 @@ const ensureValidFunctionAccessToken = async (): Promise<string> => {
   }
 
   // 2) Jika invalid/expired, coba refresh session sekali
-  const { data: refreshedData, error: refreshError } = await supabase.auth.refreshSession();
+  const { data: refreshedData, error: refreshError } = await withTimeout(
+    supabase.auth.refreshSession(),
+    12000,
+    "admin.partition_monitoring.ensure_token.refresh_session timeout",
+  );
   if (refreshError || !refreshedData.session?.access_token) {
     if (isJwtAuthError(firstValidation.errorMessage)) {
-      await supabase.auth.signOut();
+      await withTimeout(
+        supabase.auth.signOut(),
+        12000,
+        "admin.partition_monitoring.ensure_token.signout_invalid_jwt timeout",
+      );
       throw new Error("Sesi login tidak valid/kedaluwarsa. Silakan login ulang.");
     }
     throw new Error(refreshError?.message || "Sesi login kedaluwarsa. Silakan login ulang lalu coba lagi.");
@@ -150,7 +171,11 @@ const ensureValidFunctionAccessToken = async (): Promise<string> => {
   // 3) Validasi ulang token hasil refresh
   const secondValidation = await validateToken(accessToken);
   if (!secondValidation.isValid) {
-    await supabase.auth.signOut();
+    await withTimeout(
+      supabase.auth.signOut(),
+      12000,
+      "admin.partition_monitoring.ensure_token.signout_after_refresh timeout",
+    );
     throw new Error("Sesi login tidak valid/kedaluwarsa. Silakan login ulang.");
   }
 
@@ -184,14 +209,17 @@ const PARTITIONS_PER_PAGE = 10;
 const CLEANUP_LOGS_PER_PAGE = 5;
 const CREATION_LOGS_PER_PAGE = 5;
 const GLOSSARY_PER_PAGE = 10;
+const ADMIN_PARTITION_READ_TIMEOUT_MS = 12000;
+const ADMIN_PARTITION_MAX_RETRIES = 2;
 
-const PartitionMonitoring = () => {
+export default function PartitionMonitoring({ embedded = false }: { embedded?: boolean }) {
   const navigate = useNavigate();
   const [partitionStats, setPartitionStats] = useState<PartitionStat[]>([]);
   const [cleanupLogs, setCleanupLogs] = useState<CleanupLog[]>([]);
   const [partitionLogs, setPartitionLogs] = useState<PartitionCreationLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [isRunningMaintenance, setIsRunningMaintenance] = useState(false);
   const [glossaryQuery, setGlossaryQuery] = useState("");
   const [partitionPage, setPartitionPage] = useState(1);
@@ -243,37 +271,93 @@ const PartitionMonitoring = () => {
     setGlossaryPage(1);
   }, [glossaryQuery, filteredGlossary.length]);
 
-  const runMaintenanceViaRpc = async (action: Exclude<MaintenanceAction, "all">) => {
-    if (action === "cleanup_gps") {
-      const { data, error } = await supabase.rpc("cleanup_gps_data_partitioned");
+const runMaintenanceViaRpc = async (action: Exclude<MaintenanceAction, "all">) => {
+  if (action === "cleanup_gps") {
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("cleanup_gps_data_partitioned"),
+            ADMIN_PARTITION_READ_TIMEOUT_MS,
+            "admin.partition_monitoring.rpc.cleanup_gps timeout",
+          ),
+        {
+          maxRetries: ADMIN_PARTITION_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (error) throw new Error(`RPC cleanup_gps_data_partitioned gagal: ${error.message}`);
       return { success: true, data };
     }
 
     if (action === "create_partition") {
-      const { error } = await supabase.rpc("create_next_month_partition");
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("create_next_month_partition"),
+            ADMIN_PARTITION_READ_TIMEOUT_MS,
+            "admin.partition_monitoring.rpc.create_partition timeout",
+          ),
+        {
+          maxRetries: ADMIN_PARTITION_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (error) throw new Error(`RPC create_next_month_partition gagal: ${error.message}`);
       return { success: true, data: { success: true, message: "Next month partition ensured" } };
     }
 
     if (action === "analyze") {
-      const { data, error } = await supabase.rpc("analyze_attendance_partitions");
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("analyze_attendance_partitions"),
+            ADMIN_PARTITION_READ_TIMEOUT_MS,
+            "admin.partition_monitoring.rpc.analyze timeout",
+          ),
+        {
+          maxRetries: ADMIN_PARTITION_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (error) throw new Error(`RPC analyze_attendance_partitions gagal: ${error.message}`);
       return { success: true, data };
     }
 
-    const { data, error } = await supabase.rpc("cleanup_old_audit_logs");
+    const { data, error } = await withExponentialBackoff(
+      () =>
+        withTimeout(
+          supabase.rpc("cleanup_old_audit_logs"),
+          ADMIN_PARTITION_READ_TIMEOUT_MS,
+          "admin.partition_monitoring.rpc.cleanup_audit timeout",
+        ),
+      {
+        maxRetries: ADMIN_PARTITION_MAX_RETRIES,
+        shouldRetry: isRetryableError,
+      },
+    );
     if (error) throw new Error(`RPC cleanup_old_audit_logs gagal: ${error.message}`);
     return { success: true, data };
   };
 
   const fetchData = async () => {
     setIsLoading(true);
+    setIsRetrying(false);
     try {
       setLoadError(null);
       // Fetch partition stats
-      const { data: stats, error: statsError } = await supabase
-        .rpc('get_partition_stats');
+      const { data: stats, error: statsError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc('get_partition_stats'),
+            ADMIN_PARTITION_READ_TIMEOUT_MS,
+            "Permintaan statistik partisi timeout."
+          ),
+        {
+          maxRetries: ADMIN_PARTITION_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       
       if (statsError) {
         const errorRef = reportError(statsError, "admin.partition_monitoring.partition_stats.fetch");
@@ -283,8 +367,19 @@ const PartitionMonitoring = () => {
       }
 
       // Fetch cleanup logs
-      const { data: cleanup, error: cleanupError } = await supabase
-        .rpc('get_gps_cleanup_logs', { limit_count: 10 });
+      const { data: cleanup, error: cleanupError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc('get_gps_cleanup_logs', { limit_count: 10 }),
+            ADMIN_PARTITION_READ_TIMEOUT_MS,
+            "Permintaan log cleanup GPS timeout."
+          ),
+        {
+          maxRetries: ADMIN_PARTITION_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       
       if (cleanupError) {
         const errorRef = reportError(cleanupError, "admin.partition_monitoring.cleanup_logs.fetch");
@@ -294,8 +389,19 @@ const PartitionMonitoring = () => {
       }
 
       // Fetch partition creation logs
-      const { data: creation, error: creationError } = await supabase
-        .rpc('get_partition_creation_logs', { limit_count: 10 });
+      const { data: creation, error: creationError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc('get_partition_creation_logs', { limit_count: 10 }),
+            ADMIN_PARTITION_READ_TIMEOUT_MS,
+            "Permintaan log pembuatan partisi timeout."
+          ),
+        {
+          maxRetries: ADMIN_PARTITION_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       
       if (creationError) {
         const errorRef = reportError(creationError, "admin.partition_monitoring.partition_logs.fetch");
@@ -309,22 +415,34 @@ const PartitionMonitoring = () => {
       setLoadError(message);
       toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchData();
+    void fetchData();
   }, []);
 
   const runSingleMaintenance = async (action: Exclude<MaintenanceAction, 'all'>) => {
     const accessToken = await ensureValidFunctionAccessToken();
-    const { data, error } = await supabase.functions.invoke('partition-maintenance', {
-      body: { action },
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
+    const { data, error } = await withExponentialBackoff(
+      () =>
+        withTimeout(
+          supabase.functions.invoke('partition-maintenance', {
+            body: { action },
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+          }),
+          ADMIN_PARTITION_READ_TIMEOUT_MS,
+          `admin.partition_monitoring.invoke.partition_maintenance timeout (${action})`,
+        ),
+      {
+        maxRetries: ADMIN_PARTITION_MAX_RETRIES,
+        shouldRetry: isRetryableError,
       },
-    });
+    );
 
     if (error) {
       const detailed = await extractFunctionErrorMessage(error);
@@ -460,26 +578,44 @@ const PartitionMonitoring = () => {
   // Calculate totals
   const totalRows = partitionStats.reduce((acc, p) => acc + (p.row_count || 0), 0);
 
+  const loadingContent = (
+    <div className="space-y-6">
+      <Skeleton className="h-8 w-64" />
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {[1, 2, 3].map(i => <Skeleton key={i} className="h-32" />)}
+      </div>
+      <Skeleton className="h-96" />
+    </div>
+  );
+
   if (isLoading) {
+    if (embedded) return loadingContent;
     return (
       <SuperAdminLayout title="Monitoring Partisi" subtitle="Status tabel absensi partitioned dan log maintenance">
-        <div className="space-y-6">
-          <Skeleton className="h-8 w-64" />
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {[1, 2, 3].map(i => <Skeleton key={i} className="h-32" />)}
-          </div>
-          <Skeleton className="h-96" />
-        </div>
+        {loadingContent}
       </SuperAdminLayout>
     );
   }
 
-  return (
-    <SuperAdminLayout title="Monitoring Partisi" subtitle="Status tabel absensi partitioned dan log maintenance">
+  const pageContent = (
+    <>
       <div className="space-y-6">
+        {isRetrying && (
+          <Card className="border-amber-500/30 bg-amber-500/10">
+            <CardContent className="pt-6 text-sm text-amber-700">
+              Sedang mencoba ulang memuat data monitoring partisi...
+            </CardContent>
+          </Card>
+        )}
+
         {loadError && (
           <Card className="border-destructive/30 bg-destructive/5">
-            <CardContent className="pt-6 text-sm text-destructive">{loadError}</CardContent>
+            <CardContent className="flex flex-col gap-2 pt-6 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+              <span>{loadError}</span>
+              <Button variant="outline" size="sm" onClick={() => void fetchData()} disabled={isLoading}>
+                Coba Lagi
+              </Button>
+            </CardContent>
           </Card>
         )}
         {/* Header */}
@@ -930,8 +1066,12 @@ const PartitionMonitoring = () => {
         </CardContent>
       </Card>
       </div>
+    </>
+  );
+  if (embedded) return pageContent;
+  return (
+    <SuperAdminLayout title="Monitoring Partisi" subtitle="Status tabel absensi partitioned dan log maintenance">
+      {pageContent}
     </SuperAdminLayout>
   );
-};
-
-export default PartitionMonitoring;
+}

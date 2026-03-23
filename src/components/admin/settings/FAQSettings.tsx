@@ -9,6 +9,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { toast } from "sonner";
 import { Loader2, Save, Plus, Trash2, Edit, HelpCircle, Image } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface FAQ {
   id: string;
@@ -26,6 +28,7 @@ const defaultFAQs: FAQ[] = [
 ];
 
 export function FAQSettings() {
+  const REQUEST_TIMEOUT_MS = 12000;
   const [faqs, setFaqs] = useState<FAQ[]>(defaultFAQs);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -40,7 +43,11 @@ export function FAQSettings() {
 
   const fetchSettings = async () => {
     try {
-      const { data } = await supabase.from("system_settings").select("value").eq("key", "faq_settings").maybeSingle();
+      const { data } = await withTimeout(
+        supabase.from("system_settings").select("value").eq("key", "faq_settings").maybeSingle(),
+        REQUEST_TIMEOUT_MS,
+        "Memuat FAQ terlalu lama",
+      );
       if (data?.value) {
         const value = data.value;
         if (Array.isArray(value)) {
@@ -56,7 +63,8 @@ export function FAQSettings() {
         }
       }
     } catch (error) {
-      console.error("Error:", error);
+      const errorRef = reportError(error, "admin.settings.faq.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan FAQ.", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -65,16 +73,29 @@ export function FAQSettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const { data: existing } = await supabase.from("system_settings").select("id").eq("key", "faq_settings").maybeSingle();
+      const { data: existing } = await withTimeout(
+        supabase.from("system_settings").select("id").eq("key", "faq_settings").maybeSingle(),
+        REQUEST_TIMEOUT_MS,
+        "Membaca konfigurasi FAQ terlalu lama",
+      );
       const jsonValue = JSON.parse(JSON.stringify({ items: faqs, banner_image_url: bannerImageUrl }));
       if (existing) {
-        await supabase.from("system_settings").update({ value: jsonValue, updated_at: new Date().toISOString() }).eq("key", "faq_settings");
+        await withTimeout(
+          supabase.from("system_settings").update({ value: jsonValue, updated_at: new Date().toISOString() }).eq("key", "faq_settings"),
+          REQUEST_TIMEOUT_MS,
+          "Menyimpan konfigurasi FAQ terlalu lama",
+        );
       } else {
-        await supabase.from("system_settings").insert({ key: "faq_settings", value: jsonValue });
+        await withTimeout(
+          supabase.from("system_settings").insert({ key: "faq_settings", value: jsonValue }),
+          REQUEST_TIMEOUT_MS,
+          "Menyimpan konfigurasi FAQ terlalu lama",
+        );
       }
       toast.success("FAQ berhasil disimpan");
-    } catch (err) {
-      toast.error("Gagal menyimpan");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.faq.save");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan FAQ.", errorRef));
     } finally {
       setIsSaving(false);
     }

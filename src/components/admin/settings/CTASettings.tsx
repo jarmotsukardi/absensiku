@@ -7,6 +7,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Loader2, Save } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface CTASettingsData {
   title: string;
@@ -41,17 +43,23 @@ export function CTASettings() {
 
   const fetchSettings = async () => {
     try {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "cta_settings")
-        .maybeSingle();
+      const { data } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "cta_settings")
+            .maybeSingle(),
+        10000,
+        "Load CTA settings timeout"
+      );
 
       if (data?.value) {
         setSettings({ ...defaultSettings, ...(data.value as Record<string, unknown>) });
       }
     } catch (error) {
-      console.error("Error fetching CTA settings:", error);
+      const errorRef = reportError(error, "admin.settings.cta.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan CTA", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -60,28 +68,46 @@ export function CTASettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "cta_settings")
-        .maybeSingle();
+      const { data: existing } = await withTimeout(
+        () =>
+          supabase
+            .from("system_settings")
+            .select("id")
+            .eq("key", "cta_settings")
+            .maybeSingle(),
+        10000,
+        "Load CTA existing setting timeout"
+      );
 
       const jsonValue = JSON.parse(JSON.stringify(settings));
 
       if (existing) {
-        await supabase
-          .from("system_settings")
-          .update({ value: jsonValue, updated_at: new Date().toISOString() })
-          .eq("key", "cta_settings");
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .update({ value: jsonValue, updated_at: new Date().toISOString() })
+              .eq("key", "cta_settings"),
+          10000,
+          "Update CTA settings timeout"
+        );
+        if (error) throw error;
       } else {
-        await supabase
-          .from("system_settings")
-          .insert({ key: "cta_settings", value: jsonValue });
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .insert({ key: "cta_settings", value: jsonValue }),
+          10000,
+          "Insert CTA settings timeout"
+        );
+        if (error) throw error;
       }
       
       toast.success("Pengaturan CTA berhasil disimpan");
-    } catch (err) {
-      toast.error("Gagal menyimpan pengaturan");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.cta.save");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan", errorRef));
     } finally {
       setIsSaving(false);
     }

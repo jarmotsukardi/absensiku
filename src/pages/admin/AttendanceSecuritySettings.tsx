@@ -21,15 +21,17 @@ import {
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import { GlossaryPanel } from "@/components/common/GlossaryPanel";
 
 interface SecuritySettings {
-  // GPS Validation
+  // Validasi GPS
   require_realtime_location: boolean;
-  // Device Validation
+  // Validasi Perangkat
   block_desktop_browser: boolean;
   block_all_browsers: boolean;
   allow_iphone_safari: boolean;
-  // Device Binding Settings
+  // Pengaturan Pengikatan Perangkat
   enable_device_binding: boolean;
   max_device_reset_count: number;
   require_password_change_for_reset: boolean;
@@ -40,19 +42,22 @@ interface SecuritySettings {
   // APK Compatibility
   min_android_version: number;
 }
+const ATTENDANCE_SECURITY_QUERY_TIMEOUT_MS = 12000;
+const ATTENDANCE_SECURITY_QUERY_RETRY_MAX = 2;
 
 export default function AttendanceSecuritySettings() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [settings, setSettings] = useState<SecuritySettings>({
-    // GPS Validation
+    // Validasi GPS
     require_realtime_location: true,
-    // Device Validation
+    // Validasi Perangkat
     block_desktop_browser: true,
     block_all_browsers: false,
     allow_iphone_safari: true,
-    // Device Binding
+    // Pengikatan Perangkat
     enable_device_binding: true,
     max_device_reset_count: 3,
     require_password_change_for_reset: true,
@@ -71,11 +76,24 @@ export default function AttendanceSecuritySettings() {
   const fetchSettings = async () => {
     try {
       setLoadError(null);
-      const { data, error } = await supabase
-        .from("system_settings")
-        .select("*")
-        .eq("key", "attendance_security")
-        .maybeSingle();
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("*")
+              .eq("key", "attendance_security")
+              .maybeSingle(),
+            ATTENDANCE_SECURITY_QUERY_TIMEOUT_MS,
+            "admin.attendance_security.fetch_settings timeout"
+          ),
+        {
+          maxRetries: ATTENDANCE_SECURITY_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
 
@@ -83,13 +101,13 @@ export default function AttendanceSecuritySettings() {
         // Merge dengan default settings untuk memastikan field baru tetap ada
         const savedSettings = data.value as Record<string, unknown>;
         setSettings(prev => ({
-          // GPS Validation
+          // Validasi GPS
           require_realtime_location: typeof savedSettings.require_realtime_location === 'boolean' ? savedSettings.require_realtime_location : prev.require_realtime_location,
-          // Device Validation
+          // Validasi Perangkat
           block_desktop_browser: typeof savedSettings.block_desktop_browser === 'boolean' ? savedSettings.block_desktop_browser : prev.block_desktop_browser,
           block_all_browsers: typeof savedSettings.block_all_browsers === 'boolean' ? savedSettings.block_all_browsers : prev.block_all_browsers,
           allow_iphone_safari: typeof savedSettings.allow_iphone_safari === 'boolean' ? savedSettings.allow_iphone_safari : prev.allow_iphone_safari,
-          // Device Binding
+          // Pengikatan Perangkat
           enable_device_binding: typeof savedSettings.enable_device_binding === 'boolean' ? savedSettings.enable_device_binding : prev.enable_device_binding,
           max_device_reset_count: typeof savedSettings.max_device_reset_count === 'number' ? savedSettings.max_device_reset_count : prev.max_device_reset_count,
           require_password_change_for_reset: typeof savedSettings.require_password_change_for_reset === 'boolean' ? savedSettings.require_password_change_for_reset : prev.require_password_change_for_reset,
@@ -115,28 +133,65 @@ export default function AttendanceSecuritySettings() {
     setIsSaving(true);
     try {
       setLoadError(null);
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "attendance_security")
-        .maybeSingle();
+      setIsRetrying(false);
+      const { data: existing } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("id")
+              .eq("key", "attendance_security")
+              .maybeSingle(),
+            ATTENDANCE_SECURITY_QUERY_TIMEOUT_MS,
+            "admin.attendance_security.save_settings.lookup timeout"
+          ),
+        {
+          maxRetries: ATTENDANCE_SECURITY_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       const settingsValue = JSON.parse(JSON.stringify(settings)) as Json;
 
       if (existing) {
-        const { error } = await supabase
-          .from("system_settings")
-          .update({ value: settingsValue, updated_at: new Date().toISOString() })
-          .eq("key", "attendance_security");
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("system_settings")
+                .update({ value: settingsValue, updated_at: new Date().toISOString() })
+                .eq("key", "attendance_security"),
+              ATTENDANCE_SECURITY_QUERY_TIMEOUT_MS,
+              "admin.attendance_security.save_settings.update timeout"
+            ),
+          {
+            maxRetries: ATTENDANCE_SECURITY_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (error) throw error;
       } else {
-        const { error } = await supabase
-          .from("system_settings")
-          .insert({
-            key: "attendance_security",
-            value: settingsValue,
-            description: "Pengaturan keamanan absensi GPS",
-          });
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("system_settings")
+                .insert({
+                  key: "attendance_security",
+                  value: settingsValue,
+                  description: "Pengaturan keamanan absensi GPS",
+                }),
+              ATTENDANCE_SECURITY_QUERY_TIMEOUT_MS,
+              "admin.attendance_security.save_settings.insert timeout"
+            ),
+          {
+            maxRetries: ATTENDANCE_SECURITY_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (error) throw error;
       }
 
@@ -197,19 +252,38 @@ export default function AttendanceSecuritySettings() {
             )}
           </Button>
         </div>
+        <div className="flex justify-end">
+          <GlossaryPanel defaultCategory="absensi" />
+        </div>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang memuat pengaturan keamanan...
+          </div>
+        )}
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void fetchSettings()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 
         <Tabs defaultValue="gps" className="space-y-4">
-          <TabsList className="grid w-full grid-cols-4">
-            <TabsTrigger value="gps">Validasi GPS</TabsTrigger>
-            <TabsTrigger value="device">Validasi Perangkat</TabsTrigger>
-            <TabsTrigger value="binding">Device Binding</TabsTrigger>
-            <TabsTrigger value="apk">Kompatibilitas Aplikasi</TabsTrigger>
+          <TabsList className="h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+            <TabsTrigger value="gps" className="whitespace-nowrap">
+              Validasi GPS
+            </TabsTrigger>
+            <TabsTrigger value="device" className="whitespace-nowrap">
+              Validasi Perangkat
+            </TabsTrigger>
+            <TabsTrigger value="binding" className="whitespace-nowrap">
+              Pengikatan Perangkat
+            </TabsTrigger>
+            <TabsTrigger value="apk" className="whitespace-nowrap">
+              Kompatibilitas Aplikasi
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="gps" className="space-y-4">
@@ -220,7 +294,7 @@ export default function AttendanceSecuritySettings() {
                   Validasi Lokasi Realtime
                 </CardTitle>
                 <CardDescription>
-                  Pastikan absensi memakai koordinat terbaru saat proses check-in/check-out
+                  Pastikan absensi memakai koordinat terbaru saat proses absen masuk dan absen pulang
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
@@ -269,7 +343,7 @@ export default function AttendanceSecuritySettings() {
                   <div className="space-y-1">
                     <Label className="font-medium">Blokir Semua Browser</Label>
                     <p className="text-sm text-muted-foreground">
-                      Memblokir akses absensi dari browser (desktop & mobile) dan memaksa penggunaan aplikasi mobile internal.
+                      Memblokir akses absensi dari browser (desktop & seluler) dan memaksa penggunaan aplikasi seluler internal.
                     </p>
                   </div>
                   <Switch
@@ -310,7 +384,7 @@ export default function AttendanceSecuritySettings() {
                     <div>
                       <h4 className="font-medium text-warning">Catatan Penting</h4>
                       <ul className="text-sm text-muted-foreground mt-2 space-y-1 list-disc list-inside">
-                        <li>"Blokir Semua Browser" akan memaksa pegawai menggunakan aplikasi mobile internal</li>
+                        <li>"Blokir Semua Browser" akan memaksa pegawai menggunakan aplikasi seluler internal</li>
                         <li>Jika dimatikan, /employee/login dapat diakses sesuai kebijakan blokir lainnya</li>
                         <li>Pastikan aplikasi internal sudah tersedia sebelum mengaktifkan fitur ini</li>
                         <li>Admin tetap bisa mengakses halaman via browser</li>
@@ -327,7 +401,7 @@ export default function AttendanceSecuritySettings() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Fingerprint className="h-5 w-5" />
-                  Device Binding (Android ID)
+                  Pengikatan Perangkat (Android ID)
                 </CardTitle>
                 <CardDescription>
                   Pengaturan untuk mencegah titip absen dengan mengikat perangkat ke pegawai
@@ -336,7 +410,7 @@ export default function AttendanceSecuritySettings() {
               <CardContent className="space-y-6">
                 <div className="flex items-center justify-between">
                   <div className="space-y-1">
-                    <Label className="font-medium">Aktifkan Device Binding</Label>
+                    <Label className="font-medium">Aktifkan Pengikatan Perangkat</Label>
                     <p className="text-sm text-muted-foreground">
                       Setiap pegawai hanya bisa absen dari perangkat yang sudah terdaftar (Android ID)
                     </p>
@@ -349,9 +423,9 @@ export default function AttendanceSecuritySettings() {
 
                 <div className="flex items-center justify-between">
                   <div className="space-y-1">
-                    <Label className="font-medium">Maks. Reset Device ID</Label>
+                    <Label className="font-medium">Maks. Reset ID Perangkat</Label>
                     <p className="text-sm text-muted-foreground">
-                      Batas maksimal reset device mandiri per pegawai dalam 1 bulan berjalan (dienforce di backend).
+                      Batas maksimal reset perangkat mandiri per pegawai dalam 1 bulan berjalan.
                     </p>
                   </div>
                   <Input
@@ -381,7 +455,7 @@ export default function AttendanceSecuritySettings() {
                   <div className="flex items-start gap-3">
                     <Fingerprint className="h-5 w-5 text-info mt-0.5" />
                     <div>
-                      <h4 className="font-medium text-info">Cara Kerja Device Binding</h4>
+                      <h4 className="font-medium text-info">Cara Kerja Pengikatan Perangkat</h4>
                       <ul className="text-sm text-muted-foreground mt-2 space-y-1 list-disc list-inside">
                         <li>Saat pertama kali absen, Android ID akan otomatis tersimpan</li>
                         <li>Absen selanjutnya harus dari perangkat dengan Android ID yang sama</li>
@@ -395,9 +469,9 @@ export default function AttendanceSecuritySettings() {
                 <div className="space-y-4 rounded-lg border p-4">
                   <div className="flex items-center justify-between">
                     <div className="space-y-1">
-                      <Label className="font-medium">Aktifkan Lock OTP Reset Device</Label>
+                      <Label className="font-medium">Aktifkan Kunci OTP Reset Perangkat</Label>
                       <p className="text-sm text-muted-foreground">
-                        Membatasi pengiriman OTP reset device agar tidak disalahgunakan.
+                        Membatasi pengiriman OTP reset perangkat agar tidak disalahgunakan.
                       </p>
                     </div>
                     <Switch

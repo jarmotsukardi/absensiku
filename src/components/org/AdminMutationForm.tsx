@@ -7,6 +7,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { Loader2, UserCog } from "lucide-react";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface Employee {
   id: string;
@@ -67,17 +69,38 @@ export function AdminMutationForm({ open, onOpenChange, employee, onSuccess }: A
 
     setIsLoading(true);
     try {
-      const [opdRes, workUnitRes, officeRes] = await Promise.all([
-        supabase.from("opd").select("id, name").eq("tenant_id", tenantId).eq("is_active", true).order("name"),
-        supabase.from("work_units").select("id, name, opd_id").eq("tenant_id", tenantId).eq("is_active", true).order("name"),
-        supabase.from("offices").select("id, name, opd_id").eq("tenant_id", tenantId).eq("is_active", true).order("name"),
-      ]);
+      const [opdRes, workUnitRes, officeRes] = await withTimeout(
+        () =>
+          Promise.all([
+            supabase.from("opd").select("id, name").eq("tenant_id", tenantId).eq("is_active", true).order("name"),
+            supabase
+              .from("work_units")
+              .select("id, name, opd_id")
+              .eq("tenant_id", tenantId)
+              .eq("is_active", true)
+              .order("name"),
+            supabase
+              .from("offices")
+              .select("id, name, opd_id")
+              .eq("tenant_id", tenantId)
+              .eq("is_active", true)
+              .order("name"),
+          ]),
+        12000,
+      );
+
+      if (opdRes.error) throw opdRes.error;
+      if (workUnitRes.error) throw workUnitRes.error;
+      if (officeRes.error) throw officeRes.error;
 
       setOpdList(opdRes.data || []);
       setWorkUnits(workUnitRes.data || []);
       setOffices(officeRes.data || []);
     } catch (error) {
-      console.error("Error fetching master data:", error);
+      const errorRef = reportError(error, "org.admin_mutation.fetch_master_data", {
+        tenant_id: tenantId,
+      });
+      toast.error(appendErrorReference("Gagal memuat data mutasi", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -139,43 +162,52 @@ export function AdminMutationForm({ open, onOpenChange, employee, onSuccess }: A
       }
 
       // Directly update employee (admin-initiated mutation)
-      const { error: updateError } = await supabase
-        .from("employees")
-        .update(requestedChanges)
-        .eq("id", employee.id);
+      const { error: updateError } = await withTimeout(
+        () => supabase.from("employees").update(requestedChanges).eq("id", employee.id),
+        12000,
+      );
 
       if (updateError) throw updateError;
 
       // Log the mutation in mutation_requests as "disetujui" (admin action)
-      const { error: logError } = await supabase.from("mutation_requests").insert({
-        tenant_id: employee.tenant_id,
-        employee_id: employee.id,
-        mutation_type: "transfer",
-        requested_changes: requestedChanges,
-        original_data: originalData,
-        reason: `[Admin] ${reason}`,
-        status: "disetujui",
-        approved_at: new Date().toISOString(),
-      });
+      const { error: logError } = await withTimeout(
+        () =>
+          supabase.from("mutation_requests").insert({
+            tenant_id: employee.tenant_id,
+            employee_id: employee.id,
+            mutation_type: "transfer",
+            requested_changes: requestedChanges,
+            original_data: originalData,
+            reason: `[Admin] ${reason}`,
+            status: "disetujui",
+            approved_at: new Date().toISOString(),
+          }),
+        12000,
+      );
 
       if (logError) throw logError;
 
       // Create notification for employee
-      const { data: empUser } = await supabase
-        .from("employees")
-        .select("user_id")
-        .eq("id", employee.id)
-        .single();
+      const { data: empUser, error: empUserError } = await withTimeout(
+        () => supabase.from("employees").select("user_id").eq("id", employee.id).single(),
+        12000,
+      );
+      if (empUserError) throw empUserError;
 
       if (empUser?.user_id) {
-        await supabase.from("notifications").insert({
-          user_id: empUser.user_id,
-          title: "Anda Dimutasi",
-          message: `Admin telah memutasi Anda dengan alasan: ${reason}`,
-          type: "info",
-          related_id: employee.id,
-          related_type: "mutation",
-        });
+        const { error: notifError } = await withTimeout(
+          () =>
+            supabase.from("notifications").insert({
+              user_id: empUser.user_id,
+              title: "Anda Dimutasi",
+              message: `Admin telah memutasi Anda dengan alasan: ${reason}`,
+              type: "info",
+              related_id: employee.id,
+              related_type: "mutation",
+            }),
+          12000,
+        );
+        if (notifError) throw notifError;
       }
 
       toast.success("Mutasi berhasil dilakukan");
@@ -183,9 +215,14 @@ export function AdminMutationForm({ open, onOpenChange, employee, onSuccess }: A
       setReason("");
       onSuccess?.();
     } catch (error: unknown) {
-      console.error("Error processing mutation:", error);
+      const errorRef = reportError(error, "org.admin_mutation.process", {
+        employee_id: employee.id,
+        tenant_id: employee.tenant_id,
+      });
       const errorMessage = error instanceof Error ? error.message : "Gagal melakukan mutasi";
-      toast.error("Gagal melakukan mutasi", { description: errorMessage });
+      toast.error("Gagal melakukan mutasi", {
+        description: appendErrorReference(errorMessage, errorRef),
+      });
     } finally {
       setIsSaving(false);
     }

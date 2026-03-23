@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -53,6 +54,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
@@ -60,6 +62,8 @@ import { OrganizationDetailPanel } from "@/components/admin/organization/Organiz
 import AdminInstitutionTypesManagement from "@/pages/admin/InstitutionTypesManagement";
 
 const ITEMS_PER_PAGE = 15;
+const ORGANIZATIONS_QUERY_TIMEOUT_MS = 12000;
+const ORGANIZATIONS_QUERY_RETRY_MAX = 2;
 
 interface Organization {
   id: string;
@@ -95,6 +99,7 @@ export default function Organizations() {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [mainView, setMainView] = useState<"organizations" | "institution-types">("organizations");
   
   // Detail panel state
@@ -120,26 +125,45 @@ export default function Organizations() {
     setLoadError(null);
     try {
       setIsLoading(true);
+      setIsRetrying(false);
 
       const from = (currentPage - 1) * ITEMS_PER_PAGE;
       const to = from + ITEMS_PER_PAGE - 1;
       const escapedQuery = searchQuery.trim().replace(/[%_]/g, "\\$&");
 
-      let query = supabase
-        .from("tenants")
-        .select("*", { count: "exact" })
-        .order("created_at", { ascending: false })
-        .range(from, to);
+      const buildQuery = () => {
+        let query = supabase
+          .from("tenants")
+          .select("*", { count: "exact" })
+          .order("created_at", { ascending: false })
+          .range(from, to);
 
-      if (activeTab !== "all") {
-        query = query.eq("organization_type", activeTab as Organization["organization_type"]);
-      }
+        if (activeTab !== "all") {
+          query = query.eq("organization_type", activeTab as Organization["organization_type"]);
+        }
 
-      if (escapedQuery) {
-        query = query.or(`name.ilike.%${escapedQuery}%,code.ilike.%${escapedQuery}%,email.ilike.%${escapedQuery}%`);
-      }
+        if (escapedQuery) {
+          query = query.or(
+            `name.ilike.%${escapedQuery}%,code.ilike.%${escapedQuery}%,email.ilike.%${escapedQuery}%`
+          );
+        }
 
-      const { data, count, error } = await query;
+        return query;
+      };
+
+      const { data, count, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            buildQuery(),
+            ORGANIZATIONS_QUERY_TIMEOUT_MS,
+            "admin.organizations.fetch timeout"
+          ),
+        {
+          maxRetries: ORGANIZATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setOrganizations(data || []);
@@ -184,15 +208,28 @@ export default function Organizations() {
     setLoadError(null);
     
     try {
-      const { error } = await supabase
-        .from("tenants")
-        .update({
-          name: editForm.name,
-          email: editForm.email || null,
-          phone: editForm.phone || null,
-          is_active: editForm.is_active,
-        })
-        .eq("id", editingOrg.id);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("tenants")
+              .update({
+                name: editForm.name,
+                email: editForm.email || null,
+                phone: editForm.phone || null,
+                is_active: editForm.is_active,
+              })
+              .eq("id", editingOrg.id),
+            ORGANIZATIONS_QUERY_TIMEOUT_MS,
+            "admin.organizations.update timeout"
+          ),
+        {
+          maxRetries: ORGANIZATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       
@@ -221,10 +258,23 @@ export default function Organizations() {
     setIsDeleting(true);
     setLoadError(null);
     try {
-      const { error } = await supabase
-        .from("tenants")
-        .delete()
-        .eq("id", deletingOrg.id);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("tenants")
+              .delete()
+              .eq("id", deletingOrg.id),
+            ORGANIZATIONS_QUERY_TIMEOUT_MS,
+            "admin.organizations.delete timeout"
+          ),
+        {
+          maxRetries: ORGANIZATIONS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
 
@@ -265,22 +315,24 @@ export default function Organizations() {
         onValueChange={(value) => setMainView(value as "organizations" | "institution-types")}
         className="space-y-6"
       >
-        <TabsList>
-          <TabsTrigger value="organizations" className="gap-2">
-            <Building2 className="h-4 w-4" />
-            Daftar Organisasi
-          </TabsTrigger>
-          <TabsTrigger value="institution-types" className="gap-2">
-            <FileStack className="h-4 w-4" />
-            Jenis Instansi
-          </TabsTrigger>
-        </TabsList>
+        <div className="overflow-x-auto pb-1">
+          <TabsList className="min-w-max h-auto gap-1.5 rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+            <TabsTrigger value="organizations" className="gap-2 whitespace-nowrap">
+              <Building2 className="h-4 w-4" />
+              Daftar Organisasi
+            </TabsTrigger>
+            <TabsTrigger value="institution-types" className="gap-2 whitespace-nowrap">
+              <FileStack className="h-4 w-4" />
+              Jenis Instansi
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
         <TabsContent value="organizations">
       <div className="flex h-full">
         <div className={`flex-1 space-y-6 ${selectedOrgId ? 'pr-4' : ''}`}>
         {/* Header Actions */}
-        <div className="flex flex-col sm:flex-row gap-4 justify-between">
+        <div className="flex flex-col gap-4 rounded-2xl border border-slate-200/80 bg-white/80 p-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
           <div className="relative flex-1 max-w-md">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
@@ -300,20 +352,36 @@ export default function Organizations() {
         <Card>
           <CardHeader className="pb-3">
             <Tabs value={activeTab} onValueChange={setActiveTab}>
-              <TabsList>
-                {tabs.map((tab) => (
-                  <TabsTrigger key={tab.id} value={tab.id} className="gap-2">
-                    <tab.icon className="h-4 w-4" />
-                    <span className="hidden sm:inline">{tab.label}</span>
-                  </TabsTrigger>
-                ))}
-              </TabsList>
+              <div className="overflow-x-auto pb-1">
+                <TabsList className="min-w-max h-auto gap-1.5 rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+                  {tabs.map((tab) => (
+                    <TabsTrigger key={tab.id} value={tab.id} className="gap-2 whitespace-nowrap">
+                      <tab.icon className="h-4 w-4" />
+                      <span className="hidden sm:inline">{tab.label}</span>
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </div>
             </Tabs>
           </CardHeader>
           <CardContent>
+            {isRetrying && (
+              <div className="mb-4 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                Sedang mencoba ulang memuat data organisasi...
+              </div>
+            )}
             {loadError && (
-              <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                {loadError}
+              <div className="mb-4 flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <span>{loadError}</span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="bg-white"
+                  onClick={() => void fetchOrganizations()}
+                >
+                  Coba Lagi
+                </Button>
               </div>
             )}
             {isLoading ? (
@@ -520,12 +588,15 @@ export default function Organizations() {
                 />
               </div>
             </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setIsEditOpen(false)}>Batal</Button>
-              <Button onClick={handleSaveEdit} disabled={isSaving}>
-                {isSaving && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-                Simpan
-              </Button>
+            <DialogFooter className={dialogActionBarClassName}>
+              <DialogActionHint>Perubahan profil organisasi langsung terlihat pada dashboard tenant.</DialogActionHint>
+              <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                <Button variant="outline" className="w-full sm:w-auto bg-white" onClick={() => setIsEditOpen(false)}>Batal</Button>
+                <Button className="w-full sm:w-auto" onClick={handleSaveEdit} disabled={isSaving}>
+                  {isSaving && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                  Simpan
+                </Button>
+              </div>
             </DialogFooter>
           </DialogContent>
         </Dialog>
@@ -547,21 +618,25 @@ export default function Organizations() {
                 Tindakan ini akan menghapus organisasi{deletingOrg ? ` "${deletingOrg.name}"` : ""}. Aksi ini tidak dapat dibatalkan.
               </DialogDescription>
             </DialogHeader>
-            <DialogFooter>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setIsDeleteOpen(false);
-                  setDeletingOrg(null);
-                }}
-                disabled={isDeleting}
-              >
-                Batal
-              </Button>
-              <Button variant="destructive" onClick={handleDeleteOrganization} disabled={isDeleting}>
-                {isDeleting && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-                Hapus
-              </Button>
+            <DialogFooter className={dialogActionBarClassName}>
+              <DialogActionHint>Tindakan hapus bersifat permanen dan tidak dapat dipulihkan.</DialogActionHint>
+              <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                <Button
+                  variant="outline"
+                  className="w-full sm:w-auto bg-white"
+                  onClick={() => {
+                    setIsDeleteOpen(false);
+                    setDeletingOrg(null);
+                  }}
+                  disabled={isDeleting}
+                >
+                  Batal
+                </Button>
+                <Button className="w-full sm:w-auto" variant="destructive" onClick={handleDeleteOrganization} disabled={isDeleting}>
+                  {isDeleting && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                  Hapus
+                </Button>
+              </div>
             </DialogFooter>
           </DialogContent>
         </Dialog>

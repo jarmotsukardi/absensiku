@@ -37,7 +37,7 @@ import type { Tables } from "@/integrations/supabase/types";
 import { toast } from "sonner";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
-type DashboardTab = "home" | "history" | "requests" | "news" | "articles" | "announcements" | "notifications" | "help" | "profile" | "activation";
+type DashboardTab = "home" | "history" | "requests" | "news" | "articles" | "announcements" | "notifications" | "help" | "profile" | "activation" | "billing";
 
 interface EmployeeProfile {
   id: string;
@@ -119,6 +119,12 @@ const DEFAULT_HELP_FAQS: Array<{ id: string; question: string; answer?: string |
     question: "Apa yang harus dilakukan jika lupa password?",
     answer: "Gunakan menu ganti/reset password pada halaman autentikasi, atau hubungi admin organisasi.",
   },
+  {
+    id: "default-help-4",
+    question: "Mengapa pilihan golongan di perubahan profil berbeda dengan yang saya harapkan?",
+    answer:
+      "Pilihan golongan mengikuti master data aktif organisasi. Hubungi admin organisasi agar golongan yang dibutuhkan ditambahkan atau diaktifkan.",
+  },
 ];
 
 type WfhRequestRow = Tables<"wfh_requests">;
@@ -132,7 +138,7 @@ const TABS: Array<{ id: DashboardTab; label: string; icon: React.ElementType }> 
   { id: "articles", label: "Artikel", icon: FileClock },
   { id: "announcements", label: "Pengumuman", icon: Megaphone },
   { id: "notifications", label: "Notifikasi", icon: Bell },
-  { id: "activation", label: "Aktivasi", icon: Zap },
+  { id: "activation", label: "Billing", icon: Zap },
   { id: "help", label: "Bantuan", icon: HelpCircle },
   { id: "profile", label: "Profil", icon: User2 },
 ];
@@ -183,7 +189,8 @@ export default function EmployeeDashboardReadonly() {
   const { leaveRequests, isLoading: leaveLoading, isSubmitting: leaveSubmitting, createLeaveRequest, cancelLeaveRequest, refetch: refetchLeave } = useLeaveRequests(employee?.id || null);
 
   useEffect(() => {
-    const tab = (new URLSearchParams(location.search).get("tab") || "home") as DashboardTab;
+    const rawTab = (new URLSearchParams(location.search).get("tab") || "home") as DashboardTab;
+    const tab = rawTab === "billing" ? "activation" : rawTab;
     const allowed = new Set<DashboardTab>(TABS.map((t) => t.id));
     setActiveTab(allowed.has(tab) ? tab : "home");
   }, [location.search]);
@@ -793,7 +800,7 @@ export default function EmployeeDashboardReadonly() {
           )}
 
           {!isLoading && activeTab === "activation" && employee?.tenant_id && (
-            <ReadonlyActivationTab panelClass={panelClass} tenantId={employee.tenant_id} />
+            <ReadonlyActivationTab panelClass={panelClass} tenantId={employee.tenant_id} employeeId={employee.id} />
           )}
           </main>
         </div>

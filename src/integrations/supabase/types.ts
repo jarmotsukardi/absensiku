@@ -1900,6 +1900,8 @@ export type Database = {
           notes: string | null
           payment_method: string | null
           payment_source: string
+          pph_amount: number
+          ppn_amount: number
           reference_number: string | null
           tenant_id: string | null
           transaction_date: string
@@ -1917,6 +1919,8 @@ export type Database = {
           notes?: string | null
           payment_method?: string | null
           payment_source: string
+          pph_amount?: number
+          ppn_amount?: number
           reference_number?: string | null
           tenant_id?: string | null
           transaction_date?: string
@@ -1934,6 +1938,8 @@ export type Database = {
           notes?: string | null
           payment_method?: string | null
           payment_source?: string
+          pph_amount?: number
+          ppn_amount?: number
           reference_number?: string | null
           tenant_id?: string | null
           transaction_date?: string
@@ -2159,7 +2165,11 @@ export type Database = {
           paid_at: string | null
           payment_method_type: string | null
           payment_proof_url: string | null
+          pph_amount: number
+          pph_percentage: number
           price_per_employee: number
+          ppn_amount: number
+          ppn_percentage: number
           rejection_reason: string | null
           status: string
           subscription_id: string | null
@@ -2198,7 +2208,11 @@ export type Database = {
           paid_at?: string | null
           payment_method_type?: string | null
           payment_proof_url?: string | null
+          pph_amount?: number
+          pph_percentage?: number
           price_per_employee: number
+          ppn_amount?: number
+          ppn_percentage?: number
           rejection_reason?: string | null
           status?: string
           subscription_id?: string | null
@@ -2237,7 +2251,11 @@ export type Database = {
           paid_at?: string | null
           payment_method_type?: string | null
           payment_proof_url?: string | null
+          pph_amount?: number
+          pph_percentage?: number
           price_per_employee?: number
+          ppn_amount?: number
+          ppn_percentage?: number
           rejection_reason?: string | null
           status?: string
           subscription_id?: string | null
@@ -2352,11 +2370,15 @@ export type Database = {
           account_name: string | null
           account_number: string | null
           amount: number
+          archive_expires_at: string | null
+          archived_at: string | null
           bank_name: string | null
+          confirmed_amount: number | null
           created_at: string | null
           id: string
           invoice_number: string | null
           invoice_url: string | null
+          is_archived: boolean
           notes: string | null
           payment_date: string | null
           payment_method: string | null
@@ -2364,9 +2386,12 @@ export type Database = {
           rejection_reason: string | null
           status: string | null
           subscription_id: string | null
+          transfer_proof_path: string | null
           tenant_id: string
           transfer_proof_url: string | null
           updated_at: string | null
+          verification_method: string | null
+          verified_amount: number | null
           verified_at: string | null
           verified_by: string | null
         }
@@ -2374,11 +2399,15 @@ export type Database = {
           account_name?: string | null
           account_number?: string | null
           amount: number
+          archive_expires_at?: string | null
+          archived_at?: string | null
           bank_name?: string | null
+          confirmed_amount?: number | null
           created_at?: string | null
           id?: string
           invoice_number?: string | null
           invoice_url?: string | null
+          is_archived?: boolean
           notes?: string | null
           payment_date?: string | null
           payment_method?: string | null
@@ -2386,9 +2415,12 @@ export type Database = {
           rejection_reason?: string | null
           status?: string | null
           subscription_id?: string | null
+          transfer_proof_path?: string | null
           tenant_id: string
           transfer_proof_url?: string | null
           updated_at?: string | null
+          verification_method?: string | null
+          verified_amount?: number | null
           verified_at?: string | null
           verified_by?: string | null
         }
@@ -2396,11 +2428,15 @@ export type Database = {
           account_name?: string | null
           account_number?: string | null
           amount?: number
+          archive_expires_at?: string | null
+          archived_at?: string | null
           bank_name?: string | null
+          confirmed_amount?: number | null
           created_at?: string | null
           id?: string
           invoice_number?: string | null
           invoice_url?: string | null
+          is_archived?: boolean
           notes?: string | null
           payment_date?: string | null
           payment_method?: string | null
@@ -2408,9 +2444,12 @@ export type Database = {
           rejection_reason?: string | null
           status?: string | null
           subscription_id?: string | null
+          transfer_proof_path?: string | null
           tenant_id?: string
           transfer_proof_url?: string | null
           updated_at?: string | null
+          verification_method?: string | null
+          verified_amount?: number | null
           verified_at?: string | null
           verified_by?: string | null
         }
@@ -4255,6 +4294,15 @@ export type Database = {
           tidak_hadir: number
           tugas_luar: number
         }[]
+      }
+      log_employee_invitation_flow_audit: {
+        Args: {
+          p_event: string
+          p_invitation_id: string
+          p_payload?: Json
+          p_tenant_id: string
+        }
+        Returns: string
       }
       get_feedback_stats_filtered: {
         Args: {

@@ -79,6 +79,15 @@ interface BillingLogRow {
   metadata: JsonObject | null;
 }
 
+interface ArchivedManualPaymentRow {
+  id: string;
+  tenant_id: string;
+  invoice_number: string | null;
+  transfer_proof_url: string | null;
+  transfer_proof_path: string | null;
+  archive_expires_at: string | null;
+}
+
 interface SendResult {
   ok: boolean;
   provider?: string;
@@ -89,7 +98,48 @@ type NotificationReason =
   | "GRACE_PERIOD_ENTERED"
   | "GRACE_PERIOD_REMINDER"
   | "GRACE_PERIOD_LAST_DAY"
-  | "GRACE_PERIOD_EXPIRED";
+  | "GRACE_PERIOD_EXPIRED"
+  | "INVOICE_DUE_SOON";
+
+const createErrorRef = (): string => {
+  const compactIso = new Date()
+    .toISOString()
+    .replaceAll("-", "")
+    .replaceAll(":", "")
+    .replace("T", "")
+    .replaceAll(".", "")
+    .replace("Z", "")
+    .slice(0, 14);
+  const random = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `ERR-${compactIso}-${random}`;
+};
+
+const logClientError = async (
+  supabase: ReturnType<typeof createClient>,
+  params: {
+    traceId: string;
+    context: string;
+    message: string;
+    tenantId?: string | null;
+    metadata?: JsonObject;
+  },
+) => {
+  const payload = {
+    error_ref: createErrorRef(),
+    context: params.context,
+    message: params.message,
+    tenant_id: params.tenantId ?? null,
+    source: "edge:billing-grace-notifier",
+    metadata: {
+      trace_id: params.traceId,
+      ...(params.metadata || {}),
+    },
+  };
+  const { error } = await supabase.from("client_error_logs").insert(payload);
+  if (error) {
+    logTraceError(params.traceId, "Failed to persist client_error_logs from billing-grace-notifier", error);
+  }
+};
 
 const toStringSafe = (value: unknown): string => (typeof value === "string" ? value : "");
 
@@ -124,6 +174,29 @@ const normalizePhone = (raw: string | null): string | null => {
   if (!value) return null;
   if (value.startsWith("0")) value = `62${value.slice(1)}`;
   return value;
+};
+
+const parseRetentionDays = (raw: unknown, fallback: number): number => {
+  const min = 1;
+  const max = 365;
+  if (typeof raw === "number" && Number.isFinite(raw)) return Math.min(max, Math.max(min, Math.floor(raw)));
+  if (typeof raw === "string" && raw.trim() && /^\d+$/.test(raw.trim())) {
+    return Math.min(max, Math.max(min, Number.parseInt(raw.trim(), 10)));
+  }
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const value = (raw as Record<string, unknown>).value;
+    return parseRetentionDays(value, fallback);
+  }
+  return Math.min(max, Math.max(min, fallback));
+};
+
+const toProofPathFromPublicUrl = (url: string | null): string | null => {
+  if (!url) return null;
+  const marker = "/storage/v1/object/public/payment-proofs/";
+  const idx = url.indexOf(marker);
+  if (idx < 0) return null;
+  const rest = url.slice(idx + marker.length);
+  return rest || null;
 };
 
 const parseDateOnlyUtc = (value: string): Date => {
@@ -188,6 +261,8 @@ const getMessagePayload = (params: {
     ? "Pengingat Grace Period"
     : reason === "GRACE_PERIOD_LAST_DAY"
     ? "Hari Terakhir Grace Period"
+    : reason === "INVOICE_DUE_SOON"
+    ? "Pengingat Jatuh Tempo Invoice"
     : "Grace Period Berakhir";
 
   const reasonLineBase = reason === "GRACE_PERIOD_ENTERED"
@@ -198,6 +273,14 @@ const getMessagePayload = (params: {
     }`
     : reason === "GRACE_PERIOD_LAST_DAY"
     ? "Hari ini adalah batas akhir grace period. Segera selesaikan pembayaran agar layanan tidak dinonaktifkan."
+    : reason === "INVOICE_DUE_SOON"
+    ? `Invoice Anda akan segera jatuh tempo${
+      typeof daysRemaining === "number"
+        ? daysRemaining <= 0
+          ? " hari ini."
+          : ` (sisa ${daysRemaining} hari).`
+        : "."
+    }`
     : "Masa grace period telah berakhir. Layanan dapat dinonaktifkan jika pembayaran belum diterima.";
 
   const purgeLine = purgeDateText
@@ -434,6 +517,7 @@ const getChannelReason = (
 };
 
 const normalizeReason = (value: string): NotificationReason => {
+  if (value === "INVOICE_DUE_SOON") return "INVOICE_DUE_SOON";
   if (value === "GRACE_PERIOD_REMINDER") return "GRACE_PERIOD_REMINDER";
   if (value === "GRACE_PERIOD_LAST_DAY") return "GRACE_PERIOD_LAST_DAY";
   if (value === "GRACE_PERIOD_EXPIRED") return "GRACE_PERIOD_EXPIRED";
@@ -442,15 +526,448 @@ const normalizeReason = (value: string): NotificationReason => {
 
 const mapReasonToInAppType = (reason: NotificationReason): "info" | "warning" | "error" => {
   if (reason === "GRACE_PERIOD_EXPIRED") return "error";
-  if (reason === "GRACE_PERIOD_LAST_DAY" || reason === "GRACE_PERIOD_REMINDER") return "warning";
+  if (
+    reason === "GRACE_PERIOD_LAST_DAY" ||
+    reason === "GRACE_PERIOD_REMINDER" ||
+    reason === "INVOICE_DUE_SOON"
+  ) return "warning";
   return "info";
 };
 
 const mapReasonToInAppTitle = (reason: NotificationReason): string => {
+  if (reason === "INVOICE_DUE_SOON") return "Pengingat Jatuh Tempo Invoice";
   if (reason === "GRACE_PERIOD_EXPIRED") return "Grace Period Berakhir";
   if (reason === "GRACE_PERIOD_LAST_DAY") return "Hari Terakhir Grace Period";
   if (reason === "GRACE_PERIOD_REMINDER") return "Pengingat Pembayaran Grace Period";
   return "Tenant Masuk Grace Period";
+};
+
+const runArchivedManualPaymentCleanup = async (
+  supabase: ReturnType<typeof createClient>,
+  traceId: string,
+  dryRun: boolean,
+) => {
+  const defaultRetentionDays = 7;
+  let retentionDays = defaultRetentionDays;
+  const summary = {
+    retention_days: defaultRetentionDays,
+    scanned: 0,
+    deleted_rows: 0,
+    deleted_files: 0,
+    failed_rows: 0,
+    dry_run: dryRun,
+  };
+
+  const { data: retentionSetting, error: retentionError } = await supabase
+    .from("system_settings")
+    .select("value")
+    .eq("key", "payment_archive_retention_days")
+    .maybeSingle();
+  if (retentionError) {
+    logTraceError(traceId, "Failed to load payment archive retention setting", retentionError);
+    await logClientError(supabase, {
+      traceId,
+      context: "billing.archive_cleanup.retention_setting.fetch_failed",
+      message: retentionError.message || "Failed to load payment archive retention setting",
+      metadata: { code: retentionError.code || null },
+    });
+  } else {
+    retentionDays = parseRetentionDays((retentionSetting?.value as unknown) ?? defaultRetentionDays, defaultRetentionDays);
+    summary.retention_days = retentionDays;
+  }
+
+  const { data: archivedRows, error: archivedError } = await supabase
+    .from("manual_payments")
+    .select("id, tenant_id, invoice_number, transfer_proof_url, transfer_proof_path, archive_expires_at")
+    .eq("is_archived", true)
+    .not("archive_expires_at", "is", null)
+    .lte("archive_expires_at", new Date().toISOString())
+    .order("archive_expires_at", { ascending: true })
+    .limit(300);
+
+  if (archivedError) {
+    logTraceError(traceId, "Failed to load expired archived manual payments", archivedError);
+    await logClientError(supabase, {
+      traceId,
+      context: "billing.archive_cleanup.expired_rows.fetch_failed",
+      message: archivedError.message || "Failed to load expired archived manual payments",
+      metadata: { code: archivedError.code || null },
+    });
+    return summary;
+  }
+
+  const rows = (archivedRows ?? []) as ArchivedManualPaymentRow[];
+  summary.scanned = rows.length;
+  if (rows.length === 0) return summary;
+
+  if (dryRun) {
+    return {
+      ...summary,
+      deleted_rows: rows.length,
+    };
+  }
+
+  for (const row of rows) {
+    try {
+      const proofPath = row.transfer_proof_path || toProofPathFromPublicUrl(row.transfer_proof_url);
+      if (proofPath) {
+        const { error: removeFileError } = await supabase.storage.from("payment-proofs").remove([proofPath]);
+        if (removeFileError) {
+          summary.failed_rows += 1;
+          logTraceError(traceId, `Failed to remove proof file for manual payment ${row.id}`, removeFileError);
+          await logClientError(supabase, {
+            traceId,
+            context: "billing.archive_cleanup.storage.remove_failed",
+            message: removeFileError.message || `Failed to remove proof file for manual payment ${row.id}`,
+            tenantId: row.tenant_id,
+            metadata: {
+              manual_payment_id: row.id,
+              invoice_number: row.invoice_number,
+              proof_path: proofPath,
+              code: removeFileError.code || null,
+            },
+          });
+          continue;
+        }
+        summary.deleted_files += 1;
+      }
+
+      const { error: deleteRowError } = await supabase.from("manual_payments").delete().eq("id", row.id);
+      if (deleteRowError) {
+        summary.failed_rows += 1;
+        logTraceError(traceId, `Failed to delete archived manual payment ${row.id}`, deleteRowError);
+        await logClientError(supabase, {
+          traceId,
+          context: "billing.archive_cleanup.manual_payment.delete_failed",
+          message: deleteRowError.message || `Failed to delete archived manual payment ${row.id}`,
+          tenantId: row.tenant_id,
+          metadata: {
+            manual_payment_id: row.id,
+            invoice_number: row.invoice_number,
+            code: deleteRowError.code || null,
+          },
+        });
+        continue;
+      }
+      summary.deleted_rows += 1;
+    } catch (error) {
+      summary.failed_rows += 1;
+      logTraceError(traceId, `Unhandled cleanup error for archived manual payment ${row.id}`, error);
+      await logClientError(supabase, {
+        traceId,
+        context: "billing.archive_cleanup.unhandled",
+        message: error instanceof Error ? error.message : `Unhandled cleanup error for manual payment ${row.id}`,
+        tenantId: row.tenant_id,
+        metadata: {
+          manual_payment_id: row.id,
+          invoice_number: row.invoice_number,
+        },
+      });
+    }
+  }
+
+  if (summary.failed_rows > 0) {
+    await logClientError(supabase, {
+      traceId,
+      context: "billing.archive_cleanup.summary.partial_failure",
+      message: `Cleanup arsip pembayaran gagal pada ${summary.failed_rows} dari ${summary.scanned} baris`,
+      metadata: {
+        scanned: summary.scanned,
+        deleted_rows: summary.deleted_rows,
+        deleted_files: summary.deleted_files,
+        failed_rows: summary.failed_rows,
+      },
+    });
+  }
+
+  return summary;
+};
+
+const processDueSoonInvoiceReminders = async (
+  supabase: ReturnType<typeof createClient>,
+  traceId: string,
+  params: {
+    tenantFilter: string | null;
+    limit: number;
+    dryRun: boolean;
+  },
+): Promise<JsonObject> => {
+  const dueSoonWindowDays = Math.max(
+    Number.parseInt(Deno.env.get("BILLING_DUE_SOON_WINDOW_DAYS") ?? "3", 10) || 3,
+    0,
+  );
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const windowEnd = new Date();
+  windowEnd.setUTCDate(windowEnd.getUTCDate() + dueSoonWindowDays);
+  const dueWindowEndIso = windowEnd.toISOString().slice(0, 10);
+
+  const summary: JsonObject = {
+    window_days: dueSoonWindowDays,
+    window_start: todayIso,
+    window_end: dueWindowEndIso,
+    dry_run: params.dryRun,
+    scanned: 0,
+    processed: 0,
+    email_sent: 0,
+    whatsapp_sent: 0,
+    failed: 0,
+    skipped: 0,
+    details: [] as JsonObject[],
+  };
+
+  let invoiceQuery = supabase
+    .from("invoices")
+    .select(
+      "id, tenant_id, invoice_number, gross_amount, due_date, issue_date, status, payment_method_type, invoice_url, package_name, notes, created_at",
+    )
+    .eq("status", "PENDING")
+    .not("due_date", "is", null)
+    .gte("due_date", todayIso)
+    .lte("due_date", dueWindowEndIso)
+    .order("due_date", { ascending: true })
+    .limit(params.limit);
+
+  if (params.tenantFilter) {
+    invoiceQuery = invoiceQuery.eq("tenant_id", params.tenantFilter);
+  }
+
+  const { data: invoiceRows, error: invoiceError } = await invoiceQuery;
+  if (invoiceError) {
+    logTraceError(traceId, "Failed to load due-soon invoices", invoiceError);
+    await logClientError(supabase, {
+      traceId,
+      context: "billing.due_soon.fetch_invoices_failed",
+      message: invoiceError.message || "Failed to load due-soon invoices",
+      tenantId: params.tenantFilter,
+      metadata: { code: invoiceError.code || null },
+    });
+    return {
+      ...summary,
+      error: "FAILED_TO_LOAD_INVOICES",
+    };
+  }
+
+  const invoices = (invoiceRows ?? []) as InvoiceRow[];
+  summary.scanned = invoices.length;
+  if (invoices.length === 0) return summary;
+
+  const tenantIds = Array.from(new Set(invoices.map((invoice) => invoice.tenant_id)));
+  const [tenantRes, gatewayRes] = await Promise.all([
+    supabase
+      .from("tenants")
+      .select("id, name, billing_mode, email, phone, whatsapp, pic_whatsapp")
+      .in("id", tenantIds),
+    supabase
+      .from("system_settings")
+      .select("key, value")
+      .in("key", ["email_gateway", "whatsapp_gateway"]),
+  ]);
+
+  if (tenantRes.error) {
+    logTraceError(traceId, "Failed to load tenants for due-soon reminder", tenantRes.error);
+    await logClientError(supabase, {
+      traceId,
+      context: "billing.due_soon.fetch_tenants_failed",
+      message: tenantRes.error.message || "Failed to load tenants for due-soon reminder",
+      metadata: { code: tenantRes.error.code || null },
+    });
+    return {
+      ...summary,
+      error: "FAILED_TO_LOAD_TENANTS",
+    };
+  }
+  if (gatewayRes.error) {
+    logTraceError(traceId, "Failed to load gateway settings for due-soon reminder", gatewayRes.error);
+    await logClientError(supabase, {
+      traceId,
+      context: "billing.due_soon.fetch_gateways_failed",
+      message: gatewayRes.error.message || "Failed to load gateway settings for due-soon reminder",
+      metadata: { code: gatewayRes.error.code || null },
+    });
+    return {
+      ...summary,
+      error: "FAILED_TO_LOAD_GATEWAYS",
+    };
+  }
+
+  const tenantMap = new Map(((tenantRes.data ?? []) as TenantRow[]).map((tenant) => [tenant.id, tenant]));
+  const emailGateway = getGatewaySetting((gatewayRes.data ?? []) as GatewaySettingRow[], "email_gateway");
+  const waGateway = getGatewaySetting((gatewayRes.data ?? []) as GatewaySettingRow[], "whatsapp_gateway");
+
+  const invoiceIds = invoices.map((invoice) => invoice.id);
+  const { data: existingLogs, error: logError } = await supabase
+    .from("billing_notification_logs")
+    .select("invoice_id, notification_type, status, metadata")
+    .in("invoice_id", invoiceIds)
+    .in("notification_type", ["EMAIL", "WHATSAPP"]);
+  if (logError) {
+    logTraceError(traceId, "Failed to load due-soon notification logs", logError);
+  }
+
+  const sentChannelKeys = new Set<string>();
+  for (const row of ((existingLogs ?? []) as BillingLogRow[])) {
+    if (!row.invoice_id || row.status !== "SENT") continue;
+    const reason = normalizeReason(toStringSafe(row.metadata?.reason));
+    if (reason !== "INVOICE_DUE_SOON") continue;
+    sentChannelKeys.add(`${row.invoice_id}:${row.notification_type}`);
+  }
+
+  const siteUrl = (Deno.env.get("PUBLIC_SITE_URL") ?? "").trim() || "https://absensiku.app";
+  const details = summary.details as JsonObject[];
+
+  for (const invoice of invoices) {
+    const tenant = tenantMap.get(invoice.tenant_id);
+    if (!tenant) {
+      summary.skipped = Number(summary.skipped || 0) + 1;
+      continue;
+    }
+
+    const invoiceNumber = invoice.invoice_number || `INV-${invoice.id.slice(0, 8).toUpperCase()}`;
+    const dueDateText = formatDateId(invoice.due_date);
+    const amountText = formatCurrencyIdr(invoice.gross_amount);
+    const daysRemaining = getGraceDaysRemaining(invoice.due_date);
+    const invoiceUrl = (invoice.invoice_url || `${siteUrl}/org/subscription`).trim();
+
+    const payload = getMessagePayload({
+      tenantName: tenant.name,
+      invoiceNumber,
+      amountText,
+      dueDateText,
+      invoiceUrl,
+      siteUrl,
+      reason: "INVOICE_DUE_SOON",
+      daysRemaining,
+    });
+
+    const tenantDetail: JsonObject = {
+      tenant_id: tenant.id,
+      tenant_name: tenant.name,
+      invoice_id: invoice.id,
+      invoice_number: invoiceNumber,
+      due_date: invoice.due_date,
+      days_remaining: daysRemaining,
+      channels: {},
+    };
+    const channelResults = tenantDetail.channels as Record<string, unknown>;
+
+    const emailChannelKey = `${invoice.id}:EMAIL`;
+    const waChannelKey = `${invoice.id}:WHATSAPP`;
+    const emailRecipient = toStringSafe(tenant.email).trim();
+    const waRecipient = normalizePhone(tenant.pic_whatsapp || tenant.whatsapp || tenant.phone);
+
+    if (sentChannelKeys.has(emailChannelKey)) {
+      channelResults.email = { skipped: true, reason: "ALREADY_SENT", notification_reason: "INVOICE_DUE_SOON" };
+      summary.skipped = Number(summary.skipped || 0) + 1;
+    } else if (!emailRecipient) {
+      channelResults.email = { ok: false, error: "TENANT_EMAIL_EMPTY", notification_reason: "INVOICE_DUE_SOON" };
+      summary.failed = Number(summary.failed || 0) + 1;
+      if (!params.dryRun) {
+        await supabase.from("billing_notification_logs").insert({
+          tenant_id: tenant.id,
+          invoice_id: invoice.id,
+          notification_type: "EMAIL",
+          recipient: "-",
+          subject: payload.subject,
+          message: payload.emailText,
+          status: "FAILED",
+          error_message: "TENANT_EMAIL_EMPTY",
+          metadata: { reason: "INVOICE_DUE_SOON", trace_id: traceId, days_remaining: daysRemaining },
+        });
+      }
+    } else if (params.dryRun) {
+      channelResults.email = {
+        ok: true,
+        dry_run: true,
+        recipient: emailRecipient,
+        notification_reason: "INVOICE_DUE_SOON",
+      };
+    } else {
+      const emailResult = await sendEmailNotification(emailGateway, emailRecipient, payload);
+      channelResults.email = { ...emailResult, recipient: emailRecipient, notification_reason: "INVOICE_DUE_SOON" };
+      await supabase.from("billing_notification_logs").insert({
+        tenant_id: tenant.id,
+        invoice_id: invoice.id,
+        notification_type: "EMAIL",
+        recipient: emailRecipient,
+        subject: payload.subject,
+        message: payload.emailText,
+        status: emailResult.ok ? "SENT" : "FAILED",
+        sent_at: emailResult.ok ? new Date().toISOString() : null,
+        error_message: emailResult.ok ? null : emailResult.error,
+        metadata: {
+          reason: "INVOICE_DUE_SOON",
+          provider: emailResult.provider ?? null,
+          trace_id: traceId,
+          days_remaining: daysRemaining,
+        },
+      });
+      if (emailResult.ok) {
+        summary.email_sent = Number(summary.email_sent || 0) + 1;
+        sentChannelKeys.add(emailChannelKey);
+      } else {
+        summary.failed = Number(summary.failed || 0) + 1;
+      }
+    }
+
+    if (sentChannelKeys.has(waChannelKey)) {
+      channelResults.whatsapp = { skipped: true, reason: "ALREADY_SENT", notification_reason: "INVOICE_DUE_SOON" };
+      summary.skipped = Number(summary.skipped || 0) + 1;
+    } else if (!waRecipient) {
+      channelResults.whatsapp = { ok: false, error: "TENANT_WHATSAPP_EMPTY", notification_reason: "INVOICE_DUE_SOON" };
+      summary.failed = Number(summary.failed || 0) + 1;
+      if (!params.dryRun) {
+        await supabase.from("billing_notification_logs").insert({
+          tenant_id: tenant.id,
+          invoice_id: invoice.id,
+          notification_type: "WHATSAPP",
+          recipient: "-",
+          subject: null,
+          message: payload.whatsappText,
+          status: "FAILED",
+          error_message: "TENANT_WHATSAPP_EMPTY",
+          metadata: { reason: "INVOICE_DUE_SOON", trace_id: traceId, days_remaining: daysRemaining },
+        });
+      }
+    } else if (params.dryRun) {
+      channelResults.whatsapp = {
+        ok: true,
+        dry_run: true,
+        recipient: waRecipient,
+        notification_reason: "INVOICE_DUE_SOON",
+      };
+    } else {
+      const waResult = await sendWhatsAppNotification(waGateway, waRecipient, payload.whatsappText);
+      channelResults.whatsapp = { ...waResult, recipient: waRecipient, notification_reason: "INVOICE_DUE_SOON" };
+      await supabase.from("billing_notification_logs").insert({
+        tenant_id: tenant.id,
+        invoice_id: invoice.id,
+        notification_type: "WHATSAPP",
+        recipient: waRecipient,
+        subject: null,
+        message: payload.whatsappText,
+        status: waResult.ok ? "SENT" : "FAILED",
+        sent_at: waResult.ok ? new Date().toISOString() : null,
+        error_message: waResult.ok ? null : waResult.error,
+        metadata: {
+          reason: "INVOICE_DUE_SOON",
+          provider: waResult.provider ?? null,
+          trace_id: traceId,
+          days_remaining: daysRemaining,
+        },
+      });
+      if (waResult.ok) {
+        summary.whatsapp_sent = Number(summary.whatsapp_sent || 0) + 1;
+        sentChannelKeys.add(waChannelKey);
+      } else {
+        summary.failed = Number(summary.failed || 0) + 1;
+      }
+    }
+
+    details.push(tenantDetail);
+    summary.processed = Number(summary.processed || 0) + 1;
+  }
+
+  return summary;
 };
 
 serve(async (req) => {
@@ -539,6 +1056,13 @@ serve(async (req) => {
       cleanupLifecycleResult = lifecycleData as JsonObject;
     }
 
+    const paymentArchiveCleanupResult = await runArchivedManualPaymentCleanup(supabase, traceId, dryRun);
+    const dueSoonReminderResult = await processDueSoonInvoiceReminders(supabase, traceId, {
+      tenantFilter,
+      limit,
+      dryRun,
+    });
+
     let streakQuery = supabase
       .from("stability_streaks")
       .select("tenant_id, status, grace_period_end, reached_target, reached_target_at")
@@ -569,6 +1093,8 @@ serve(async (req) => {
           processed: 0,
           message: "Tidak ada tenant grace period.",
           cleanup_lifecycle: cleanupLifecycleResult,
+          payment_archive_cleanup: paymentArchiveCleanupResult,
+          due_soon_reminder: dueSoonReminderResult,
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
@@ -730,6 +1256,8 @@ serve(async (req) => {
           processed: 0,
           message: "Tenant grace period belum memiliki invoice pending.",
           cleanup_lifecycle: cleanupLifecycleResult,
+          payment_archive_cleanup: paymentArchiveCleanupResult,
+          due_soon_reminder: dueSoonReminderResult,
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
@@ -1086,6 +1614,8 @@ serve(async (req) => {
         whatsapp_sent: waSent,
         failed,
         cleanup_lifecycle: cleanupLifecycleResult,
+        payment_archive_cleanup: paymentArchiveCleanupResult,
+        due_soon_reminder: dueSoonReminderResult,
         details,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },

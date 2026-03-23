@@ -14,6 +14,9 @@ import { Loader2, Save, FileText, Eye, EyeOff, ChevronLeft, ChevronRight, Plus, 
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { RichTextEditor } from "@/components/editor/RichTextEditor";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface ArticlesSectionSettings {
   section_title: string;
@@ -44,6 +47,8 @@ const defaultSettings: ArticlesSectionSettings = {
 const ITEMS_PER_PAGE = 10;
 
 export function ArticlesSettings() {
+  const REQUEST_TIMEOUT_MS = 12000;
+  const confirmDialog = useConfirmDialog();
   const [settings, setSettings] = useState<ArticlesSectionSettings>(defaultSettings);
   const [articles, setArticles] = useState<Article[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -69,26 +74,35 @@ export function ArticlesSettings() {
   const fetchData = async () => {
     try {
       // Fetch section settings
-      const { data: settingsData } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "articles_section_settings")
-        .maybeSingle();
+      const { data: settingsData } = await withTimeout(
+        supabase
+          .from("system_settings")
+          .select("value")
+          .eq("key", "articles_section_settings")
+          .maybeSingle(),
+        REQUEST_TIMEOUT_MS,
+        "Memuat pengaturan section artikel terlalu lama",
+      );
 
       if (settingsData?.value) {
         setSettings({ ...defaultSettings, ...(settingsData.value as Record<string, unknown>) });
       }
 
       // Fetch articles (excluding berita category)
-      const { data: articlesData } = await supabase
-        .from("articles")
-        .select("*")
-        .or("category.neq.berita,category.is.null")
-        .order("created_at", { ascending: false });
+      const { data: articlesData } = await withTimeout(
+        supabase
+          .from("articles")
+          .select("*")
+          .or("category.neq.berita,category.is.null")
+          .order("created_at", { ascending: false }),
+        REQUEST_TIMEOUT_MS,
+        "Memuat daftar artikel terlalu lama",
+      );
 
       setArticles(articlesData || []);
     } catch (error) {
-      console.error("Error:", error);
+      const errorRef = reportError(error, "admin.settings.articles.fetch");
+      toast.error(appendErrorReference("Gagal memuat data artikel.", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -97,23 +111,36 @@ export function ArticlesSettings() {
   const handleSaveSettings = async () => {
     setIsSaving(true);
     try {
-      const { data: existing } = await supabase
-        .from("system_settings")
-        .select("id")
-        .eq("key", "articles_section_settings")
-        .maybeSingle();
+      const { data: existing } = await withTimeout(
+        supabase
+          .from("system_settings")
+          .select("id")
+          .eq("key", "articles_section_settings")
+          .maybeSingle(),
+        REQUEST_TIMEOUT_MS,
+        "Membaca konfigurasi section artikel terlalu lama",
+      );
 
       const jsonValue = JSON.parse(JSON.stringify(settings));
 
       if (existing) {
-        await supabase.from("system_settings").update({ value: jsonValue, updated_at: new Date().toISOString() }).eq("key", "articles_section_settings");
+        await withTimeout(
+          supabase.from("system_settings").update({ value: jsonValue, updated_at: new Date().toISOString() }).eq("key", "articles_section_settings"),
+          REQUEST_TIMEOUT_MS,
+          "Menyimpan konfigurasi section artikel terlalu lama",
+        );
       } else {
-        await supabase.from("system_settings").insert({ key: "articles_section_settings", value: jsonValue });
+        await withTimeout(
+          supabase.from("system_settings").insert({ key: "articles_section_settings", value: jsonValue }),
+          REQUEST_TIMEOUT_MS,
+          "Menyimpan konfigurasi section artikel terlalu lama",
+        );
       }
       
       toast.success("Pengaturan artikel berhasil disimpan");
-    } catch (err) {
-      toast.error("Gagal menyimpan pengaturan");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.articles.save_settings");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan artikel.", errorRef));
     } finally {
       setIsSaving(false);
     }
@@ -139,13 +166,27 @@ export function ArticlesSettings() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Hapus artikel ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus Artikel",
+        description: "Hapus artikel ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
     try {
-      await supabase.from("articles").delete().eq("id", id);
+      await withTimeout(
+        supabase.from("articles").delete().eq("id", id),
+        REQUEST_TIMEOUT_MS,
+        "Menghapus artikel terlalu lama",
+      );
       setArticles(articles.filter(a => a.id !== id));
       toast.success("Artikel dihapus");
     } catch (error) {
-      toast.error("Gagal menghapus");
+      const errorRef = reportError(error, "admin.settings.articles.delete", { article_id: id });
+      toast.error(appendErrorReference("Gagal menghapus artikel.", errorRef));
     }
   };
 
@@ -159,33 +200,41 @@ export function ArticlesSettings() {
       const slug = formData.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") + "-" + Date.now();
       
       if (editingArticle) {
-        const { error } = await supabase
-          .from("articles")
-          .update({
-            title: formData.title,
-            content: formData.content,
-            excerpt: formData.excerpt || null,
-            image_url: formData.image_url || null,
-            category: formData.category,
-            is_published: formData.is_published,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", editingArticle.id);
+        const { error } = await withTimeout(
+          supabase
+            .from("articles")
+            .update({
+              title: formData.title,
+              content: formData.content,
+              excerpt: formData.excerpt || null,
+              image_url: formData.image_url || null,
+              category: formData.category,
+              is_published: formData.is_published,
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", editingArticle.id),
+          REQUEST_TIMEOUT_MS,
+          "Menyimpan perubahan artikel terlalu lama",
+        );
         
         if (error) throw error;
         toast.success("Artikel diperbarui");
       } else {
-        const { error } = await supabase
-          .from("articles")
-          .insert({
-            title: formData.title,
-            slug,
-            content: formData.content,
-            excerpt: formData.excerpt || null,
-            image_url: formData.image_url || null,
-            category: formData.category,
-            is_published: formData.is_published,
-          });
+        const { error } = await withTimeout(
+          supabase
+            .from("articles")
+            .insert({
+              title: formData.title,
+              slug,
+              content: formData.content,
+              excerpt: formData.excerpt || null,
+              image_url: formData.image_url || null,
+              category: formData.category,
+              is_published: formData.is_published,
+            }),
+          REQUEST_TIMEOUT_MS,
+          "Menambah artikel baru terlalu lama",
+        );
         
         if (error) throw error;
         toast.success("Artikel ditambahkan");
@@ -195,17 +244,29 @@ export function ArticlesSettings() {
       fetchData();
     } catch (error) {
       const message = error instanceof Error ? error.message : "Gagal menyimpan data";
-      toast.error("Gagal menyimpan: " + message);
+      const errorRef = reportError(error, "admin.settings.articles.upsert", {
+        article_id: editingArticle?.id || null,
+        is_edit: Boolean(editingArticle),
+      });
+      toast.error(appendErrorReference("Gagal menyimpan: " + message, errorRef));
     }
   };
 
   const togglePublish = async (articleId: string, currentStatus: boolean) => {
     try {
-      await supabase.from("articles").update({ is_published: !currentStatus }).eq("id", articleId);
+      await withTimeout(
+        supabase.from("articles").update({ is_published: !currentStatus }).eq("id", articleId),
+        REQUEST_TIMEOUT_MS,
+        "Mengubah status publish artikel terlalu lama",
+      );
       setArticles(articles.map(a => a.id === articleId ? { ...a, is_published: !currentStatus } : a));
       toast.success(currentStatus ? "Artikel di-unpublish" : "Artikel dipublish");
     } catch (error) {
-      toast.error("Gagal mengubah status");
+      const errorRef = reportError(error, "admin.settings.articles.toggle_publish", {
+        article_id: articleId,
+        current_status: currentStatus,
+      });
+      toast.error(appendErrorReference("Gagal mengubah status artikel.", errorRef));
     }
   };
 

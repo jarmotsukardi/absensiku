@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 interface StreakItem {
   id: string;
@@ -208,12 +209,15 @@ const STREAK_GLOSSARY: StreakGlossaryItem[] = [
 const STREAK_ITEMS_PER_PAGE = 10;
 const PAYMENTS_PER_PAGE = 10;
 const GLOSSARY_PER_PAGE = 10;
+const STREAK_MONITORING_QUERY_TIMEOUT_MS = 12000;
+const STREAK_MONITORING_QUERY_RETRY_MAX = 2;
 
 export default function StreakMonitoring() {
   const [streaks, setStreaks] = useState<StreakItem[]>([]);
   const [payments, setPayments] = useState<PaymentLog[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState("active");
   const [streakThreshold, setStreakThreshold] = useState(30);
@@ -224,19 +228,26 @@ export default function StreakMonitoring() {
   const [paymentsPage, setPaymentsPage] = useState(1);
   const [glossaryPage, setGlossaryPage] = useState(1);
 
-  useEffect(() => {
-    fetchStreaks();
-    fetchPayments();
-    fetchThreshold();
-  }, []);
-
-  const fetchThreshold = async () => {
+  const fetchThreshold = useCallback(async () => {
     try {
-      const { data } = await supabase
-        .from("system_settings")
-        .select("value")
-        .eq("key", "streak_threshold")
-        .maybeSingle();
+      setIsRetrying(false);
+      const { data } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("value")
+              .eq("key", "streak_threshold")
+              .maybeSingle(),
+            STREAK_MONITORING_QUERY_TIMEOUT_MS,
+            "admin.streak.threshold.fetch timeout"
+          ),
+        {
+          maxRetries: STREAK_MONITORING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       if (!data?.value) return;
 
       const rawValue = (data.value as { value?: unknown })?.value;
@@ -248,16 +259,29 @@ export default function StreakMonitoring() {
       const errorRef = reportError(error, "admin.streak.threshold.fetch");
       setLoadError((prev) => prev ?? appendErrorReference("Gagal memuat threshold streak", errorRef));
     }
-  };
+  }, []);
 
-  const fetchStreaks = async () => {
+  const fetchStreaks = useCallback(async () => {
     setIsLoading(true);
     try {
       setLoadError(null);
-      const { data } = await supabase
-        .from("stability_streaks")
-        .select("*, tenants(name)")
-        .order("streak_count", { ascending: false });
+      setIsRetrying(false);
+      const { data } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("stability_streaks")
+              .select("*, tenants(name)")
+              .order("streak_count", { ascending: false }),
+            STREAK_MONITORING_QUERY_TIMEOUT_MS,
+            "admin.streak.items.fetch timeout"
+          ),
+        {
+          maxRetries: STREAK_MONITORING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       setStreaks((data || []) as StreakItem[]);
     } catch (error: unknown) {
       const errorRef = reportError(error, "admin.streak.items.fetch");
@@ -267,22 +291,39 @@ export default function StreakMonitoring() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
-  const fetchPayments = async () => {
+  const fetchPayments = useCallback(async () => {
     try {
-      const { data } = await supabase
-        .from("manual_payments")
-        .select("id, tenant_id, amount, status, created_at, payment_method, tenants:tenant_id(name)")
-        .order("created_at", { ascending: false })
-        .limit(50);
+      setIsRetrying(false);
+      const { data } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("manual_payments")
+              .select("id, tenant_id, amount, status, created_at, payment_method, tenants:tenant_id(name)")
+              .order("created_at", { ascending: false })
+              .limit(50),
+            STREAK_MONITORING_QUERY_TIMEOUT_MS,
+            "admin.streak.payment_logs.fetch timeout"
+          ),
+        {
+          maxRetries: STREAK_MONITORING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       setPayments((data as PaymentLog[]) || []);
     } catch (error: unknown) {
       const errorRef = reportError(error, "admin.streak.payment_logs.fetch");
       setLoadError((prev) => prev ?? appendErrorReference("Gagal memuat payment logs streak", errorRef));
       setPayments([]);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    void Promise.all([fetchStreaks(), fetchPayments(), fetchThreshold()]);
+  }, [fetchStreaks, fetchPayments, fetchThreshold]);
 
   const filtered = streaks.filter(s =>
     !searchQuery || s.tenants?.name?.toLowerCase().includes(searchQuery.toLowerCase())
@@ -451,9 +492,21 @@ export default function StreakMonitoring() {
 
   return (
     <SuperAdminLayout title="Streak Monitoring" subtitle="Pantau stabilitas penggunaan per tenant">
+      {isRetrying && (
+        <div className="mb-6 rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          Sedang mencoba ulang memuat data streak monitoring...
+        </div>
+      )}
       {loadError && (
-        <div className="mb-6 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-          {loadError}
+        <div className="mb-6 flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          <span>{loadError}</span>
+          <button
+            type="button"
+            className="inline-flex h-8 items-center justify-center rounded-md border bg-white px-3 text-xs text-foreground"
+            onClick={() => void Promise.all([fetchStreaks(), fetchPayments(), fetchThreshold()])}
+          >
+            Coba Lagi
+          </button>
         </div>
       )}
       {/* Stats */}
@@ -484,17 +537,17 @@ export default function StreakMonitoring() {
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger value="active" className="flex items-center gap-1">
+        <TabsList className="h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
+          <TabsTrigger value="active" className="flex items-center gap-1 whitespace-nowrap">
             <Flame className="w-3.5 h-3.5" /> Active
           </TabsTrigger>
-          <TabsTrigger value="near" className="flex items-center gap-1">
+          <TabsTrigger value="near" className="flex items-center gap-1 whitespace-nowrap">
             <Clock className="w-3.5 h-3.5" /> Near Suspension
           </TabsTrigger>
-          <TabsTrigger value="suspended" className="flex items-center gap-1">
+          <TabsTrigger value="suspended" className="flex items-center gap-1 whitespace-nowrap">
             <AlertTriangle className="w-3.5 h-3.5" /> Suspended
           </TabsTrigger>
-          <TabsTrigger value="payments" className="flex items-center gap-1">
+          <TabsTrigger value="payments" className="flex items-center gap-1 whitespace-nowrap">
             <CreditCard className="w-3.5 h-3.5" /> Payment Logs
           </TabsTrigger>
         </TabsList>

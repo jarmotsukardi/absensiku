@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { toast } from "sonner";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 import { 
   Building2, 
   Users, 
@@ -11,6 +18,8 @@ import {
   TrendingUp,
   CheckCircle2
 } from "lucide-react";
+const ORG_STATS_READ_TIMEOUT_MS = 12000;
+const ORG_STATS_MAX_RETRIES = 2;
 
 interface Stats {
   total: number;
@@ -33,6 +42,8 @@ export function OrganizationStats() {
     activeSubscriptions: 0,
   });
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   useEffect(() => {
     fetchStats();
@@ -40,21 +51,59 @@ export function OrganizationStats() {
 
   const fetchStats = async () => {
     try {
+      setIsRetrying(false);
+      setLoadError(null);
       // Get all tenants
-      const { data: tenants } = await supabase
-        .from("tenants")
-        .select("id, organization_type, is_active");
+      const { data: tenants } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("tenants")
+              .select("id, organization_type, is_active"),
+            ORG_STATS_READ_TIMEOUT_MS,
+            "Permintaan statistik tenant timeout."
+          ),
+        {
+          maxRetries: ORG_STATS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       // Get all employees count
-      const { count: employeesCount } = await supabase
-        .from("employees")
-        .select("*", { count: "exact", head: true });
+      const { count: employeesCount } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("*", { count: "exact", head: true }),
+            ORG_STATS_READ_TIMEOUT_MS,
+            "Permintaan total pegawai timeout."
+          ),
+        {
+          maxRetries: ORG_STATS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       // Get active subscriptions
-      const { count: activeSubsCount } = await supabase
-        .from("subscriptions")
-        .select("*", { count: "exact", head: true })
-        .eq("status", "active");
+      const { count: activeSubsCount } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("subscriptions")
+              .select("*", { count: "exact", head: true })
+              .eq("status", "active"),
+            ORG_STATS_READ_TIMEOUT_MS,
+            "Permintaan total langganan aktif timeout."
+          ),
+        {
+          maxRetries: ORG_STATS_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (tenants) {
         setStats({
@@ -68,8 +117,12 @@ export function OrganizationStats() {
         });
       }
     } catch (error) {
-      console.error("Error fetching stats:", error);
+      const errorRef = reportError(error, "admin.components.organization_stats.fetch");
+      const message = appendErrorReference("Gagal memuat statistik organisasi", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   };
@@ -136,7 +189,18 @@ export function OrganizationStats() {
   }
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
+    <div className="space-y-3">
+      {isRetrying && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+          Sedang mencoba ulang memuat statistik organisasi...
+        </div>
+      )}
+      {loadError && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          {loadError}
+        </div>
+      )}
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
       {statCards.map((stat) => (
         <Card key={stat.label} className="hover:shadow-md transition-shadow">
           <CardContent className="p-4">
@@ -148,6 +212,7 @@ export function OrganizationStats() {
           </CardContent>
         </Card>
       ))}
+      </div>
     </div>
   );
 }

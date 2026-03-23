@@ -20,11 +20,18 @@ import {
   Sparkles,
   Home,
   ClipboardList,
-  Download
+  Download,
+  RotateCcw
 } from "lucide-react";
 import { toast } from "sonner";
 import { format, differenceInDays } from "date-fns";
 import { id } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 interface TenantInfo {
   id: string;
@@ -53,9 +60,15 @@ interface DashboardStats {
   pendingLeaves: number;
 }
 
+const TENANT_DASHBOARD_READ_TIMEOUT_MS = 12000;
+const TENANT_DASHBOARD_WRITE_TIMEOUT_MS = 10000;
+const TENANT_DASHBOARD_MAX_RETRIES = 2;
+
 export default function TenantDashboard() {
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [tenant, setTenant] = useState<TenantInfo | null>(null);
   const [subscription, setSubscription] = useState<SubscriptionInfo | null>(null);
   const [stats, setStats] = useState<DashboardStats>({
@@ -69,7 +82,21 @@ export default function TenantDashboard() {
 
   const fetchDashboardData = useCallback(async () => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      setLoadError(null);
+      setIsRetrying(false);
+      const { data: { user } } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            TENANT_DASHBOARD_READ_TIMEOUT_MS,
+            "Permintaan user auth timeout."
+          ),
+        {
+          maxRetries: TENANT_DASHBOARD_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
       
       if (!user) {
         navigate("/org/login");
@@ -77,12 +104,25 @@ export default function TenantDashboard() {
       }
 
       // Check if user is admin_instansi
-      const { data: roleData } = await supabase
-        .from("user_roles")
-        .select("role, tenant_id")
-        .eq("user_id", user.id)
-        .in("role", ["admin_instansi", "super_admin"])
-        .single();
+      const { data: roleData, error: roleError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("user_roles")
+              .select("role, tenant_id")
+              .eq("user_id", user.id)
+              .in("role", ["admin_instansi", "super_admin"])
+              .single(),
+            TENANT_DASHBOARD_READ_TIMEOUT_MS,
+            "Permintaan role user timeout."
+          ),
+        {
+          maxRetries: TENANT_DASHBOARD_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+      if (roleError) throw roleError;
 
       if (!roleData) {
         toast.error("Akses ditolak. Anda bukan Admin.");
@@ -97,33 +137,70 @@ export default function TenantDashboard() {
       }
 
       // Fetch tenant info
-      const { data: tenantData } = await supabase
-        .from("tenants")
-        .select("*")
-        .eq("id", roleData.tenant_id)
-        .single();
+      const { data: tenantData, error: tenantError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("tenants")
+              .select("*")
+              .eq("id", roleData.tenant_id)
+              .single(),
+            TENANT_DASHBOARD_READ_TIMEOUT_MS,
+            "Permintaan data tenant timeout."
+          ),
+        {
+          maxRetries: TENANT_DASHBOARD_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+      if (tenantError) throw tenantError;
 
       if (tenantData) {
         setTenant(tenantData);
       }
 
       // Fetch subscription
-      const { data: subData } = await supabase
-        .from("subscriptions")
-        .select("*")
-        .eq("tenant_id", roleData.tenant_id)
-        .single();
+      const { data: subData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("subscriptions")
+              .select("*")
+              .eq("tenant_id", roleData.tenant_id)
+              .single(),
+            TENANT_DASHBOARD_READ_TIMEOUT_MS,
+            "Permintaan data langganan timeout."
+          ),
+        {
+          maxRetries: TENANT_DASHBOARD_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (subData) {
         setSubscription(subData);
       }
 
       // Fetch employee info for name
-      const { data: empData } = await supabase
-        .from("employees")
-        .select("name")
-        .eq("user_id", user.id)
-        .single();
+      const { data: empData } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("employees")
+              .select("name")
+              .eq("user_id", user.id)
+              .single(),
+            TENANT_DASHBOARD_READ_TIMEOUT_MS,
+            "Permintaan nama pegawai timeout."
+          ),
+        {
+          maxRetries: TENANT_DASHBOARD_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (empData) {
         setUserName(empData.name);
@@ -132,31 +209,48 @@ export default function TenantDashboard() {
       // Fetch stats
       const today = new Date().toISOString().split('T')[0];
 
-      const [employeesRes, officesRes, attendanceRes, leavesRes, apkSettings] = await Promise.all([
-        supabase
-          .from("employees")
-          .select("id", { count: "exact" })
-          .eq("tenant_id", roleData.tenant_id)
-          .eq("is_active", true),
-        supabase
-          .from("offices")
-          .select("id", { count: "exact" })
-          .eq("tenant_id", roleData.tenant_id)
-          .eq("is_active", true),
-        supabase
-          .from("attendance_records_partitioned")
-          .select("id", { count: "exact" })
-          .eq("date", today),
-        supabase
-          .from("leave_requests")
-          .select("id", { count: "exact" })
-          .eq("status", "menunggu"),
-        supabase
-          .from("system_settings")
-          .select("value")
-          .eq("key", "apk_settings")
-          .maybeSingle(),
-      ]);
+      const [employeesRes, officesRes, attendanceRes, leavesRes, apkSettings] = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.all([
+              supabase
+                .from("employees")
+                .select("id", { count: "exact" })
+                .eq("tenant_id", roleData.tenant_id)
+                .eq("is_active", true),
+              supabase
+                .from("offices")
+                .select("id", { count: "exact" })
+                .eq("tenant_id", roleData.tenant_id)
+                .eq("is_active", true),
+              supabase
+                .from("attendance_records_partitioned")
+                .select("id", { count: "exact" })
+                .eq("date", today),
+              supabase
+                .from("leave_requests")
+                .select("id", { count: "exact" })
+                .eq("status", "menunggu"),
+              supabase
+                .from("system_settings")
+                .select("value")
+                .eq("key", "apk_settings")
+                .maybeSingle(),
+            ]),
+            TENANT_DASHBOARD_READ_TIMEOUT_MS,
+            "Permintaan statistik dashboard tenant timeout."
+          ),
+        {
+          maxRetries: TENANT_DASHBOARD_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+      if (employeesRes.error) throw employeesRes.error;
+      if (officesRes.error) throw officesRes.error;
+      if (attendanceRes.error) throw attendanceRes.error;
+      if (leavesRes.error) throw leavesRes.error;
+      if (apkSettings.error) throw apkSettings.error;
 
       setStats({
         totalEmployees: employeesRes.count || 0,
@@ -178,9 +272,12 @@ export default function TenantDashboard() {
       }
 
     } catch (error) {
-      console.error("Error fetching dashboard:", error);
-      toast.error("Gagal memuat data dashboard");
+      const errorRef = reportError(error, "tenant_dashboard.fetch");
+      const message = appendErrorReference("Gagal memuat data dashboard", errorRef);
+      toast.error(message);
+      setLoadError(message);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [navigate]);
@@ -190,7 +287,11 @@ export default function TenantDashboard() {
   }, [fetchDashboardData]);
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
+    await withTimeout(
+      supabase.auth.signOut(),
+      TENANT_DASHBOARD_WRITE_TIMEOUT_MS,
+      "Logout timeout."
+    );
     navigate("/org/login");
   };
 
@@ -266,6 +367,22 @@ export default function TenantDashboard() {
       </header>
 
       <main className="container mx-auto px-4 py-8 space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+            Mencoba ulang memuat dashboard tenant...
+          </div>
+        )}
+
+        {loadError && (
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchDashboardData()}>
+              <RotateCcw className="mr-2 h-4 w-4" />
+              Coba Lagi
+            </Button>
+          </div>
+        )}
+
         {/* Welcome & Trial Warning */}
         <div className="space-y-4">
           <div>

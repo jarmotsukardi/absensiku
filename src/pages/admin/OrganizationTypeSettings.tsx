@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,8 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 interface OrgTypeSettings {
   employee_fields: { required: string[]; optional: string[] };
@@ -75,22 +77,36 @@ const defaultSettings: OrgTypeSettings = {
   leave_types: { enabled: ["cuti_tahunan", "sakit", "izin"] },
   work_schedule: { default_start: "08:00", default_end: "17:00", work_days: [1, 2, 3, 4, 5] },
 };
+const ORG_TYPE_SETTINGS_QUERY_TIMEOUT_MS = 12000;
+const ORG_TYPE_SETTINGS_QUERY_RETRY_MAX = 2;
 
 export default function OrganizationTypeSettings() {
   const [activeTab, setActiveTab] = useState("pemerintah_daerah");
   const [settings, setSettings] = useState<Record<string, OrgTypeSettings>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
-  useEffect(() => {
-    fetchSettings();
-  }, []);
-
-  const fetchSettings = async () => {
+  const fetchSettings = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("organization_type_settings")
-        .select("*");
+      setLoadError(null);
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("organization_type_settings")
+              .select("*"),
+            ORG_TYPE_SETTINGS_QUERY_TIMEOUT_MS,
+            "admin.organization_type_settings.fetch timeout"
+          ),
+        {
+          maxRetries: ORG_TYPE_SETTINGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
 
@@ -119,12 +135,18 @@ export default function OrganizationTypeSettings() {
 
       setSettings(grouped);
     } catch (error) {
-      console.error("Error fetching settings:", error);
-      toast.error("Gagal memuat pengaturan");
+      const errorRef = reportError(error, "admin.organization_type_settings.fetch");
+      const message = appendErrorReference("Gagal memuat pengaturan jenis organisasi", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    void fetchSettings();
+  }, [fetchSettings]);
 
   const updateSetting = <K extends keyof OrgTypeSettings>(
     orgType: string,
@@ -143,28 +165,45 @@ export default function OrganizationTypeSettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
+      setLoadError(null);
+      setIsRetrying(false);
       const currentSettings = settings[activeTab];
       if (!currentSettings) return;
 
       for (const [key, value] of Object.entries(currentSettings)) {
-        const { error } = await supabase
-          .from("organization_type_settings")
-          .upsert({
-            organization_type: activeTab,
-            setting_key: key,
-            setting_value: value,
-            updated_at: new Date().toISOString(),
-          }, {
-            onConflict: "organization_type,setting_key",
-          });
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("organization_type_settings")
+                .upsert({
+                  organization_type: activeTab,
+                  setting_key: key,
+                  setting_value: value,
+                  updated_at: new Date().toISOString(),
+                }, {
+                  onConflict: "organization_type,setting_key",
+                }),
+              ORG_TYPE_SETTINGS_QUERY_TIMEOUT_MS,
+              "admin.organization_type_settings.save timeout"
+            ),
+          {
+            maxRetries: ORG_TYPE_SETTINGS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
 
         if (error) throw error;
       }
 
       toast.success("Pengaturan berhasil disimpan");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Gagal menyimpan pengaturan";
-      console.error("Error saving settings:", error);
+      const errorRef = reportError(error, "admin.organization_type_settings.save", {
+        organization_type: activeTab,
+      });
+      const message = appendErrorReference("Gagal menyimpan pengaturan jenis organisasi", errorRef);
+      setLoadError(message);
       toast.error(message);
     } finally {
       setIsSaving(false);
@@ -229,12 +268,25 @@ export default function OrganizationTypeSettings() {
       subtitle="Konfigurasi default untuk setiap jenis organisasi"
     >
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang memuat pengaturan jenis organisasi...
+          </div>
+        )}
+        {loadError && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void fetchSettings()}>
+              Coba Lagi
+            </Button>
+          </div>
+        )}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="h-auto w-full justify-start gap-1.5 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
             {ORG_TYPES.map((org) => {
               const Icon = org.icon;
               return (
-                <TabsTrigger key={org.value} value={org.value} className="flex items-center gap-2">
+                <TabsTrigger key={org.value} value={org.value} className="flex items-center gap-2 whitespace-nowrap">
                   <Icon className={`h-4 w-4 ${org.color}`} />
                   <span className="hidden sm:inline">{org.label}</span>
                 </TabsTrigger>

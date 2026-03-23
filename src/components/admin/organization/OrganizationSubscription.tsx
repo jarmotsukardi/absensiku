@@ -24,6 +24,12 @@ import {
 import { toast } from "sonner";
 import { format, addMonths, addYears } from "date-fns";
 import { id } from "date-fns/locale";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 interface Subscription {
   id: string;
@@ -37,11 +43,16 @@ interface OrganizationSubscriptionProps {
   tenantId: string;
   organizationName: string;
 }
+const ORG_SUBSCRIPTION_READ_TIMEOUT_MS = 12000;
+const ORG_SUBSCRIPTION_WRITE_TIMEOUT_MS = 15000;
+const ORG_SUBSCRIPTION_MAX_RETRIES = 2;
 
 export function OrganizationSubscription({ tenantId, organizationName }: OrganizationSubscriptionProps) {
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     status: "trial",
     duration: "1_month",
@@ -49,11 +60,25 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
 
   const fetchSubscription = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from("subscriptions")
-        .select("*")
-        .eq("tenant_id", tenantId)
-        .single();
+      setIsRetrying(false);
+      setLoadError(null);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("subscriptions")
+              .select("*")
+              .eq("tenant_id", tenantId)
+              .single(),
+            ORG_SUBSCRIPTION_READ_TIMEOUT_MS,
+            "Permintaan data langganan organisasi timeout."
+          ),
+        {
+          maxRetries: ORG_SUBSCRIPTION_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error && error.code !== "PGRST116") throw error;
       
@@ -65,8 +90,14 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
         });
       }
     } catch (error) {
-      console.error("Error fetching subscription:", error);
+      const errorRef = reportError(error, "admin.components.organization_subscription.fetch", {
+        tenant_id: tenantId,
+      });
+      const message = appendErrorReference("Gagal memuat langganan organisasi", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, [tenantId]);
@@ -103,23 +134,35 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
       };
 
       if (subscription) {
-        const { error } = await supabase
-          .from("subscriptions")
-          .update(updateData)
-          .eq("id", subscription.id);
+        const { error } = await withTimeout(
+          supabase
+            .from("subscriptions")
+            .update(updateData)
+            .eq("id", subscription.id),
+          ORG_SUBSCRIPTION_WRITE_TIMEOUT_MS,
+          "Perbarui langganan organisasi timeout."
+        );
         if (error) throw error;
       } else {
-        const { error } = await supabase
-          .from("subscriptions")
-          .insert({ ...updateData, tenant_id: tenantId });
+        const { error } = await withTimeout(
+          supabase
+            .from("subscriptions")
+            .insert({ ...updateData, tenant_id: tenantId }),
+          ORG_SUBSCRIPTION_WRITE_TIMEOUT_MS,
+          "Tambah langganan organisasi timeout."
+        );
         if (error) throw error;
       }
 
       toast.success("Langganan berhasil diperbarui");
-      fetchSubscription();
+      void fetchSubscription();
     } catch (error) {
-      console.error("Error saving subscription:", error);
-      toast.error("Gagal menyimpan langganan");
+      const errorRef = reportError(error, "admin.components.organization_subscription.save", {
+        tenant_id: tenantId,
+      });
+      const message = appendErrorReference("Gagal menyimpan langganan", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsSaving(false);
     }
@@ -148,6 +191,19 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
 
   return (
     <div className="space-y-6">
+      {isRetrying && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+          Sedang mencoba ulang memuat data langganan...
+        </div>
+      )}
+      {loadError && (
+        <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+          <span>{loadError}</span>
+          <Button variant="outline" size="sm" onClick={() => void fetchSubscription()}>
+            Coba Lagi
+          </Button>
+        </div>
+      )}
       {/* Current Subscription Status */}
       <Card>
         <CardHeader>

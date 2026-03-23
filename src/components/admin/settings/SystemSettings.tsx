@@ -9,6 +9,8 @@ import { PageGlossarySection } from "@/components/admin/common/PageGlossarySecti
 import { Settings, Save, Database, Shield, Clock, AlertTriangle, Trash2, Zap, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface SystemSettingsData {
   timezone: string;
@@ -57,16 +59,21 @@ export function SystemSettings() {
   useEffect(() => {
     const fetchSettings = async () => {
       try {
-        const { data, error } = await supabase
-          .from("system_settings")
-          .select("key, value")
-          .in("key", [
-            "system_config",
-            "restrict_access_during_attendance",
-            "access_restriction_buffer_hours",
-            "super_admin_2fa_enabled",
-            "org_admin_2fa_enabled",
-          ]);
+        const { data, error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .select("key, value")
+              .in("key", [
+                "system_config",
+                "restrict_access_during_attendance",
+                "access_restriction_buffer_hours",
+                "super_admin_2fa_enabled",
+                "org_admin_2fa_enabled",
+              ]),
+          10000,
+          "Load system settings timeout"
+        );
 
         if (error) throw error;
 
@@ -89,8 +96,8 @@ export function SystemSettings() {
 
         setSettings(newSettings);
       } catch (error) {
-        console.error("Error fetching settings:", error);
-        toast.error("Gagal memuat pengaturan");
+        const errorRef = reportError(error, "admin.settings.system.fetch");
+        toast.error(appendErrorReference("Gagal memuat pengaturan", errorRef));
       } finally {
         setIsLoading(false);
       }
@@ -150,30 +157,42 @@ export function SystemSettings() {
 
       // Upsert semua pengaturan
       for (const update of updates) {
-        const { data: existing } = await supabase
-          .from("system_settings")
-          .select("id")
-          .eq("key", update.key)
-          .maybeSingle();
+        const { data: existing } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .select("id")
+              .eq("key", update.key)
+              .maybeSingle(),
+          10000,
+          `Check setting ${update.key} timeout`
+        );
 
         if (existing) {
-          const { error } = await supabase
-            .from("system_settings")
-            .update({ value: update.value, updated_at: new Date().toISOString() })
-            .eq("key", update.key);
+          const { error } = await withTimeout(
+            () =>
+              supabase
+                .from("system_settings")
+                .update({ value: update.value, updated_at: new Date().toISOString() })
+                .eq("key", update.key),
+            10000,
+            `Update setting ${update.key} timeout`
+          );
           if (error) throw error;
         } else {
-          const { error } = await supabase
-            .from("system_settings")
-            .insert(update);
+          const { error } = await withTimeout(
+            () => supabase.from("system_settings").insert(update),
+            10000,
+            `Insert setting ${update.key} timeout`
+          );
           if (error) throw error;
         }
       }
 
       toast.success("Pengaturan sistem berhasil disimpan");
     } catch (error) {
-      console.error("Error saving settings:", error);
-      toast.error("Gagal menyimpan pengaturan");
+      const errorRef = reportError(error, "admin.settings.system.save");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan", errorRef));
     } finally {
       setIsSaving(false);
     }

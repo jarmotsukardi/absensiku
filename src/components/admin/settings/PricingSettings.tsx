@@ -12,6 +12,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { toast } from "sonner";
 import { CreditCard, ExternalLink, Loader2, Save } from "lucide-react";
 import { mapSubscriptionPackagesToPricingPlans, type HomepagePricingPlan } from "@/lib/pricingPlans";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface PricingSectionSettings {
   section_title: string;
@@ -57,21 +59,36 @@ export function PricingSettings() {
   const fetchSettings = async () => {
     try {
       const [sectionRes, packageRes, legacyPricingRes] = await Promise.all([
-        supabase
-          .from("homepage_sections")
-          .select("settings, is_enabled")
-          .eq("section_key", "pricing")
-          .maybeSingle(),
-        supabase
-          .from("subscription_packages")
-          .select("id, name, description, base_price_per_month, duration_months, discount_percentage, features, sort_order")
-          .eq("is_active", true)
-          .order("sort_order"),
-        supabase
-          .from("system_settings")
-          .select("value")
-          .eq("key", "pricing_settings")
-          .maybeSingle(),
+        withTimeout(
+          () =>
+            supabase
+              .from("homepage_sections")
+              .select("settings, is_enabled")
+              .eq("section_key", "pricing")
+              .maybeSingle(),
+          10000,
+          "Load pricing section timeout"
+        ),
+        withTimeout(
+          () =>
+            supabase
+              .from("subscription_packages")
+              .select("id, name, description, base_price_per_month, duration_months, discount_percentage, features, sort_order")
+              .eq("is_active", true)
+              .order("sort_order"),
+          10000,
+          "Load subscription packages timeout"
+        ),
+        withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .select("value")
+              .eq("key", "pricing_settings")
+              .maybeSingle(),
+          10000,
+          "Load legacy pricing settings timeout"
+        ),
       ]);
 
       const sectionData = sectionRes.data;
@@ -90,8 +107,8 @@ export function PricingSettings() {
       const packageRows = (packageRes.data || []) as BillingPackageRow[];
       setPlans(mapSubscriptionPackagesToPricingPlans(packageRows, legacyPlans));
     } catch (error) {
-      console.error("Failed to load pricing settings:", error);
-      toast.error("Gagal memuat pengaturan harga");
+      const errorRef = reportError(error, "admin.settings.pricing.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan harga", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -103,19 +120,29 @@ export function PricingSettings() {
       const { section_title, section_subtitle, show_section } = sectionSettings;
 
       const [{ error: sectionError }, { data: existing, error: existingError }] = await Promise.all([
-        supabase
-          .from("homepage_sections")
-          .update({
-            settings: { section_title, section_subtitle },
-            is_enabled: show_section,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("section_key", "pricing"),
-        supabase
-          .from("system_settings")
-          .select("id")
-          .eq("key", "pricing_settings")
-          .maybeSingle(),
+        withTimeout(
+          () =>
+            supabase
+              .from("homepage_sections")
+              .update({
+                settings: { section_title, section_subtitle },
+                is_enabled: show_section,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("section_key", "pricing"),
+          10000,
+          "Update pricing section timeout"
+        ),
+        withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .select("id")
+              .eq("key", "pricing_settings")
+              .maybeSingle(),
+          10000,
+          "Load pricing setting before save timeout"
+        ),
       ]);
 
       if (sectionError) throw sectionError;
@@ -124,22 +151,32 @@ export function PricingSettings() {
       const mirroredPlans = JSON.parse(JSON.stringify(plans));
 
       if (existing) {
-        const { error } = await supabase
-          .from("system_settings")
-          .update({ value: mirroredPlans, updated_at: new Date().toISOString() })
-          .eq("key", "pricing_settings");
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .update({ value: mirroredPlans, updated_at: new Date().toISOString() })
+              .eq("key", "pricing_settings"),
+          10000,
+          "Update pricing settings mirror timeout"
+        );
         if (error) throw error;
       } else {
-        const { error } = await supabase
-          .from("system_settings")
-          .insert({ key: "pricing_settings", value: mirroredPlans });
+        const { error } = await withTimeout(
+          () =>
+            supabase
+              .from("system_settings")
+              .insert({ key: "pricing_settings", value: mirroredPlans }),
+          10000,
+          "Insert pricing settings mirror timeout"
+        );
         if (error) throw error;
       }
 
       toast.success("Pengaturan harga berhasil disimpan");
     } catch (error) {
-      console.error("Failed to save pricing settings:", error);
-      toast.error("Gagal menyimpan pengaturan harga");
+      const errorRef = reportError(error, "admin.settings.pricing.save");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan harga", errorRef));
     } finally {
       setIsSaving(false);
     }
@@ -267,4 +304,3 @@ export function PricingSettings() {
     </div>
   );
 }
-

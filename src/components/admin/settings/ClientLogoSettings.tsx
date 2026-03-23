@@ -7,6 +7,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Users, Save, Trash2, Plus, Image, Loader2, Link2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 interface ClientLogo {
   id: string;
@@ -18,6 +20,7 @@ interface ClientLogo {
 }
 
 export function ClientLogoSettings() {
+  const REQUEST_TIMEOUT_MS = 12000;
   const [logos, setLogos] = useState<ClientLogo[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -26,12 +29,16 @@ export function ClientLogoSettings() {
 
   const fetchLogos = async () => {
     try {
-      const { data, error } = await supabase.from("client_logos").select("*").order("sort_order");
+      const { data, error } = await withTimeout(
+        supabase.from("client_logos").select("*").order("sort_order"),
+        REQUEST_TIMEOUT_MS,
+        "Memuat logo klien terlalu lama",
+      );
       if (error) throw error;
       setLogos(data || []);
     } catch (error) {
-      console.error("Error fetching logos:", error);
-      toast.error("Gagal memuat data logo");
+      const errorRef = reportError(error, "admin.settings.client_logo.fetch");
+      toast.error(appendErrorReference("Gagal memuat data logo", errorRef));
     } finally {
       setIsLoading(false);
     }
@@ -58,12 +65,17 @@ export function ClientLogoSettings() {
       return;
     }
     try {
-      const { error } = await supabase.from("client_logos").delete().eq("id", id);
+      const { error } = await withTimeout(
+        supabase.from("client_logos").delete().eq("id", id),
+        REQUEST_TIMEOUT_MS,
+        "Menghapus logo klien terlalu lama",
+      );
       if (error) throw error;
       setLogos(logos.filter((l) => l.id !== id));
       toast.success("Logo berhasil dihapus");
     } catch (error) {
-      toast.error("Gagal menghapus logo");
+      const errorRef = reportError(error, "admin.settings.client_logo.delete", { logo_id: id });
+      toast.error(appendErrorReference("Gagal menghapus logo", errorRef));
     }
   };
 
@@ -73,24 +85,32 @@ export function ClientLogoSettings() {
       for (const logo of logos) {
         if (!logo.name || !logo.logo_url) continue;
         if (logo.id.startsWith("temp-")) {
-          const { error } = await supabase.from("client_logos").insert({
-            name: logo.name, logo_url: logo.logo_url, website_url: logo.website_url,
-            is_active: logo.is_active, sort_order: logo.sort_order,
-          });
+          const { error } = await withTimeout(
+            supabase.from("client_logos").insert({
+              name: logo.name, logo_url: logo.logo_url, website_url: logo.website_url,
+              is_active: logo.is_active, sort_order: logo.sort_order,
+            }),
+            REQUEST_TIMEOUT_MS,
+            "Menyimpan logo klien baru terlalu lama",
+          );
           if (error) throw error;
         } else {
-          const { error } = await supabase.from("client_logos").update({
-            name: logo.name, logo_url: logo.logo_url, website_url: logo.website_url,
-            is_active: logo.is_active, sort_order: logo.sort_order,
-          }).eq("id", logo.id);
+          const { error } = await withTimeout(
+            supabase.from("client_logos").update({
+              name: logo.name, logo_url: logo.logo_url, website_url: logo.website_url,
+              is_active: logo.is_active, sort_order: logo.sort_order,
+            }).eq("id", logo.id),
+            REQUEST_TIMEOUT_MS,
+            "Menyimpan perubahan logo klien terlalu lama",
+          );
           if (error) throw error;
         }
       }
       toast.success("Perubahan berhasil disimpan");
       fetchLogos();
     } catch (error) {
-      console.error("Save error:", error);
-      toast.error("Gagal menyimpan perubahan");
+      const errorRef = reportError(error, "admin.settings.client_logo.save");
+      toast.error(appendErrorReference("Gagal menyimpan perubahan", errorRef));
     } finally {
       setIsSaving(false);
     }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -31,8 +31,12 @@ import {
   Globe,
 } from "lucide-react";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 type Holiday = Tables<"holidays">;
+const MASTER_HOLIDAYS_QUERY_TIMEOUT_MS = 12000;
+const MASTER_HOLIDAYS_QUERY_RETRY_MAX = 2;
 
 export default function MasterHolidays() {
   const { toast } = useToast();
@@ -42,6 +46,8 @@ export default function MasterHolidays() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingHoliday, setEditingHoliday] = useState<Holiday | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -49,30 +55,54 @@ export default function MasterHolidays() {
     is_national: true,
   });
 
-  useEffect(() => {
-    fetchHolidays();
-  }, []);
-
-  const fetchHolidays = async () => {
+  const fetchHolidays = useCallback(async () => {
     setIsLoading(true);
-    const { data, error } = await supabase
-      .from("holidays")
-      .select("*")
-      .order("date", { ascending: false });
+    setLoadError(null);
+    try {
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("holidays")
+              .select("*")
+              .order("date", { ascending: false }),
+            MASTER_HOLIDAYS_QUERY_TIMEOUT_MS,
+            "admin.master_holidays.fetch timeout"
+          ),
+        {
+          maxRetries: MASTER_HOLIDAYS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
-    if (!error && data) {
-      setHolidays(data);
+      if (error) throw error;
+      setHolidays(data || []);
+    } catch (error) {
+      const errorRef = reportError(error, "admin.master_holidays.fetch");
+      const message = appendErrorReference("Gagal memuat data hari libur", errorRef);
+      setLoadError(message);
+      setHolidays([]);
+      toast({ variant: "destructive", title: "Gagal", description: message });
+    } finally {
+      setIsLoading(false);
     }
-    setIsLoading(false);
-  };
+  }, [toast]);
+
+  useEffect(() => {
+    void fetchHolidays();
+  }, [fetchHolidays]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.date) return;
 
     setIsSubmitting(true);
+    setLoadError(null);
 
     try {
+      setIsRetrying(false);
       const holidayData = {
         name: formData.name,
         date: format(formData.date, "yyyy-MM-dd"),
@@ -81,23 +111,53 @@ export default function MasterHolidays() {
       };
 
       if (editingHoliday) {
-        const { error } = await supabase
-          .from("holidays")
-          .update(holidayData)
-          .eq("id", editingHoliday.id);
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("holidays")
+                .update(holidayData)
+                .eq("id", editingHoliday.id),
+              MASTER_HOLIDAYS_QUERY_TIMEOUT_MS,
+              "admin.master_holidays.update timeout"
+            ),
+          {
+            maxRetries: MASTER_HOLIDAYS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (error) throw error;
         toast({ title: "Berhasil", description: "Hari libur berhasil diperbarui" });
       } else {
-        const { error } = await supabase.from("holidays").insert(holidayData);
+        const { error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("holidays").insert(holidayData),
+              MASTER_HOLIDAYS_QUERY_TIMEOUT_MS,
+              "admin.master_holidays.insert timeout"
+            ),
+          {
+            maxRetries: MASTER_HOLIDAYS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
         if (error) throw error;
         toast({ title: "Berhasil", description: "Hari libur berhasil ditambahkan" });
       }
 
       setDialogOpen(false);
       resetForm();
-      fetchHolidays();
+      void fetchHolidays();
     } catch (error) {
-      toast({ variant: "destructive", title: "Gagal", description: "Terjadi kesalahan" });
+      const errorRef = reportError(error, "admin.master_holidays.save", {
+        mode: editingHoliday ? "update" : "insert",
+        holiday_id: editingHoliday?.id,
+      });
+      const message = appendErrorReference("Gagal menyimpan hari libur", errorRef);
+      setLoadError(message);
+      toast({ variant: "destructive", title: "Gagal", description: message });
     } finally {
       setIsSubmitting(false);
     }
@@ -123,10 +183,30 @@ export default function MasterHolidays() {
   };
 
   const handleDelete = async (id: string) => {
-    const { error } = await supabase.from("holidays").delete().eq("id", id);
-    if (!error) {
+    try {
+      setLoadError(null);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.from("holidays").delete().eq("id", id),
+            MASTER_HOLIDAYS_QUERY_TIMEOUT_MS,
+            "admin.master_holidays.delete timeout"
+          ),
+        {
+          maxRetries: MASTER_HOLIDAYS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+      if (error) throw error;
       toast({ title: "Berhasil", description: "Hari libur berhasil dihapus" });
-      fetchHolidays();
+      void fetchHolidays();
+    } catch (error) {
+      const errorRef = reportError(error, "admin.master_holidays.delete", { holiday_id: id });
+      const message = appendErrorReference("Gagal menghapus hari libur", errorRef);
+      setLoadError(message);
+      toast({ variant: "destructive", title: "Gagal", description: message });
     }
   };
 
@@ -141,15 +221,17 @@ export default function MasterHolidays() {
     >
       <div className="space-y-6">
         {/* Header Actions */}
-        <div className="flex flex-col sm:flex-row gap-4 justify-between">
-          <div className="relative flex-1 max-w-md">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input
-              placeholder="Cari hari libur..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10"
-            />
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="w-full rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm sm:flex-1">
+            <div className="relative max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                placeholder="Cari hari libur..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-10"
+              />
+            </div>
           </div>
           <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) resetForm(); }}>
             <DialogTrigger asChild>
@@ -221,6 +303,20 @@ export default function MasterHolidays() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sedang mencoba ulang memuat data hari libur...
+          </div>
+        )}
+        {loadError && (
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button type="button" size="sm" variant="outline" className="bg-white" onClick={() => void fetchHolidays()}>
+              Coba Lagi
+            </Button>
+          </div>
+        )}
 
         {/* Holiday List */}
         {isLoading ? (

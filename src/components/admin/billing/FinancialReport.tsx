@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useFinancialLedger } from "@/hooks/useBilling";
+import { useBillingSettings, useFinancialLedger } from "@/hooks/useBilling";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,17 +13,20 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { 
-  Loader2, 
-  Download, 
-  TrendingUp, 
-  DollarSign, 
-  Receipt, 
+import {
+  Loader2,
+  Download,
+  TrendingUp,
+  DollarSign,
+  Receipt,
   Percent,
-  Calendar
+  Calendar,
 } from "lucide-react";
 import { format, startOfMonth, endOfMonth, subMonths } from "date-fns";
 import { id } from "date-fns/locale";
+import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { withTimeout } from "@/lib/attendanceResilience";
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat("id-ID", {
@@ -33,6 +36,20 @@ const formatCurrency = (amount: number) => {
   }).format(amount);
 };
 
+const getNumericSettingValue = (value: unknown, fallback: number): number => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    const objectValue = value as Record<string, unknown>;
+    if ("value" in objectValue) return getNumericSettingValue(objectValue.value, fallback);
+    if ("amount" in objectValue) return getNumericSettingValue(objectValue.amount, fallback);
+  }
+  return fallback;
+};
+
 export function FinancialReport() {
   const ITEMS_PER_PAGE = 10;
   const [dateRange, setDateRange] = useState({
@@ -40,8 +57,28 @@ export function FinancialReport() {
     end: format(endOfMonth(new Date()), "yyyy-MM-dd"),
   });
 
-  const { summary, transactions, isLoading, refetch } = useFinancialLedger(dateRange);
+  const { summary, transactions, isLoading } = useFinancialLedger(dateRange);
+  const { getSetting, isLoading: isLoadingBillingSettings } = useBillingSettings();
   const [currentPage, setCurrentPage] = useState(1);
+
+  const ppnPercentage = getNumericSettingValue(getSetting("vat_percentage"), 11);
+  const pphPercentage = getNumericSettingValue(getSetting("pph_percentage"), 2);
+  const totalTaxPercentage = Math.max(0, ppnPercentage + pphPercentage);
+
+  const splitTaxAmount = (totalTaxAmount: number) => {
+    if (!Number.isFinite(totalTaxAmount) || totalTaxAmount <= 0) {
+      return { ppnAmount: 0, pphAmount: 0 };
+    }
+    if (totalTaxPercentage <= 0) {
+      return { ppnAmount: totalTaxAmount, pphAmount: 0 };
+    }
+    const ppnAmount = Math.round((totalTaxAmount * ppnPercentage) / totalTaxPercentage);
+    const pphAmount = totalTaxAmount - ppnAmount;
+    return { ppnAmount, pphAmount };
+  };
+
+  const summaryPpn = summary.total_ppn > 0 || summary.total_pph > 0 ? summary.total_ppn : splitTaxAmount(summary.total_vat).ppnAmount;
+  const summaryPph = summary.total_ppn > 0 || summary.total_pph > 0 ? summary.total_pph : splitTaxAmount(summary.total_vat).pphAmount;
 
   const handleQuickFilter = (months: number) => {
     const targetDate = months === 0 ? new Date() : subMonths(new Date(), months);
@@ -51,48 +88,68 @@ export function FinancialReport() {
     });
   };
 
-  const handleExport = () => {
-    // Simple CSV export
-    const headers = ["Tanggal", "Tipe", "Gross", "Fee", "PPN", "Net", "Sumber", "Referensi"];
-    const rows = transactions.map((tx) => [
-      tx.transaction_date,
-      tx.transaction_type,
-      tx.gross_amount,
-      tx.xendit_fee,
-      tx.vat_amount,
-      tx.net_amount,
-      tx.payment_source,
-      tx.reference_number || "",
-    ]);
-
-    const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `laporan-keuangan-${dateRange.start}-${dateRange.end}.csv`;
-    a.click();
+  const handleExport = async () => {
+    try {
+      const csv = await withTimeout(
+        Promise.resolve().then(() => {
+          const headers = ["Tanggal", "Tipe", "Gross", "Fee", "PPN", "PPH", "Net", "Sumber", "Referensi"];
+          const rows = transactions.map((tx) => {
+            const tax = {
+              ppnAmount: Number(tx.ppn_amount ?? splitTaxAmount(Number(tx.vat_amount || 0)).ppnAmount),
+              pphAmount: Number(tx.pph_amount ?? splitTaxAmount(Number(tx.vat_amount || 0)).pphAmount),
+            };
+            return [
+              tx.transaction_date,
+              tx.transaction_type,
+              tx.gross_amount,
+              tx.xendit_fee,
+              tax.ppnAmount,
+              tax.pphAmount,
+              tx.net_amount,
+              tx.payment_source,
+              tx.reference_number || "",
+            ];
+          });
+          return [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
+        }),
+        10000,
+        "Menyiapkan export laporan terlalu lama",
+      );
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `laporan-keuangan-${dateRange.start}-${dateRange.end}.csv`;
+      a.click();
+    } catch (error) {
+      const errorRef = reportError(error, "admin.billing.financial_report.export");
+      toast.error(appendErrorReference("Gagal mengekspor laporan keuangan.", errorRef));
+    }
   };
+
   const totalPages = Math.max(1, Math.ceil(transactions.length / ITEMS_PER_PAGE));
-  const paginatedTransactions = transactions.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
-  );
+  const paginatedTransactions = transactions.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+
   useEffect(() => {
     setCurrentPage(1);
   }, [dateRange.start, dateRange.end, transactions.length]);
 
-  if (isLoading) {
+  if (isLoading || isLoadingBillingSettings) {
     return (
-      <div className="flex items-center justify-center h-32">
-        <Loader2 className="h-6 w-6 animate-spin" />
+      <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50/80 px-4 py-10 text-center">
+        <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-white shadow-sm">
+          <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
+        </div>
+        <p className="text-base font-medium text-slate-900">Memuat laporan keuangan</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Data ringkasan transaksi dan pajak sedang disiapkan.
+        </p>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      {/* Date Range Filter */}
       <Card>
         <CardContent className="p-4">
           <div className="flex flex-wrap items-end gap-4">
@@ -131,8 +188,7 @@ export function FinancialReport() {
         </CardContent>
       </Card>
 
-      {/* Summary Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Gross Revenue</CardTitle>
@@ -140,9 +196,7 @@ export function FinancialReport() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{formatCurrency(summary.total_gross)}</div>
-            <p className="text-xs text-muted-foreground">
-              {summary.transaction_count} transaksi
-            </p>
+            <p className="text-xs text-muted-foreground">{summary.transaction_count} transaksi</p>
           </CardContent>
         </Card>
 
@@ -152,12 +206,8 @@ export function FinancialReport() {
             <Receipt className="h-4 w-4 text-orange-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-orange-600">
-              {formatCurrency(summary.total_xendit_fee)}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Xendit fee
-            </p>
+            <div className="text-2xl font-bold text-orange-600">{formatCurrency(summary.total_xendit_fee)}</div>
+            <p className="text-xs text-muted-foreground">Xendit fee</p>
           </CardContent>
         </Card>
 
@@ -167,12 +217,19 @@ export function FinancialReport() {
             <Percent className="h-4 w-4 text-blue-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-blue-600">
-              {formatCurrency(summary.total_vat)}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Pajak terkumpul
-            </p>
+            <div className="text-2xl font-bold text-blue-600">{formatCurrency(summaryPpn)}</div>
+            <p className="text-xs text-muted-foreground">Pajak pertambahan nilai</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">PPH</CardTitle>
+            <Percent className="h-4 w-4 text-indigo-600" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-indigo-600">{formatCurrency(summaryPph)}</div>
+            <p className="text-xs text-muted-foreground">Pajak penghasilan</p>
           </CardContent>
         </Card>
 
@@ -182,17 +239,12 @@ export function FinancialReport() {
             <TrendingUp className="h-4 w-4 text-green-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-green-600">
-              {formatCurrency(summary.total_net)}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Pendapatan bersih
-            </p>
+            <div className="text-2xl font-bold text-green-600">{formatCurrency(summary.total_net)}</div>
+            <p className="text-xs text-muted-foreground">Pendapatan bersih</p>
           </CardContent>
         </Card>
       </div>
 
-      {/* Transactions Table */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -210,46 +262,52 @@ export function FinancialReport() {
                 <TableHead className="text-right">Gross</TableHead>
                 <TableHead className="text-right">Fee</TableHead>
                 <TableHead className="text-right">PPN</TableHead>
+                <TableHead className="text-right">PPH</TableHead>
                 <TableHead className="text-right">Net</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {transactions.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground py-8">
-                    Tidak ada transaksi pada periode ini
+                  <TableCell colSpan={8} className="py-10">
+                    <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
+                      <div className="rounded-full bg-slate-100 p-3">
+                        <Calendar className="h-5 w-5 text-slate-500" />
+                      </div>
+                      <p className="text-base font-medium text-slate-800">Tidak ada transaksi pada periode ini</p>
+                      <p className="text-sm text-muted-foreground">
+                        Coba ubah rentang tanggal atau gunakan filter cepat Bulan Ini/Bulan Lalu.
+                      </p>
+                    </div>
                   </TableCell>
                 </TableRow>
               ) : (
-                paginatedTransactions.map((tx) => (
-                  <TableRow key={tx.id}>
-                    <TableCell>
-                      {format(new Date(tx.transaction_date), "dd MMM yyyy", { locale: id })}
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant={tx.transaction_type === "REFUND" ? "destructive" : "default"}>
-                        {tx.transaction_type}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">
-                        {tx.payment_source === "XENDIT" ? "Online" : "Manual"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right font-medium">
-                      {formatCurrency(tx.gross_amount)}
-                    </TableCell>
-                    <TableCell className="text-right text-orange-600">
-                      {tx.xendit_fee > 0 ? `-${formatCurrency(tx.xendit_fee)}` : "-"}
-                    </TableCell>
-                    <TableCell className="text-right text-blue-600">
-                      {formatCurrency(tx.vat_amount)}
-                    </TableCell>
-                    <TableCell className="text-right font-bold text-green-600">
-                      {formatCurrency(tx.net_amount)}
-                    </TableCell>
-                  </TableRow>
-                ))
+                paginatedTransactions.map((tx) => {
+                  const tax = {
+                    ppnAmount: Number(tx.ppn_amount ?? splitTaxAmount(Number(tx.vat_amount || 0)).ppnAmount),
+                    pphAmount: Number(tx.pph_amount ?? splitTaxAmount(Number(tx.vat_amount || 0)).pphAmount),
+                  };
+                  return (
+                    <TableRow key={String(tx.id)}>
+                      <TableCell>{format(new Date(String(tx.transaction_date)), "dd MMM yyyy", { locale: id })}</TableCell>
+                      <TableCell>
+                        <Badge variant={tx.transaction_type === "REFUND" ? "destructive" : "default"}>
+                          {String(tx.transaction_type)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant="outline">{tx.payment_source === "XENDIT" ? "Online" : "Manual"}</Badge>
+                      </TableCell>
+                      <TableCell className="text-right font-medium">{formatCurrency(Number(tx.gross_amount || 0))}</TableCell>
+                      <TableCell className="text-right text-orange-600">
+                        {Number(tx.xendit_fee || 0) > 0 ? `-${formatCurrency(Number(tx.xendit_fee || 0))}` : "-"}
+                      </TableCell>
+                      <TableCell className="text-right text-blue-600">{formatCurrency(tax.ppnAmount)}</TableCell>
+                      <TableCell className="text-right text-indigo-600">{formatCurrency(tax.pphAmount)}</TableCell>
+                      <TableCell className="text-right font-bold text-green-600">{formatCurrency(Number(tx.net_amount || 0))}</TableCell>
+                    </TableRow>
+                  );
+                })
               )}
             </TableBody>
           </Table>
@@ -263,9 +321,7 @@ export function FinancialReport() {
               >
                 Sebelumnya
               </Button>
-              <span className="text-sm text-muted-foreground">
-                Halaman {currentPage} dari {totalPages}
-              </span>
+              <span className="text-sm text-muted-foreground">Halaman {currentPage} dari {totalPages}</span>
               <Button
                 variant="outline"
                 size="sm"

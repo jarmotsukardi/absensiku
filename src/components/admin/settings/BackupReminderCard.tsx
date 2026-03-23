@@ -6,6 +6,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import {
   Bell,
   Clock,
@@ -50,7 +51,8 @@ export function BackupReminderCard({ onBackupClick }: { onBackupClick: () => voi
         }
       }
     } catch (error) {
-      console.error("Error loading backup info:", error);
+      const errorRef = reportError(error, "admin.backup_reminder.load_backup_info");
+      toast.error(appendErrorReference("Gagal memuat informasi backup lokal", errorRef));
     }
   };
 
@@ -77,7 +79,8 @@ export function BackupReminderCard({ onBackupClick }: { onBackupClick: () => voi
       
       toast.success("Backup tercatat!");
     } catch (error) {
-      console.error("Error recording backup:", error);
+      const errorRef = reportError(error, "admin.backup_reminder.record_backup", { type });
+      toast.error(appendErrorReference("Gagal mencatat histori backup lokal", errorRef));
     }
   };
 

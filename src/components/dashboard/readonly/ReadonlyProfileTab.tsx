@@ -1,7 +1,12 @@
+import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { MutationSection } from "@/components/employee/MutationSection";
+import {
+  DEFAULT_ORG_MASTER_DATA_MODULES,
+  fetchTenantOrgMasterDataModules,
+} from "@/lib/orgMasterDataModules";
 
 interface EmployeeProfile {
   id: string;
@@ -39,6 +44,37 @@ export function ReadonlyProfileTab({
   onForgotPassword,
   onRefreshData,
 }: ReadonlyProfileTabProps) {
+  const [masterDataModules, setMasterDataModules] = useState(DEFAULT_ORG_MASTER_DATA_MODULES);
+
+  useEffect(() => {
+    let isActive = true;
+    const loadMasterDataModules = async () => {
+      if (!employee?.tenant_id) {
+        if (isActive) setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
+        return;
+      }
+      try {
+        const moduleSetting = await fetchTenantOrgMasterDataModules(employee.tenant_id);
+        if (isActive) {
+          setMasterDataModules(moduleSetting.modules);
+        }
+      } catch {
+        if (isActive) {
+          setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
+        }
+      }
+    };
+
+    void loadMasterDataModules();
+    return () => {
+      isActive = false;
+    };
+  }, [employee?.tenant_id]);
+
+  const showPositionField = masterDataModules.positions;
+  const showGolonganField = masterDataModules.employee_golongan;
+  const showCategoryField = masterDataModules.employee_categories;
+
   return (
     <div className="space-y-4">
       <Card className={panelClass}>
@@ -49,8 +85,12 @@ export function ReadonlyProfileTab({
         <CardContent className="space-y-5">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline">{employee?.is_active === false ? "Nonaktif" : "Aktif"}</Badge>
-            {employee?.employee_category ? <Badge variant="secondary">{employee.employee_category}</Badge> : null}
-            {employee?.golongan ? <Badge variant="secondary">Gol. {employee.golongan}</Badge> : null}
+            {showCategoryField && employee?.employee_category ? (
+              <Badge variant="secondary">{employee.employee_category}</Badge>
+            ) : null}
+            {showGolonganField && employee?.golongan ? (
+              <Badge variant="secondary">Gol. {employee.golongan}</Badge>
+            ) : null}
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
@@ -66,7 +106,7 @@ export function ReadonlyProfileTab({
           <div className="rounded-xl border border-slate-200 p-3">
             <p className="mb-2 text-xs uppercase tracking-wide text-slate-500">Informasi Kepegawaian</p>
             <div className="grid gap-3 sm:grid-cols-2">
-              <InfoItem label="Jabatan" value={employee?.position} />
+              {showPositionField ? <InfoItem label="Jabatan" value={employee?.position} /> : null}
               <InfoItem label="Instansi/OPD" value={employee?.opd?.name} />
               <InfoItem label="Unit Kerja" value={employee?.work_unit?.name} />
               <InfoItem label="Kantor" value={employee?.offices?.name} />

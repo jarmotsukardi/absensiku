@@ -21,10 +21,17 @@ import { Tables } from "@/integrations/supabase/types";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 type AttendanceRecord = Tables<"attendance_records">;
 type Employee = Tables<"employees">;
 type OPD = Tables<"opd">;
+const ADMIN_ABSENT_WITHOUT_NOTICE_READ_TIMEOUT_MS = 12000;
+const ADMIN_ABSENT_WITHOUT_NOTICE_MAX_RETRIES = 2;
 
 export default function AbsentWithoutNotice() {
   const ITEMS_PER_PAGE = 15;
@@ -32,6 +39,7 @@ export default function AbsentWithoutNotice() {
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterOpd, setFilterOpd] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
@@ -39,16 +47,41 @@ export default function AbsentWithoutNotice() {
   const fetchData = useCallback(async () => {
     try {
       setIsLoading(true);
+      setIsRetrying(false);
       setLoadError(null);
       
       const [opdResult, recordResult] = await Promise.all([
-        supabase.from("opd").select("*").order("name"),
-        supabase
-          .from("attendance_records_partitioned")
-          .select("*")
-          .eq("status", "tidak_hadir")
-          .order("date", { ascending: false })
-          .limit(100),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("opd").select("*").order("name"),
+              ADMIN_ABSENT_WITHOUT_NOTICE_READ_TIMEOUT_MS,
+              "Permintaan daftar OPD timeout."
+            ),
+          {
+            maxRetries: ADMIN_ABSENT_WITHOUT_NOTICE_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("attendance_records_partitioned")
+                .select("*")
+                .eq("status", "tidak_hadir")
+                .order("date", { ascending: false })
+                .limit(100),
+              ADMIN_ABSENT_WITHOUT_NOTICE_READ_TIMEOUT_MS,
+              "Permintaan data tanpa keterangan timeout."
+            ),
+          {
+            maxRetries: ADMIN_ABSENT_WITHOUT_NOTICE_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
       ]);
 
       if (opdResult.error) throw opdResult.error;
@@ -64,6 +97,7 @@ export default function AbsentWithoutNotice() {
       setRecords([]);
       setOpdList([]);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, []);
@@ -103,13 +137,22 @@ export default function AbsentWithoutNotice() {
           </div>
           <Button variant="outline" onClick={handleExport}>
             <Download className="mr-2 h-4 w-4" />
-            Export Excel
+            Ekspor Excel
           </Button>
         </div>
 
+        {isRetrying && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
+            Sedang mencoba ulang memuat data tanpa keterangan...
+          </div>
+        )}
+
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">
+            <span>{loadError}</span>
+            <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+              Coba Lagi
+            </Button>
           </div>
         )}
 

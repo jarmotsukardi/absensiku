@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type ComponentType } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User, Session } from "@supabase/supabase-js";
@@ -23,16 +23,115 @@ import {
   CheckCircle2,
   ExternalLink,
 } from "lucide-react";
+import { resolveFaqAudience } from "@/lib/faqAudience";
+import type { FaqAudience } from "@/lib/faqAudience";
 
 interface TenantInfo {
   name: string;
 }
+
+interface ManagedFAQ {
+  id: string;
+  category: string;
+  question: string;
+  answer: string;
+  sort_order?: number | null;
+  audience?: FaqAudience;
+}
+
+interface FAQSettingsValue {
+  items?: ManagedFAQ[];
+}
+
+interface FAQSectionItem {
+  question: string;
+  answer: string;
+}
+
+interface FAQSection {
+  id: string;
+  icon: ComponentType<{ className?: string }>;
+  title: string;
+  items: FAQSectionItem[];
+}
+
+const EMPLOYEE_CATEGORY_ICONS: Record<string, ComponentType<{ className?: string }>> = {
+  Absensi: MapPin,
+  "Perangkat & Aplikasi": Smartphone,
+  "Pengajuan Izin & Cuti": FileText,
+  "Jam Kerja & Keterlambatan": Clock,
+  "Keamanan Akun": Shield,
+  Troubleshooting: AlertTriangle,
+};
+
+const slugify = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const normalizeFaqSettings = (raw: unknown): ManagedFAQ[] => {
+  let items: unknown[] = [];
+
+  if (Array.isArray(raw)) {
+    items = raw;
+  } else if (raw && typeof raw === "object" && Array.isArray((raw as FAQSettingsValue).items)) {
+    items = (raw as FAQSettingsValue).items ?? [];
+  }
+
+  return items
+    .map((item, index) => {
+      const row = item as Partial<ManagedFAQ>;
+      if (typeof row.question !== "string" || typeof row.answer !== "string") return null;
+
+      const category = typeof row.category === "string" && row.category.trim() ? row.category.trim() : "Umum";
+      const sort_order =
+        typeof row.sort_order === "number" && Number.isFinite(row.sort_order) ? row.sort_order : null;
+      const audience = resolveFaqAudience({
+        audience: row.audience,
+        category,
+        question: row.question,
+        answer: row.answer,
+      });
+
+      return {
+        id: typeof row.id === "string" && row.id.trim() ? row.id : `employee-faq-${index + 1}`,
+        category,
+        question: row.question,
+        answer: row.answer,
+        sort_order,
+        audience,
+      } satisfies ManagedFAQ;
+    })
+    .filter((row): row is ManagedFAQ => Boolean(row))
+    .filter((row) => row.audience === "employee")
+    .sort((a, b) => (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER));
+};
+
+const buildEmployeeFaqSections = (rows: ManagedFAQ[]): FAQSection[] => {
+  const grouped = new Map<string, FAQSectionItem[]>();
+
+  for (const row of rows) {
+    const existing = grouped.get(row.category) || [];
+    existing.push({ question: row.question, answer: row.answer });
+    grouped.set(row.category, existing);
+  }
+
+  return Array.from(grouped.entries()).map(([category, items], index) => ({
+    id: slugify(category) || `employee-section-${index + 1}`,
+    title: category,
+    icon: EMPLOYEE_CATEGORY_ICONS[category] || HelpCircle,
+    items,
+  }));
+};
 
 export default function EmployeeHelp() {
   const navigate = useNavigate();
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [tenantInfo, setTenantInfo] = useState<TenantInfo | null>(null);
+  const [managedFaqItems, setManagedFaqItems] = useState<FAQSection[]>([]);
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
@@ -80,7 +179,31 @@ export default function EmployeeHelp() {
     }
   }, [user, fetchTenantInfo]);
 
-  const faqItems = [
+  const fetchManagedFaqs = useCallback(async () => {
+    try {
+      const { data: faqSettingsRow } = await supabase
+        .from("system_settings")
+        .select("value")
+        .eq("key", "faq_settings")
+        .maybeSingle();
+
+      const managedRows = normalizeFaqSettings(faqSettingsRow?.value);
+      if (managedRows.length > 0) {
+        setManagedFaqItems(buildEmployeeFaqSections(managedRows));
+      } else {
+        setManagedFaqItems([]);
+      }
+    } catch (error) {
+      console.error("Error fetching employee managed FAQ:", error);
+      setManagedFaqItems([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void fetchManagedFaqs();
+  }, [fetchManagedFaqs]);
+
+  const faqItems: FAQSection[] = [
     {
       id: "attendance",
       icon: MapPin,
@@ -135,6 +258,10 @@ export default function EmployeeHelp() {
         {
           question: "Apakah bisa mengajukan izin mendadak?",
           answer: "Ya, Anda dapat mengajukan izin kapan saja. Namun disarankan untuk mengajukan sebelumnya jika memungkinkan agar proses persetujuan lebih lancar."
+        },
+        {
+          question: "Mengapa pilihan golongan di form perubahan profil tidak muncul lengkap?",
+          answer: "Pilihan golongan mengikuti master data organisasi. Jika golongan yang Anda butuhkan belum tersedia, minta admin organisasi memperbarui menu Master Data > Golongan Pegawai."
         }
       ]
     },
@@ -233,7 +360,7 @@ export default function EmployeeHelp() {
         </Card>
 
         {/* FAQ Sections */}
-        {faqItems.map((section) => (
+        {(managedFaqItems.length > 0 ? managedFaqItems : faqItems).map((section) => (
           <Card key={section.id}>
             <CardHeader className="pb-3">
               <CardTitle className="text-lg flex items-center gap-2">

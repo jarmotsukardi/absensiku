@@ -14,28 +14,55 @@ import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { buildOpdCodeFromName, normalizeOpdCode } from "@/lib/opdCode";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import {
+  isRetryableError,
+  withExponentialBackoff,
+  withTimeout,
+} from "@/lib/attendanceResilience";
 
 type OPD = Tables<"opd">;
 
 const ITEMS_PER_PAGE = 10;
+const OPD_READ_TIMEOUT_MS = 12000;
+const OPD_WRITE_TIMEOUT_MS = 15000;
+const OPD_MAX_RETRIES = 2;
 
 export default function OrgOPDManagement() {
+  const confirmDialog = useConfirmDialog();
   const [opds, setOpds] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState({ id: "", code: "", name: "", is_active: true });
+  const [isCodeManuallyEdited, setIsCodeManuallyEdited] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRetrying, setIsRetrying] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoadError(null);
     try {
-      const { data, error } = await supabase
-        .from("opd")
-        .select("*")
-        .order("name");
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("opd")
+              .select("*")
+              .order("name"),
+            OPD_READ_TIMEOUT_MS,
+            "Permintaan data OPD timeout."
+          ),
+        {
+          maxRetries: OPD_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
 
       if (error) throw error;
       setOpds(data || []);
@@ -45,6 +72,7 @@ export default function OrgOPDManagement() {
       setLoadError(message);
       toast.error(message);
     } finally {
+      setIsRetrying(false);
       setIsLoading(false);
     }
   }, []);
@@ -54,20 +82,46 @@ export default function OrgOPDManagement() {
   }, [fetchData]);
 
   const handleSubmit = async () => {
-    if (!formData.code || !formData.name) {
-      toast.error("Semua field harus diisi");
+    const normalizedName = formData.name.trim();
+    const generatedCode = buildOpdCodeFromName(normalizedName);
+    const normalizedCode = normalizeOpdCode(formData.code || generatedCode);
+
+    if (!normalizedName) {
+      toast.error("Nama OPD wajib diisi terlebih dahulu");
+      return;
+    }
+
+    if (!normalizedCode) {
+      toast.error("Kode/Singkatan OPD wajib diisi");
+      return;
+    }
+
+    const hasDuplicateCode = opds.some((opd) =>
+      opd.id !== formData.id && opd.code.toUpperCase() === normalizedCode,
+    );
+    if (hasDuplicateCode) {
+      toast.error(`Kode/Singkatan OPD "${normalizedCode}" sudah digunakan`);
       return;
     }
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user } } = await withTimeout(
+        supabase.auth.getUser(),
+        OPD_WRITE_TIMEOUT_MS,
+        "Permintaan user auth timeout."
+      );
       if (!user) return;
 
-      const { data: roleData } = await supabase
-        .from("user_roles")
-        .select("tenant_id")
-        .eq("user_id", user.id)
-        .maybeSingle();
+      const { data: roleData, error: roleError } = await withTimeout(
+        supabase
+          .from("user_roles")
+          .select("tenant_id")
+          .eq("user_id", user.id)
+          .maybeSingle(),
+        OPD_WRITE_TIMEOUT_MS,
+        "Permintaan tenant role timeout."
+      );
+      if (roleError) throw roleError;
 
       if (!roleData?.tenant_id) {
         toast.error("Tenant tidak ditemukan");
@@ -75,22 +129,31 @@ export default function OrgOPDManagement() {
       }
 
       if (isEditing) {
-        const { error } = await supabase
-          .from("opd")
-          .update({ code: formData.code, name: formData.name, is_active: formData.is_active })
-          .eq("id", formData.id);
+        const { error } = await withTimeout(
+          supabase
+            .from("opd")
+            .update({ code: normalizedCode, name: normalizedName, is_active: formData.is_active })
+            .eq("id", formData.id),
+          OPD_WRITE_TIMEOUT_MS,
+          "Update OPD timeout."
+        );
         if (error) throw error;
         toast.success("OPD berhasil diperbarui");
       } else {
-        const { error } = await supabase
-          .from("opd")
-          .insert({ code: formData.code, name: formData.name, tenant_id: roleData.tenant_id, is_active: formData.is_active });
+        const { error } = await withTimeout(
+          supabase
+            .from("opd")
+            .insert({ code: normalizedCode, name: normalizedName, tenant_id: roleData.tenant_id, is_active: formData.is_active }),
+          OPD_WRITE_TIMEOUT_MS,
+          "Tambah OPD timeout."
+        );
         if (error) throw error;
         toast.success("OPD berhasil ditambahkan");
       }
 
       setIsDialogOpen(false);
       setFormData({ id: "", code: "", name: "", is_active: true });
+      setIsCodeManuallyEdited(false);
       setIsEditing(false);
       void fetchData();
     } catch (error) {
@@ -100,17 +163,28 @@ export default function OrgOPDManagement() {
   };
 
   const handleEdit = (opd: OPD) => {
-    setFormData({ id: opd.id, code: opd.code, name: opd.name, is_active: opd.is_active ?? true });
+    const generatedFromName = buildOpdCodeFromName(opd.name);
+    setFormData({
+      id: opd.id,
+      code: opd.code,
+      name: opd.name,
+      is_active: opd.is_active ?? true,
+    });
+    setIsCodeManuallyEdited(opd.code.toUpperCase() !== generatedFromName);
     setIsEditing(true);
     setIsDialogOpen(true);
   };
 
   const handleToggleStatus = async (opd: OPD) => {
     try {
-      const { error } = await supabase
-        .from("opd")
-        .update({ is_active: !opd.is_active })
-        .eq("id", opd.id);
+      const { error } = await withTimeout(
+        supabase
+          .from("opd")
+          .update({ is_active: !opd.is_active })
+          .eq("id", opd.id),
+        OPD_WRITE_TIMEOUT_MS,
+        "Ubah status OPD timeout."
+      );
       if (error) throw error;
       toast.success(`OPD berhasil ${opd.is_active ? "dinonaktifkan" : "diaktifkan"}`);
       void fetchData();
@@ -121,10 +195,23 @@ export default function OrgOPDManagement() {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm("Yakin ingin menghapus OPD ini?")) return;
+    if (
+      !(await confirmDialog({
+        title: "Hapus OPD",
+        description: "Yakin ingin menghapus OPD ini?",
+        confirmText: "Ya, hapus",
+        variant: "destructive",
+      }))
+    ) {
+      return;
+    }
 
     try {
-      const { error } = await supabase.from("opd").delete().eq("id", id);
+      const { error } = await withTimeout(
+        supabase.from("opd").delete().eq("id", id),
+        OPD_WRITE_TIMEOUT_MS,
+        "Hapus OPD timeout."
+      );
       if (error) throw error;
       toast.success("OPD berhasil dihapus");
       void fetchData();
@@ -152,6 +239,12 @@ export default function OrgOPDManagement() {
   return (
     <OrganizationLayout>
       <div className="space-y-6">
+        {isRetrying && (
+          <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-primary">
+            Mencoba ulang memuat data OPD...
+          </div>
+        )}
+
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -162,7 +255,7 @@ export default function OrgOPDManagement() {
           </div>
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
-              <Button onClick={() => { setIsEditing(false); setFormData({ id: "", code: "", name: "", is_active: true }); }}>
+              <Button onClick={() => { setIsEditing(false); setIsCodeManuallyEdited(false); setFormData({ id: "", code: "", name: "", is_active: true }); }}>
                 <Plus className="mr-2 h-4 w-4" /> Tambah OPD
               </Button>
             </DialogTrigger>
@@ -175,20 +268,36 @@ export default function OrgOPDManagement() {
               </DialogHeader>
               <div className="grid gap-4 py-4">
                 <div className="grid gap-2">
-                  <Label>Kode/Singkatan OPD</Label>
-                  <Input
-                    value={formData.code}
-                    onChange={(e) => setFormData({ ...formData, code: e.target.value })}
-                    placeholder="Contoh: BPKAD"
-                  />
-                </div>
-                <div className="grid gap-2">
                   <Label>Nama OPD</Label>
                   <Input
                     value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    onChange={(e) => {
+                      const nextName = e.target.value;
+                      const prevGeneratedCode = buildOpdCodeFromName(formData.name);
+                      const shouldAutoGenerate = !isCodeManuallyEdited || formData.code === prevGeneratedCode;
+                      setFormData({
+                        ...formData,
+                        name: nextName,
+                        code: shouldAutoGenerate ? buildOpdCodeFromName(nextName) : formData.code,
+                      });
+                    }}
                     placeholder="Contoh: Badan Pengelolaan Keuangan dan Aset Daerah"
                   />
+                </div>
+                <div className="grid gap-2">
+                  <Label>Kode/Singkatan OPD</Label>
+                  <Input
+                    value={formData.code}
+                    onChange={(e) => {
+                      setIsCodeManuallyEdited(true);
+                      setFormData({ ...formData, code: normalizeOpdCode(e.target.value) });
+                    }}
+                    placeholder={formData.name.trim() ? "Contoh: DPKD atau DPKDLPSA" : "Isi Nama OPD terlebih dahulu"}
+                    disabled={!formData.name.trim()}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Kode otomatis dari huruf pertama tiap kata. Anda tetap bisa mengedit manual bila diperlukan.
+                  </p>
                 </div>
                 <div className="flex items-center justify-between">
                   <Label>Status Aktif</Label>
@@ -198,9 +307,12 @@ export default function OrgOPDManagement() {
                   />
                 </div>
               </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
-                <Button onClick={handleSubmit}>{isEditing ? "Simpan" : "Tambah"}</Button>
+              <DialogFooter className={dialogActionBarClassName}>
+                <DialogActionHint>Kode OPD harus unik dan akan divalidasi saat simpan.</DialogActionHint>
+                <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                  <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
+                  <Button onClick={handleSubmit}>{isEditing ? "Simpan" : "Tambah"}</Button>
+                </div>
               </DialogFooter>
             </DialogContent>
           </Dialog>
@@ -208,8 +320,11 @@ export default function OrgOPDManagement() {
 
         {loadError && (
           <Card className="border-destructive/40">
-            <CardContent className="pt-6">
+            <CardContent className="flex flex-col gap-2 pt-6 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-destructive">{loadError}</p>
+              <Button variant="outline" size="sm" onClick={() => void fetchData()}>
+                Coba Lagi
+              </Button>
             </CardContent>
           </Card>
         )}

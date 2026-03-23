@@ -16,6 +16,8 @@ import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
+import { RequestReportsTabs } from "@/components/org/reports/RequestReportsTabs";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 type WfhRequestRow = Tables<"wfh_requests">;
 type FlexibleRequestRow = Tables<"flexible_attendance_requests">;
@@ -53,6 +55,8 @@ interface CombinedRecord {
 
 const ITEMS_PER_PAGE = 20;
 const FETCH_CHUNK = 500;
+const FLEXIBLE_REPORT_QUERY_TIMEOUT_MS = 15000;
+const FLEXIBLE_REPORT_QUERY_RETRY_MAX = 1;
 
 const STATUS_OPTIONS = [
   { value: "menunggu", label: "Menunggu" },
@@ -110,34 +114,49 @@ export default function OrgFlexibleReport() {
   const [opdFilter, setOpdFilter] = useState("all");
   const [workUnitFilter, setWorkUnitFilter] = useState("all");
 
-  useEffect(() => {
-    const init = async () => {
-      try {
-        setLoadError(null);
-        const resolvedTenant = await resolveOrgTenantId();
-        setTenantId(resolvedTenant);
-        if (!resolvedTenant) return;
+  const initializePage = useCallback(async () => {
+    try {
+      setLoadError(null);
+      const resolvedTenant = await withTimeout(
+        resolveOrgTenantId(),
+        FLEXIBLE_REPORT_QUERY_TIMEOUT_MS,
+        "org.reports.flexible.init.resolve_tenant timeout",
+      );
+      setTenantId(resolvedTenant);
+      if (!resolvedTenant) return;
 
-        const [opdRes, workUnitRes] = await Promise.all([
-          supabase.from("opd").select("*").eq("tenant_id", resolvedTenant).order("name"),
-          supabase.from("work_units").select("*").eq("tenant_id", resolvedTenant).order("name"),
-        ]);
+      const [opdRes, workUnitRes] = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            Promise.all([
+              supabase.from("opd").select("*").eq("tenant_id", resolvedTenant).order("name"),
+              supabase.from("work_units").select("*").eq("tenant_id", resolvedTenant).order("name"),
+            ]),
+            FLEXIBLE_REPORT_QUERY_TIMEOUT_MS,
+            "org.reports.flexible.init.query timeout",
+          ),
+        {
+          maxRetries: FLEXIBLE_REPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
 
-        if (opdRes.error) throw opdRes.error;
-        if (workUnitRes.error) throw workUnitRes.error;
+      if (opdRes.error) throw opdRes.error;
+      if (workUnitRes.error) throw workUnitRes.error;
 
-        setOpds(opdRes.data || []);
-        setWorkUnits(workUnitRes.data || []);
-      } catch (error) {
-        const errorRef = reportError(error, "org.reports.flexible.init");
-        const message = appendErrorReference("Gagal memuat data awal laporan WFH/Absensi Khusus", errorRef);
-        setLoadError(message);
-        toast.error(message);
-      }
-    };
-
-    void init();
+      setOpds(opdRes.data || []);
+      setWorkUnits(workUnitRes.data || []);
+    } catch (error) {
+      const errorRef = reportError(error, "org.reports.flexible.init");
+      const message = appendErrorReference("Gagal memuat data awal laporan WFH/Absensi Khusus", errorRef);
+      setLoadError(message);
+      toast.error(message);
+    }
   }, []);
+
+  useEffect(() => {
+    void initializePage();
+  }, [initializePage]);
 
   const opdMap = useMemo(() => {
     const map = new Map<string, OPD>();
@@ -160,7 +179,18 @@ export default function OrgFlexibleReport() {
     setIsLoading(true);
     try {
       setLoadError(null);
-      const employeeIds = await getTenantEmployeeIds(tenantId);
+      const employeeIds = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            getTenantEmployeeIds(tenantId),
+            FLEXIBLE_REPORT_QUERY_TIMEOUT_MS,
+            "org.reports.flexible.fetch.employee_ids timeout",
+          ),
+        {
+          maxRetries: FLEXIBLE_REPORT_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+        },
+      );
       if (employeeIds.length === 0) {
         setRecords([]);
         return;
@@ -190,7 +220,18 @@ export default function OrgFlexibleReport() {
             query = query.lte("request_date", endDate);
           }
 
-          const { data, error } = await query;
+          const { data, error } = await withExponentialBackoff(
+            () =>
+              withTimeout(
+                query,
+                FLEXIBLE_REPORT_QUERY_TIMEOUT_MS,
+                "org.reports.flexible.fetch.wfh_chunk timeout",
+              ),
+            {
+              maxRetries: FLEXIBLE_REPORT_QUERY_RETRY_MAX,
+              shouldRetry: isRetryableError,
+            },
+          );
           if (error) throw error;
 
           const chunk = (data || []) as WfhQueryRow[];
@@ -237,7 +278,18 @@ export default function OrgFlexibleReport() {
             query = query.lte("request_date", endDate);
           }
 
-          const { data, error } = await query;
+          const { data, error } = await withExponentialBackoff(
+            () =>
+              withTimeout(
+                query,
+                FLEXIBLE_REPORT_QUERY_TIMEOUT_MS,
+                "org.reports.flexible.fetch.flexible_chunk timeout",
+              ),
+            {
+              maxRetries: FLEXIBLE_REPORT_QUERY_RETRY_MAX,
+              shouldRetry: isRetryableError,
+            },
+          );
           if (error) throw error;
 
           const chunk = (data || []) as FlexibleQueryRow[];
@@ -331,6 +383,13 @@ export default function OrgFlexibleReport() {
     setHasQueried(true);
     setCurrentPage(1);
     await fetchReport();
+  };
+
+  const handleRetryLoad = async () => {
+    await initializePage();
+    if (tenantId && hasQueried) {
+      await fetchReport();
+    }
   };
 
   const handleExport = async () => {
@@ -505,9 +564,14 @@ export default function OrgFlexibleReport() {
           </div>
         </div>
 
+        <RequestReportsTabs />
+
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button size="sm" variant="outline" onClick={handleRetryLoad} className="border-destructive/30 text-destructive hover:bg-destructive/10">
+              Coba Lagi
+            </Button>
           </div>
         )}
 
@@ -516,7 +580,8 @@ export default function OrgFlexibleReport() {
             <CardTitle>Filter Laporan</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
               <div className="grid gap-2">
                 <Label>Tanggal Mulai</Label>
                 <Input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} />
@@ -588,6 +653,7 @@ export default function OrgFlexibleReport() {
                 <Button onClick={handleShow} className="w-full" disabled={isLoading}>
                   {isLoading ? "Memuat..." : "Tampilkan"}
                 </Button>
+              </div>
               </div>
             </div>
           </CardContent>

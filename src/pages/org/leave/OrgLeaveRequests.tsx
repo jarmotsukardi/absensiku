@@ -15,119 +15,220 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
-import { Search, ClipboardList, Check, X, AlertTriangle, Clock } from "lucide-react";
+import { Search, ClipboardList, Check, X } from "lucide-react";
 import { toast } from "sonner";
 import { format, differenceInDays, isBefore, startOfDay } from "date-fns";
 import { id } from "date-fns/locale";
 import type { Enums, Tables } from "@/integrations/supabase/types";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  LEAVE_REQUEST_CATEGORY_OPTIONS,
+  type LeaveRequestCategory,
+  getLeaveRequestPresentation,
+} from "@/lib/leaveRequestPresentation";
+import {
+  getApprovalRoleLabel,
+  getApprovalTypeLabel,
+  type HrApprovalHistoryEntry,
+} from "@/lib/hrApprovalWorkflow";
+import { processLeaveApprovalStep, processLeaveRejection } from "@/lib/leaveApprovalActions";
+import { formatLeaveDayAmount } from "@/lib/hrLeaveTypes";
+import {
+  EARLY_LEAVE_PERMISSION_REASON_PREFIX,
+  LATE_PERMISSION_REASON_PREFIX,
+  isAutoCanceledLatePermissionRejectionReason,
+} from "@/lib/latePermissionRequest";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { LeaveRequestTabs } from "@/components/org/leave/LeaveRequestTabs";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
 
 type RequestStatus = Enums<"request_status">;
+type DisplayRequestStatus = RequestStatus | "kedaluwarsa" | "unknown";
 type LeaveRequest = Tables<"leave_requests"> & {
   employees: {
     name: string;
     nip: string | null;
     opd: { code: string } | null;
   } | null;
+  leave_type_id?: string | null;
+  leave_type_meta?: {
+    leave_name: string;
+    request_type: Enums<"leave_type">;
+    approval_type_code: string;
+    max_days_per_year: number | null;
+  } | null;
+  approval_type_code?: string | null;
+  current_approval_level?: number | null;
+  required_approval_levels?: number | null;
+  approval_history?: HrApprovalHistoryEntry[] | null;
+  document_reference_number?: string | null;
+  document_reference_date?: string | null;
+  document_reference_issuer?: string | null;
+  document_reference_notes?: string | null;
+};
+
+const getDisplayRequestStatus = (request: Pick<LeaveRequest, "status" | "start_date">): DisplayRequestStatus => {
+  if (!request.status) return "unknown";
+  if (request.status !== "menunggu") return request.status;
+
+  const requestStart = startOfDay(new Date(request.start_date));
+  const today = startOfDay(new Date());
+  if (isBefore(requestStart, today)) return "kedaluwarsa";
+
+  return "menunggu";
 };
 
 export default function OrgLeaveRequests() {
   const PAGE_SIZE = 20;
+  const FETCH_CHUNK = 500;
+  const LEAVE_REQUEST_QUERY_TIMEOUT_MS = 15000;
+  const LEAVE_REQUEST_QUERY_RETRY_MAX = 1;
   const [requests, setRequests] = useState<LeaveRequest[]>([]);
-  const [expiredRequests, setExpiredRequests] = useState<LeaveRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRetrying, setIsRetrying] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("menunggu");
+  const [requestCategoryFilter, setRequestCategoryFilter] = useState<LeaveRequestCategory>("all");
   const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const [totalCount, setTotalCount] = useState(0);
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
+  const [rejectTargetRequestId, setRejectTargetRequestId] = useState<string | null>(null);
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [isRejecting, setIsRejecting] = useState(false);
 
-  useEffect(() => {
-    const initTenant = async () => {
-      try {
-        const resolved = await resolveOrgTenantId();
-        setTenantId(resolved);
-        setLoadError(null);
-      } catch (error) {
-        const errorRef = reportError(error, "org.leave_requests.resolve_tenant");
-        const message = appendErrorReference("Gagal menentukan tenant organisasi", errorRef);
-        setLoadError(message);
-        toast.error(message);
-        setTenantId(null);
-      }
-    };
-    void initTenant();
+  const initializeTenant = useCallback(async () => {
+    try {
+      const resolved = await withTimeout(
+        resolveOrgTenantId(),
+        LEAVE_REQUEST_QUERY_TIMEOUT_MS,
+        "org.leave_requests.resolve_tenant timeout",
+      );
+      setTenantId(resolved);
+      setLoadError(null);
+    } catch (error) {
+      const errorRef = reportError(error, "org.leave_requests.resolve_tenant");
+      const message = appendErrorReference("Gagal menentukan tenant organisasi", errorRef);
+      setLoadError(message);
+      toast.error(message);
+      setTenantId(null);
+    }
   }, []);
 
+  useEffect(() => {
+    void initializeTenant();
+  }, [initializeTenant]);
+
   const fetchData = useCallback(async () => {
+    setIsLoading(true);
     try {
       setLoadError(null);
+      setIsRetrying(false);
       if (!tenantId) {
         setRequests([]);
-        setExpiredRequests([]);
-        setTotalCount(0);
         return;
       }
 
-      const employeeIds = await getTenantEmployeeIds(tenantId);
+      const employeeIds = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            getTenantEmployeeIds(tenantId),
+            LEAVE_REQUEST_QUERY_TIMEOUT_MS,
+            "org.leave_requests.fetch.employee_ids timeout",
+          ),
+        {
+          maxRetries: LEAVE_REQUEST_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (employeeIds.length === 0) {
         setRequests([]);
-        setExpiredRequests([]);
         return;
       }
 
-      // Auto-expire: mark pending requests past start_date as expired
+      const allRows: LeaveRequest[] = [];
+      let offset = 0;
       const today = format(new Date(), "yyyy-MM-dd");
-      await supabase
-        .from("leave_requests")
-        .update({
-          status: "ditolak" as RequestStatus,
-          rejection_reason: "Otomatis kedaluwarsa (melewati tanggal mulai)",
-        })
-        .in("employee_id", employeeIds)
-        .eq("status", "menunggu")
-        .lt("start_date", today);
 
-      let query = supabase
-        .from("leave_requests")
-        .select("*, employees!leave_requests_employee_id_fkey(name, nip, opd(code))", { count: "exact" })
-        .in("employee_id", employeeIds)
-        .order("created_at", { ascending: false })
-        .range((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE - 1);
+      while (true) {
+        let query = supabase
+          .from("leave_requests")
+          .select(
+            "*, employees!leave_requests_employee_id_fkey(name, nip, opd(code)), leave_type_meta:leave_type_id(leave_name, request_type, approval_type_code, max_days_per_year)",
+          )
+          .in("employee_id", employeeIds)
+          .order("created_at", { ascending: false })
+          .range(offset, offset + FETCH_CHUNK - 1);
 
-      if (statusFilter !== "all") {
-        query = query.eq("status", statusFilter as RequestStatus);
+        if (statusFilter === "kedaluwarsa") {
+          query = query
+            .eq("status", "menunggu")
+            .lt("start_date", today);
+        } else if (statusFilter === "menunggu") {
+          query = query
+            .eq("status", "menunggu")
+            .gte("start_date", today);
+        } else if (statusFilter !== "all") {
+          query = query.eq("status", statusFilter as RequestStatus);
+        }
+
+        if (requestCategoryFilter === "late_permission") {
+          query = query
+            .eq("leave_type", "izin")
+            .like("reason", `${LATE_PERMISSION_REASON_PREFIX}%`);
+        } else if (requestCategoryFilter === "early_leave_permission") {
+          query = query
+            .eq("leave_type", "izin")
+            .like("reason", `${EARLY_LEAVE_PERMISSION_REASON_PREFIX}%`);
+        } else if (requestCategoryFilter === "regular") {
+          query = query
+            .not("reason", "like", `${LATE_PERMISSION_REASON_PREFIX}%`)
+            .not("reason", "like", `${EARLY_LEAVE_PERMISSION_REASON_PREFIX}%`);
+        }
+
+        const { data, error } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              query,
+              LEAVE_REQUEST_QUERY_TIMEOUT_MS,
+              "org.leave_requests.fetch.query timeout",
+            ),
+          {
+            maxRetries: LEAVE_REQUEST_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        );
+        if (error) throw error;
+
+        const chunk = (data || []) as LeaveRequest[];
+        allRows.push(...chunk);
+
+        if (chunk.length < FETCH_CHUNK) break;
+        offset += FETCH_CHUNK;
       }
 
-      const { data, error, count } = await query;
-      if (error) throw error;
-      setTotalCount(count || 0);
-      
-      // Separate expired ones
-      const expired = (data || []).filter(
-        (r) => r.status === "ditolak" && r.rejection_reason?.includes("kedaluwarsa")
-      );
-      setExpiredRequests(expired as LeaveRequest[]);
-      setRequests((data || []) as LeaveRequest[]);
+      setRequests(allRows);
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.leave_requests.fetch_data", {
         tenant_id: tenantId,
         status: statusFilter,
-        page: currentPage,
+        request_category: requestCategoryFilter,
       });
       const message = appendErrorReference("Gagal memuat data permohonan cuti", errorRef);
       setLoadError(message);
       toast.error(message);
       setRequests([]);
-      setExpiredRequests([]);
-      setTotalCount(0);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
-  }, [currentPage, statusFilter, tenantId]);
+  }, [requestCategoryFilter, statusFilter, tenantId]);
 
   useEffect(() => {
     if (tenantId === undefined) return;
@@ -140,28 +241,57 @@ export default function OrgLeaveRequests() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, statusFilter]);
+  }, [searchTerm, statusFilter, requestCategoryFilter]);
 
   const handleApprove = async (id: string) => {
+    const targetRequest = requests.find((item) => item.id === id);
+    if (!targetRequest) {
+      toast.warning("Data permohonan tidak ditemukan. Muat ulang halaman.");
+      void fetchData();
+      return;
+    }
+
+    const targetDisplayStatus = getDisplayRequestStatus(targetRequest);
+    if (targetDisplayStatus !== "menunggu") {
+      toast.warning("Permohonan sudah tidak berstatus menunggu.");
+      void fetchData();
+      return;
+    }
+
     try {
       const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        toast.error("Sesi login tidak ditemukan. Silakan login ulang.");
+        return;
+      }
       const { data: empData } = await supabase
         .from("employees")
         .select("id")
         .eq("user_id", user?.id)
         .single();
+      const result = await processLeaveApprovalStep({
+        request: targetRequest,
+        approverUserId: user.id,
+        approverEmployeeId: empData?.id || null,
+        tenantId,
+      });
 
-      const { error } = await supabase
-        .from("leave_requests")
-        .update({ 
-          status: "disetujui", 
-          approved_by: empData?.id,
-          approved_at: new Date().toISOString() 
-        })
-        .eq("id", id);
+      if (!result.updated) {
+        toast.warning("Permohonan sudah diproses admin lain. Data disegarkan.");
+        void fetchData();
+        return;
+      }
 
-      if (error) throw error;
-      toast.success("Permohonan disetujui");
+      if (!result.isFinalApproval) {
+        toast.success(
+          `Approval level ${result.currentApprovalLevel}/${result.requiredApprovalLevels} tersimpan. Menunggu level berikutnya.`,
+        );
+        void fetchData();
+        return;
+      }
+      toast.success(
+        `Permohonan disetujui pada level ${result.requiredApprovalLevels}/${result.requiredApprovalLevels}`,
+      );
       void fetchData();
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.leave_requests.approve", { request_id: id, tenant_id: tenantId });
@@ -169,57 +299,159 @@ export default function OrgLeaveRequests() {
     }
   };
 
-  const handleReject = async (id: string) => {
-    const reason = prompt("Alasan penolakan:");
-    if (!reason) return;
+  const handleOpenRejectDialog = (id: string) => {
+    const targetRequest = requests.find((item) => item.id === id);
+    if (!targetRequest) {
+      toast.warning("Data permohonan tidak ditemukan. Muat ulang halaman.");
+      void fetchData();
+      return;
+    }
 
+    const targetDisplayStatus = getDisplayRequestStatus(targetRequest);
+    if (targetDisplayStatus !== "menunggu") {
+      toast.warning("Permohonan sudah tidak berstatus menunggu.");
+      void fetchData();
+      return;
+    }
+
+    setRejectTargetRequestId(id);
+    setRejectionReason("");
+    setRejectDialogOpen(true);
+  };
+
+  const handleConfirmReject = async () => {
+    if (!rejectTargetRequestId) return;
+    const targetRequest = requests.find((item) => item.id === rejectTargetRequestId);
+    if (!targetRequest) {
+      toast.warning("Data permohonan tidak ditemukan. Muat ulang halaman.");
+      setRejectDialogOpen(false);
+      setRejectTargetRequestId(null);
+      void fetchData();
+      return;
+    }
+
+    const targetDisplayStatus = getDisplayRequestStatus(targetRequest);
+    if (targetDisplayStatus !== "menunggu") {
+      toast.warning("Permohonan sudah tidak berstatus menunggu.");
+      setRejectDialogOpen(false);
+      setRejectTargetRequestId(null);
+      void fetchData();
+      return;
+    }
+
+    const reason = rejectionReason.trim();
+    if (reason.length < 3) {
+      toast.error("Alasan penolakan minimal 3 karakter.");
+      return;
+    }
+
+    setIsRejecting(true);
     try {
-      const { error } = await supabase
-        .from("leave_requests")
-        .update({ status: "ditolak", rejection_reason: reason })
-        .eq("id", id);
+      const { data: { user } } = await supabase.auth.getUser();
+      const result = await processLeaveRejection({
+        request: targetRequest,
+        approverUserId: user?.id || null,
+        rejectionReason: reason,
+      });
 
-      if (error) throw error;
+      if (!result.updated) {
+        toast.warning("Permohonan sudah diproses admin lain. Data disegarkan.");
+        void fetchData();
+        return;
+      }
       toast.success("Permohonan ditolak");
+      setRejectDialogOpen(false);
+      setRejectTargetRequestId(null);
+      setRejectionReason("");
       void fetchData();
     } catch (error: unknown) {
-      const errorRef = reportError(error, "org.leave_requests.reject", { request_id: id, tenant_id: tenantId });
+      const errorRef = reportError(error, "org.leave_requests.reject", {
+        request_id: rejectTargetRequestId,
+        tenant_id: tenantId,
+      });
       toast.error(appendErrorReference("Gagal menolak permohonan", errorRef));
+    } finally {
+      setIsRejecting(false);
     }
   };
 
-  const getLeaveTypeLabel = (type: string) => {
-    const types: Record<string, string> = {
-      izin: "Izin",
-      cuti_tahunan: "Cuti Tahunan",
-      cuti_penting: "Cuti Penting",
-      cuti_lainnya: "Cuti Lainnya",
-      sakit: "Sakit",
-      tugas_luar: "Tugas Luar",
-    };
-    return types[type] || type;
+  const handleRetryLoad = async () => {
+    await initializeTenant();
+    if (tenantId) {
+      await fetchData();
+    }
   };
 
-  const getStatusBadge = (status: string) => {
+  const getStatusBadge = (status: DisplayRequestStatus, rejectionReason?: string | null) => {
     switch (status) {
       case "menunggu":
         return <Badge variant="secondary">Menunggu</Badge>;
       case "disetujui":
         return <Badge variant="default">Disetujui</Badge>;
       case "ditolak":
+        if (isAutoCanceledLatePermissionRejectionReason(rejectionReason)) {
+          return (
+            <Badge variant="outline" className="text-amber-700 border-amber-300 bg-amber-50">
+              Batal Otomatis
+            </Badge>
+          );
+        }
         return <Badge variant="destructive">Ditolak</Badge>;
       case "kedaluwarsa":
         return <Badge variant="outline" className="text-amber-600 border-amber-300">Kedaluwarsa</Badge>;
+      case "unknown":
+        return <Badge variant="outline">Tidak diketahui</Badge>;
       default:
         return <Badge variant="outline">{status}</Badge>;
     }
   };
 
-  const filteredRequests = requests.filter(req =>
-    (req.employees?.name || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
-    req.reason.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const getApprovalProgressText = (request: LeaveRequest) => {
+    const current = Math.max(1, Number(request.current_approval_level || 1));
+    const required = Math.max(1, Number(request.required_approval_levels || 1));
+    if (request.status === "disetujui") return `Selesai pada tahap ${required}/${required}`;
+    if (request.status === "ditolak") return `Ditolak pada tahap ${Math.min(current, required)}/${required}`;
+
+    const approvalRole =
+      request.approval_history
+        ?.slice()
+        .reverse()
+        .find((entry) => entry.level_order === current)?.approver_role || null;
+
+    if (approvalRole) {
+      return `${getApprovalRoleLabel(approvalRole)} • tahap ${Math.min(current, required)}/${required}`;
+    }
+
+    return `Tahap ${Math.min(current, required)}/${required}`;
+  };
+
+  const filteredRequests = requests.filter((request) => {
+    const displayStatus = getDisplayRequestStatus(request);
+    if (statusFilter === "kedaluwarsa" && displayStatus !== "kedaluwarsa") return false;
+    if (statusFilter === "menunggu" && displayStatus !== "menunggu") return false;
+    if (statusFilter === "disetujui" && displayStatus !== "disetujui") return false;
+    if (statusFilter === "ditolak" && displayStatus !== "ditolak") return false;
+
+    const searchNeedle = searchTerm.trim().toLowerCase();
+    if (!searchNeedle) return true;
+
+    const presentation = getLeaveRequestPresentation({
+      leave_type: request.leave_type,
+      reason: request.reason,
+      leave_type_name: request.leave_type_meta?.leave_name,
+    });
+    return (
+      (request.employees?.name || "").toLowerCase().includes(searchNeedle) ||
+      presentation.reasonText.toLowerCase().includes(searchNeedle) ||
+      presentation.leaveTypeLabel.toLowerCase().includes(searchNeedle)
+    );
+  });
+  const totalCount = filteredRequests.length;
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const paginatedRequests = filteredRequests.slice(
+    (currentPage - 1) * PAGE_SIZE,
+    currentPage * PAGE_SIZE
+  );
 
   return (
     <OrganizationLayout>
@@ -229,23 +461,33 @@ export default function OrgLeaveRequests() {
             <ClipboardList className="h-6 w-6" />
             Permohonan Cuti
           </h1>
-          <p className="text-muted-foreground">Kelola permohonan izin dan cuti pegawai</p>
+          <p className="text-muted-foreground">Kelola data permohonan izin/cuti pegawai</p>
         </div>
+        <LeaveRequestTabs />
 
         {loadError && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {loadError}
+          <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            <span>{loadError}</span>
+            <Button size="sm" variant="outline" onClick={handleRetryLoad} className="border-destructive/30 text-destructive hover:bg-destructive/10">
+              Coba Lagi
+            </Button>
+          </div>
+        )}
+        {isRetrying && (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+            Sedang mencoba ulang koneksi data...
           </div>
         )}
 
         <Card>
           <CardHeader>
-            <CardTitle>Daftar Permohonan</CardTitle>
+            <CardTitle>Daftar Permohonan Cuti</CardTitle>
             <CardDescription>Total {totalCount} permohonan</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-wrap gap-4 mb-4">
-              <div className="relative flex-1 min-w-[200px] max-w-sm">
+            <div className="mb-4 rounded-xl border border-border/60 bg-muted/20 p-3 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="relative flex-1 min-w-[200px] sm:max-w-sm">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder="Cari permohonan..."
@@ -255,16 +497,33 @@ export default function OrgLeaveRequests() {
                 />
               </div>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[180px]">
+                <SelectTrigger className="w-full sm:w-[180px]">
                   <SelectValue placeholder="Filter Status" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Semua Status</SelectItem>
                   <SelectItem value="menunggu">Menunggu</SelectItem>
+                  <SelectItem value="kedaluwarsa">Kedaluwarsa</SelectItem>
                   <SelectItem value="disetujui">Disetujui</SelectItem>
                   <SelectItem value="ditolak">Ditolak</SelectItem>
                 </SelectContent>
               </Select>
+              <Select
+                value={requestCategoryFilter}
+                onValueChange={(value) => setRequestCategoryFilter(value as LeaveRequestCategory)}
+              >
+                <SelectTrigger className="w-full sm:w-[220px]">
+                  <SelectValue placeholder="Kategori Permohonan" />
+                </SelectTrigger>
+                <SelectContent>
+                  {LEAVE_REQUEST_CATEGORY_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              </div>
             </div>
 
             <Table>
@@ -276,54 +535,103 @@ export default function OrgLeaveRequests() {
                   <TableHead>Durasi</TableHead>
                   <TableHead>Alasan</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Alur Approval</TableHead>
                   <TableHead className="text-right">Aksi</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-8">
+                    <TableCell colSpan={8} className="text-center py-8">
                       <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto"></div>
                     </TableCell>
                   </TableRow>
                 ) : filteredRequests.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                       Tidak ada permohonan
                     </TableCell>
                   </TableRow>
                 ) : (
-                  filteredRequests.map((req) => (
-                    <TableRow key={req.id}>
-                      <TableCell>
-                        <div>
-                          <div className="font-medium">{req.employees?.name}</div>
-                          <div className="text-xs text-muted-foreground">{req.employees?.nip}</div>
-                        </div>
-                      </TableCell>
-                      <TableCell>{getLeaveTypeLabel(req.leave_type)}</TableCell>
-                      <TableCell>
-                        <div className="text-sm">
-                          {format(new Date(req.start_date), "d MMM", { locale: id })} - {format(new Date(req.end_date), "d MMM yyyy", { locale: id })}
-                        </div>
-                      </TableCell>
-                      <TableCell>{differenceInDays(new Date(req.end_date), new Date(req.start_date)) + 1} hari</TableCell>
-                      <TableCell className="max-w-[200px] truncate">{req.reason}</TableCell>
-                      <TableCell>{getStatusBadge(req.status)}</TableCell>
-                      <TableCell className="text-right">
-                        {req.status === "menunggu" && (
-                          <div className="flex justify-end gap-1">
-                            <Button variant="ghost" size="icon" onClick={() => handleApprove(req.id)}>
-                              <Check className="h-4 w-4 text-green-600" />
-                            </Button>
-                            <Button variant="ghost" size="icon" onClick={() => handleReject(req.id)}>
-                              <X className="h-4 w-4 text-destructive" />
-                            </Button>
+                  paginatedRequests.map((req) => {
+                    const presentation = getLeaveRequestPresentation({
+                      leave_type: req.leave_type,
+                      reason: req.reason,
+                      leave_type_name: req.leave_type_meta?.leave_name,
+                    });
+                    const displayStatus = getDisplayRequestStatus(req);
+                    return (
+                      <TableRow key={req.id}>
+                        <TableCell>
+                          <div>
+                            <div className="font-medium">{req.employees?.name}</div>
+                            <div className="text-xs text-muted-foreground">{req.employees?.nip}</div>
                           </div>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  ))
+                        </TableCell>
+                        <TableCell>
+                          {(presentation.isLatePermission || presentation.isEarlyLeavePermission) ? (
+                            <Badge
+                              variant="outline"
+                              className={
+                                presentation.isLatePermission
+                                  ? "border-amber-300 bg-amber-50 text-amber-700"
+                                  : "border-blue-300 bg-blue-50 text-blue-700"
+                              }
+                            >
+                              {presentation.leaveTypeLabel}
+                            </Badge>
+                          ) : (
+                            <div className="space-y-1">
+                              <div>{presentation.leaveTypeLabel}</div>
+                              {req.leave_type_meta?.approval_type_code ? (
+                                <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
+                                  {getApprovalTypeLabel(req.leave_type_meta.approval_type_code)}
+                                </Badge>
+                              ) : null}
+                            </div>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <div className="text-sm">
+                            {format(new Date(req.start_date), "d MMM", { locale: id })} - {format(new Date(req.end_date), "d MMM yyyy", { locale: id })}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {formatLeaveDayAmount(req.is_half_day ? 0.5 : differenceInDays(new Date(req.end_date), new Date(req.start_date)) + 1)} hari
+                        </TableCell>
+                        <TableCell className="max-w-[260px]">
+                          <p className="truncate text-sm">{presentation.reasonText}</p>
+                          {req.document_reference_number ? (
+                            <p className="text-xs text-muted-foreground">
+                              Referensi: {req.document_reference_number}
+                              {req.document_reference_issuer ? ` • ${req.document_reference_issuer}` : ""}
+                            </p>
+                          ) : null}
+                          {(presentation.isLatePermission || presentation.isEarlyLeavePermission) && (
+                            <p className="text-xs text-muted-foreground">
+                              {presentation.detailLabel}: {presentation.detailText ?? "-"}
+                            </p>
+                          )}
+                        </TableCell>
+                        <TableCell>{getStatusBadge(displayStatus, req.rejection_reason)}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">
+                          {getApprovalProgressText(req)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          {displayStatus === "menunggu" && (
+                            <div className="flex justify-end gap-1">
+                              <Button variant="ghost" size="icon" onClick={() => handleApprove(req.id)}>
+                                <Check className="h-4 w-4 text-green-600" />
+                              </Button>
+                              <Button variant="ghost" size="icon" onClick={() => handleOpenRejectDialog(req.id)}>
+                                <X className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </div>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
                 )}
               </TableBody>
             </Table>
@@ -376,6 +684,52 @@ export default function OrgLeaveRequests() {
 
         <PageGlossarySection preset="org_leave_requests" />
       </div>
+
+      <Dialog
+        open={rejectDialogOpen}
+        onOpenChange={(open) => {
+          setRejectDialogOpen(open);
+          if (!open) {
+            setRejectTargetRequestId(null);
+            setRejectionReason("");
+            setIsRejecting(false);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Tolak Permohonan</DialogTitle>
+            <DialogDescription>Masukkan alasan penolakan agar pengaju dapat menindaklanjuti.</DialogDescription>
+          </DialogHeader>
+          <Textarea
+            placeholder="Alasan penolakan..."
+            value={rejectionReason}
+            onChange={(event) => setRejectionReason(event.target.value)}
+            rows={4}
+          />
+          <DialogFooter className={dialogActionBarClassName}>
+            <DialogActionHint>Alasan penolakan akan tercatat di riwayat permohonan.</DialogActionHint>
+            <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+              <Button
+                variant="outline"
+                className="w-full sm:w-auto bg-white"
+                onClick={() => setRejectDialogOpen(false)}
+                disabled={isRejecting}
+              >
+                Batal
+              </Button>
+              <Button
+                className="w-full sm:w-auto"
+                variant="destructive"
+                onClick={() => void handleConfirmReject()}
+                disabled={isRejecting || rejectionReason.trim().length < 3}
+              >
+                Tolak Permohonan
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </OrganizationLayout>
   );
 }

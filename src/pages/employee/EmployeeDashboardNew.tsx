@@ -43,6 +43,11 @@ import EmployeeNewsArticles from "@/pages/employee/EmployeeNewsArticles";
 import EmployeeAnnouncements from "@/pages/employee/EmployeeAnnouncements";
 import DOMPurify from "dompurify";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isFaqVisibleToPublic } from "@/lib/faqAudience";
+import {
+  DEFAULT_ORG_MASTER_DATA_MODULES,
+  fetchTenantOrgMasterDataModules,
+} from "@/lib/orgMasterDataModules";
 
 // Lazy load DeviceResetDialog di level modul untuk mencegah flicker
 const LazyDeviceResetDialog = React.lazy(() => 
@@ -50,6 +55,7 @@ const LazyDeviceResetDialog = React.lazy(() =>
 );
 const EmployeeActivationPageLazy = React.lazy(() => import("@/components/employee/EmployeeActivationPage").then(m => ({ default: m.EmployeeActivationPage })));
 import { BillingActivationOverlay } from "@/components/employee/BillingActivationOverlay";
+import { hasActiveIndividualBillingCoverage } from "@/lib/employeeBillingCoverage";
 import {
   MapPin,
   LogIn,
@@ -141,7 +147,14 @@ interface NewsItem {
 type LeaveRequestRow = Tables<"leave_requests">;
 type WfhRequestRow = Tables<"wfh_requests">;
 type OvertimeSettingsRow = Tables<"overtime_settings">;
-type FaqRow = Tables<"faqs">;
+type LegacyFaqRow = Tables<"faqs">;
+
+interface DashboardFaqItem {
+  id: string;
+  question: string;
+  answer: string | null;
+  sort_order?: number | null;
+}
 
 interface WorkHourRow {
   day_of_week: number;
@@ -156,7 +169,7 @@ interface DashboardLoadIssue {
   scopes: string[];
 }
 
-type EmployeeTab = "home" | "history" | "requests" | "help" | "profile" | "news" | "articles" | "announcements" | "notifications" | "activation";
+type EmployeeTab = "home" | "history" | "requests" | "help" | "profile" | "news" | "articles" | "announcements" | "notifications" | "activation" | "billing";
 
 // Pending state type untuk optimistic UI
 type PendingStatus = 'idle' | 'pending' | 'buffered' | 'jitter' | 'processing' | 'success' | 'error' | 'circuit_open';
@@ -239,6 +252,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   const [showDeviceRegistration, setShowDeviceRegistration] = useState(false);
   const [showShiftSelection, setShowShiftSelection] = useState(false);
   const [showFlexibleAttendance, setShowFlexibleAttendance] = useState(false);
+  const [showBillingActivationOverlay, setShowBillingActivationOverlay] = useState(false);
   const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   
   // Map overlay state
@@ -273,6 +287,10 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   const attendanceActionStickyBottom = `calc(${bottomSafeAreaInset} + 4.25rem)`;
 
   const navigateToTab = useCallback((tab: EmployeeTab) => {
+    if (tab === "billing" || tab === "activation") {
+      navigate("/employee/billing");
+      return;
+    }
     setActiveTab(tab);
     const params = new URLSearchParams(location.search);
     if (tab === "home") {
@@ -428,9 +446,13 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
   }, [activeTab]);
 
-  // Sinkronkan tab dari query param, contoh: /employee/dashboard?tab=activation
+  // Sinkronkan tab dari query param, contoh: /employee/dashboard?tab=billing
   useEffect(() => {
     const tab = new URLSearchParams(location.search).get("tab");
+    if (tab === "billing" || tab === "activation") {
+      navigate("/employee/billing", { replace: true });
+      return;
+    }
     const allowedTabs = new Set<EmployeeTab>([
       "home",
       "history",
@@ -442,6 +464,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       "announcements",
       "notifications",
       "activation",
+      "billing",
     ]);
 
     if (tab && allowedTabs.has(tab as EmployeeTab)) {
@@ -449,7 +472,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       return;
     }
     setActiveTab("home");
-  }, [location.search]);
+  }, [location.search, navigate]);
 
   // Sinkronisasi state absensi dari offline-first hook ke UI dashboard ini
   useEffect(() => {
@@ -1014,8 +1037,39 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
     return false;
   }, [securityCheck]);
 
+  const ensureIndividualBillingAccess = useCallback(async (): Promise<boolean> => {
+    if (!employee?.tenant_id || billingMode !== "individual") return true;
+
+    try {
+      const hasAccess = await hasActiveIndividualBillingCoverage({
+        tenantId: employee.tenant_id,
+        employeeId: employee.id,
+        billingMode,
+      });
+
+      if (!hasAccess) {
+        setShowBillingActivationOverlay(true);
+        return false;
+      }
+
+      return true;
+    } catch (error) {
+      const errorRef = reportError(error, "employee.dashboard.billing_access_check", {
+        employee_id: employee.id,
+        tenant_id: employee.tenant_id,
+      });
+      toast.error(appendErrorReference("Gagal memeriksa status billing", errorRef), {
+        description: "Silakan coba lagi beberapa saat.",
+      });
+      return false;
+    }
+  }, [billingMode, employee?.id, employee?.tenant_id]);
+
   const handleCheckIn = async () => {
     if (!employee) return;
+
+    const hasBillingAccess = await ensureIndividualBillingAccess();
+    if (!hasBillingAccess) return;
     
     // 1. Validasi hari kerja dan libur
     const validation = await attendanceValidation.validateToday();
@@ -1382,14 +1436,20 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
         billingMode={billingMode}
         picWhatsapp={tenantInfo?.pic_whatsapp || null}
         picName={tenantInfo?.pic_name || null}
+        onNavigateBilling={() => {
+          setShowSidebar(false);
+          navigate("/employee/billing");
+        }}
       />
 
-      {/* Billing Activation Overlay - blocks access if individual billing and unpaid */}
+      {/* Billing Activation Overlay - shown on check-in attempt when unpaid */}
       {employee?.tenant_id && billingMode === "individual" && (
         <BillingActivationOverlay
           tenantId={employee.tenant_id}
           employeeId={employee.id}
           billingMode={billingMode}
+          open={showBillingActivationOverlay}
+          onOpenChange={setShowBillingActivationOverlay}
         />
       )}
 
@@ -2709,7 +2769,7 @@ function RequestsTab({ employeeId, tenantId }: { employeeId?: string; tenantId?:
 
 // Help Tab Component  
 function HelpTab({ tenantId }: { tenantId?: string }) {
-  const [faqs, setFaqs] = useState<FaqRow[]>([]);
+  const [faqs, setFaqs] = useState<DashboardFaqItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -2742,10 +2802,71 @@ function HelpTab({ tenantId }: { tenantId?: string }) {
     },
   ], []);
 
+  const normalizeManagedFaqs = useCallback((raw: unknown): DashboardFaqItem[] => {
+    const items =
+      Array.isArray(raw)
+        ? raw
+        : raw &&
+            typeof raw === "object" &&
+            Array.isArray((raw as { items?: unknown[] }).items)
+          ? (raw as { items: unknown[] }).items
+          : [];
+
+    return items
+      .map((item, index) => {
+        if (!item || typeof item !== "object") return null;
+        const row = item as Record<string, unknown>;
+        const question = typeof row.question === "string" ? row.question.trim() : "";
+        if (!question) return null;
+
+        const answer = typeof row.answer === "string" ? row.answer : "";
+        const category = typeof row.category === "string" ? row.category : null;
+        const isVisible = isFaqVisibleToPublic({
+          audience: row.audience,
+          category,
+          question,
+          answer,
+        });
+        if (!isVisible) return null;
+
+        const sortOrder =
+          typeof row.sort_order === "number" && Number.isFinite(row.sort_order)
+            ? row.sort_order
+            : Number.MAX_SAFE_INTEGER;
+
+        return {
+          id: typeof row.id === "string" && row.id.trim() ? row.id : `managed-faq-${index + 1}`,
+          question,
+          answer,
+          sort_order: sortOrder,
+        } satisfies DashboardFaqItem;
+      })
+      .filter((row): row is DashboardFaqItem => Boolean(row))
+      .sort((a, b) => (a.sort_order ?? Number.MAX_SAFE_INTEGER) - (b.sort_order ?? Number.MAX_SAFE_INTEGER));
+  }, []);
+
   const fetchFAQs = useCallback(async () => {
     try {
       setIsLoading(true);
-      // Query FAQs - global (tenant_id is null) atau milik tenant ini
+      const { data: faqSettingsRow, error: faqSettingsError } = await supabase
+        .from("system_settings")
+        .select("value")
+        .eq("key", "faq_settings")
+        .maybeSingle();
+
+      if (faqSettingsError) {
+        reportError(faqSettingsError, "employee.dashboard.help.fetch_managed_faqs", {
+          tenant_id: tenantId,
+        });
+      } else {
+        const managedFaqs = normalizeManagedFaqs(faqSettingsRow?.value);
+        if (managedFaqs.length > 0) {
+          setFaqs(managedFaqs);
+          return;
+        }
+      }
+
+      // Fallback ke tabel lama FAQ per-tenant bila managed FAQ belum tersedia.
       let query = supabase
         .from("faqs")
         .select("*")
@@ -2765,10 +2886,17 @@ function HelpTab({ tenantId }: { tenantId?: string }) {
         reportError(error, "employee.dashboard.help.fetch_faqs", {
           tenant_id: tenantId,
         });
-        // Set default FAQs jika error
         setFaqs(getDefaultFAQs());
       } else {
-        setFaqs(data && data.length > 0 ? data : getDefaultFAQs());
+        const legacyFaqs = (data ?? [])
+          .filter((row): row is LegacyFaqRow => typeof row.question === "string" && row.question.trim().length > 0)
+          .map((row) => ({
+            id: row.id,
+            question: row.question,
+            answer: row.answer ?? "",
+            sort_order: row.sort_order,
+          } satisfies DashboardFaqItem));
+        setFaqs(legacyFaqs.length > 0 ? legacyFaqs : getDefaultFAQs());
       }
     } catch (error) {
       reportError(error, "employee.dashboard.help.fetch_faqs_unhandled", {
@@ -2778,7 +2906,7 @@ function HelpTab({ tenantId }: { tenantId?: string }) {
     } finally {
       setIsLoading(false);
     }
-  }, [getDefaultFAQs, tenantId]);
+  }, [getDefaultFAQs, normalizeManagedFaqs, tenantId]);
 
   useEffect(() => {
     void fetchFAQs();
@@ -2849,9 +2977,10 @@ interface ProfileTabProps {
   };
 }
 
-const ProfileTab = React.memo(function ProfileTab({ employee, onLogout, deviceBinding }: ProfileTabProps) {
+function ProfileTab({ employee, onLogout, deviceBinding }: ProfileTabProps) {
   const [showDeviceReset, setShowDeviceReset] = useState(false);
   const [isLoadingDeviceInfo, setIsLoadingDeviceInfo] = useState(false);
+  const [masterDataModules, setMasterDataModules] = useState(DEFAULT_ORG_MASTER_DATA_MODULES);
   
   // Gunakan data dari deviceBinding, tidak perlu fetch sendiri
   const deviceInfo = {
@@ -2865,6 +2994,30 @@ const ProfileTab = React.memo(function ProfileTab({ employee, onLogout, deviceBi
   const maxResetCount = settings?.max_device_reset_count || 3;
   const usedResetCount = Math.max(0, deviceInfo?.device_id_reset_count || 0);
   const remainingResetCount = Math.max(0, maxResetCount - usedResetCount);
+
+  useEffect(() => {
+    let isActive = true;
+    const loadMasterDataModules = async () => {
+      if (!employee?.tenant_id) {
+        if (isActive) setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
+        return;
+      }
+      try {
+        const moduleSetting = await fetchTenantOrgMasterDataModules(employee.tenant_id);
+        if (isActive) {
+          setMasterDataModules(moduleSetting.modules);
+        }
+      } catch {
+        if (isActive) {
+          setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
+        }
+      }
+    };
+    void loadMasterDataModules();
+    return () => {
+      isActive = false;
+    };
+  }, [employee?.tenant_id]);
 
   if (!employee) {
     return (
@@ -2895,6 +3048,9 @@ const ProfileTab = React.memo(function ProfileTab({ employee, onLogout, deviceBi
   const primaryIdentityField = employee.nip
     ? { label: "NIP", value: employee.nip }
     : { label: "NIK", value: employee.nik || "-" };
+  const showPositionField = masterDataModules.positions;
+  const showGolonganField = masterDataModules.employee_golongan;
+  const showCategoryField = masterDataModules.employee_categories;
 
   const profileFields = [
     { label: "Nama Lengkap", value: employee.name },
@@ -2903,12 +3059,12 @@ const ProfileTab = React.memo(function ProfileTab({ employee, onLogout, deviceBi
     { label: "No. Telepon / WhatsApp", value: employee.phone || employee.whatsapp || "-" },
     { label: "Jenis Kelamin", value: employee.gender === "laki-laki" ? "Laki-laki" : employee.gender === "perempuan" ? "Perempuan" : (employee.gender || "-") },
     { label: "Alamat", value: employee.address || "-" },
-    { label: "Jabatan", value: employee.position || "-" },
+    ...(showPositionField ? [{ label: "Jabatan", value: employee.position || "-" }] : []),
     { label: "OPD", value: employee.opd?.name || "-" },
     { label: "Satuan Kerja", value: employee.work_unit?.name || "-" },
     { label: "Lokasi Kerja", value: employee.offices?.name || "-" },
-    { label: "Golongan", value: employee.golongan || "-" },
-    { label: "Kategori", value: employee.employee_category || "-" },
+    ...(showGolonganField ? [{ label: "Golongan", value: employee.golongan || "-" }] : []),
+    ...(showCategoryField ? [{ label: "Kategori", value: employee.employee_category || "-" }] : []),
   ];
 
   // DeviceResetDialog dilazy-load di level modul (LazyDeviceResetDialog) untuk mencegah flicker saat re-render
@@ -2925,7 +3081,9 @@ const ProfileTab = React.memo(function ProfileTab({ employee, onLogout, deviceBi
             </div>
             <div>
               <h2 className="font-bold text-lg">{employee.name}</h2>
-              <p className="text-sm text-muted-foreground">{employee.position || employee.opd?.name}</p>
+              <p className="text-sm text-muted-foreground">
+                {showPositionField ? (employee.position || employee.opd?.name) : (employee.opd?.name || "Pegawai")}
+              </p>
             </div>
           </div>
 
@@ -3064,7 +3222,7 @@ const ProfileTab = React.memo(function ProfileTab({ employee, onLogout, deviceBi
       </React.Suspense>
     </div>
   );
-});
+}
 
 // Today's Attendance Notes Component - Catatan Absen Hari Ini with Schedule Info
 function TodayAttendanceNotes({ attendance, timezone, workSchedule }: { 

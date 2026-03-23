@@ -1,5 +1,6 @@
 import { useEffect, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
+import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 
 /**
  * Hook untuk menangani tombol back pada Android (Capacitor/WebView)
@@ -8,6 +9,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 export function useAndroidBackButton() {
   const navigate = useNavigate();
   const location = useLocation();
+  const confirmDialog = useConfirmDialog();
 
   const handleBackButton = useCallback(() => {
     // Check if we're on the main pages
@@ -68,10 +70,17 @@ export function useAndroidBackButton() {
             // Check if we're on the main pages
             const mainPages = ["/", "/employee/dashboard", "/org", "/admin"];
             if (mainPages.includes(location.pathname)) {
-              // Ask user if they want to exit
-              if (confirm("Apakah Anda yakin ingin keluar dari aplikasi?")) {
-                App.exitApp();
-              }
+              void (async () => {
+                const shouldExit = await confirmDialog({
+                  title: "Keluar Aplikasi",
+                  description: "Apakah Anda yakin ingin keluar dari aplikasi?",
+                  confirmText: "Ya, keluar",
+                  variant: "destructive",
+                });
+                if (shouldExit) {
+                  App.exitApp();
+                }
+              })();
             } else {
               // Navigate to appropriate home based on path
               if (location.pathname.startsWith("/employee")) {
@@ -103,7 +112,7 @@ export function useAndroidBackButton() {
         cleanup();
       }
     };
-  }, [navigate, location.pathname, handleBackButton]);
+  }, [navigate, location.pathname, handleBackButton, confirmDialog]);
 }
 
 /**

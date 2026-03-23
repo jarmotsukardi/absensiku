@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
 import { format } from "date-fns";
@@ -21,6 +22,15 @@ import {
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { CheckCircle2, Loader2, RefreshCcw, Sparkles, Wand2 } from "lucide-react";
+import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import {
+  DEFAULT_ORG_MASTER_DATA_MODULES,
+  emitOrgMasterDataModulesUpdated,
+  fetchTenantOrgMasterDataModules,
+  ORG_MASTER_DATA_MODULE_OPTIONS,
+  saveTenantOrgMasterDataModules,
+  type OrgMasterDataModuleKey,
+} from "@/lib/orgMasterDataModules";
 
 const EMPTY_COUNTS: OrgOnboardingCounts = {
   opd: 0,
@@ -39,32 +49,56 @@ const MODULE_LINKS: Array<{
 }> = [
   { key: "opd", label: "Data OPD", path: "/org/master/opd" },
   { key: "work_units", label: "Satuan Kerja", path: "/org/master/work-units" },
-  { key: "positions", label: "Jabatan", path: "/org/master/positions" },
   { key: "offices", label: "Lokasi Kerja", path: "/org/master/work-locations" },
   { key: "work_hours", label: "Jam Kerja", path: "/org/schedule/work-hours" },
   { key: "absence_limits", label: "Batas Absen", path: "/org/schedule/absence-limits" },
-  { key: "announcements", label: "Pengumuman", path: "/org/news" },
 ];
 
 export default function OrgOnboardingSetup() {
+  const ORG_ONBOARDING_QUERY_TIMEOUT_MS = 15000;
+  const ORG_ONBOARDING_QUERY_RETRY_MAX = 1;
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(true);
   const [isApplying, setIsApplying] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [counts, setCounts] = useState<OrgOnboardingCounts>(EMPTY_COUNTS);
   const [templateLabel, setTemplateLabel] = useState<string>("Template Setup Awal");
   const [templateUpdatedAt, setTemplateUpdatedAt] = useState<string | null>(null);
   const [applyResult, setApplyResult] = useState<OrgOnboardingApplyResult | null>(null);
+  const [masterDataModules, setMasterDataModules] = useState(DEFAULT_ORG_MASTER_DATA_MODULES);
+  const [isSavingMasterDataModules, setIsSavingMasterDataModules] = useState(false);
+
+  const activeChecklistModules = MODULE_LINKS;
 
   const configuredModules = useMemo(
-    () => MODULE_LINKS.filter((item) => counts[item.key] > 0).length,
-    [counts]
+    () => activeChecklistModules.filter((item) => counts[item.key] > 0).length,
+    [activeChecklistModules, counts]
+  );
+  const activeMasterDataModuleCount = useMemo(
+    () => ORG_MASTER_DATA_MODULE_OPTIONS.filter((item) => masterDataModules[item.key]).length,
+    [masterDataModules]
   );
 
   const refreshData = useCallback(async () => {
     try {
       setIsLoading(true);
-      const resolvedTenantId = await resolveOrgTenantId();
+      setIsRetrying(false);
+      setLoadError(null);
+      const resolvedTenantId = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            resolveOrgTenantId(),
+            ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+            "org.onboarding.refresh.resolve_tenant timeout",
+          ),
+        {
+          maxRetries: ORG_ONBOARDING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (!resolvedTenantId) {
         toast.error("Tenant organisasi tidak ditemukan. Silakan login ulang.");
         navigate("/org/login", { replace: true });
@@ -72,25 +106,90 @@ export default function OrgOnboardingSetup() {
       }
       setTenantId(resolvedTenantId);
 
-      const [{ template, updatedAt }, tenantCounts] = await Promise.all([
-        loadOrgOnboardingTemplate(),
-        fetchOrgOnboardingCounts(resolvedTenantId),
-      ]);
+      const [{ template, updatedAt }, tenantCounts, moduleSetting] = await withExponentialBackoff(
+        () =>
+          Promise.all([
+            withTimeout(
+              loadOrgOnboardingTemplate(),
+              ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+              "org.onboarding.refresh.load_template timeout",
+            ),
+            withTimeout(
+              fetchOrgOnboardingCounts(resolvedTenantId),
+              ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+              "org.onboarding.refresh.fetch_counts timeout",
+            ),
+            withTimeout(
+              fetchTenantOrgMasterDataModules(resolvedTenantId),
+              ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+              "org.onboarding.refresh.fetch_master_data_modules timeout",
+            ),
+          ]),
+        {
+          maxRetries: ORG_ONBOARDING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
 
       setTemplateLabel(template.label);
       setTemplateUpdatedAt(updatedAt);
       setCounts(tenantCounts);
+      setMasterDataModules(moduleSetting.modules);
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.onboarding.fetch_data");
-      toast.error(appendErrorReference("Gagal memuat data onboarding organisasi", errorRef));
+      const message = appendErrorReference("Gagal memuat data onboarding organisasi", errorRef);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setIsLoading(false);
+      setIsRetrying(false);
     }
   }, [navigate]);
 
   useEffect(() => {
     void refreshData();
   }, [refreshData]);
+
+  const handleToggleMasterDataModule = (key: OrgMasterDataModuleKey, checked: boolean) => {
+    setMasterDataModules((prev) => ({ ...prev, [key]: checked }));
+  };
+
+  const handleSaveMasterDataModules = async () => {
+    if (!tenantId) {
+      toast.error("Tenant organisasi belum tersedia. Muat ulang halaman.");
+      return;
+    }
+
+    try {
+      setIsSavingMasterDataModules(true);
+      setIsRetrying(false);
+      const savedModules = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            saveTenantOrgMasterDataModules(tenantId, masterDataModules),
+            ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+            "org.onboarding.save_master_data_modules timeout",
+          ),
+        {
+          maxRetries: ORG_ONBOARDING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
+      setMasterDataModules(savedModules);
+      emitOrgMasterDataModulesUpdated(savedModules);
+      toast.success("Preferensi modul master data berhasil disimpan.");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.onboarding.save_master_data_modules", {
+        tenant_id: tenantId,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan preferensi modul master data", errorRef));
+    } finally {
+      setIsSavingMasterDataModules(false);
+      setIsRetrying(false);
+    }
+  };
 
   const handleApplyTemplate = async () => {
     if (!tenantId) {
@@ -100,22 +199,36 @@ export default function OrgOnboardingSetup() {
 
     try {
       setIsApplying(true);
-      const { data: userData, error: userError } = await supabase.auth.getUser();
+      setIsRetrying(false);
+      const { data: userData, error: userError } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.auth.getUser(),
+            ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+            "org.onboarding.apply.get_user timeout",
+          ),
+        {
+          maxRetries: ORG_ONBOARDING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       if (userError) throw userError;
-      const userId = userData.user?.id || null;
+      if (!userData.user) throw new Error("Sesi user tidak ditemukan.");
 
-      let actorEmployeeId: string | null = null;
-      if (userId) {
-        const { data: employeeData } = await supabase
-          .from("employees")
-          .select("id")
-          .eq("tenant_id", tenantId)
-          .eq("user_id", userId)
-          .maybeSingle();
-        actorEmployeeId = employeeData?.id || null;
-      }
-
-      const result = await applyOrgOnboardingTemplateToTenant(tenantId, { actorEmployeeId });
+      const result = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            applyOrgOnboardingTemplateToTenant(tenantId),
+            ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+            "org.onboarding.apply.template timeout",
+          ),
+        {
+          maxRetries: ORG_ONBOARDING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
       setApplyResult(result);
       setCounts(result.counts_after);
 
@@ -130,6 +243,7 @@ export default function OrgOnboardingSetup() {
       toast.error(appendErrorReference("Gagal menerapkan template onboarding", errorRef));
     } finally {
       setIsApplying(false);
+      setIsRetrying(false);
     }
   };
 
@@ -159,8 +273,8 @@ export default function OrgOnboardingSetup() {
           <CardContent className="space-y-4">
             <div className="flex flex-wrap items-center gap-2">
               <Badge variant="outline">{templateLabel}</Badge>
-              <Badge variant={configuredModules === MODULE_LINKS.length ? "default" : "secondary"}>
-                Modul Siap: {configuredModules}/{MODULE_LINKS.length}
+              <Badge variant={configuredModules === activeChecklistModules.length ? "default" : "secondary"}>
+                Modul Siap: {configuredModules}/{activeChecklistModules.length}
               </Badge>
             </div>
             {templateUpdatedAt && (
@@ -185,6 +299,95 @@ export default function OrgOnboardingSetup() {
             </div>
           </CardContent>
         </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Pilihan Modul Master Data</CardTitle>
+            <CardDescription>
+              Pilih modul yang ingin digunakan. Jika modul dimatikan, submenu terkait akan disembunyikan dari sidebar.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant={activeMasterDataModuleCount === ORG_MASTER_DATA_MODULE_OPTIONS.length ? "default" : "secondary"}>
+                Modul Aktif: {activeMasterDataModuleCount}/{ORG_MASTER_DATA_MODULE_OPTIONS.length}
+              </Badge>
+              <Badge variant="outline">Bisa diubah kapan saja</Badge>
+            </div>
+
+            <div className="space-y-3">
+              {ORG_MASTER_DATA_MODULE_OPTIONS.map((item) => (
+                <div key={item.key} className="flex items-start justify-between gap-4 rounded-md border p-3">
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold">{item.label}</p>
+                    <p className="text-xs text-muted-foreground">{item.description}</p>
+                    <Button
+                      variant="link"
+                      size="sm"
+                      className="h-auto p-0 text-xs"
+                      onClick={() => navigate(item.path)}
+                      disabled={!masterDataModules[item.key]}
+                    >
+                      Buka modul
+                    </Button>
+                  </div>
+                  <Switch
+                    checked={masterDataModules[item.key]}
+                    onCheckedChange={(checked) => handleToggleMasterDataModule(item.key, checked)}
+                    aria-label={`Aktifkan modul ${item.label}`}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => void refreshData()}
+                disabled={isLoading || isApplying || isSavingMasterDataModules}
+              >
+                {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
+                Muat Ulang
+              </Button>
+              <Button
+                onClick={() => void handleSaveMasterDataModules()}
+                disabled={isLoading || isApplying || isSavingMasterDataModules}
+              >
+                {isSavingMasterDataModules ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="mr-2 h-4 w-4" />
+                )}
+                Simpan Preferensi Modul
+              </Button>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Jika nanti butuh modul yang sempat dimatikan, aktifkan kembali di halaman ini lalu submenu akan muncul lagi.
+            </p>
+            <p className="text-xs text-muted-foreground">Checklist setup fokus ke 5 modul inti operasional.</p>
+          </CardContent>
+        </Card>
+
+        {loadError && (
+          <Card className="border-destructive/40">
+            <CardContent className="pt-6">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-destructive">{loadError}</p>
+                <Button type="button" variant="outline" size="sm" onClick={() => void refreshData()}>
+                  Coba Lagi
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        {isRetrying && (
+          <Card className="border-amber-300/60 bg-amber-50">
+            <CardContent className="pt-4">
+              <p className="text-sm text-amber-800">Sedang mencoba ulang koneksi data setup awal...</p>
+            </CardContent>
+          </Card>
+        )}
 
         <Card>
           <CardHeader>
