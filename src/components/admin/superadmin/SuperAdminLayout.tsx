@@ -8,6 +8,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import { AdminOrgOverlayDialog } from "@/components/admin/organization/AdminOrgOverlayDialog";
+import { Helmet } from "react-helmet-async";
+import { setStoredSuperAdminWorkspaceMode } from "@/lib/superAdminWorkspace";
 
 interface SuperAdminLayoutProps {
   children: React.ReactNode;
@@ -22,21 +25,30 @@ const ACCESS_CACHE_KEY = "superadmin_access_cache_v1";
 const ACCESS_CACHE_TTL_MS = 3 * 60 * 1000;
 const ACCESS_CHECK_RETRY_MAX = 1;
 
-const getCachedSuperAdminAccess = () => {
+interface SuperAdminAccessCacheEntry {
+  userId: string;
+  verifiedAt: number;
+}
+
+const getCachedSuperAdminAccess = (): SuperAdminAccessCacheEntry | null => {
   try {
     const raw = sessionStorage.getItem(ACCESS_CACHE_KEY);
-    if (!raw) return false;
-    const parsed = JSON.parse(raw) as { verifiedAt?: number };
-    if (!parsed?.verifiedAt || !Number.isFinite(parsed.verifiedAt)) return false;
-    return Date.now() - parsed.verifiedAt <= ACCESS_CACHE_TTL_MS;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<SuperAdminAccessCacheEntry>;
+    if (!parsed?.userId || !parsed?.verifiedAt || !Number.isFinite(parsed.verifiedAt)) return null;
+    if (Date.now() - parsed.verifiedAt > ACCESS_CACHE_TTL_MS) return null;
+    return {
+      userId: parsed.userId,
+      verifiedAt: parsed.verifiedAt,
+    };
   } catch {
-    return false;
+    return null;
   }
 };
 
-const setCachedSuperAdminAccess = () => {
+const setCachedSuperAdminAccess = (userId: string) => {
   try {
-    sessionStorage.setItem(ACCESS_CACHE_KEY, JSON.stringify({ verifiedAt: Date.now() }));
+    sessionStorage.setItem(ACCESS_CACHE_KEY, JSON.stringify({ userId, verifiedAt: Date.now() }));
   } catch {
     // Ignore storage failures
   }
@@ -57,10 +69,14 @@ export function SuperAdminLayout({
   workspaceMode = "absensi",
 }: SuperAdminLayoutProps) {
   const navigate = useNavigate();
-  const [isLoading, setIsLoading] = useState(() => !getCachedSuperAdminAccess());
-  const [isSuperAdmin, setIsSuperAdmin] = useState(() => getCachedSuperAdminAccess());
-  const [hasChecked, setHasChecked] = useState(() => getCachedSuperAdminAccess());
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+  const [hasChecked, setHasChecked] = useState(false);
   const [accessDeniedMessage, setAccessDeniedMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    setStoredSuperAdminWorkspaceMode(workspaceMode);
+  }, [workspaceMode]);
 
   useEffect(() => {
     // Prevent duplicate checks
@@ -93,6 +109,12 @@ export function SuperAdminLayout({
           return;
         }
 
+        const cachedAccess = getCachedSuperAdminAccess();
+        if (cachedAccess?.userId === session.user.id) {
+          setIsSuperAdmin(true);
+          return;
+        }
+
         // Check if user is super_admin using RPC function
         const { data: isSuperAdminResult, error: rpcError } = await withExponentialBackoff(
           () =>
@@ -112,7 +134,7 @@ export function SuperAdminLayout({
         if (!isMounted) return;
 
         if (isSuperAdminResult === true) {
-          setCachedSuperAdminAccess();
+          setCachedSuperAdminAccess(session.user.id);
           setIsSuperAdmin(true);
           return;
         }
@@ -140,7 +162,7 @@ export function SuperAdminLayout({
 
         const hasSuperAdminRole = roles?.some((r) => r.role === "super_admin");
         if (hasSuperAdminRole) {
-          setCachedSuperAdminAccess();
+          setCachedSuperAdminAccess(session.user.id);
           setIsSuperAdmin(true);
           return;
         }
@@ -202,6 +224,10 @@ export function SuperAdminLayout({
   if (isLoading) {
     return (
       <SidebarProvider>
+        <Helmet>
+          <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+          <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet" />
+        </Helmet>
         <div className="min-h-screen flex w-full">
           <SuperAdminSidebar workspaceMode={workspaceMode} />
           <SidebarInset>
@@ -221,6 +247,10 @@ export function SuperAdminLayout({
   if (!isSuperAdmin) {
     return (
       <SidebarProvider>
+        <Helmet>
+          <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+          <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet" />
+        </Helmet>
         <div className="min-h-screen flex w-full">
           <SuperAdminSidebar workspaceMode={workspaceMode} />
           <SidebarInset>
@@ -244,6 +274,10 @@ export function SuperAdminLayout({
 
   return (
     <SidebarProvider>
+      <Helmet>
+        <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+        <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet" />
+      </Helmet>
       <div className="min-h-screen flex w-full">
         <SuperAdminSidebar workspaceMode={workspaceMode} />
         <SidebarInset>
@@ -251,6 +285,7 @@ export function SuperAdminLayout({
           <main className="flex-1 p-6">
             {children}
           </main>
+          <AdminOrgOverlayDialog />
         </SidebarInset>
       </div>
     </SidebarProvider>

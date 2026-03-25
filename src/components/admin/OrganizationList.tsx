@@ -36,6 +36,7 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { useAdminOrgContextNavigate } from "@/hooks/useAdminOrgContextNavigate";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import {
   isRetryableError,
@@ -73,6 +74,7 @@ const orgTypeLabels: Record<string, string> = {
 export function OrganizationList({ filterType }: OrganizationListProps) {
   const confirmDialog = useConfirmDialog();
   const navigate = useNavigate();
+  const navigateWithOverlay = useAdminOrgContextNavigate();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -332,15 +334,15 @@ export function OrganizationList({ filterType }: OrganizationListProps) {
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => navigate(`/org?tenant_id=${org.id}`)}>
                             <LayoutDashboard className="h-4 w-4 mr-2" />
-                            Masuk Dashboard
+                            Masuk Dasbor
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => navigate(`/admin/organizations/${org.id}`)}>
+                          <DropdownMenuItem onClick={() => navigateWithOverlay(`/admin/organizations/${org.id}`)}>
                             <Eye className="h-4 w-4 mr-2" />
-                            Lihat Detail
+                            Lihat Rincian
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => navigate(`/admin/organizations/${org.id}/edit`)}>
+                          <DropdownMenuItem onClick={() => navigateWithOverlay(`/admin/organizations/${org.id}/edit`)}>
                             <Edit className="h-4 w-4 mr-2" />
-                            Edit
+                            Ubah
                           </DropdownMenuItem>
                           <DropdownMenuItem 
                             onClick={() => handleDelete(org.id, org.name)}

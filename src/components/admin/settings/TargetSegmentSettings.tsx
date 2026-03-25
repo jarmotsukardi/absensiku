@@ -220,7 +220,7 @@ export function TargetSegmentSettings() {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="section_title">Judul Section</Label>
+            <Label htmlFor="section_title">Judul Bagian</Label>
             <Input
               id="section_title"
               value={config.section_title}

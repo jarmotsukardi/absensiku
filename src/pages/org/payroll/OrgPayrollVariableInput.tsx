@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -52,13 +53,13 @@ const INPUT_TYPE_OPTIONS = [
   { value: "correction", label: "Koreksi" },
   { value: "allowance", label: "Tunjangan" },
   { value: "deduction_adjustment", label: "Penyesuaian Potongan" },
-  { value: "adjustment", label: "Adjustment" },
+  { value: "adjustment", label: "Penyesuaian" },
   { value: "other", label: "Lainnya" },
 ];
 
 const SOURCE_OPTIONS = [
   { value: "manual", label: "Manual" },
-  { value: "import", label: "Import" },
+  { value: "import", label: "Impor" },
   { value: "integration", label: "Integrasi" },
   { value: "system", label: "Sistem" },
 ];
@@ -102,6 +103,9 @@ const INPUT_TYPE_LABELS: Record<string, string> = Object.fromEntries(
 
 export default function OrgPayrollVariableInput() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target));
   const confirmDialog = useConfirmDialog();
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [periods, setPeriods] = useState<PayrollPeriod[]>([]);
@@ -365,7 +369,7 @@ export default function OrgPayrollVariableInput() {
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
-    toast.success("Export CSV input variabel berhasil");
+    toast.success("Ekspor CSV input variabel berhasil");
   };
 
   return (
@@ -378,7 +382,7 @@ export default function OrgPayrollVariableInput() {
           </p>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-4">
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>Total input variabel</CardDescription>
@@ -407,8 +411,22 @@ export default function OrgPayrollVariableInput() {
               <CardTitle className="text-lg">Validasi Payroll</CardTitle>
             </CardHeader>
             <CardContent>
-              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/validation")}>
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/payroll/validation")}>
                 Buka Validasi Payroll
+              </Button>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Referensi HR & Absensi</CardDescription>
+              <CardTitle className="text-lg">Cek sumber data</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/hr/employees")}>
+                Data Pegawai HR
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/reports/attendance")}>
+                Laporan Absensi
               </Button>
             </CardContent>
           </Card>
@@ -431,7 +449,7 @@ export default function OrgPayrollVariableInput() {
                   className="pl-9"
                   value={searchTerm}
                   onChange={(event) => setSearchTerm(event.target.value)}
-                  placeholder="Cari kode, nama komponen, trace id, atau catatan..."
+                  placeholder="Cari kode, nama komponen, ID trace, atau catatan..."
                 />
               </div>
             </div>
@@ -484,11 +502,11 @@ export default function OrgPayrollVariableInput() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => navigate("/org/payroll/periods")}>
+              <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll/periods")}>
                 <ArrowLeft className="mr-2 h-4 w-4" />Periode Payroll
               </Button>
               <Button onClick={openCreateDialog}><Plus className="mr-2 h-4 w-4" />Tambah Input</Button>
-              <Button variant="secondary" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+              <Button variant="secondary" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Ekspor CSV</Button>
             </div>
 
             {loadError ? <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{loadError}</div> : null}
@@ -641,8 +659,8 @@ export default function OrgPayrollVariableInput() {
                   </Select>
                 </div>
                 <div className="grid gap-1.5">
-                  <Label htmlFor="trace_id">Trace ID</Label>
-                  <Input id="trace_id" value={formState.trace_id} onChange={(event) => setFormState((prev) => ({ ...prev, trace_id: event.target.value }))} placeholder="Opsional, auto-generate jika kosong" />
+                  <Label htmlFor="trace_id">ID Trace</Label>
+                  <Input id="trace_id" value={formState.trace_id} onChange={(event) => setFormState((prev) => ({ ...prev, trace_id: event.target.value }))} placeholder="Opsional, dibuat otomatis jika kosong" />
                 </div>
               </div>
 

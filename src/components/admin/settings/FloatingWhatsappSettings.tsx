@@ -235,7 +235,7 @@ export function FloatingWhatsappSettings() {
               </div>
 
               <div className="space-y-2">
-                <Label>Pesan Default</Label>
+                <Label>Pesan Bawaan</Label>
                 <Textarea
                   value={channel.value.default_message}
                   onChange={(e) => handleChange(channel.key, "default_message", e.target.value)}
@@ -266,7 +266,7 @@ export function FloatingWhatsappSettings() {
 
               <div className="flex items-center justify-between rounded-lg border p-4">
                 <div>
-                  <Label className="font-medium">Tampilkan di Mobile</Label>
+                  <Label className="font-medium">Tampilkan di Seluler</Label>
                   <p className="text-sm text-muted-foreground">Browser ponsel</p>
                 </div>
                 <Switch
@@ -284,7 +284,7 @@ export function FloatingWhatsappSettings() {
                   )}
                 </div>
                 <div className="flex-1">
-                  <p className="text-sm font-medium">Preview Target</p>
+                  <p className="text-sm font-medium">Pratinjau Target</p>
                   <p className="text-xs text-muted-foreground">{channel.description}</p>
                 </div>
                 <Button variant="outline" size="sm" asChild>

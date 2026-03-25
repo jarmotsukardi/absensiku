@@ -15,12 +15,18 @@ interface ErrorAlertSettings {
   emailWebhookUrl: string;
 }
 
+interface UserRoleRow {
+  role: string;
+  tenant_id: string | null;
+}
+
 interface AlertTarget {
   channel: "webhook" | "slack" | "whatsapp" | "email";
   url: string;
 }
 
 const getEnv = (key: string): string => Deno.env.get(key) || "";
+const HR_ERROR_ALERT_SETTINGS_KEY = "hr_error_alert_settings_v1";
 
 const normalizeAlertSettings = (value: unknown): ErrorAlertSettings => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -80,6 +86,7 @@ const resolvePayload = (rawBody: unknown): Record<string, unknown> => {
       route: asStringOrNull(errorPart.route),
       metadata: errorPart.metadata ?? null,
     },
+    tenant_id: typeof body.tenant_id === "string" ? body.tenant_id : null,
   };
 };
 
@@ -124,16 +131,19 @@ serve(async (req: Request): Promise<Response> => {
       );
     }
 
-    const { data: roleData, error: roleError } = await admin
+    const { data: roleRows, error: roleError } = await admin
       .from("user_roles")
-      .select("id")
+      .select("role, tenant_id")
       .eq("user_id", userData.user.id)
-      .eq("role", "super_admin")
-      .maybeSingle();
+      .in("role", ["super_admin", "admin_instansi"]);
     if (roleError) {
       throw roleError;
     }
-    if (!roleData) {
+    const roles = (roleRows || []) as UserRoleRow[];
+    const isSuperAdmin = roles.some((row) => row.role === "super_admin");
+    const orgRole = roles.find((row) => row.role === "admin_instansi" && !!row.tenant_id);
+
+    if (!isSuperAdmin && !orgRole) {
       return new Response(
         JSON.stringify(withTrace({ error: "Forbidden" }, traceId)),
         { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -150,14 +160,29 @@ serve(async (req: Request): Promise<Response> => {
       );
     }
 
-    const { data: settingsRow, error: settingsError } = await admin
-      .from("system_settings")
-      .select("value")
-      .eq("key", "error_alert_settings")
-      .maybeSingle();
-    if (settingsError) throw settingsError;
+    const requestedTenantId = typeof payload.tenant_id === "string" ? payload.tenant_id : null;
+    const tenantId = orgRole?.tenant_id || requestedTenantId;
 
-    const settings = normalizeAlertSettings(settingsRow?.value);
+    const settingsQuery = isSuperAdmin
+      ? admin
+          .from("system_settings")
+          .select("value")
+          .eq("key", "error_alert_settings")
+          .maybeSingle()
+      : admin
+          .from("organization_settings")
+          .select("setting_value")
+          .eq("tenant_id", tenantId)
+          .eq("setting_key", HR_ERROR_ALERT_SETTINGS_KEY)
+          .maybeSingle();
+
+    const { data: settingsRow, error: settingsError } = await settingsQuery;
+    if (settingsError) throw settingsError;
+    const settingsRaw =
+      isSuperAdmin
+        ? (settingsRow as { value?: unknown } | null)?.value
+        : (settingsRow as { setting_value?: unknown } | null)?.setting_value;
+    const settings = normalizeAlertSettings(settingsRaw);
     if (!settings.enableRealtimeAlerts) {
       return new Response(
         JSON.stringify(withTrace({ success: true, skipped: true, reason: "alerts_disabled" }, traceId)),

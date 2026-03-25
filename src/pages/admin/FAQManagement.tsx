@@ -135,7 +135,7 @@ const PUBLIC_RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
   {
     question: "Apakah tersedia dashboard kehadiran realtime?",
     answer:
-      "Ya. Dashboard menampilkan ringkasan kehadiran harian, status keterlambatan, serta indikator operasional penting agar pimpinan cepat mengambil keputusan.",
+      "Ya. Dasbor menampilkan ringkasan kehadiran harian, status keterlambatan, serta indikator operasional penting agar pimpinan cepat mengambil keputusan.",
     category: "Fitur Utama",
     audience: "public",
   },
@@ -177,7 +177,7 @@ const PUBLIC_RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
   {
     question: "Bagaimana jika jumlah pegawai berubah di tengah periode?",
     answer:
-      "Perubahan jumlah pegawai akan memengaruhi simulasi pada periode berikutnya sesuai kebijakan paket aktif. Detailnya dapat dilihat di modul billing organisasi.",
+      "Perubahan jumlah pegawai akan memengaruhi simulasi pada periode berikutnya sesuai kebijakan paket aktif. Rinciannya dapat dilihat di modul billing organisasi.",
     category: "Harga & Paket",
     audience: "public",
   },
@@ -205,7 +205,7 @@ const PUBLIC_RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
   {
     question: "Apakah akses pengguna bisa dibatasi sesuai peran?",
     answer:
-      "Ya. Sistem mendukung pembagian hak akses seperti superadmin, admin organisasi, operator, dan pegawai agar setiap akun hanya melihat fitur yang relevan.",
+      "Ya. Sistem mendukung pembagian hak akses seperti super admin, admin organisasi, operator, dan pegawai agar setiap akun hanya melihat fitur yang relevan.",
     category: "Keamanan & Privasi",
     audience: "public",
   },
@@ -233,7 +233,7 @@ const PUBLIC_RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
   {
     question: "Berapa lama implementasi sampai organisasi siap pakai?",
     answer:
-      "Waktu implementasi bergantung pada kesiapan data awal dan skala organisasi. Dengan template onboarding, proses setup umumnya jauh lebih cepat.",
+      "Waktu implementasi bergantung pada kesiapan data awal dan skala organisasi. Dengan templat onboarding, proses setup umumnya jauh lebih cepat.",
     category: "Implementasi & Onboarding",
     audience: "public",
   },
@@ -247,7 +247,7 @@ const PUBLIC_RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
   {
     question: "Apakah bisa impor data pegawai secara massal?",
     answer:
-      "Ya. Admin dapat melakukan import data pegawai dengan template yang disediakan untuk mempercepat migrasi dari sistem lama.",
+      "Ya. Admin dapat melakukan impor data pegawai dengan templat yang disediakan untuk mempercepat migrasi dari sistem lama.",
     category: "Implementasi & Onboarding",
     audience: "public",
   },
@@ -259,14 +259,14 @@ const PUBLIC_RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
     audience: "public",
   },
   {
-    question: "Apa yang perlu disiapkan sebelum go-live?",
+    question: "Apa yang perlu disiapkan sebelum peluncuran operasional?",
     answer:
       "Siapkan struktur organisasi, data pegawai, lokasi kerja, jam kerja, serta kebijakan izin/cuti. Dengan data ini, aktivasi operasional dapat berjalan lebih mulus.",
     category: "Implementasi & Onboarding",
     audience: "public",
   },
   {
-    question: "Bagaimana proses training admin organisasi dilakukan?",
+    question: "Bagaimana proses pelatihan admin organisasi dilakukan?",
     answer:
       "Training difokuskan pada alur harian: master data, permohonan, laporan, notifikasi, dan billing. Tujuannya agar tim admin siap mengelola sistem secara mandiri.",
     category: "Implementasi & Onboarding",
@@ -282,7 +282,7 @@ const PUBLIC_RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
   {
     question: "Apakah tersedia API atau webhook untuk integrasi?",
     answer:
-      "Tersedia opsi integrasi untuk kebutuhan otomatisasi dan sinkronisasi. Detail implementasi mengikuti kebijakan dan kesiapan teknis masing-masing instansi.",
+      "Tersedia opsi integrasi untuk kebutuhan otomatisasi dan sinkronisasi. Rincian implementasi mengikuti kebijakan dan kesiapan teknis masing-masing instansi.",
     category: "Integrasi & Dukungan",
     audience: "public",
   },
@@ -308,9 +308,9 @@ const PUBLIC_RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
     audience: "public",
   },
   {
-    question: "Apakah ada FAQ berbeda untuk publik, pegawai, admin organisasi, dan superadmin?",
+    question: "Apakah ada FAQ berbeda untuk publik, pegawai, admin organisasi, dan super admin?",
     answer:
-      "Ya. Konten FAQ dipisahkan per audiens agar informasi yang tampil lebih relevan: publik, employee, admin organisasi, dan superadmin.",
+      "Ya. Konten FAQ dipisahkan per audiens agar informasi yang tampil lebih relevan: publik, pegawai, admin organisasi, dan super admin.",
     category: "Integrasi & Dukungan",
     audience: "public",
   },
@@ -318,6 +318,55 @@ const PUBLIC_RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
 
 const RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
   ...PUBLIC_RECOMMENDED_FAQ_UPDATES,
+  {
+    question: "MCP apa yang diprioritaskan untuk investigasi dan validasi operasional repo ini?",
+    answer:
+      "Prioritaskan filesystem, Playwright, memory, dan context7. Jika butuh akses GitHub atau inspeksi DB remote, mulai dari mode read-only lalu naikkan izin hanya untuk task yang eksplisit.",
+    category: "Operasional",
+    audience: "super_admin",
+  },
+  {
+    question: "Kenapa akses Supabase remote sebaiknya read-only secara default?",
+    answer:
+      "Karena Supabase remote adalah source of truth. Aksi tulis seperti migration, cleanup data, perubahan auth, billing, role, atau policy dapat berdampak langsung ke environment aktif sehingga harus explicit per task dan didahului backup.",
+    category: "Operasional",
+    audience: "super_admin",
+  },
+  {
+    question: "Bagaimana mematikan log error global tetapi tetap mengaktifkan untuk tenant tertentu?",
+    answer:
+      "Buka /admin/error-logs, set Mode Log Error ke paused lalu simpan. Jika ada permintaan dari admin organisasi, gunakan bagian Override Tenant untuk memilih tenant dan pilih mode full atau critical_only. Override ini disimpan di client_error_logging_policy dan hanya bisa diatur super admin.",
+    category: "Operasional",
+    audience: "super_admin",
+  },
+  {
+    question: "Di mana log error payroll dikelola dan kapan diprioritaskan?",
+    answer:
+      "Log error payroll hanya tersedia untuk super admin di /admin/payroll/error-logs. Halaman ini diprioritaskan saat progres payroll mendekati 75% untuk mempercepat triase error lintas tenant.",
+    category: "Operasional",
+    audience: "super_admin",
+  },
+  {
+    question: "Bagaimana menonaktifkan audit trail per tenant dan apa risikonya?",
+    answer:
+      "Gunakan kebijakan audit_logs_activity_policy: default_org_logging_enabled untuk global, dan tenant_overrides untuk tenant tertentu. Menonaktifkan audit menurunkan beban tulis/retensi, tetapi menghilangkan jejak aktivitas untuk investigasi, compliance, dan sengketa data.",
+    category: "Operasional",
+    audience: "super_admin",
+  },
+  {
+    question: "Apa preflight wajib sebelum menjalankan test browser di localhost?",
+    answer:
+      "Jalankan npm run ops:sandbox:doctor:strict terlebih dahulu. Jika doctor gagal, jangan lanjutkan suite browser sampai environment localhost siap agar hasil test tidak menyesatkan.",
+    category: "Operasional",
+    audience: "org_admin",
+  },
+  {
+    question: "Di mana menemukan dokumen manual setelah menu Download dihapus dari sidebar?",
+    answer:
+      "Menu Download tidak lagi ditampilkan di sidebar absensi/HR/payroll. Dokumen manual tetap bisa diakses lewat tautan langsung yang dibagikan admin atau melalui /manuals/index.html.",
+    category: "Operasional",
+    audience: "org_admin",
+  },
   {
     question: "Bagaimana sumber jawaban Chat Agent di halaman utama ditentukan?",
     answer:
@@ -327,14 +376,21 @@ const RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
   {
     question: "Kenapa jawaban Chat Agent bisa terlihat ringkas?",
     answer:
-      "Jawaban chat dibuat singkat agar cepat dibaca. Detail penuh tetap ada di FAQ, halaman fitur, harga, dan artikel. Gunakan pertanyaan lebih spesifik untuk hasil yang lebih lengkap.",
+      "Jawaban chat dibuat singkat agar cepat dibaca. Rincian penuh tetap ada di FAQ, halaman fitur, harga, dan artikel. Gunakan pertanyaan lebih spesifik untuk hasil yang lebih lengkap.",
     category: "Landing & Chat Agent",
   },
   {
     question: "Bagaimana alur penawaran harga saat jumlah pegawai menembus ambang B2B?",
     answer:
-      "Saat pegawai aktif melampaui ambang negosiasi (default 2.001), sistem menandai tenant untuk penawaran B2B dan mengirim notifikasi ke Admin Organisasi serta Super Admin agar dilakukan follow-up manual.",
+      "Saat pegawai aktif melampaui ambang negosiasi (bawaan 2.001), sistem menandai tenant untuk penawaran B2B dan mengirim notifikasi ke Admin Organisasi serta Super Admin agar dilakukan tindak lanjut manual.",
     category: "Billing & Harga",
+  },
+  {
+    question: "Apakah jejak pembayaran selalu dicatat meski audit trail umum dimatikan?",
+    answer:
+      "Ya. Aktivitas pembayaran kritikal seperti verifikasi pembayaran manual dan review topup wallet tetap mencatat audit log untuk kebutuhan compliance dan investigasi, walau audit trail tenant lain dimatikan.",
+    category: "Billing & Harga",
+    audience: "super_admin",
   },
   {
     question: "Apakah paket harga publik sama persis dengan invoice internal?",
@@ -381,10 +437,44 @@ const RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
     audience: "employee",
   },
   {
+    question: "Kenapa muncul popup 'Invoice tujuan tidak ditemukan' di /org/billing?",
+    answer:
+      "Popup ini muncul saat tautan deep-link invoice mengarah ke nomor faktur yang sudah tidak ada atau sudah berubah status. Sistem otomatis mengarahkan kembali ke daftar faktur terbaru agar admin tetap bisa lanjut dari data valid.",
+    category: "Billing & Harga",
+  },
+  {
+    question: "Apa yang terjadi jika Xendit tidak aktif saat pegawai klik Lanjutkan Pembayaran?",
+    answer:
+      "Sistem menampilkan overlay informasi bahwa Xendit nonaktif lalu mengarahkan pegawai ke alur transfer manual. Setelah itu pegawai bisa lanjut ke dialog Konfirmasi Transfer tanpa membuat alur pembayaran online.",
+    category: "Billing & Harga",
+    audience: "employee",
+  },
+  {
     question: "Apa yang tampil di billing pegawai jika organisasi memakai billing terpusat?",
     answer:
       "Halaman /employee/billing menampilkan informasi bahwa pembayaran dikelola admin organisasi. Pegawai tidak perlu membuat invoice sendiri, dan dapat kembali ke dashboard untuk aktivitas harian.",
     category: "Billing & Harga",
+    audience: "employee",
+  },
+  {
+    question: "Kenapa setelah login pegawai terkadang kembali ke halaman login?",
+    answer:
+      "Aplikasi melakukan verifikasi sesi secara otomatis sebelum dashboard ditampilkan. Pada koneksi lambat, proses ini bisa terlihat seperti kembali ke login. Tunggu proses sinkron selesai, lalu coba login ulang jika diperlukan.",
+    category: "Keamanan Sesi & Notifikasi",
+    audience: "employee",
+  },
+  {
+    question: "Apa arti pesan realtime notifikasi sedang bermasalah di dashboard pegawai?",
+    answer:
+      "Pesan ini berarti koneksi realtime ke server sedang tidak stabil. Data absensi dan pengajuan tetap tersimpan. Untuk menyegarkan notifikasi, buka tab Notifikasi atau lakukan refresh saat koneksi membaik.",
+    category: "Keamanan Sesi & Notifikasi",
+    audience: "employee",
+  },
+  {
+    question: "Bagaimana cara memastikan notifikasi terbaru pegawai sudah tersinkron?",
+    answer:
+      "Masuk ke tab Notifikasi pada dashboard pegawai. Saat tab ini dibuka, sistem akan memuat ulang notifikasi terbaru. Jika perlu, lakukan refresh manual di tab tersebut.",
+    category: "Keamanan Sesi & Notifikasi",
     audience: "employee",
   },
   {
@@ -432,7 +522,7 @@ const RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
   {
     question: "Kenapa daftar faktur di /org/billing kadang terlihat lama memuat?",
     answer:
-      "Saat data masih diproses, tabel menampilkan status loading informatif. Jika tetap lama, klik Refresh di header billing. Sistem juga menampilkan pesan fallback agar admin tahu proses masih berjalan, bukan halaman kosong/error.",
+      "Saat data masih diproses, tabel menampilkan status loading informatif. Jika tetap lama, klik Muat Ulang di header billing. Sistem juga menampilkan pesan fallback agar admin tahu proses masih berjalan, bukan halaman kosong/error.",
     category: "Billing & Harga",
   },
   {
@@ -457,24 +547,24 @@ const RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
     question: "Bagaimana workflow streak sampai suspend jika tenant tidak membayar?",
     answer:
       "Status bergerak dari tracking -> ready_for_invoicing -> invoiced -> grace period. Jika tetap unpaid sampai batas grace berakhir, tenant masuk suspend otomatis sesuai konfigurasi streak.",
-    category: "Streak Monitoring",
+    category: "Pemantauan Streak",
   },
   {
     question: "Bagaimana mekanisme saat Xendit belum aktif dan pembayaran masih manual?",
     answer:
       "Sistem tetap berjalan dengan pembayaran manual (transfer + angka unik). Admin memverifikasi pembayaran, lalu status invoice diperbarui untuk mengaktifkan kembali layanan tenant.",
-    category: "Streak Monitoring",
+    category: "Pemantauan Streak",
   },
   {
     question: "Kapan pengingat invoice dikirim ke email dan WhatsApp?",
     answer:
       "Pengingat dikirim saat mendekati/masuk grace period oleh job terjadwal (cron/edge). Pastikan gateway aktif, secrets valid, dan data kontak tenant terisi.",
-    category: "Streak Monitoring",
+    category: "Pemantauan Streak",
   },
   {
-    question: "Apa fungsi menu /admin/templates (Template Onboarding Org)?",
+    question: "Apa fungsi menu /admin/templates (Templat Onboarding Org)?",
     answer:
-      "Menu ini adalah pusat template setup awal tenant organisasi: OPD, unit kerja, jabatan global tenant, kantor, jam kerja, batas absen, pengumuman awal, dan feature flag agar organisasi baru tidak mulai dari nol.",
+      "Menu ini adalah pusat templat setup awal tenant organisasi: OPD, unit kerja, jabatan global tenant, kantor, jam kerja, batas absen, pengumuman awal, dan pengaturan fitur agar organisasi baru tidak mulai dari nol.",
     category: "Onboarding Org",
   },
   {
@@ -492,26 +582,26 @@ const RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
   {
     question: "Bagaimana alur setup awal organisasi setelah profil organisasi selesai?",
     answer:
-      "Setelah profil organisasi disimpan, admin organisasi diarahkan ke /org/onboarding. Di sana ada checklist modul dan tombol Terapkan Template Admin secara aman.",
+      "Setelah profil organisasi disimpan, admin organisasi diarahkan ke /org/onboarding. Di sana ada checklist modul dan tombol Terapkan Templat Admin secara aman.",
     category: "Onboarding Org",
   },
   {
-    question: "Apa arti 'Safe Apply' pada template onboarding organisasi?",
+    question: "Apa arti 'Terapkan Aman' pada templat onboarding organisasi?",
     answer:
-      "Safe Apply hanya mengisi modul yang masih kosong dan tidak menimpa data tenant yang sudah ada. Ini menjaga setup tetap konsisten tanpa merusak konfigurasi berjalan.",
+      "Terapkan Aman hanya mengisi modul yang masih kosong dan tidak menimpa data tenant yang sudah ada. Ini menjaga setup tetap konsisten tanpa merusak konfigurasi berjalan.",
     category: "Onboarding Org",
   },
   {
     question: "Apa fungsi menu /admin/schedule/absence-limits?",
     answer:
-      "Menu ini adalah template global batas absen untuk tenant baru. Aturan di sini disalin sebagai default ketika organisasi baru dibuat oleh Super Admin.",
-    category: "Template Tenant",
+      "Menu ini adalah templat global batas absen untuk tenant baru. Aturan di sini disalin sebagai bawaan ketika organisasi baru dibuat oleh Super Admin.",
+    category: "Templat Tenant",
   },
   {
-    question: "Bagaimana cara menerapkan ulang template batas absen di organisasi?",
+    question: "Bagaimana cara menerapkan ulang templat batas absen di organisasi?",
     answer:
-      "Di /org/schedule/absence-limits gunakan tombol 'Terapkan Template Admin'. Tombol ini biasanya hanya bekerja bila aturan tenant masih kosong agar data berjalan tidak tertimpa.",
-    category: "Template Tenant",
+      "Di /org/schedule/absence-limits gunakan tombol 'Terapkan Templat Admin'. Tombol ini biasanya hanya bekerja bila aturan tenant masih kosong agar data berjalan tidak tertimpa.",
+    category: "Templat Tenant",
   },
   {
     question: "Bagaimana toggle notifikasi pada Batas Absen organisasi bekerja?",
@@ -556,9 +646,9 @@ const RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
     category: "Keamanan Pegawai",
   },
   {
-    question: "Apa beda validasi perangkat di /admin/attendance-security dengan proteksi aplikasi mobile?",
+    question: "Apa beda validasi perangkat di /admin/attendance-security dengan proteksi aplikasi seluler?",
     answer:
-      "Validasi perangkat mengatur kebijakan akses browser/perangkat pada login absensi. Proteksi aplikasi mobile (APK/webview policy) adalah lapisan tambahan di sisi klien.",
+      "Validasi perangkat mengatur kebijakan akses browser/perangkat pada login absensi. Proteksi aplikasi seluler (APK/webview policy) adalah lapisan tambahan di sisi klien.",
     category: "Keamanan Pegawai",
   },
   {
@@ -568,29 +658,29 @@ const RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
     category: "Auth",
   },
   {
-    question: "Bagaimana validasi import pegawai agar data kantor/lokasi tidak rusak?",
+    question: "Bagaimana validasi impor pegawai agar data kantor/lokasi tidak rusak?",
     answer:
-      "Gunakan validasi CSV sebelum import, pastikan mapping kolom benar, dan pastikan referensi kantor/lokasi kerja valid dengan koordinat real.",
+      "Gunakan validasi CSV sebelum impor, pastikan mapping kolom benar, dan pastikan referensi kantor/lokasi kerja valid dengan koordinat real.",
     category: "Master Data",
   },
   {
-    question: "Bagaimana konsep Import Pegawai dan Undangan Pegawai agar tidak bentrok?",
+    question: "Bagaimana konsep Impor Pegawai dan Undangan Pegawai agar tidak bentrok?",
     answer:
-      "Gunakan alur 2 tahap: (1) Import Pegawai untuk membentuk master data pegawai, (2) Undangan Pegawai untuk aktivasi akun login. Sistem akan memprioritaskan data pegawai existing agar tidak membuat duplikasi akun/data.",
-    category: "Master Data",
-    audience: "org_admin",
-  },
-  {
-    question: "Kenapa upload import pegawai meminta Lokasi Kerja Mapping?",
-    answer:
-      "Mapping lokasi kerja dipakai sebagai fallback aman saat baris import belum mengisi referensi lokasi valid. Tujuannya menjaga seluruh data pegawai tetap terhubung ke lokasi kerja yang sah dan mencegah relasi kosong.",
+      "Gunakan alur 2 tahap: (1) Impor Pegawai untuk membentuk master data pegawai, (2) Undangan Pegawai untuk aktivasi akun login. Sistem akan memprioritaskan data pegawai existing agar tidak membuat duplikasi akun/data.",
     category: "Master Data",
     audience: "org_admin",
   },
   {
-    question: "Apakah template import pegawai mendukung format XLS?",
+    question: "Kenapa upload impor pegawai meminta Lokasi Kerja Mapping?",
     answer:
-      "Ya. Template dapat diunduh dalam format CSV maupun XLS (Excel-compatible). Isi data sesuai header template terbaru agar validasi kolom berjalan otomatis saat upload.",
+      "Mapping lokasi kerja dipakai sebagai fallback aman saat baris impor belum mengisi referensi lokasi valid. Tujuannya menjaga seluruh data pegawai tetap terhubung ke lokasi kerja yang sah dan mencegah relasi kosong.",
+    category: "Master Data",
+    audience: "org_admin",
+  },
+  {
+    question: "Apakah templat impor pegawai mendukung format XLS?",
+    answer:
+      "Ya. Templat dapat diunduh dalam format CSV maupun XLS (kompatibel Excel). Isi data sesuai header templat terbaru agar validasi kolom berjalan otomatis saat upload.",
     category: "Master Data",
     audience: "org_admin",
   },
@@ -630,11 +720,11 @@ const RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
   {
     question: "Apa fungsi toleransi keterlambatan pada data kantor?",
     answer:
-      "Toleransi keterlambatan adalah batas menit tambahan sebelum status dianggap terlambat. Default yang aman adalah 0 jika instansi tidak memakai toleransi.",
+      "Toleransi keterlambatan adalah batas menit tambahan sebelum status dianggap terlambat. Bawaan yang aman adalah 0 jika instansi tidak memakai toleransi.",
     category: "Jadwal & Absensi",
   },
   {
-    question: "Bagaimana mekanisme shift kerja dibanding default Senin-Jumat?",
+    question: "Bagaimana mekanisme shift kerja dibanding bawaan Senin-Jumat?",
     answer:
       "Gunakan konfigurasi jadwal/shift per tenant dan per pegawai. Hari kerja bisa Senin-Minggu dengan jam berbeda per shift, lalu status hadir mengikuti jadwal aktif pegawai.",
     category: "Jadwal & Absensi",
@@ -696,7 +786,7 @@ const RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
   {
     question: "Kenapa daftar /admin/log-errors terlihat kosong padahal error pernah terjadi?",
     answer:
-      "Default filter halaman ini adalah 24 jam. Jika data kosong, periksa filter rentang waktu/konteks dan ubah ke 7 hari, 30 hari, atau Semua Waktu. Pastikan juga Anda sedang melihat tab yang sesuai (Kritis, Non Kritis, Selesai, atau Arsip Kritis).",
+      "Filter bawaan halaman ini adalah 24 jam. Jika data kosong, periksa filter rentang waktu/konteks dan ubah ke 7 hari, 30 hari, atau Semua Waktu. Pastikan juga Anda sedang melihat tab yang sesuai (Kritis, Non Kritis, Selesai, atau Arsip Kritis).",
     category: "Troubleshooting",
   },
   {
@@ -738,19 +828,19 @@ const RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
   {
     question: "Apakah export/print Laporan Absensi dan Rekapitulasi ikut dibatasi jam sibuk?",
     answer:
-      "Ya. Saat jam sibuk absensi, aksi Tampilkan, Export CSV, dan Print PDF pada modul Laporan Absensi serta Rekapitulasi dinonaktifkan sementara, lalu aktif kembali di luar jam sibuk.",
+      "Ya. Saat jam sibuk absensi, aksi Tampilkan, Ekspor CSV, dan Cetak PDF pada modul Laporan Absensi serta Rekapitulasi dinonaktifkan sementara, lalu aktif kembali di luar jam sibuk.",
     category: "Laporan",
   },
   {
-    question: "Apa arti Status Checklist Setup Modul (SIAP/TIDAK SIAP) di sidebar organisasi?",
+    question: "Apa arti Status Daftar Periksa Setup Modul (SIAP/TIDAK SIAP) di sidebar organisasi?",
     answer:
-      "Indikator ini menunjukkan progres 7 modul setup awal organisasi. SIAP (hijau) berarti seluruh modul checklist sudah terisi, sedangkan TIDAK SIAP (merah) berarti masih ada modul yang belum lengkap.",
+      "Indikator ini menunjukkan progres 7 modul setup awal organisasi. SIAP (hijau) berarti seluruh modul daftar periksa sudah terisi, sedangkan TIDAK SIAP (merah) berarti masih ada modul yang belum lengkap.",
     category: "Onboarding Org",
   },
   {
-    question: "Di mana lokasi indikator Status Checklist Setup Modul dan apa aksinya?",
+    question: "Di mana lokasi indikator Status Daftar Periksa Setup Modul dan apa aksinya?",
     answer:
-      "Indikator berada di sidebar /org, tepat di bawah menu Setup Awal. Saat diklik, pengguna akan diarahkan ke /org/onboarding untuk melanjutkan checklist modul.",
+      "Indikator berada di sidebar /org, tepat di bawah menu Setup Awal. Saat diklik, pengguna akan diarahkan ke /org/onboarding untuk melanjutkan daftar periksa modul.",
     category: "Onboarding Org",
   },
   {
@@ -762,7 +852,7 @@ const RECOMMENDED_FAQ_UPDATES: RecommendedFAQUpdate[] = [
   {
     question: "Apa parameter baru yang perlu diatur admin setelah fitur ini dirilis?",
     answer:
-      "Pastikan konfigurasi cloud capacity monitor sudah terisi (khususnya usage manual Vercel bila API usage belum aktif), auto-sync FAQ rekomendasi sesuai kebutuhan, serta review warning threshold per provider agar notifikasi kapasitas bekerja tepat waktu.",
+      "Pastikan konfigurasi cloud capacity monitor sudah terisi (khususnya usage manual Vercel bila API usage belum aktif), sinkronisasi otomatis FAQ rekomendasi sesuai kebutuhan, serta review warning threshold per provider agar notifikasi kapasitas bekerja tepat waktu.",
     category: "Admin Super",
   },
   {
@@ -1056,12 +1146,12 @@ export default function FAQManagement() {
           const audienceFixNote =
             audienceFixCount > 0 ? ` + koreksi audience ${audienceFixCount}` : "";
           toast.success(
-            `FAQ auto-sync: ${mergedResult.additionsCount} ditambahkan, ${mergedResult.updatedCount} diperbarui${audienceFixNote}.`,
+            `Sinkronisasi otomatis FAQ: ${mergedResult.additionsCount} ditambahkan, ${mergedResult.updatedCount} diperbarui${audienceFixNote}.`,
           );
         } else if (shouldPersistAudienceNormalization) {
-          toast.success(`Target audience FAQ dikoreksi otomatis: ${audienceFixCount} item.`);
+          toast.success(`Target audiens FAQ dikoreksi otomatis: ${audienceFixCount} item.`);
         } else {
-          toast.success("FAQ default berhasil diinisialisasi otomatis.");
+          toast.success("FAQ bawaan berhasil diinisialisasi otomatis.");
         }
       }
 
@@ -1296,7 +1386,7 @@ export default function FAQManagement() {
     { key: "total", label: "Total FAQ", value: faqs.length },
     { key: "categories", label: "Kategori", value: totalCategories },
     { key: "results", label: "Hasil Pencarian", value: filteredFaqs.length },
-    { key: "public-visible", label: "Umum + Employee", value: publicVisibleCount },
+    { key: "public-visible", label: "Umum + Pegawai", value: publicVisibleCount },
     { key: "employee", label: FAQ_AUDIENCE_LABEL.employee, value: audienceStats.employee },
     { key: "org-admin", label: FAQ_AUDIENCE_LABEL.org_admin, value: audienceStats.org_admin },
     { key: "super-admin", label: FAQ_AUDIENCE_LABEL.super_admin, value: audienceStats.super_admin },
@@ -1331,14 +1421,14 @@ export default function FAQManagement() {
                   variant={audienceFilter === "public" ? "default" : "outline"}
                   onClick={() => setAudienceFilter("public")}
                 >
-                  Umum + Employee
+                  Umum + Pegawai
                 </Button>
                 <Button
                   size="sm"
                   variant={audienceFilter === "employee" ? "default" : "outline"}
                   onClick={() => setAudienceFilter("employee")}
                 >
-                  Employee
+                  Pegawai
                 </Button>
                 <Button
                   size="sm"
@@ -1352,7 +1442,7 @@ export default function FAQManagement() {
                   variant={audienceFilter === "super_admin" ? "default" : "outline"}
                   onClick={() => setAudienceFilter("super_admin")}
                 >
-                  Superadmin
+                  Super Admin
                 </Button>
               </div>
               <div className="rounded-lg border border-border/60 bg-background/70 p-2">
@@ -1405,7 +1495,7 @@ export default function FAQManagement() {
             <div className="rounded-md border px-3 py-2">
               <div className="flex items-center gap-2">
                 <Switch checked={autoSyncEnabled} onCheckedChange={setAutoSyncEnabled} />
-                <span className="text-sm font-medium">Auto-sync FAQ Rekomendasi</span>
+                <span className="text-sm font-medium">Sinkronisasi Otomatis FAQ Rekomendasi</span>
               </div>
               <p className="mt-1 text-xs text-slate-600">
                 Terakhir: {formatAutoSyncTimestamp(autoSyncLastRunAt)}
@@ -1600,7 +1690,7 @@ export default function FAQManagement() {
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogContent className="max-w-lg">
             <DialogHeader>
-              <DialogTitle>{editingItem ? "Edit FAQ" : "Tambah FAQ Baru"}</DialogTitle>
+              <DialogTitle>{editingItem ? "Ubah FAQ" : "Tambah FAQ Baru"}</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 py-4">
               <div className="space-y-2">

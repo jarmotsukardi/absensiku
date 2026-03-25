@@ -11,6 +11,14 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 interface ArchivedManualPayment {
@@ -22,6 +30,7 @@ interface ArchivedManualPayment {
   verified_amount: number | null;
   payment_date: string | null;
   reference_number: string | null;
+  transfer_proof_path: string | null;
   transfer_proof_url: string | null;
   archived_at: string | null;
   archive_expires_at: string | null;
@@ -36,6 +45,7 @@ interface TenantLite {
 }
 
 const PAGE_SIZE = 10;
+const PAYMENT_PROOF_BUCKET = "payment-proofs";
 
 const formatCurrency = (amount: number) =>
   new Intl.NumberFormat("id-ID", {
@@ -70,6 +80,9 @@ export function ManualPaymentArchive() {
   const [query, setQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [retentionDays, setRetentionDays] = useState<number>(7);
+  const [selectedArchive, setSelectedArchive] = useState<ArchivedManualPayment | null>(null);
+  const [selectedArchiveProofUrl, setSelectedArchiveProofUrl] = useState("");
+  const [isLoadingSelectedProof, setIsLoadingSelectedProof] = useState(false);
 
   const fetchArchiveRows = useCallback(async () => {
     setIsLoading(true);
@@ -83,7 +96,7 @@ export function ManualPaymentArchive() {
               supabase
                 .from("manual_payments")
                 .select(
-                  "id, tenant_id, invoice_number, amount, confirmed_amount, verified_amount, payment_date, reference_number, transfer_proof_url, archived_at, archive_expires_at, status, verification_method",
+                  "id, tenant_id, invoice_number, amount, confirmed_amount, verified_amount, payment_date, reference_number, transfer_proof_url, transfer_proof_path, archived_at, archive_expires_at, status, verification_method",
                 )
                 .eq("is_archived", true)
                 .order("archived_at", { ascending: false })
@@ -175,9 +188,120 @@ export function ManualPaymentArchive() {
     setCurrentPage(1);
   }, [query, filteredRows.length]);
 
+  const openArchiveDetail = useCallback((row: ArchivedManualPayment) => {
+    setSelectedArchive(row);
+  }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    const toPublicUrlFromPath = (path: string | null): string => {
+      const normalized = (path || "").trim();
+      if (!normalized) return "";
+      return supabase.storage.from(PAYMENT_PROOF_BUCKET).getPublicUrl(normalized).data.publicUrl || "";
+    };
+
+    const resolveSelectedProofUrl = async () => {
+      if (!selectedArchive) {
+        setSelectedArchiveProofUrl("");
+        setIsLoadingSelectedProof(false);
+        return;
+      }
+
+      const directProofUrl = (selectedArchive.transfer_proof_url || "").trim();
+      if (directProofUrl) {
+        setSelectedArchiveProofUrl(directProofUrl);
+        setIsLoadingSelectedProof(false);
+        return;
+      }
+
+      const directProofUrlFromPath = toPublicUrlFromPath(selectedArchive.transfer_proof_path);
+      if (directProofUrlFromPath) {
+        setSelectedArchiveProofUrl(directProofUrlFromPath);
+        setIsLoadingSelectedProof(false);
+        return;
+      }
+
+      const invoiceNumber = (selectedArchive.invoice_number || "").trim();
+      if (!invoiceNumber) {
+        setSelectedArchiveProofUrl("");
+        setIsLoadingSelectedProof(false);
+        return;
+      }
+
+      setSelectedArchiveProofUrl("");
+      setIsLoadingSelectedProof(true);
+      try {
+        const { data, error } = await withTimeout(
+          supabase
+            .from("invoices")
+            .select("payment_proof_url")
+            .eq("tenant_id", selectedArchive.tenant_id)
+            .eq("invoice_number", invoiceNumber)
+            .maybeSingle(),
+          ARCHIVE_TIMEOUT_MS,
+          "Memuat bukti transfer arsip terlalu lama",
+        );
+        if (error) throw error;
+        if (isCancelled) return;
+        const invoiceProofUrl = (data?.payment_proof_url || "").trim();
+        if (invoiceProofUrl) {
+          setSelectedArchiveProofUrl(invoiceProofUrl);
+          return;
+        }
+
+        const { data: fallbackManualRows, error: fallbackManualRowsError } = await withTimeout(
+          supabase
+            .from("manual_payments")
+            .select("transfer_proof_url, transfer_proof_path")
+            .eq("tenant_id", selectedArchive.tenant_id)
+            .eq("invoice_number", invoiceNumber)
+            .or("transfer_proof_url.not.is.null,transfer_proof_path.not.is.null")
+            .order("created_at", { ascending: false })
+            .limit(1),
+          ARCHIVE_TIMEOUT_MS,
+          "Memuat fallback bukti transfer arsip terlalu lama",
+        );
+        if (fallbackManualRowsError) throw fallbackManualRowsError;
+        if (isCancelled) return;
+
+        const fallbackManualRow = fallbackManualRows?.[0];
+        const fallbackManualUrl = (fallbackManualRow?.transfer_proof_url || "").trim();
+        if (fallbackManualUrl) {
+          setSelectedArchiveProofUrl(fallbackManualUrl);
+          return;
+        }
+
+        const fallbackManualUrlFromPath = toPublicUrlFromPath(fallbackManualRow?.transfer_proof_path || null);
+        setSelectedArchiveProofUrl(fallbackManualUrlFromPath);
+      } catch (error) {
+        if (isCancelled) return;
+        const errorRef = reportError(error, "admin.billing.manual_payment_archive.fetch_invoice_proof_failed", {
+          tenant_id: selectedArchive.tenant_id,
+          invoice_number: selectedArchive.invoice_number,
+        });
+        toast.error(appendErrorReference("Gagal memuat bukti transfer arsip", errorRef));
+        setSelectedArchiveProofUrl("");
+      } finally {
+        if (!isCancelled) {
+          setIsLoadingSelectedProof(false);
+        }
+      }
+    };
+
+    void resolveSelectedProofUrl();
+    return () => {
+      isCancelled = true;
+    };
+  }, [ARCHIVE_TIMEOUT_MS, selectedArchive]);
+
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
   const safePage = Math.min(currentPage, totalPages);
   const pageRows = filteredRows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const selectedTenant = selectedArchive ? tenantsMap.get(selectedArchive.tenant_id) : null;
+  const selectedProofUrl = selectedArchiveProofUrl.trim();
+  const hasSelectedProof = Boolean(selectedProofUrl);
+  const selectedProofIsPdf = hasSelectedProof && /\.pdf($|[?#])/i.test(selectedProofUrl);
 
   return (
     <Card>
@@ -190,7 +314,7 @@ export function ManualPaymentArchive() {
             Menampilkan arsip pembayaran manual yang sudah diverifikasi. Retensi aktif: <strong>{retentionDays} hari</strong>.
           </div>
           <Button variant="outline" size="sm" onClick={() => void fetchArchiveRows()} disabled={isLoading || isRetrying}>
-            {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Refresh"}
+            {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Muat Ulang"}
           </Button>
         </div>
         {isRetrying ? (
@@ -268,7 +392,19 @@ export function ManualPaymentArchive() {
                   const remainingDays = getDaysRemaining(row.archive_expires_at);
                   const amount = Number(row.verified_amount ?? row.confirmed_amount ?? row.amount ?? 0);
                   return (
-                    <TableRow key={row.id}>
+                    <TableRow
+                      key={row.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => openArchiveDetail(row)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          openArchiveDetail(row);
+                        }
+                      }}
+                      className="cursor-pointer transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
                       <TableCell className="font-mono text-xs">{row.invoice_number || "-"}</TableCell>
                       <TableCell>
                         <div className="font-medium">{tenant?.name || "-"}</div>
@@ -295,16 +431,18 @@ export function ManualPaymentArchive() {
                         <Badge variant="outline">{row.status || "verified"}</Badge>
                       </TableCell>
                       <TableCell>
-                        {row.transfer_proof_url ? (
-                          <a
-                            href={row.transfer_proof_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                        {row.transfer_proof_url || row.transfer_proof_path ? (
+                          <button
+                            type="button"
                             className="inline-flex items-center gap-1 text-primary hover:underline"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openArchiveDetail(row);
+                            }}
                           >
                             <ExternalLink className="h-3.5 w-3.5" />
                             Lihat
-                          </a>
+                          </button>
                         ) : (
                           <span className="text-muted-foreground">-</span>
                         )}
@@ -340,6 +478,103 @@ export function ManualPaymentArchive() {
             </Button>
           </div>
         </div>
+
+        <Dialog open={Boolean(selectedArchive)} onOpenChange={(open) => (!open ? setSelectedArchive(null) : undefined)}>
+          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>Rincian Arsip Pembayaran</DialogTitle>
+              <DialogDescription>
+                Rincian arsip manual untuk invoice <strong>{selectedArchive?.invoice_number || "-"}</strong>.
+              </DialogDescription>
+            </DialogHeader>
+
+            {selectedArchive ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 gap-3 rounded-md border bg-muted/20 p-3 text-sm sm:grid-cols-2">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Invoice</p>
+                    <p className="font-medium font-mono">{selectedArchive.invoice_number || "-"}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Status</p>
+                    <Badge variant="outline">{selectedArchive.status || "verified"}</Badge>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Tenant</p>
+                    <p className="font-medium">{selectedTenant?.name || "-"}</p>
+                    <p className="text-xs text-muted-foreground">{selectedTenant?.code || selectedArchive.tenant_id}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Nominal Terverifikasi</p>
+                    <p className="font-semibold">
+                      {formatCurrency(Number(selectedArchive.verified_amount ?? selectedArchive.confirmed_amount ?? selectedArchive.amount ?? 0))}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Tanggal Transfer</p>
+                    <p className="font-medium">{formatDateTimeId(selectedArchive.payment_date)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Terverifikasi</p>
+                    <p className="font-medium">{formatDateTimeId(selectedArchive.archived_at)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Kedaluwarsa Arsip</p>
+                    <p className="font-medium">{formatDateTimeId(selectedArchive.archive_expires_at)}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted-foreground">Metode Verifikasi</p>
+                    <p className="font-medium">{selectedArchive.verification_method || "-"}</p>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <p className="text-xs text-muted-foreground">Nomor Referensi</p>
+                    <p className="font-medium">{selectedArchive.reference_number || "-"}</p>
+                  </div>
+                </div>
+
+                <div className="space-y-2 rounded-md border p-3">
+                  <p className="text-sm font-medium">Bukti Transfer</p>
+                  {isLoadingSelectedProof ? (
+                    <div className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Memuat bukti transfer...
+                    </div>
+                  ) : hasSelectedProof ? (
+                    <div className="space-y-2">
+                      {selectedProofIsPdf ? (
+                        <iframe
+                          src={selectedProofUrl}
+                          title={`Bukti transfer ${selectedArchive.invoice_number || "-"}`}
+                          className="h-[52vh] w-full rounded-md border bg-white"
+                        />
+                      ) : (
+                        <img
+                          src={selectedProofUrl}
+                          alt={`Bukti transfer ${selectedArchive.invoice_number || "-"}`}
+                          className="max-h-[52vh] w-full rounded-md border object-contain"
+                        />
+                      )}
+                      <Button variant="outline" size="sm" asChild>
+                        <a href={selectedProofUrl} target="_blank" rel="noopener noreferrer">
+                          <ExternalLink className="mr-2 h-4 w-4" />
+                          Buka bukti di tab baru
+                        </a>
+                      </Button>
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Tidak ada file bukti transfer pada arsip ini.</p>
+                  )}
+                </div>
+              </div>
+            ) : null}
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setSelectedArchive(null)}>
+                Tutup
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </CardContent>
     </Card>
   );

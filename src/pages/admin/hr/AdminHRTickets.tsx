@@ -248,7 +248,7 @@ export default function AdminHRTickets() {
               Muat Ulang
             </Button>
             <Button size="sm" onClick={() => navigate("/admin/hr/help/support")}>
-              Buka Dukungan HR Global
+              Buka Dukungan Global HR
             </Button>
           </div>
         </div>

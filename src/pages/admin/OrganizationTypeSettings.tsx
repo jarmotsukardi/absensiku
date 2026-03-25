@@ -265,7 +265,7 @@ export default function OrganizationTypeSettings() {
   return (
     <SuperAdminLayout 
       title="Pengaturan Jenis Organisasi" 
-      subtitle="Konfigurasi default untuk setiap jenis organisasi"
+      subtitle="Konfigurasi bawaan untuk setiap jenis organisasi"
     >
       <div className="space-y-6">
         {isRetrying && (
@@ -343,7 +343,7 @@ export default function OrganizationTypeSettings() {
                     Aturan Absensi
                   </CardTitle>
                   <CardDescription>
-                    Konfigurasi aturan absensi default
+                    Konfigurasi aturan absensi bawaan
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -360,7 +360,7 @@ export default function OrganizationTypeSettings() {
                             </TooltipTrigger>
                             <TooltipContent side="top" className="max-w-xs">
                               Batas menit toleransi setelah jam masuk sebelum pegawai dinilai terlambat.
-                              Nilai default 0 berarti tanpa toleransi tambahan.
+                              Nilai bawaan 0 berarti tanpa toleransi tambahan.
                             </TooltipContent>
                           </Tooltip>
                         </TooltipProvider>
@@ -433,10 +433,10 @@ export default function OrganizationTypeSettings() {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <Clock className="h-5 w-5" />
-                    Jadwal Kerja Default
+                    Jadwal Kerja Bawaan
                   </CardTitle>
                   <CardDescription>
-                    Jam kerja dan hari kerja default
+                    Jam kerja dan hari kerja bawaan
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">

@@ -1,0 +1,25 @@
+{
+  "module": "hr-payroll",
+  "version": "1.0.0",
+  "status_flow": ["draft", "review", "approved", "paid", "archived"],
+  "menus": [
+    { "key": "payroll_dashboard", "label": "Dashboard Payroll", "phase": 1, "critical": true },
+    { "key": "payroll_employees", "label": "Master Karyawan Payroll", "phase": 1, "critical": true },
+    { "key": "payroll_org_grade", "label": "Struktur Organisasi & Grade", "phase": 4, "critical": false },
+    { "key": "payroll_income_components", "label": "Komponen Penghasilan", "phase": 1, "critical": true },
+    { "key": "payroll_deduction_components", "label": "Komponen Potongan", "phase": 1, "critical": true },
+    { "key": "payroll_policies", "label": "Kebijakan Payroll", "phase": 1, "critical": true },
+    { "key": "payroll_periods", "label": "Periode Payroll", "phase": 1, "critical": true },
+    { "key": "payroll_variable_input", "label": "Input Variabel Bulanan", "phase": 2, "critical": true },
+    { "key": "payroll_validation", "label": "Validasi & Rekonsiliasi", "phase": 2, "critical": true },
+    { "key": "payroll_run_engine", "label": "Proses Payroll (Run Engine)", "phase": 2, "critical": true },
+    { "key": "payroll_approval", "label": "Approval Payroll", "phase": 2, "critical": true },
+    { "key": "payroll_slips", "label": "Slip Gaji & Distribusi", "phase": 3, "critical": true },
+    { "key": "payroll_payment", "label": "Pembayaran & Bank File", "phase": 3, "critical": true },
+    { "key": "payroll_tax_compliance", "label": "Pajak & Kepatuhan", "phase": 4, "critical": false },
+    { "key": "payroll_reports", "label": "Laporan & Analitik", "phase": 3, "critical": true },
+    { "key": "payroll_audit_log", "label": "Audit Log Payroll", "phase": 3, "critical": true },
+    { "key": "payroll_roles", "label": "Role & Permission Payroll", "phase": 4, "critical": false },
+    { "key": "payroll_integrations", "label": "Integrasi", "phase": 4, "critical": false }
+  ]
+}

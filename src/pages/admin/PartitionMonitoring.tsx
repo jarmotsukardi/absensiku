@@ -20,6 +20,7 @@ import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { useNavigate } from "react-router-dom";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { executeRpcWithAvailability } from "@/lib/rpcAvailability";
 import {
   isRetryableError,
   withExponentialBackoff,
@@ -80,6 +81,16 @@ const actionLabels: Record<MaintenanceAction, string> = {
   analyze: 'VACUUM ANALYZE',
   cleanup_audit: 'Cleanup audit log',
 };
+
+const PARTITION_RPC_NAMES = {
+  cleanupGps: "cleanup_gps_data_partitioned",
+  createPartition: "create_next_month_partition",
+  analyze: "analyze_attendance_partitions",
+  cleanupAudit: "cleanup_old_audit_logs",
+  partitionStats: "get_partition_stats",
+  gpsCleanupLogs: "get_gps_cleanup_logs",
+  partitionCreationLogs: "get_partition_creation_logs",
+} as const;
 
 const extractFunctionErrorMessage = async (error: unknown): Promise<string> => {
   const fallback = typeof error === "object" && error !== null && "message" in error && typeof (error as { message?: unknown }).message === "string"
@@ -183,27 +194,27 @@ const ensureValidFunctionAccessToken = async (): Promise<string> => {
 };
 
 const PARTITION_GLOSSARY: GlossaryItem[] = [
-  { term: "Partitioned Table", description: "Tabel induk yang datanya dipecah menjadi beberapa partisi agar query lebih cepat dan maintenance lebih ringan.", category: "Konsep" },
+  { term: "Tabel Terpartisi", description: "Tabel induk yang datanya dipecah menjadi beberapa partisi agar query lebih cepat dan pemeliharaan lebih ringan.", category: "Konsep" },
   { term: "Partisi Bulanan", description: "Pemisahan data absensi per bulan (contoh: attendance_records_p2026_02) untuk mengurangi beban scan data.", category: "Konsep" },
-  { term: "Partition Pruning", description: "Optimasi database yang hanya membaca partisi relevan sesuai filter tanggal.", category: "Konsep" },
-  { term: "Parent Table", description: "Tabel utama (attendance_records_partitioned) tempat semua partisi ditautkan.", category: "Konsep" },
+  { term: "Pemangkasan Partisi", description: "Optimasi database yang hanya membaca partisi relevan sesuai filter tanggal.", category: "Konsep" },
+  { term: "Tabel Induk", description: "Tabel utama (`attendance_records_partitioned`) tempat semua partisi ditautkan.", category: "Konsep" },
   { term: "Buat Partisi", description: "Aksi membuat partisi bulan berikutnya agar insert absensi tidak gagal saat pergantian bulan.", category: "Aksi" },
-  { term: "Cleanup GPS", description: "Aksi menghapus kolom/jejak lokasi lama (di atas batas retensi) agar ukuran tabel tetap terkendali.", category: "Aksi" },
+  { term: "Pembersihan GPS", description: "Aksi menghapus kolom/jejak lokasi lama (di atas batas retensi) agar ukuran tabel tetap terkendali.", category: "Aksi" },
   { term: "VACUUM ANALYZE", description: "Perintah optimasi untuk merapikan storage dan memperbarui statistik query planner.", category: "Aksi" },
-  { term: "Cleanup Audit Log", description: "Aksi pembersihan log audit lama sesuai retensi hot 60 hari untuk menekan pertumbuhan data historis.", category: "Aksi" },
-  { term: "Jalankan Semua", description: "Menjalankan seluruh aksi maintenance berurutan: cleanup GPS, create partition, analyze, cleanup audit.", category: "Aksi" },
-  { term: "Row Count", description: "Jumlah baris data pada suatu partisi.", category: "Ukuran" },
-  { term: "Table Size", description: "Ukuran fisik data utama tabel (tanpa index).", category: "Ukuran" },
-  { term: "Index Size", description: "Ukuran total seluruh index pada partisi.", category: "Ukuran" },
-  { term: "Total Size", description: "Akumulasi ukuran tabel + index + overhead storage.", category: "Ukuran" },
-  { term: "Date Range", description: "Rentang tanggal yang dicakup oleh sebuah partisi.", category: "Ukuran" },
-  { term: "Cleanup Log", description: "Riwayat eksekusi cleanup GPS beserta total record yang dibersihkan.", category: "Log" },
-  { term: "Partition Creation Log", description: "Riwayat partisi yang berhasil dibuat otomatis/manual.", category: "Log" },
-  { term: "Cutoff Date", description: "Batas tanggal untuk menentukan data lama yang akan dibersihkan.", category: "Log" },
-  { term: "Edge Function", description: "Fungsi backend Supabase yang mengeksekusi maintenance terjadwal/ manual.", category: "Keandalan" },
-  { term: "RPC (Remote Procedure Call)", description: "Pemanggilan fungsi SQL di database dari aplikasi (mis. get_partition_stats).", category: "Keandalan" },
-  { term: "Cron Job", description: "Jadwal otomatis yang mengeksekusi maintenance tanpa intervensi manual.", category: "Keandalan" },
-  { term: "Warning Partial", description: "Status ketika sebagian langkah maintenance berhasil, tetapi ada langkah yang gagal.", category: "Keandalan" },
+  { term: "Pembersihan Log Audit", description: "Aksi pembersihan log audit lama sesuai retensi hot 60 hari untuk menekan pertumbuhan data historis.", category: "Aksi" },
+  { term: "Jalankan Semua", description: "Menjalankan seluruh aksi pemeliharaan berurutan: pembersihan GPS, pembuatan partisi, analisis, pembersihan audit.", category: "Aksi" },
+  { term: "Jumlah Baris", description: "Jumlah baris data pada suatu partisi.", category: "Ukuran" },
+  { term: "Ukuran Tabel", description: "Ukuran fisik data utama tabel (tanpa indeks).", category: "Ukuran" },
+  { term: "Ukuran Indeks", description: "Ukuran total seluruh indeks pada partisi.", category: "Ukuran" },
+  { term: "Ukuran Total", description: "Akumulasi ukuran tabel + indeks + overhead penyimpanan.", category: "Ukuran" },
+  { term: "Rentang Tanggal", description: "Rentang tanggal yang dicakup oleh sebuah partisi.", category: "Ukuran" },
+  { term: "Log Pembersihan", description: "Riwayat eksekusi pembersihan GPS beserta total rekaman yang dibersihkan.", category: "Log" },
+  { term: "Log Pembuatan Partisi", description: "Riwayat partisi yang berhasil dibuat otomatis/manual.", category: "Log" },
+  { term: "Tanggal Batas", description: "Batas tanggal untuk menentukan data lama yang akan dibersihkan.", category: "Log" },
+  { term: "Fungsi Edge", description: "Fungsi backend Supabase yang mengeksekusi pemeliharaan terjadwal/manual.", category: "Keandalan" },
+  { term: "RPC (Pemanggilan Prosedur Jarak Jauh)", description: "Pemanggilan fungsi SQL di database dari aplikasi (mis. `get_partition_stats`).", category: "Keandalan" },
+  { term: "Pekerjaan Cron", description: "Jadwal otomatis yang mengeksekusi pemeliharaan tanpa intervensi manual.", category: "Keandalan" },
+  { term: "Peringatan Parsial", description: "Status ketika sebagian langkah pemeliharaan berhasil, tetapi ada langkah yang gagal.", category: "Keandalan" },
 ];
 const PARTITIONS_PER_PAGE = 10;
 const CLEANUP_LOGS_PER_PAGE = 5;
@@ -273,69 +284,81 @@ export default function PartitionMonitoring({ embedded = false }: { embedded?: b
 
 const runMaintenanceViaRpc = async (action: Exclude<MaintenanceAction, "all">) => {
   if (action === "cleanup_gps") {
-      const { data, error } = await withExponentialBackoff(
-        () =>
-          withTimeout(
-            supabase.rpc("cleanup_gps_data_partitioned"),
-            ADMIN_PARTITION_READ_TIMEOUT_MS,
-            "admin.partition_monitoring.rpc.cleanup_gps timeout",
-          ),
-        {
-          maxRetries: ADMIN_PARTITION_MAX_RETRIES,
-          shouldRetry: isRetryableError,
-        },
+      const { data, error } = await executeRpcWithAvailability(
+        PARTITION_RPC_NAMES.cleanupGps,
+        () => withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.rpc(PARTITION_RPC_NAMES.cleanupGps),
+              ADMIN_PARTITION_READ_TIMEOUT_MS,
+              "admin.partition_monitoring.rpc.cleanup_gps timeout",
+            ),
+          {
+            maxRetries: ADMIN_PARTITION_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+          },
+        ),
       );
-      if (error) throw new Error(`RPC cleanup_gps_data_partitioned gagal: ${error.message}`);
+      if (error) throw new Error(`RPC ${PARTITION_RPC_NAMES.cleanupGps} gagal: ${error instanceof Error ? error.message : String(error)}`);
       return { success: true, data };
     }
 
     if (action === "create_partition") {
-      const { error } = await withExponentialBackoff(
-        () =>
-          withTimeout(
-            supabase.rpc("create_next_month_partition"),
-            ADMIN_PARTITION_READ_TIMEOUT_MS,
-            "admin.partition_monitoring.rpc.create_partition timeout",
-          ),
-        {
-          maxRetries: ADMIN_PARTITION_MAX_RETRIES,
-          shouldRetry: isRetryableError,
-        },
+      const { error } = await executeRpcWithAvailability(
+        PARTITION_RPC_NAMES.createPartition,
+        () => withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.rpc(PARTITION_RPC_NAMES.createPartition),
+              ADMIN_PARTITION_READ_TIMEOUT_MS,
+              "admin.partition_monitoring.rpc.create_partition timeout",
+            ),
+          {
+            maxRetries: ADMIN_PARTITION_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+          },
+        ),
       );
-      if (error) throw new Error(`RPC create_next_month_partition gagal: ${error.message}`);
+      if (error) throw new Error(`RPC ${PARTITION_RPC_NAMES.createPartition} gagal: ${error instanceof Error ? error.message : String(error)}`);
       return { success: true, data: { success: true, message: "Next month partition ensured" } };
     }
 
     if (action === "analyze") {
-      const { data, error } = await withExponentialBackoff(
+      const { data, error } = await executeRpcWithAvailability(
+        PARTITION_RPC_NAMES.analyze,
+        () => withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.rpc(PARTITION_RPC_NAMES.analyze),
+              ADMIN_PARTITION_READ_TIMEOUT_MS,
+              "admin.partition_monitoring.rpc.analyze timeout",
+            ),
+          {
+            maxRetries: ADMIN_PARTITION_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+          },
+        ),
+      );
+      if (error) throw new Error(`RPC ${PARTITION_RPC_NAMES.analyze} gagal: ${error instanceof Error ? error.message : String(error)}`);
+      return { success: true, data };
+    }
+
+    const { data, error } = await executeRpcWithAvailability(
+      PARTITION_RPC_NAMES.cleanupAudit,
+      () => withExponentialBackoff(
         () =>
           withTimeout(
-            supabase.rpc("analyze_attendance_partitions"),
+            supabase.rpc(PARTITION_RPC_NAMES.cleanupAudit),
             ADMIN_PARTITION_READ_TIMEOUT_MS,
-            "admin.partition_monitoring.rpc.analyze timeout",
+            "admin.partition_monitoring.rpc.cleanup_audit timeout",
           ),
         {
           maxRetries: ADMIN_PARTITION_MAX_RETRIES,
           shouldRetry: isRetryableError,
         },
-      );
-      if (error) throw new Error(`RPC analyze_attendance_partitions gagal: ${error.message}`);
-      return { success: true, data };
-    }
-
-    const { data, error } = await withExponentialBackoff(
-      () =>
-        withTimeout(
-          supabase.rpc("cleanup_old_audit_logs"),
-          ADMIN_PARTITION_READ_TIMEOUT_MS,
-          "admin.partition_monitoring.rpc.cleanup_audit timeout",
-        ),
-      {
-        maxRetries: ADMIN_PARTITION_MAX_RETRIES,
-        shouldRetry: isRetryableError,
-      },
+      ),
     );
-    if (error) throw new Error(`RPC cleanup_old_audit_logs gagal: ${error.message}`);
+    if (error) throw new Error(`RPC ${PARTITION_RPC_NAMES.cleanupAudit} gagal: ${error instanceof Error ? error.message : String(error)}`);
     return { success: true, data };
   };
 
@@ -345,18 +368,21 @@ const runMaintenanceViaRpc = async (action: Exclude<MaintenanceAction, "all">) =
     try {
       setLoadError(null);
       // Fetch partition stats
-      const { data: stats, error: statsError } = await withExponentialBackoff(
-        () =>
-          withTimeout(
-            supabase.rpc('get_partition_stats'),
-            ADMIN_PARTITION_READ_TIMEOUT_MS,
-            "Permintaan statistik partisi timeout."
-          ),
-        {
-          maxRetries: ADMIN_PARTITION_MAX_RETRIES,
-          shouldRetry: isRetryableError,
-          onRetry: () => setIsRetrying(true),
-        }
+      const { data: stats, error: statsError } = await executeRpcWithAvailability(
+        PARTITION_RPC_NAMES.partitionStats,
+        () => withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.rpc(PARTITION_RPC_NAMES.partitionStats),
+              ADMIN_PARTITION_READ_TIMEOUT_MS,
+              "Permintaan statistik partisi timeout."
+            ),
+          {
+            maxRetries: ADMIN_PARTITION_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        )
       );
       
       if (statsError) {
@@ -367,18 +393,21 @@ const runMaintenanceViaRpc = async (action: Exclude<MaintenanceAction, "all">) =
       }
 
       // Fetch cleanup logs
-      const { data: cleanup, error: cleanupError } = await withExponentialBackoff(
-        () =>
-          withTimeout(
-            supabase.rpc('get_gps_cleanup_logs', { limit_count: 10 }),
-            ADMIN_PARTITION_READ_TIMEOUT_MS,
-            "Permintaan log cleanup GPS timeout."
-          ),
-        {
-          maxRetries: ADMIN_PARTITION_MAX_RETRIES,
-          shouldRetry: isRetryableError,
-          onRetry: () => setIsRetrying(true),
-        }
+      const { data: cleanup, error: cleanupError } = await executeRpcWithAvailability(
+        PARTITION_RPC_NAMES.gpsCleanupLogs,
+        () => withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.rpc(PARTITION_RPC_NAMES.gpsCleanupLogs, { limit_count: 10 }),
+              ADMIN_PARTITION_READ_TIMEOUT_MS,
+              "Permintaan log cleanup GPS timeout."
+            ),
+          {
+            maxRetries: ADMIN_PARTITION_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        )
       );
       
       if (cleanupError) {
@@ -389,18 +418,21 @@ const runMaintenanceViaRpc = async (action: Exclude<MaintenanceAction, "all">) =
       }
 
       // Fetch partition creation logs
-      const { data: creation, error: creationError } = await withExponentialBackoff(
-        () =>
-          withTimeout(
-            supabase.rpc('get_partition_creation_logs', { limit_count: 10 }),
-            ADMIN_PARTITION_READ_TIMEOUT_MS,
-            "Permintaan log pembuatan partisi timeout."
-          ),
-        {
-          maxRetries: ADMIN_PARTITION_MAX_RETRIES,
-          shouldRetry: isRetryableError,
-          onRetry: () => setIsRetrying(true),
-        }
+      const { data: creation, error: creationError } = await executeRpcWithAvailability(
+        PARTITION_RPC_NAMES.partitionCreationLogs,
+        () => withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.rpc(PARTITION_RPC_NAMES.partitionCreationLogs, { limit_count: 10 }),
+              ADMIN_PARTITION_READ_TIMEOUT_MS,
+              "Permintaan log pembuatan partisi timeout."
+            ),
+          {
+            maxRetries: ADMIN_PARTITION_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        )
       );
       
       if (creationError) {
@@ -591,7 +623,7 @@ const runMaintenanceViaRpc = async (action: Exclude<MaintenanceAction, "all">) =
   if (isLoading) {
     if (embedded) return loadingContent;
     return (
-      <SuperAdminLayout title="Monitoring Partisi" subtitle="Status tabel absensi partitioned dan log maintenance">
+      <SuperAdminLayout title="Pemantauan Partisi" subtitle="Status tabel absensi terpartisi dan log pemeliharaan">
         {loadingContent}
       </SuperAdminLayout>
     );
@@ -603,7 +635,7 @@ const runMaintenanceViaRpc = async (action: Exclude<MaintenanceAction, "all">) =
         {isRetrying && (
           <Card className="border-amber-500/30 bg-amber-500/10">
             <CardContent className="pt-6 text-sm text-amber-700">
-              Sedang mencoba ulang memuat data monitoring partisi...
+              Sedang mencoba ulang memuat data pemantauan partisi...
             </CardContent>
           </Card>
         )}
@@ -622,11 +654,11 @@ const runMaintenanceViaRpc = async (action: Exclude<MaintenanceAction, "all">) =
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Database className="h-6 w-6 text-primary" />
-            <span className="text-lg font-medium">Database Partitions</span>
+            <span className="text-lg font-medium">Partisi Database</span>
           </div>
           <Button variant="outline" onClick={fetchData} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
-            Refresh
+            Muat Ulang
           </Button>
         </div>
 
@@ -710,7 +742,7 @@ const runMaintenanceViaRpc = async (action: Exclude<MaintenanceAction, "all">) =
               size="sm"
             >
               {isRunningMaintenance ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Trash2 className="h-4 w-4 mr-2" />}
-              Cleanup GPS
+              Pembersihan GPS
             </Button>
             <Button 
               onClick={() => runMaintenance('analyze')} 
@@ -737,7 +769,7 @@ const runMaintenanceViaRpc = async (action: Exclude<MaintenanceAction, "all">) =
               size="sm"
             >
               {isRunningMaintenance ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Clock className="h-4 w-4 mr-2" />}
-              Cleanup Audit Log
+              Pembersihan Log Audit
             </Button>
             <Button 
               onClick={() => runMaintenance('all')} 
@@ -993,10 +1025,10 @@ const runMaintenanceViaRpc = async (action: Exclude<MaintenanceAction, "all">) =
         <CardHeader>
           <CardTitle className="text-lg flex items-center gap-2">
             <BookOpen className="h-5 w-5" />
-            Glosarium Monitoring Partisi
+            Glosarium Pemantauan Partisi
           </CardTitle>
           <CardDescription>
-            Penjelasan istilah teknis dan operasional agar proses monitoring serta maintenance lebih mudah dipahami.
+            Penjelasan istilah teknis dan operasional agar proses pemantauan serta pemeliharaan lebih mudah dipahami.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -1070,7 +1102,7 @@ const runMaintenanceViaRpc = async (action: Exclude<MaintenanceAction, "all">) =
   );
   if (embedded) return pageContent;
   return (
-    <SuperAdminLayout title="Monitoring Partisi" subtitle="Status tabel absensi partitioned dan log maintenance">
+    <SuperAdminLayout title="Pemantauan Partisi" subtitle="Status tabel absensi terpartisi dan log pemeliharaan">
       {pageContent}
     </SuperAdminLayout>
   );

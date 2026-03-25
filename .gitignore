@@ -32,6 +32,9 @@ tmp/
 artifacts/
 ops/*.local.json
 ops/*.local.jsonl
+ops/**/*.local.json
+ops/**/*.local.jsonl
+ops/**/*.local.md
 playwright-report/
 test-results/
 docker/postgres/migrations/supabase/

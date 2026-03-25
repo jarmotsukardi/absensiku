@@ -1,0 +1,76 @@
+<svg width="430" height="932" viewBox="0 0 430 932" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="46" y1="42" x2="392" y2="900" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F4F7FB"/>
+      <stop offset="1" stop-color="#DCE7F3"/>
+    </linearGradient>
+    <linearGradient id="hero" x1="72" y1="104" x2="360" y2="256" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F2742"/>
+      <stop offset="1" stop-color="#1D4F86"/>
+    </linearGradient>
+    <filter id="shadow" x="38" y="88" width="354" height="744" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+      <feOffset dy="14"/>
+      <feGaussianBlur stdDeviation="17"/>
+      <feComposite in2="hardAlpha" operator="out"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.0509804 0 0 0 0 0.121569 0 0 0 0 0.203922 0 0 0 0.16 0"/>
+      <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_0_1"/>
+      <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_0_1" result="shape"/>
+    </filter>
+  </defs>
+
+  <rect width="430" height="932" fill="url(#bg)"/>
+
+  <g filter="url(#shadow)">
+    <rect x="64" y="104" width="302" height="676" rx="36" fill="#FFFFFF"/>
+  </g>
+
+  <rect x="64" y="104" width="302" height="182" rx="36" fill="url(#hero)"/>
+  <circle cx="215" cy="160" r="28" fill="#FFFFFF" fill-opacity="0.18"/>
+  <circle cx="215" cy="160" r="20" fill="#FFFFFF"/>
+  <rect x="198" y="143" width="34" height="34" rx="10" fill="#0F2742"/>
+  <path d="M206 152H224V158H206V152Z" fill="#FFFFFF"/>
+  <path d="M212 164H224V170H212V164Z" fill="#FFFFFF"/>
+
+  <text x="215" y="206" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#FFFFFF">AbsensiKu Secure</text>
+  <text x="215" y="228" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#D9E6F6">Login Pegawai Hybrid Native</text>
+
+  <rect x="90" y="256" width="250" height="64" rx="18" fill="#FFFFFF" fill-opacity="0.12" stroke="#FFFFFF" stroke-opacity="0.18"/>
+  <rect x="106" y="271" width="34" height="34" rx="12" fill="#FFFFFF"/>
+  <text x="153" y="286" font-family="Arial, sans-serif" font-size="10" font-weight="700" fill="#FFFFFF">LOGO</text>
+  <text x="153" y="300" font-family="Arial, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF">Instansi Demo Nasional</text>
+  <text x="153" y="315" font-family="Arial, sans-serif" font-size="11" fill="#D9E6F6">Perangkat diverifikasi dan tenant ditemukan</text>
+
+  <rect x="90" y="342" width="250" height="42" rx="14" fill="#EEF5FB"/>
+  <circle cx="112" cy="363" r="7" fill="#20A464"/>
+  <text x="127" y="367" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#163A63">Status keamanan perangkat aman</text>
+
+  <text x="96" y="431" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#10263C">Email / NIP</text>
+  <rect x="90" y="444" width="250" height="54" rx="16" fill="#F6F9FC" stroke="#D5E0EC"/>
+  <text x="108" y="476" font-family="Arial, sans-serif" font-size="14" fill="#6A7B8C">pegawai@instansi.go.id</text>
+
+  <text x="96" y="534" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#10263C">Password</text>
+  <rect x="90" y="547" width="250" height="54" rx="16" fill="#F6F9FC" stroke="#D5E0EC"/>
+  <text x="108" y="579" font-family="Arial, sans-serif" font-size="14" fill="#6A7B8C">..............</text>
+  <rect x="304" y="563" width="18" height="12" rx="4" stroke="#6A7B8C"/>
+  <circle cx="313" cy="569" r="3" fill="#6A7B8C"/>
+
+  <rect x="90" y="622" width="18" height="18" rx="6" fill="#1D4F86"/>
+  <path d="M95 631L99 635L104 627" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="118" y="635" font-family="Arial, sans-serif" font-size="13" fill="#334A60">Tetap masuk di perangkat ini</text>
+
+  <rect x="90" y="666" width="250" height="56" rx="18" fill="#13395E"/>
+  <text x="215" y="700" text-anchor="middle" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#FFFFFF">Masuk Aman</text>
+
+  <text x="90" y="751" font-family="Arial, sans-serif" font-size="12" fill="#356190">Lupa Password</text>
+  <text x="277" y="751" font-family="Arial, sans-serif" font-size="12" fill="#356190">Kode Undangan</text>
+
+  <rect x="90" y="770" width="250" height="1" fill="#E0E8F1"/>
+  <text x="215" y="795" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#7A8C9D">Session token disimpan di native secure storage</text>
+
+  <rect x="110" y="822" width="210" height="34" rx="17" fill="#EFF4F8" stroke="#D6E2EE"/>
+  <text x="215" y="844" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" fill="#52677B">v1.0.0  •  TRACE-APK-LOGIN-001</text>
+
+  <rect x="178" y="878" width="74" height="6" rx="3" fill="#0E243A" fill-opacity="0.20"/>
+</svg>

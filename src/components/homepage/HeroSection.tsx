@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { ArrowRight, Star } from "lucide-react";
 import type { HeroSettings, StatisticsSettings } from "@/hooks/useHomepageData";
+import { PUBLIC_CONSULTATION_PATH } from "@/lib/publicRoutes";
 
 interface HeroSectionProps {
   heroSettings: HeroSettings;
@@ -41,23 +42,37 @@ export function HeroSection({ heroSettings, statisticsSettings, showStats }: Her
             {heroSettings.description}
           </p>
 
-          <div className="flex flex-col items-center gap-3 animate-slide-in-up stagger-2">
-            <Link to={heroSettings.cta_link}>
-              <Button variant="gold" size="xl" className="group">
-                {heroSettings.cta_text}
-                <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-              </Button>
-            </Link>
-            {heroSettings.secondary_cta_text?.trim() && heroSettings.secondary_cta_link?.trim() && (
-              <Link
-                to={heroSettings.secondary_cta_link}
-                className="text-sm font-medium text-primary-foreground/80 hover:text-primary-foreground underline underline-offset-4 transition-colors"
-              >
-                {heroSettings.secondary_cta_text}
+          <div className="flex flex-col items-center gap-4 animate-slide-in-up stagger-2">
+            <div className="grid w-full max-w-[34rem] gap-3 sm:grid-cols-2">
+              <Link to={heroSettings.cta_link} className="w-full">
+                <Button variant="gold" size="xl" className="group w-full justify-center">
+                  {heroSettings.cta_text}
+                  <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+                </Button>
               </Link>
-            )}
+              <Link to={heroSettings.secondary_cta_link?.trim() || "/#solusi"} className="w-full">
+                <Button
+                  variant="outline"
+                  size="xl"
+                  className="w-full justify-center border-primary-foreground/20 bg-primary-foreground/5 text-primary-foreground hover:bg-primary-foreground/10"
+                >
+                  {heroSettings.secondary_cta_text?.trim() || "Lihat Jalur Solusi"}
+                </Button>
+              </Link>
+            </div>
+            <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-2 text-sm">
+              <Link
+                to={PUBLIC_CONSULTATION_PATH}
+                className="font-medium text-white/90 underline decoration-white/60 underline-offset-4 transition-colors hover:text-white"
+              >
+                Butuh konsultasi implementasi lanjutan?
+              </Link>
+            </div>
             <p className="text-xs md:text-sm text-primary-foreground/75 max-w-xl">
-              Gratis sampai instansi Anda siap go-live penuh untuk seluruh pegawai.
+              Bebas digunakan langsung sampai instansi Anda siap berlangganan.
+            </p>
+            <p className="text-xs md:text-sm text-primary-foreground/70 max-w-2xl">
+              Tetap mulai dari absensi. Jika nanti organisasi membutuhkan proses SDM atau penggajian yang lebih rapi, jalur lanjutannya bisa dikonsultasikan tanpa pindah ekosistem.
             </p>
           </div>
 

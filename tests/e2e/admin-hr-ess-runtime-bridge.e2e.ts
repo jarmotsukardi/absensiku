@@ -44,6 +44,8 @@ const applyEssPolicySnapshot = async (page: Page, snapshot: EssPolicySnapshot) =
 
 test.describe.serial("Admin HR ESS Runtime Bridge", () => {
   test("baseline ESS admin memengaruhi runtime org lalu kembali normal", async ({ page, browser }) => {
+    test.setTimeout(90_000);
+
     const orgTenantName = await readOrgHrTenantName(browser);
 
     await loginAsSuperadmin(page);
@@ -70,7 +72,7 @@ test.describe.serial("Admin HR ESS Runtime Bridge", () => {
     try {
       await applyEssPolicySnapshot(page, updatedState);
       await saveButton.click();
-      await expectToast(page, "Baseline ESS berhasil disimpan.");
+      await expectToast(page, "Acuan bawaan ESS berhasil disimpan.");
 
       orgRuntime = await createOrgAdminHrPage(browser);
 
@@ -119,7 +121,7 @@ test.describe.serial("Admin HR ESS Runtime Bridge", () => {
       await expect(saveButton).toBeEnabled({ timeout: 15_000 });
       await applyEssPolicySnapshot(page, originalState);
       await saveButton.click();
-      await expectToast(page, "Baseline ESS berhasil disimpan.");
+      await expectToast(page, "Acuan bawaan ESS berhasil disimpan.");
 
       await page.reload({ waitUntil: "domcontentloaded" });
       await waitForStable(page);

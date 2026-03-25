@@ -57,9 +57,9 @@ export default function OrgHRESSProfile() {
       <div className="space-y-6">
         <div className="space-y-2">
           <Badge variant="outline">ESS</Badge>
-          <h1 className="text-2xl font-semibold tracking-tight">Profil Saya</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Profil ESS</h1>
           <p className="text-sm text-muted-foreground">
-            Ringkasan profil pribadi untuk akun organisasi yang juga terhubung ke data pegawai tenant aktif.
+            Ringkasan profil dari perspektif ESS untuk akun organisasi yang juga terhubung ke data pegawai tenant aktif.
           </p>
           <p className="text-xs text-muted-foreground">
             Capability halaman: {isLoadingAccess ? "memverifikasi..." : access.canEdit ? "mode kelola" : "monitoring hanya-baca"}

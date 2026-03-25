@@ -26,17 +26,29 @@ import {
   recordFailure,
   withExponentialBackoff,
   isRetryableError,
+  isPeakHours,
   withTimeout,
   getAdaptiveTimeout,
   generateAdaptiveJitter,
 } from '@/lib/attendanceResilience';
-import { loadScalabilityConfig, saveScalabilityConfig, type ScalabilityTier } from '@/lib/scalabilityConfig';
+import {
+  loadAttendanceScalabilitySetting,
+  loadScalabilityConfig,
+  normalizeAttendanceScalabilitySetting,
+  saveAttendanceScalabilitySetting,
+  saveScalabilityConfig,
+} from '@/lib/scalabilityConfig';
 import { useOnlineStatus } from './useOnlineStatus';
 import { supabase } from '@/integrations/supabase/client';
 import { reportError } from '@/lib/errorLogger';
 import { buildAttendanceClientContext } from '@/lib/attendanceClientContext';
 import { debugLog } from '@/lib/debugLog';
 import { DEFAULT_TIMEZONE } from '@/lib/timezone';
+import { setConfiguredPeakWindows } from '@/lib/attendanceResilience';
+import {
+  buildLocalProductionWriteBlockMessage,
+  shouldBlockLocalProductionWrites,
+} from '@/lib/runtimeEnvironment';
 
 export interface SyncStats {
   pendingCount: number;
@@ -44,6 +56,9 @@ export interface SyncStats {
   failedCount: number;
   isSyncing: boolean;
   lastSyncAt: string | null;
+  stalePendingCount: number;
+  oldestPendingAgeMinutes: number | null;
+  staleWarningRef: string | null;
 }
 
 interface BatchSyncResult {
@@ -139,10 +154,14 @@ export function useAttendanceSync(
     failedCount: 0,
     isSyncing: false,
     lastSyncAt: null,
+    stalePendingCount: 0,
+    oldestPendingAgeMinutes: null,
+    staleWarningRef: null,
   });
 
   const syncingRef = useRef(false);
   const mountedRef = useRef(true);
+  const staleWarningSignatureRef = useRef<string | null>(null);
 
   const getAdaptiveSyncIntervalMs = useCallback((): number => {
     const profile = loadScalabilityConfig();
@@ -152,6 +171,72 @@ export function useAttendanceSync(
     const jitter = Math.min(generateAdaptiveJitter(0), max);
     return Math.min(max, base + Math.floor(jitter / 2));
   }, []);
+
+  const getStaleThresholdMinutes = useCallback((): number => {
+    const profile = loadScalabilityConfig();
+    const baseMs = Math.max(
+      profile.syncIntervalMaxMs * 2,
+      profile.deferredSyncDelayMs * 3,
+      15 * 60 * 1000,
+    );
+    return Math.max(15, Math.ceil(baseMs / 60000));
+  }, []);
+
+  const buildPendingInsight = useCallback((entries: AttendanceEntry[]) => {
+    const staleThresholdMinutes = getStaleThresholdMinutes();
+    const now = Date.now();
+    const ages = entries
+      .map((entry) => {
+        const sourceTs = entry.lastSyncAttempt || entry.createdAt;
+        const ageMs = now - new Date(sourceTs).getTime();
+        return Number.isFinite(ageMs) && ageMs >= 0 ? Math.floor(ageMs / 60000) : 0;
+      });
+
+    const oldestPendingAgeMinutes = ages.length > 0 ? Math.max(...ages) : null;
+    const stalePendingCount = ages.filter((age) => age >= staleThresholdMinutes).length;
+
+    return {
+      staleThresholdMinutes,
+      stalePendingCount,
+      oldestPendingAgeMinutes,
+    };
+  }, [getStaleThresholdMinutes]);
+
+  const updatePendingInsight = useCallback((entries: AttendanceEntry[]) => {
+    const insight = buildPendingInsight(entries);
+    let staleWarningRef: string | null = null;
+
+    if (insight.stalePendingCount > 0 && employeeId) {
+      const signature = `${employeeId}:${insight.stalePendingCount}:${insight.oldestPendingAgeMinutes}:${insight.staleThresholdMinutes}`;
+      if (staleWarningSignatureRef.current !== signature) {
+        staleWarningSignatureRef.current = signature;
+        staleWarningRef = reportError(
+          new Error('Stale attendance buffer detected'),
+          'attendance.sync.stale_pending_detected',
+          {
+            employeeId,
+            stale_pending_count: insight.stalePendingCount,
+            oldest_pending_age_minutes: insight.oldestPendingAgeMinutes,
+            stale_threshold_minutes: insight.staleThresholdMinutes,
+          }
+        );
+      }
+    } else {
+      staleWarningSignatureRef.current = null;
+    }
+
+    if (mountedRef.current) {
+      setSyncStats((prev) => ({
+        ...prev,
+        pendingCount: entries.length,
+        stalePendingCount: insight.stalePendingCount,
+        oldestPendingAgeMinutes: insight.oldestPendingAgeMinutes,
+        staleWarningRef: insight.stalePendingCount > 0 ? (staleWarningRef || prev.staleWarningRef) : null,
+      }));
+    }
+
+    return { ...insight, staleWarningRef };
+  }, [buildPendingInsight, employeeId]);
 
   // Best-effort: hydrate global scalability profile from DB.
   useEffect(() => {
@@ -167,18 +252,17 @@ export function useAttendanceSync(
 
         if (error) return;
 
-        const value = data?.value as { tier?: string; effective_tier?: string } | null;
-        const tier = value?.effective_tier || value?.tier;
-        if (tier && ['small', 'medium', 'large', 'enterprise'].includes(tier)) {
-          saveScalabilityConfig(tier as ScalabilityTier);
-        }
+        const setting = normalizeAttendanceScalabilitySetting(data?.value);
+        saveScalabilityConfig(setting.effective_tier);
+        saveAttendanceScalabilitySetting(setting);
+        setConfiguredPeakWindows(setting.peak_hour_windows, setting.peak_hour_enabled);
       } catch {
         // ignore - fallback to local profile
       }
     };
 
     hydrateGlobalScalability();
-  }, [employeeId]);
+  }, [employeeId, updatePendingInsight]);
 
   // Sync function
   const performSync = useCallback(async () => {
@@ -191,20 +275,61 @@ export function useAttendanceSync(
 
     try {
       const profile = loadScalabilityConfig();
-      await recoverStuckSyncEntries(employeeId, 5);
-      await cleanupOldEntries(profile.bufferExpiryDays);
+      const runtimeSetting = loadAttendanceScalabilitySetting();
+      const shouldPauseForPeakHold = runtimeSetting.peak_hour_enabled
+        && runtimeSetting.peak_hour_hold_sync
+        && isPeakHours();
+      const shouldPauseForWorkerOnly = runtimeSetting.offpeak_release_strategy === 'worker_only';
 
-      const pending = await getPendingEntries(employeeId);
-      if (pending.length === 0) {
-        if (mountedRef.current) {
-          setSyncStats(prev => ({ ...prev, pendingCount: 0, isSyncing: false }));
-        }
+      if (shouldPauseForPeakHold || shouldPauseForWorkerOnly) {
         return;
       }
 
-      if (mountedRef.current) {
-        setSyncStats(prev => ({ ...prev, pendingCount: pending.length }));
+      await recoverStuckSyncEntries(employeeId, 5);
+      await cleanupOldEntries(profile.bufferExpiryDays, profile.maxSyncAttempts);
+
+      const pending = await getPendingEntries(employeeId, profile.maxSyncAttempts);
+      if (pending.length === 0) {
+        if (mountedRef.current) {
+          setSyncStats(prev => ({
+            ...prev,
+            pendingCount: 0,
+            stalePendingCount: 0,
+            oldestPendingAgeMinutes: null,
+            staleWarningRef: null,
+            isSyncing: false,
+          }));
+        }
+        staleWarningSignatureRef.current = null;
+        return;
       }
+
+      if (shouldBlockLocalProductionWrites()) {
+        const guardMessage = buildLocalProductionWriteBlockMessage("Sinkronisasi absensi");
+        const blockedAt = new Date().toISOString();
+
+        await Promise.all(
+          pending.map((entry) => updateEntryStatus(entry.bufferId, {
+            syncStatus: 'failed',
+            syncAttempts: entry.syncAttempts + 1,
+            lastSyncAttempt: blockedAt,
+            syncError: guardMessage,
+          }))
+        );
+
+        if (mountedRef.current) {
+          setSyncStats((prev) => ({
+            ...prev,
+            pendingCount: pending.length,
+            failedCount: prev.failedCount + pending.length,
+            lastSyncAt: blockedAt,
+          }));
+        }
+        updatePendingInsight(await getPendingEntries(employeeId, profile.maxSyncAttempts));
+        return;
+      }
+
+      updatePendingInsight(pending);
 
       const batchSize = profile.batchSize;
       const chunkSize = Math.max(1, Math.min(profile.batchSize, profile.edgeFunctionMaxBatch));
@@ -347,10 +472,12 @@ export function useAttendanceSync(
         }
       }
 
+      const remainingPending = await getPendingEntries(employeeId, profile.maxSyncAttempts);
+      updatePendingInsight(remainingPending);
       if (mountedRef.current) {
         setSyncStats(prev => ({
           ...prev,
-          pendingCount: Math.max(0, pending.length - syncedInBatch),
+          pendingCount: remainingPending.length,
           syncedCount: prev.syncedCount + syncedInBatch,
           failedCount: prev.failedCount + failedInBatch,
           lastSyncAt: new Date().toISOString(),
@@ -365,7 +492,7 @@ export function useAttendanceSync(
         setSyncStats(prev => ({ ...prev, isSyncing: false }));
       }
     }
-  }, [employeeId]);
+  }, [employeeId, updatePendingInsight]);
 
   // Online status with auto-sync on reconnect
   const onlineStatus = useOnlineStatus(performSync);
@@ -379,21 +506,28 @@ export function useAttendanceSync(
       await migrateFromLocalStorage(attendanceDate, timezone);
 
       // Re-hydrate pending entries
-      const { pendingCount } = await rehydratePendingEntries(employeeId, attendanceDate);
-      
-      if (mountedRef.current) {
-        setSyncStats(prev => ({ ...prev, pendingCount }));
-      }
+      const profile = loadScalabilityConfig();
+      const { pendingCount } = await rehydratePendingEntries(
+        employeeId,
+        attendanceDate,
+        profile.maxSyncAttempts,
+      );
+      const pendingEntries = await getPendingEntries(employeeId, profile.maxSyncAttempts);
+      updatePendingInsight(pendingEntries);
 
       // Auto sync if online and has pending
-      if (navigator.onLine && pendingCount > 0) {
+      const runtimeSetting = loadAttendanceScalabilitySetting();
+      const allowStartupClientSync = !(runtimeSetting.offpeak_release_strategy === 'worker_only')
+        && !(runtimeSetting.peak_hour_enabled && runtimeSetting.peak_hour_hold_sync && isPeakHours());
+
+      if (navigator.onLine && pendingCount > 0 && allowStartupClientSync) {
         const startupDelay = Math.max(1000, Math.floor(generateAdaptiveJitter(0) / 2));
         window.setTimeout(performSync, startupDelay);
       }
     };
 
     init();
-  }, [employeeId, performSync, attendanceDate, timezone]);
+  }, [employeeId, performSync, attendanceDate, timezone, updatePendingInsight]);
 
   // Periodic sync with adaptive interval + jitter (avoid thundering herd).
   useEffect(() => {
@@ -411,8 +545,13 @@ export function useAttendanceSync(
           return;
         }
 
-        const pending = await getPendingEntries(employeeId);
-        if (pending.length > 0) {
+        const profile = loadScalabilityConfig();
+        const runtimeSetting = loadAttendanceScalabilitySetting();
+        const allowPeriodicClientSync = !(runtimeSetting.offpeak_release_strategy === 'worker_only')
+          && !(runtimeSetting.peak_hour_enabled && runtimeSetting.peak_hour_hold_sync && isPeakHours());
+        const pending = await getPendingEntries(employeeId, profile.maxSyncAttempts);
+        updatePendingInsight(pending);
+        if (pending.length > 0 && allowPeriodicClientSync) {
           performSync();
         }
         schedule();
@@ -427,7 +566,7 @@ export function useAttendanceSync(
         window.clearTimeout(timer);
       }
     };
-  }, [employeeId, performSync, getAdaptiveSyncIntervalMs]);
+  }, [employeeId, performSync, getAdaptiveSyncIntervalMs, updatePendingInsight]);
 
   // Cleanup on unmount
   useEffect(() => {

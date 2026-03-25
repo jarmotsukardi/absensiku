@@ -141,6 +141,63 @@ const logClientError = async (
   }
 };
 
+const triggerAndroidPushDispatch = async (params: {
+  traceId: string;
+  tenantId: string | null;
+  limit: number;
+  dryRun: boolean;
+}): Promise<JsonObject> => {
+  if (params.dryRun) {
+    return { skipped_reason: "DRY_RUN" };
+  }
+
+  const supabaseUrl = (Deno.env.get("SUPABASE_URL") ?? "").trim();
+  const serviceRole = (Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "").trim();
+  if (!supabaseUrl || !serviceRole) {
+    return { skipped_reason: "SUPABASE_ENV_MISSING" };
+  }
+
+  try {
+    const response = await fetch(`${supabaseUrl}/functions/v1/dispatch-device-pushes`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${serviceRole}`,
+      },
+      body: JSON.stringify({
+        tenant_id: params.tenantId ?? undefined,
+        limit: Math.min(Math.max(params.limit * 2, 20), 500),
+        notification_sources: ["billing_grace_notifier"],
+        dry_run: false,
+      }),
+    });
+
+    const rawText = await response.text();
+    let payload: JsonObject = {};
+    try {
+      const parsed = JSON.parse(rawText);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        payload = parsed as JsonObject;
+      } else {
+        payload = { raw: rawText };
+      }
+    } catch {
+      payload = { raw: rawText };
+    }
+
+    return {
+      http_status: response.status,
+      ...(payload ?? {}),
+    };
+  } catch (error) {
+    logTraceError(params.traceId, "Gagal memicu dispatch-device-pushes", error);
+    return {
+      skipped_reason: "DISPATCH_HTTP_FAILED",
+      error: error instanceof Error ? error.message : "HTTP dispatch failed",
+    };
+  }
+};
+
 const toStringSafe = (value: unknown): string => (typeof value === "string" ? value : "");
 
 const toBooleanSafe = (value: unknown): boolean => {
@@ -218,7 +275,7 @@ const getGraceDaysRemaining = (gracePeriodEnd: string | null): number | null => 
 
 const buildReasonKey = (
   invoiceId: string,
-  notificationType: "EMAIL" | "WHATSAPP",
+  notificationType: "EMAIL" | "WHATSAPP" | "PUSH",
   reason: NotificationReason,
 ): string => `${invoiceId}:${notificationType}:${reason}`;
 
@@ -500,7 +557,7 @@ const sendWhatsAppNotification = async (
 const hasReasonNotificationSent = (
   sentReasonMap: Set<string>,
   invoiceId: string,
-  notificationType: "EMAIL" | "WHATSAPP",
+  notificationType: "EMAIL" | "WHATSAPP" | "PUSH",
   reason: NotificationReason,
 ): boolean => sentReasonMap.has(buildReasonKey(invoiceId, notificationType, reason));
 
@@ -540,6 +597,219 @@ const mapReasonToInAppTitle = (reason: NotificationReason): string => {
   if (reason === "GRACE_PERIOD_LAST_DAY") return "Hari Terakhir Grace Period";
   if (reason === "GRACE_PERIOD_REMINDER") return "Pengingat Pembayaran Grace Period";
   return "Tenant Masuk Grace Period";
+};
+
+const BILLING_IN_APP_LINK = "/org/billing?menu=invoices";
+
+const resolveBillingInAppRecipients = (
+  tenant: TenantRow,
+  recipientMap: Map<string, EmployeeRecipientRow[]>,
+  tenantAdminMap: Map<string, string[]>,
+): { userIds: string[]; recipientScope: "tenant_admin_only" | "active_employees" } => {
+  const isCentralized = (tenant.billing_mode ?? "centralized") === "centralized";
+  if (isCentralized) {
+    return {
+      userIds: tenantAdminMap.get(tenant.id) ?? [],
+      recipientScope: "tenant_admin_only",
+    };
+  }
+
+  const userIds = Array.from(
+    new Set(
+      (recipientMap.get(tenant.id) ?? [])
+        .map((recipient) => recipient.user_id)
+        .filter((value): value is string => Boolean(value)),
+    ),
+  );
+
+  return {
+    userIds,
+    recipientScope: "active_employees",
+  };
+};
+
+const buildBillingInAppMessage = (params: {
+  tenantName: string;
+  invoiceNumber: string;
+  amountText: string;
+  dueDateText: string;
+  reason: NotificationReason;
+}): string => {
+  const reasonText = params.reason === "INVOICE_DUE_SOON"
+    ? "Invoice segera jatuh tempo dan perlu ditindaklanjuti."
+    : params.reason === "GRACE_PERIOD_LAST_DAY"
+    ? "Hari ini batas akhir grace period pembayaran."
+    : params.reason === "GRACE_PERIOD_EXPIRED"
+    ? "Grace period berakhir dan layanan berisiko ditangguhkan."
+    : params.reason === "GRACE_PERIOD_REMINDER"
+    ? "Tagihan masih berada dalam masa grace period."
+    : "Tagihan streak baru sudah muncul dan perlu perhatian admin.";
+
+  return [
+    `${params.tenantName} - ${params.invoiceNumber}`,
+    `Tagihan: ${params.amountText}`,
+    `Batas tindak lanjut: ${params.dueDateText}`,
+    reasonText,
+  ].join(" | ");
+};
+
+const insertBillingInAppNotifications = async (
+  supabase: ReturnType<typeof createClient>,
+  params: {
+    traceId: string;
+    tenant: TenantRow;
+    invoice: InvoiceRow;
+    reason: NotificationReason;
+    amountText: string;
+    dueDateText: string;
+    daysRemaining: number | null;
+    dryRun: boolean;
+    recipientMap: Map<string, EmployeeRecipientRow[]>;
+    tenantAdminMap: Map<string, string[]>;
+    emailChannelOk: boolean;
+    whatsappChannelOk: boolean;
+  },
+): Promise<JsonObject> => {
+  const { userIds, recipientScope } = resolveBillingInAppRecipients(
+    params.tenant,
+    params.recipientMap,
+    params.tenantAdminMap,
+  );
+
+  if (userIds.length === 0) {
+    return {
+      inserted: 0,
+      reason: params.reason,
+      recipient_scope: recipientScope,
+      skipped_reason: "NO_RECIPIENTS",
+    };
+  }
+
+  const metadataMatcher = {
+    source: "billing_grace_notifier",
+    invoice_id: params.invoice.id,
+    reason: params.reason,
+  };
+
+  const { data: existingRows, error: existingError } = await supabase
+    .from("notifications")
+    .select("user_id")
+    .in("user_id", userIds)
+    .contains("metadata", metadataMatcher);
+
+  if (existingError) {
+    logTraceError(
+      params.traceId,
+      `Failed to check existing in-app billing notifications for invoice ${params.invoice.id}`,
+      existingError,
+    );
+    return {
+      inserted: 0,
+      reason: params.reason,
+      recipient_scope: recipientScope,
+      skipped_reason: "EXISTING_CHECK_FAILED",
+      error: existingError.message || "FAILED_TO_CHECK_EXISTING_NOTIFICATIONS",
+    };
+  }
+
+  const notifiedUserIds = new Set(
+    ((existingRows ?? []) as Array<{ user_id: string | null }>)
+      .map((row) => row.user_id)
+      .filter((value): value is string => Boolean(value)),
+  );
+  const pendingUserIds = userIds.filter((userId) => !notifiedUserIds.has(userId));
+
+  if (pendingUserIds.length === 0) {
+    return {
+      inserted: 0,
+      reason: params.reason,
+      recipient_scope: recipientScope,
+      skipped_reason: "ALREADY_EXISTS",
+    };
+  }
+
+  if (params.dryRun) {
+    return {
+      inserted: pendingUserIds.length,
+      reason: params.reason,
+      recipient_scope: recipientScope,
+      dry_run: true,
+    };
+  }
+
+  const title = mapReasonToInAppTitle(params.reason);
+  const message = buildBillingInAppMessage({
+    tenantName: params.tenant.name,
+    invoiceNumber: params.invoice.invoice_number || `INV-${params.invoice.id.slice(0, 8).toUpperCase()}`,
+    amountText: params.amountText,
+    dueDateText: params.dueDateText,
+    reason: params.reason,
+  });
+  const notificationType = mapReasonToInAppType(params.reason);
+  const notificationRows = pendingUserIds.map((userId) => ({
+    user_id: userId,
+    title,
+    message,
+    type: notificationType,
+    is_read: false,
+    link: BILLING_IN_APP_LINK,
+    metadata: {
+      source: "billing_grace_notifier",
+      trace_id: params.traceId,
+      invoice_id: params.invoice.id,
+      invoice_number: params.invoice.invoice_number,
+      reason: params.reason,
+      email_sent: params.emailChannelOk,
+      whatsapp_sent: params.whatsappChannelOk,
+    },
+  }));
+
+  const { error: insertError } = await supabase.from("notifications").insert(notificationRows);
+  const pushLogPayload = {
+    tenant_id: params.tenant.id,
+    invoice_id: params.invoice.id,
+    notification_type: "PUSH",
+    recipient: `in-app:${notificationRows.length}`,
+    subject: title,
+    message,
+    status: insertError ? "FAILED" : "SENT",
+    sent_at: insertError ? null : new Date().toISOString(),
+    error_message: insertError ? String(insertError.message || "IN_APP_INSERT_FAILED") : null,
+    metadata: {
+      reason: params.reason,
+      trace_id: params.traceId,
+      days_remaining: params.daysRemaining,
+    },
+  };
+  const { error: pushLogError } = await supabase.from("billing_notification_logs").insert(pushLogPayload);
+  if (pushLogError) {
+    logTraceError(
+      params.traceId,
+      `Failed to write PUSH billing log for invoice ${params.invoice.id}`,
+      pushLogError,
+    );
+  }
+
+  if (insertError) {
+    logTraceError(
+      params.traceId,
+      `Failed to insert in-app billing notifications for invoice ${params.invoice.id}`,
+      insertError,
+    );
+    return {
+      inserted: 0,
+      reason: params.reason,
+      recipient_scope: recipientScope,
+      skipped_reason: "INSERT_FAILED",
+      error: insertError.message || "FAILED_TO_INSERT_NOTIFICATIONS",
+    };
+  }
+
+  return {
+    inserted: notificationRows.length,
+    reason: params.reason,
+    recipient_scope: recipientScope,
+  };
 };
 
 const runArchivedManualPaymentCleanup = async (
@@ -752,7 +1022,7 @@ const processDueSoonInvoiceReminders = async (
   if (invoices.length === 0) return summary;
 
   const tenantIds = Array.from(new Set(invoices.map((invoice) => invoice.tenant_id)));
-  const [tenantRes, gatewayRes] = await Promise.all([
+  const [tenantRes, gatewayRes, recipientRes, tenantAdminRes] = await Promise.all([
     supabase
       .from("tenants")
       .select("id, name, billing_mode, email, phone, whatsapp, pic_whatsapp")
@@ -761,6 +1031,17 @@ const processDueSoonInvoiceReminders = async (
       .from("system_settings")
       .select("key, value")
       .in("key", ["email_gateway", "whatsapp_gateway"]),
+    supabase
+      .from("employees")
+      .select("tenant_id, user_id, name")
+      .in("tenant_id", tenantIds)
+      .eq("is_active", true)
+      .not("user_id", "is", null),
+    supabase
+      .from("user_roles")
+      .select("tenant_id, user_id")
+      .in("tenant_id", tenantIds)
+      .eq("role", "admin_instansi"),
   ]);
 
   if (tenantRes.error) {
@@ -789,10 +1070,49 @@ const processDueSoonInvoiceReminders = async (
       error: "FAILED_TO_LOAD_GATEWAYS",
     };
   }
+  if (recipientRes.error) {
+    logTraceError(traceId, "Failed to load in-app recipients for due-soon reminder", recipientRes.error);
+    await logClientError(supabase, {
+      traceId,
+      context: "billing.due_soon.fetch_in_app_recipients_failed",
+      message: recipientRes.error.message || "Failed to load in-app recipients for due-soon reminder",
+      metadata: { code: recipientRes.error.code || null },
+    });
+    return {
+      ...summary,
+      error: "FAILED_TO_LOAD_IN_APP_RECIPIENTS",
+    };
+  }
+  if (tenantAdminRes.error) {
+    logTraceError(traceId, "Failed to load tenant admin recipients for due-soon reminder", tenantAdminRes.error);
+    await logClientError(supabase, {
+      traceId,
+      context: "billing.due_soon.fetch_tenant_admins_failed",
+      message: tenantAdminRes.error.message || "Failed to load tenant admin recipients for due-soon reminder",
+      metadata: { code: tenantAdminRes.error.code || null },
+    });
+    return {
+      ...summary,
+      error: "FAILED_TO_LOAD_TENANT_ADMINS",
+    };
+  }
 
   const tenantMap = new Map(((tenantRes.data ?? []) as TenantRow[]).map((tenant) => [tenant.id, tenant]));
   const emailGateway = getGatewaySetting((gatewayRes.data ?? []) as GatewaySettingRow[], "email_gateway");
   const waGateway = getGatewaySetting((gatewayRes.data ?? []) as GatewaySettingRow[], "whatsapp_gateway");
+  const recipientMap = new Map<string, EmployeeRecipientRow[]>();
+  for (const recipient of ((recipientRes.data ?? []) as EmployeeRecipientRow[])) {
+    const list = recipientMap.get(recipient.tenant_id) ?? [];
+    list.push(recipient);
+    recipientMap.set(recipient.tenant_id, list);
+  }
+  const tenantAdminMap = new Map<string, string[]>();
+  for (const row of ((tenantAdminRes.data ?? []) as AdminRecipientRow[])) {
+    if (!row.tenant_id) continue;
+    const list = tenantAdminMap.get(row.tenant_id) ?? [];
+    if (!list.includes(row.user_id)) list.push(row.user_id);
+    tenantAdminMap.set(row.tenant_id, list);
+  }
 
   const invoiceIds = invoices.map((invoice) => invoice.id);
   const { data: existingLogs, error: logError } = await supabase
@@ -963,6 +1283,23 @@ const processDueSoonInvoiceReminders = async (
       }
     }
 
+    const emailOk = Boolean((channelResults.email as Record<string, unknown> | undefined)?.ok);
+    const waOk = Boolean((channelResults.whatsapp as Record<string, unknown> | undefined)?.ok);
+    tenantDetail.in_app_notifications = await insertBillingInAppNotifications(supabase, {
+      traceId,
+      tenant,
+      invoice,
+      reason: "INVOICE_DUE_SOON",
+      amountText,
+      dueDateText,
+      daysRemaining,
+      dryRun: params.dryRun,
+      recipientMap,
+      tenantAdminMap,
+      emailChannelOk: emailOk,
+      whatsappChannelOk: waOk,
+    });
+
     details.push(tenantDetail);
     summary.processed = Number(summary.processed || 0) + 1;
   }
@@ -1086,6 +1423,12 @@ serve(async (req) => {
 
     const streaks = (streakRows ?? []) as StreakRow[];
     if (streaks.length === 0) {
+      const pushDispatchResult = await triggerAndroidPushDispatch({
+        traceId,
+        tenantId: tenantFilter,
+        limit,
+        dryRun,
+      });
       return new Response(
         JSON.stringify({
           success: true,
@@ -1095,6 +1438,7 @@ serve(async (req) => {
           cleanup_lifecycle: cleanupLifecycleResult,
           payment_archive_cleanup: paymentArchiveCleanupResult,
           due_soon_reminder: dueSoonReminderResult,
+          android_push_dispatch: pushDispatchResult,
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
@@ -1240,15 +1584,21 @@ serve(async (req) => {
     for (const tenantId of tenantIds) {
       const tenantInvoices = invoices.filter((item) => item.tenant_id === tenantId);
       if (tenantInvoices.length === 0) continue;
-      const streakInvoice = tenantInvoices.find((item) =>
-        (item.package_name ?? "").toLowerCase() === "streak billing" ||
-        (item.notes ?? "").toLowerCase().includes("streak")
-      );
+      const streakInvoice = tenantInvoices.find((item) => {
+        const packageName = (item.package_name ?? "").toLowerCase();
+        return packageName.includes("streak billing") || (item.notes ?? "").toLowerCase().includes("streak");
+      });
       const candidate = streakInvoice ?? tenantInvoices[0];
       if (candidate) candidateInvoices.push(candidate);
     }
 
     if (candidateInvoices.length === 0) {
+      const pushDispatchResult = await triggerAndroidPushDispatch({
+        traceId,
+        tenantId: tenantFilter,
+        limit,
+        dryRun,
+      });
       return new Response(
         JSON.stringify({
           success: true,
@@ -1258,6 +1608,7 @@ serve(async (req) => {
           cleanup_lifecycle: cleanupLifecycleResult,
           payment_archive_cleanup: paymentArchiveCleanupResult,
           due_soon_reminder: dueSoonReminderResult,
+          android_push_dispatch: pushDispatchResult,
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
@@ -1268,7 +1619,7 @@ serve(async (req) => {
       .from("billing_notification_logs")
       .select("created_at, invoice_id, notification_type, status, metadata")
       .in("invoice_id", invoiceIds)
-      .in("notification_type", ["EMAIL", "WHATSAPP"]);
+      .in("notification_type", ["EMAIL", "WHATSAPP", "PUSH"]);
 
     if (sentError) {
       logTraceError(traceId, "Failed to load notification logs", sentError);
@@ -1290,7 +1641,7 @@ serve(async (req) => {
     for (const row of (sentRows ?? []) as BillingLogRow[]) {
       if (!row.invoice_id) continue;
       const reason = normalizeReason(toStringSafe(row.metadata?.reason));
-      const reasonKey = buildReasonKey(row.invoice_id, row.notification_type as "EMAIL" | "WHATSAPP", reason);
+      const reasonKey = buildReasonKey(row.invoice_id, row.notification_type as "EMAIL" | "WHATSAPP" | "PUSH", reason);
       const channelKey = `${row.invoice_id}:${row.notification_type}`;
       if (row.status === "SENT") {
         sentReasonMap.add(reasonKey);
@@ -1531,69 +1882,132 @@ serve(async (req) => {
         }
       }
 
-      if (!dryRun) {
-        const emailOk = Boolean((channelResults.email as Record<string, unknown> | undefined)?.ok);
-        const waOk = Boolean((channelResults.whatsapp as Record<string, unknown> | undefined)?.ok);
-        if (emailOk || waOk) {
-          const reason = (toStringSafe(
-            (channelResults.email as Record<string, unknown> | undefined)?.notification_reason ??
-              (channelResults.whatsapp as Record<string, unknown> | undefined)?.notification_reason,
-          ) || "GRACE_PERIOD_ENTERED") as NotificationReason;
-          const inAppType = mapReasonToInAppType(reason);
-          const inAppTitle = mapReasonToInAppTitle(reason);
-          const inAppMessage = [
-            `${tenant.name} - ${invoiceNumber}`,
-            `Tagihan: ${amountText}`,
-            `Batas grace: ${dueDateText}`,
-            `Status: ${reason.replaceAll("_", " ")}`,
-          ].join(" | ");
+      {
+        const inAppEnteredSent = hasReasonNotificationSent(sentReasonMap, invoice.id, "PUSH", "GRACE_PERIOD_ENTERED");
+        const inAppReason = getChannelReason(graceDaysRemaining, inAppEnteredSent);
+        const inAppReasonKey = buildReasonKey(invoice.id, "PUSH", inAppReason);
+        const inAppChannelKey = `${invoice.id}:PUSH`;
+        const inAppAttemptedRecently = attemptedRecentlyMap.has(inAppReasonKey);
+        const inAppLastSentTs = lastSentAtMap.get(inAppChannelKey) ?? 0;
+        const inAppReasonAlreadySent = inAppReason !== "GRACE_PERIOD_REMINDER" &&
+          hasReasonNotificationSent(sentReasonMap, invoice.id, "PUSH", inAppReason);
+        const inAppReminderCooldown = inAppReason === "GRACE_PERIOD_REMINDER" &&
+          inAppLastSentTs > 0 &&
+          nowTs - inAppLastSentTs < reminderIntervalMs;
+        const inAppType = mapReasonToInAppType(inAppReason);
+        const inAppTitle = mapReasonToInAppTitle(inAppReason);
+        const inAppMessage = [
+          `${tenant.name} - ${invoiceNumber}`,
+          `Tagihan: ${amountText}`,
+          `Batas grace: ${dueDateText}`,
+          `Status: ${inAppReason.replaceAll("_", " ")}`,
+        ].join(" | ");
+        const inAppLink = `/org/billing?menu=invoices&invoice=${encodeURIComponent(invoiceNumber)}`;
+        const isCentralized = (tenant.billing_mode ?? "centralized") === "centralized";
+        const userIds = isCentralized
+          ? (tenantAdminMap.get(tenant.id) ?? [])
+          : Array.from(
+            new Set(
+              (recipientMap.get(tenant.id) ?? [])
+                .map((r) => r.user_id)
+                .filter((id): id is string => Boolean(id)),
+            ),
+          );
 
-          const isCentralized = (tenant.billing_mode ?? "centralized") === "centralized";
-          const userIds = isCentralized
-            ? (tenantAdminMap.get(tenant.id) ?? [])
-            : Array.from(
-              new Set(
-                (recipientMap.get(tenant.id) ?? [])
-                  .map((r) => r.user_id)
-                  .filter((id): id is string => Boolean(id)),
-              ),
-            );
+        if (inAppReasonAlreadySent) {
+          tenantResult.in_app_notifications = {
+            inserted: 0,
+            reason: inAppReason,
+            recipient_scope: isCentralized ? "tenant_admin_only" : "active_employees",
+            skipped_reason: "ALREADY_SENT",
+          };
+        } else if (!dryRun && inAppAttemptedRecently) {
+          tenantResult.in_app_notifications = {
+            inserted: 0,
+            reason: inAppReason,
+            recipient_scope: isCentralized ? "tenant_admin_only" : "active_employees",
+            skipped_reason: "RETRY_COOLDOWN",
+            retry_after_minutes: retryCooldownMinutes,
+          };
+        } else if (!dryRun && inAppReminderCooldown) {
+          tenantResult.in_app_notifications = {
+            inserted: 0,
+            reason: inAppReason,
+            recipient_scope: isCentralized ? "tenant_admin_only" : "active_employees",
+            skipped_reason: "REMINDER_INTERVAL",
+            retry_after_hours: reminderIntervalHours,
+          };
+        } else if (userIds.length === 0) {
+          tenantResult.in_app_notifications = {
+            inserted: 0,
+            reason: inAppReason,
+            recipient_scope: isCentralized ? "tenant_admin_only" : "active_employees",
+            skipped_reason: "NO_RECIPIENTS",
+          };
+        } else if (dryRun) {
+          tenantResult.in_app_notifications = {
+            inserted: userIds.length,
+            reason: inAppReason,
+            recipient_scope: isCentralized ? "tenant_admin_only" : "active_employees",
+            dry_run: true,
+          };
+        } else {
+          const notificationRows = userIds.map((userId) => ({
+            user_id: userId,
+            title: inAppTitle,
+            message: inAppMessage,
+            type: inAppType,
+            is_read: false,
+            link: inAppLink,
+            metadata: {
+              source: "billing_grace_notifier",
+              trace_id: traceId,
+              invoice_id: invoice.id,
+              invoice_number: invoiceNumber,
+              reason: inAppReason,
+              email_sent: Boolean((channelResults.email as Record<string, unknown> | undefined)?.ok),
+              whatsapp_sent: Boolean((channelResults.whatsapp as Record<string, unknown> | undefined)?.ok),
+            },
+          }));
 
-          if (userIds.length > 0) {
-            const notificationRows = userIds.map((userId) => ({
-              user_id: userId,
-              title: inAppTitle,
-              message: inAppMessage,
-              type: inAppType,
-              is_read: false,
-              link: "/org/subscription",
-              metadata: {
-                source: "billing_grace_notifier",
-                trace_id: traceId,
-                invoice_id: invoice.id,
-                invoice_number: invoiceNumber,
-                reason,
-                email_sent: emailOk,
-                whatsapp_sent: waOk,
-              },
-            }));
+          const { error: inAppError } = await supabase.from("notifications").insert(notificationRows);
+          const { error: pushLogError } = await supabase.from("billing_notification_logs").insert({
+            tenant_id: tenant.id,
+            invoice_id: invoice.id,
+            notification_type: "PUSH",
+            recipient: `in-app:${notificationRows.length}`,
+            subject: inAppTitle,
+            message: inAppMessage,
+            status: inAppError ? "FAILED" : "SENT",
+            sent_at: inAppError ? null : new Date().toISOString(),
+            error_message: inAppError ? String(inAppError.message || "IN_APP_INSERT_FAILED") : null,
+            metadata: {
+              reason: inAppReason,
+              trace_id: traceId,
+              days_remaining: graceDaysRemaining,
+            },
+          });
 
-            const { error: inAppError } = await supabase.from("notifications").insert(notificationRows);
-            if (inAppError) {
-              logTraceError(traceId, `Failed to write in-app notifications for tenant ${tenant.id}`, inAppError);
-            } else {
-              tenantResult.in_app_notifications = {
-                inserted: notificationRows.length,
-                reason,
-                recipient_scope: isCentralized ? "tenant_admin_only" : "active_employees",
-              };
-            }
-          } else {
+          if (pushLogError) {
+            logTraceError(traceId, `Failed to write PUSH billing log for tenant ${tenant.id}`, pushLogError);
+          }
+
+          if (inAppError) {
+            logTraceError(traceId, `Failed to write in-app notifications for tenant ${tenant.id}`, inAppError);
+            failed += 1;
             tenantResult.in_app_notifications = {
               inserted: 0,
-              reason,
+              reason: inAppReason,
               recipient_scope: isCentralized ? "tenant_admin_only" : "active_employees",
-              skipped_reason: "NO_RECIPIENTS",
+              error: String(inAppError.message || "IN_APP_INSERT_FAILED"),
+            };
+          } else {
+            sentReasonMap.add(inAppReasonKey);
+            lastSentAtMap.set(inAppChannelKey, Date.now());
+            tenantResult.in_app_notifications = {
+              inserted: notificationRows.length,
+              reason: inAppReason,
+              recipient_scope: isCentralized ? "tenant_admin_only" : "active_employees",
             };
           }
         }
@@ -1603,6 +2017,13 @@ serve(async (req) => {
       details.push(tenantResult);
       processed += 1;
     }
+
+    const pushDispatchResult = await triggerAndroidPushDispatch({
+      traceId,
+      tenantId: tenantFilter,
+      limit,
+      dryRun,
+    });
 
     return new Response(
       JSON.stringify({
@@ -1616,6 +2037,7 @@ serve(async (req) => {
         cleanup_lifecycle: cleanupLifecycleResult,
         payment_archive_cleanup: paymentArchiveCleanupResult,
         due_soon_reminder: dueSoonReminderResult,
+        android_push_dispatch: pushDispatchResult,
         details,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },

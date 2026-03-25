@@ -4,13 +4,11 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from "@/components/ui/dialog";
 import {
   Select,
@@ -27,11 +25,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { 
+import {
   Search, 
   Eye, 
-  CheckCircle, 
-  XCircle, 
   Loader2, 
   ExternalLink,
   FileText,
@@ -40,15 +36,14 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
-import { toast } from "sonner";
-import { appendErrorReference, reportError } from "@/lib/errorLogger";
-import { withTimeout } from "@/lib/attendanceResilience";
 
 type InvoicesFilterMode = "all" | "invalid_number";
 
 interface InvoicesManagerProps {
   filterMode?: InvoicesFilterMode;
   onClearFilterMode?: () => void;
+  focusedTenantId?: string | null;
+  onClearFocusedTenant?: () => void;
 }
 
 const INVOICE_NUMBER_PATTERN = /^INV-\d{6}-\d{4,}$/;
@@ -92,21 +87,27 @@ const statusLabels: Record<string, string> = {
   REFUNDED: "Refund",
 };
 
-export function InvoicesManager({ filterMode = "all", onClearFilterMode }: InvoicesManagerProps) {
-  const VERIFY_TIMEOUT_MS = 12000;
+export function InvoicesManager({
+  filterMode = "all",
+  onClearFilterMode,
+  focusedTenantId = null,
+  onClearFocusedTenant,
+}: InvoicesManagerProps) {
   const ITEMS_PER_PAGE = 10;
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
-  const { invoices, isLoading, verifyPayment } = useInvoices(
-    statusFilter !== "all" ? { status: statusFilter } : undefined
+  const { invoices, isLoading } = useInvoices(
+    statusFilter !== "all" || focusedTenantId
+      ? {
+          status: statusFilter !== "all" ? statusFilter : undefined,
+          tenantId: focusedTenantId || undefined,
+        }
+      : undefined
   );
 
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [showDetailDialog, setShowDetailDialog] = useState(false);
-  const [showVerifyDialog, setShowVerifyDialog] = useState(false);
-  const [rejectionReason, setRejectionReason] = useState("");
-  const [isProcessing, setIsProcessing] = useState(false);
 
   const filteredInvoices = useMemo(
     () =>
@@ -133,7 +134,7 @@ export function InvoicesManager({ filterMode = "all", onClearFilterMode }: Invoi
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, statusFilter, invoices.length]);
+  }, [focusedTenantId, searchQuery, statusFilter, invoices.length]);
 
   useEffect(() => {
     if (filterMode === "invalid_number" && statusFilter !== "all") {
@@ -144,34 +145,6 @@ export function InvoicesManager({ filterMode = "all", onClearFilterMode }: Invoi
   const handleViewDetail = (invoice: Invoice) => {
     setSelectedInvoice(invoice);
     setShowDetailDialog(true);
-  };
-
-  const handleVerifyClick = (invoice: Invoice) => {
-    setSelectedInvoice(invoice);
-    setRejectionReason("");
-    setShowVerifyDialog(true);
-  };
-
-  const handleVerify = async (approved: boolean) => {
-    if (!selectedInvoice) return;
-    setIsProcessing(true);
-    try {
-      await withTimeout(
-        verifyPayment(selectedInvoice.id, approved, approved ? undefined : rejectionReason),
-        VERIFY_TIMEOUT_MS,
-        "Memproses verifikasi invoice terlalu lama",
-      );
-      setShowVerifyDialog(false);
-      setSelectedInvoice(null);
-    } catch (error) {
-      const errorRef = reportError(error, "admin.billing.invoices.verify_payment", {
-        invoice_id: selectedInvoice.id,
-        approved,
-      });
-      toast.error(appendErrorReference("Gagal memproses verifikasi invoice.", errorRef));
-    } finally {
-      setIsProcessing(false);
-    }
   };
 
   if (isLoading) {
@@ -227,6 +200,18 @@ export function InvoicesManager({ filterMode = "all", onClearFilterMode }: Invoi
           <Button variant="link" className="h-auto p-0 text-red-700" onClick={onClearFilterMode}>
             Tampilkan semua
           </Button>
+        </div>
+      )}
+
+      {focusedTenantId && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+          <Building2 className="h-4 w-4" />
+          Fokus tenant aktif: <span className="font-mono">{focusedTenantId}</span>
+          {onClearFocusedTenant ? (
+            <Button variant="link" className="h-auto p-0 text-blue-700" onClick={onClearFocusedTenant}>
+              Lihat semua tenant
+            </Button>
+          ) : null}
         </div>
       )}
 
@@ -306,11 +291,6 @@ export function InvoicesManager({ filterMode = "all", onClearFilterMode }: Invoi
                       <Button variant="ghost" size="icon" onClick={() => handleViewDetail(invoice)}>
                         <Eye className="h-4 w-4" />
                       </Button>
-                      {(invoice.status === "AWAITING_VERIFICATION" || invoice.status === "PENDING") && (
-                        <Button variant="ghost" size="icon" onClick={() => handleVerifyClick(invoice)}>
-                          <CheckCircle className="h-4 w-4 text-green-600" />
-                        </Button>
-                      )}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -343,13 +323,13 @@ export function InvoicesManager({ filterMode = "all", onClearFilterMode }: Invoi
         )}
       </Card>
 
-      {/* Detail Dialog */}
+      {/* Dialog rincian */}
       <Dialog open={showDetailDialog} onOpenChange={setShowDetailDialog}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <FileText className="h-5 w-5" />
-              Detail Invoice
+              Rincian Invoice
             </DialogTitle>
           </DialogHeader>
 
@@ -434,7 +414,7 @@ export function InvoicesManager({ filterMode = "all", onClearFilterMode }: Invoi
                     <span>{formatCurrency(selectedInvoice.gross_amount)}</span>
                   </div>
                   <div className="flex justify-between text-green-600">
-                    <span>Net Revenue</span>
+                    <span>Pendapatan Bersih</span>
                     <span>{formatCurrency(selectedInvoice.net_amount)}</span>
                   </div>
                 </CardContent>
@@ -453,52 +433,6 @@ export function InvoicesManager({ filterMode = "all", onClearFilterMode }: Invoi
         </DialogContent>
       </Dialog>
 
-      {/* Verify Dialog */}
-      <Dialog open={showVerifyDialog} onOpenChange={setShowVerifyDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Verifikasi Pembayaran</DialogTitle>
-          </DialogHeader>
-
-          {selectedInvoice && (
-            <div className="space-y-4">
-              <p>
-                Verifikasi pembayaran untuk invoice <strong>{selectedInvoice.invoice_number}</strong>?
-              </p>
-              <p className="text-lg font-bold">{formatCurrency(selectedInvoice.gross_amount)}</p>
-
-              <div className="space-y-2">
-                <p className="text-sm text-muted-foreground">Alasan penolakan (jika ditolak):</p>
-                <Textarea
-                  value={rejectionReason}
-                  onChange={(e) => setRejectionReason(e.target.value)}
-                  placeholder="Contoh: Bukti pembayaran tidak valid"
-                />
-              </div>
-            </div>
-          )}
-
-          <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={() => setShowVerifyDialog(false)}>
-              Batal
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => handleVerify(false)}
-              disabled={isProcessing}
-            >
-              {isProcessing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              <XCircle className="mr-2 h-4 w-4" />
-              Tolak
-            </Button>
-            <Button onClick={() => handleVerify(true)} disabled={isProcessing}>
-              {isProcessing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              <CheckCircle className="mr-2 h-4 w-4" />
-              Setujui
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

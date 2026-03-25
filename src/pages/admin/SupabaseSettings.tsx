@@ -20,6 +20,7 @@ import { FullBackupManager } from "@/components/admin/settings/FullBackupManager
 import { MigrationWizard } from "@/components/admin/settings/MigrationWizard";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { supabase } from "@/integrations/supabase/client";
+import { supabasePublishableKey, supabaseUrl } from "@/integrations/supabase/env";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { debugLog } from "@/lib/debugLog";
 import { withTimeout } from "@/lib/attendanceResilience";
@@ -415,12 +416,12 @@ AS $$
 $$;
 
 -- ================================================
--- NOTES:
--- 1. Run this SQL in the new Supabase project's SQL Editor
--- 2. After running, import data from JSON backups
--- 3. Create RLS policies (use RLS Export feature)
--- 4. Set up storage buckets: organization-logos, apk-files, news-images
--- 5. Deploy edge functions from the codebase
+-- CATATAN:
+-- 1. Jalankan SQL ini di SQL Editor proyek Supabase baru
+-- 2. Setelah itu, impor data dari backup JSON
+-- 3. Buat kebijakan RLS (gunakan fitur Ekspor RLS)
+-- 4. Siapkan storage bucket: organization-logos, apk-files, news-images
+-- 5. Deploy edge functions dari codebase
 -- ================================================
 `;
 };
@@ -431,39 +432,39 @@ const migrationChecklist = [
     category: "Persiapan",
     items: [
       { id: "backup-data", label: "Backup semua data dari database sumber" },
-      { id: "backup-schema", label: "Export schema SQL" },
-      { id: "export-rls", label: "Export RLS Policies SQL" },
-      { id: "create-project", label: "Buat project Supabase baru" },
-      { id: "note-credentials", label: "Catat kredensial project baru (URL, Anon Key, Service Key)" }
+      { id: "backup-schema", label: "Ekspor skema SQL" },
+      { id: "export-rls", label: "Ekspor kebijakan RLS SQL" },
+      { id: "create-project", label: "Buat proyek Supabase baru" },
+      { id: "note-credentials", label: "Catat kredensial proyek baru (URL, Kunci Anon, Kunci Service)" }
     ]
   },
   {
-    category: "Migrasi Schema",
+    category: "Migrasi Skema",
     items: [
-      { id: "run-schema", label: "Jalankan schema SQL di SQL Editor project baru" },
-      { id: "run-rls", label: "Jalankan RLS Policies SQL" },
+      { id: "run-schema", label: "Jalankan skema SQL di SQL Editor proyek baru" },
+      { id: "run-rls", label: "Jalankan kebijakan RLS SQL" },
       { id: "verify-tables", label: "Verifikasi semua tabel berhasil dibuat" },
       { id: "create-partitions", label: "Buat partisi attendance_records untuk bulan berjalan" },
-      { id: "verify-rls", label: "Verifikasi RLS policies aktif" }
+      { id: "verify-rls", label: "Verifikasi kebijakan RLS aktif" }
     ]
   },
   {
     category: "Migrasi Data",
     items: [
-      { id: "import-tenants", label: "Import data tenants" },
-      { id: "import-subscriptions", label: "Import data subscriptions" },
-      { id: "import-opd", label: "Import data OPD" },
-      { id: "import-offices", label: "Import data offices" },
-      { id: "import-employees", label: "Import data employees" },
-      { id: "import-user-roles", label: "Import data user_roles" },
-      { id: "import-attendance", label: "Import data attendance records" },
+      { id: "import-tenants", label: "Impor data tenant" },
+      { id: "import-subscriptions", label: "Impor data langganan" },
+      { id: "import-opd", label: "Impor data OPD" },
+      { id: "import-offices", label: "Impor data kantor" },
+      { id: "import-employees", label: "Impor data pegawai" },
+      { id: "import-user-roles", label: "Impor data user_roles" },
+      { id: "import-attendance", label: "Impor data absensi" },
       { id: "verify-fk", label: "Verifikasi foreign key relationships" }
     ]
   },
   {
     category: "Migrasi Auth",
     items: [
-      { id: "export-users", label: "Export daftar users dari auth.users (via Dashboard)" },
+      { id: "export-users", label: "Ekspor daftar pengguna dari auth.users (via Dasbor)" },
       { id: "reset-passwords", label: "Kirim email reset password ke semua user" },
       { id: "verify-roles", label: "Verifikasi user_roles terlink dengan benar" }
     ]
@@ -523,8 +524,8 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
   } | null>(null);
 
   const currentProjectId = import.meta.env.VITE_SUPABASE_PROJECT_ID || "uvzruextguakdocvhfay";
-  const currentUrl = import.meta.env.VITE_SUPABASE_URL || "";
-  const currentAnonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || "";
+  const currentUrl = supabaseUrl;
+  const currentAnonKey = supabasePublishableKey;
 
   const copyToClipboard = async (text: string, label: string) => {
     try {
@@ -721,7 +722,7 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    toast.success("Schema SQL berhasil diekspor");
+    toast.success("Skema SQL berhasil diekspor");
   };
 
   const runDataValidation = async () => {
@@ -843,7 +844,7 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
         }
         
         const json = JSON.parse(content);
-        debugLog("Preview JSON keys:", Object.keys(json));
+        debugLog("Pratinjau kunci JSON:", Object.keys(json));
         
         // Check if it's a full backup format (has 'data' property with table data)
         const isFullBackup = json.data && typeof json.data === 'object' && !Array.isArray(json.data);
@@ -861,7 +862,7 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
           }, 0);
           
           if (loadingToast) toast.dismiss(loadingToast);
-          toast.success(`Backup lengkap dimuat: ${tableCount} tabel, ${recordCount.toLocaleString()} records`);
+          toast.success(`Backup lengkap dimuat: ${tableCount} tabel, ${recordCount.toLocaleString()} rekaman`);
         } else {
           // Simple format (direct table data)
           setImportData(json as Record<string, unknown[]>);
@@ -912,23 +913,23 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
         <TabsList className="min-w-max h-auto flex-nowrap gap-1.5 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
           <TabsTrigger value="info" className="gap-2 whitespace-nowrap">
             <Server className="h-4 w-4" />
-            <span className="hidden sm:inline">Info</span>
+            <span className="hidden sm:inline">Informasi</span>
           </TabsTrigger>
           <TabsTrigger value="health" className="gap-2 whitespace-nowrap">
             <Activity className="h-4 w-4" />
-            <span className="hidden sm:inline">Health</span>
+            <span className="hidden sm:inline">Kesehatan</span>
           </TabsTrigger>
           <TabsTrigger value="backup" className="gap-2 whitespace-nowrap">
             <Download className="h-4 w-4" />
-            <span className="hidden sm:inline">Export</span>
+            <span className="hidden sm:inline">Ekspor</span>
           </TabsTrigger>
           <TabsTrigger value="import" className="gap-2 whitespace-nowrap">
             <Upload className="h-4 w-4" />
-            <span className="hidden sm:inline">Import</span>
+            <span className="hidden sm:inline">Impor</span>
           </TabsTrigger>
           <TabsTrigger value="schema" className="gap-2 whitespace-nowrap">
             <FileCode className="h-4 w-4" />
-            <span className="hidden sm:inline">Schema</span>
+            <span className="hidden sm:inline">Skema</span>
           </TabsTrigger>
           <TabsTrigger value="rls" className="gap-2 whitespace-nowrap">
             <Shield className="h-4 w-4" />
@@ -944,7 +945,7 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
           </TabsTrigger>
           <TabsTrigger value="checklist" className="gap-2 whitespace-nowrap">
             <ListChecks className="h-4 w-4" />
-            <span className="hidden sm:inline">Checklist</span>
+            <span className="hidden sm:inline">Daftar Periksa</span>
           </TabsTrigger>
         </TabsList>
 
@@ -956,7 +957,7 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
                 <Server className="h-5 w-5 text-primary" />
                 Informasi Koneksi Database
               </CardTitle>
-              <CardDescription>Detail koneksi ke database saat ini</CardDescription>
+              <CardDescription>Rincian koneksi ke database saat ini</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="flex items-center gap-2 mb-4">
@@ -969,10 +970,10 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
 
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <Label className="text-sm font-medium">Project ID</Label>
+                  <Label className="text-sm font-medium">ID Proyek</Label>
                   <div className="flex gap-2">
                     <Input value={currentProjectId} readOnly className="font-mono text-sm bg-muted" />
-                    <Button variant="outline" size="icon" onClick={() => copyToClipboard(currentProjectId, "Project ID")}>
+                    <Button variant="outline" size="icon" onClick={() => copyToClipboard(currentProjectId, "ID Proyek")}>
                       <Copy className="h-4 w-4" />
                     </Button>
                   </div>
@@ -989,7 +990,7 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
                 </div>
 
                 <div className="space-y-2">
-                  <Label className="text-sm font-medium">Anon Key (Publishable)</Label>
+                  <Label className="text-sm font-medium">Kunci Anon (Publikasi)</Label>
                   <div className="flex gap-2">
                     <Input 
                       value={showKeys ? currentAnonKey : "••••••••••••••••••••••••"} 
@@ -999,7 +1000,7 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
                     <Button variant="outline" size="icon" onClick={() => setShowKeys(!showKeys)}>
                       {showKeys ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                     </Button>
-                    <Button variant="outline" size="icon" onClick={() => copyToClipboard(currentAnonKey, "Anon Key")}>
+                    <Button variant="outline" size="icon" onClick={() => copyToClipboard(currentAnonKey, "Kunci Anon")}>
                       <Copy className="h-4 w-4" />
                     </Button>
                   </div>
@@ -1033,7 +1034,7 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
                       <Key className="h-4 w-4 text-green-500" />
                       <span className="font-medium">Environment</span>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-1">VITE_SUPABASE_URL, KEY, ID</p>
+                    <p className="text-xs text-muted-foreground mt-1">VITE_SUPABASE_URL, KUNCI, ID</p>
                   </CardContent>
                 </Card>
               </div>
@@ -1049,7 +1050,7 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
                   </h4>
                   <Button variant="outline" size="sm" onClick={fetchDatabaseStats} disabled={isLoading}>
                     <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
-                    Refresh
+                    Muat Ulang
                   </Button>
                 </div>
 
@@ -1100,12 +1101,12 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
           <DatabaseHealthMonitor />
         </TabsContent>
 
-        {/* Export/Backup Tab */}
+        {/* Tab Ekspor/Cadangan */}
         <TabsContent value="backup" className="space-y-6">
           <FullBackupManager />
         </TabsContent>
 
-        {/* Import Tab */}
+        {/* Tab Impor */}
         <TabsContent value="import" className="space-y-6">
           <DataImportManager />
         </TabsContent>
@@ -1116,16 +1117,16 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Code className="h-5 w-5 text-primary" />
-                Export Schema SQL
+                Ekspor Skema SQL
               </CardTitle>
               <CardDescription>
-                Export struktur database dalam format SQL untuk membuat project baru
+                Ekspor struktur database dalam format SQL untuk membuat proyek baru
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <Button onClick={exportSchemaSql} className="gap-2" size="lg">
                 <Download className="h-5 w-5" />
-                Download Schema SQL
+                Unduh Skema SQL
               </Button>
 
               <Separator />
@@ -1151,10 +1152,10 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Plug className="h-5 w-5 text-primary" />
-                Migrasi Antar Project
+                Migrasi Antar Proyek
               </CardTitle>
               <CardDescription>
-                Panduan langkah demi langkah untuk memindahkan database dari satu Supabase project ke project lainnya
+                Panduan langkah demi langkah untuk memindahkan database dari satu proyek Supabase ke proyek lainnya
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -1163,9 +1164,9 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
                 <div className="text-sm text-muted-foreground">
                   <p>Wizard ini akan membantu Anda:</p>
                   <ul className="list-disc list-inside mt-1 space-y-0.5">
-                    <li>Test koneksi ke project target</li>
-                    <li>Migrasi schema dan RLS policies</li>
-                    <li>Import data dengan urutan yang benar</li>
+                    <li>Test koneksi ke proyek target</li>
+                    <li>Migrasi skema dan kebijakan RLS</li>
+                    <li>Impor data dengan urutan yang benar</li>
                     <li>Setup storage dan edge functions</li>
                     <li>Verifikasi dan cutover</li>
                   </ul>
@@ -1180,7 +1181,7 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Upload className="h-5 w-5 text-primary" />
-                Preview Import Data
+                Pratinjau Impor Data
               </CardTitle>
               <CardDescription>
                 Upload file JSON backup untuk preview sebelum import manual
@@ -1219,13 +1220,13 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
                             {importData ? Object.values(importData).reduce((acc, val) => acc + (Array.isArray(val) ? val.length : 0), 0).toLocaleString() : 0}
                           </p>
                           <p className="text-xs text-muted-foreground">
-                            {importData ? `${Object.keys(importData).length} tabel` : 'records'}
+                            {importData ? `${Object.keys(importData).length} tabel` : 'rekaman'}
                           </p>
                         </CardContent>
                       </Card>
                       <Card className={`${importSchema ? 'bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800' : 'bg-muted/50'}`}>
                         <CardContent className="pt-4">
-                          <p className="font-medium text-sm">schema</p>
+                          <p className="font-medium text-sm">skema</p>
                           <p className="text-2xl font-bold">{importSchema ? '✓' : '—'}</p>
                           <p className="text-xs text-muted-foreground">
                             {importSchema ? `${(importSchema.length / 1024).toFixed(1)} KB` : 'tidak ada'}
@@ -1252,17 +1253,17 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
                       </Card>
                     </div>
 
-                    {/* Table Details */}
+                    {/* Rincian Tabel */}
                     {importData && Object.keys(importData).length > 0 && (
                       <>
-                        <h4 className="font-medium">Detail Tabel:</h4>
+                        <h4 className="font-medium">Rincian Tabel:</h4>
                         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
                           {Object.entries(importData).map(([table, data]) => (
                             <Card key={table} className="bg-muted/50">
                               <CardContent className="pt-4">
                                 <p className="font-medium text-sm">{table}</p>
                                 <p className="text-2xl font-bold">{Array.isArray(data) ? data.length.toLocaleString() : 0}</p>
-                                <p className="text-xs text-muted-foreground">records</p>
+                                <p className="text-xs text-muted-foreground">rekaman</p>
                               </CardContent>
                             </Card>
                           ))}
@@ -1347,7 +1348,7 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <ListChecks className="h-5 w-5 text-primary" />
-                Checklist Migrasi
+                Daftar Periksa Migrasi
               </CardTitle>
               <CardDescription>
                 Panduan langkah demi langkah untuk migrasi database
@@ -1355,7 +1356,7 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="flex items-center justify-between">
-                <span className="text-sm font-medium">Progress: {getChecklistProgress()}%</span>
+                <span className="text-sm font-medium">Progres: {getChecklistProgress()}%</span>
                 <Badge variant={getChecklistProgress() === 100 ? "default" : "secondary"}>
                   {Object.values(checkedItems).filter(Boolean).length} / {migrationChecklist.reduce((acc, cat) => acc + cat.items.length, 0)} selesai
                 </Badge>
@@ -1413,7 +1414,7 @@ export default function SupabaseSettings({ embedded = false }: { embedded?: bool
   return (
     <SuperAdminLayout
       title="Pengaturan Supabase"
-      subtitle="Kelola koneksi database, backup, migrasi, dan monitoring"
+      subtitle="Kelola koneksi database, backup, migrasi, dan pemantauan"
     >
       {content}
     </SuperAdminLayout>

@@ -18,7 +18,6 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
-import { getHrRoutePolicy } from "@/lib/hrRouteAccess";
 import {
   LayoutDashboard,
   Building2,
@@ -45,7 +44,6 @@ import {
   Newspaper,
   Activity,
   ListChecks,
-  MessageCircleQuestion,
   Upload,
   Home,
   Bell,
@@ -88,6 +86,18 @@ import {
   DEFAULT_ORG_WORKSPACE_MODULES,
   type OrgWorkspaceModules,
 } from "@/lib/orgWorkspaceModules";
+import {
+  getAccessStageLabel,
+  getWorkspaceModeLabel,
+  type TenantHrPayrollAccessState,
+} from "@/lib/hrPayrollAccessPolicy";
+import {
+  getHrWorkspaceRouteDefinition,
+  HR_FOCUSED_SIDEBAR_GROUPS,
+  HR_OVERVIEW_SIDEBAR_SECTIONS,
+  type HrSidebarIconKey,
+  type HrSidebarItemDefinition,
+} from "@/lib/hrWorkspaceRegistry";
 
 interface SubMenuItem {
   title: string;
@@ -114,13 +124,6 @@ interface PayrollMenuSection {
   paths: string[];
 }
 
-interface HrMenuSection {
-  label: string;
-  title: string;
-  icon: React.ElementType;
-  subItems: SubMenuItem[];
-}
-
 type OrgSidebarAccessLevel = "admin" | "operator";
 type OrgWorkspace = "absensi" | "hr" | "payroll";
 
@@ -140,10 +143,11 @@ const getOnboardingReadyModules = (counts: OrgOnboardingCounts) =>
 
 const getHrSidebarBadgeLabel = (path: string): string | undefined => {
   if (!path.startsWith("/org/hr")) return undefined;
-  const policy = getHrRoutePolicy(path);
-  if (policy.status === "redirect") return "Alias";
-  if (policy.status === "internal") return "Internal";
-  if (policy.status === "tunda") return "Tunda";
+  const routeDefinition = getHrWorkspaceRouteDefinition(path);
+  if (!routeDefinition) return undefined;
+  if (routeDefinition.status === "redirect") return "Alias";
+  if (routeDefinition.status === "internal") return "Internal";
+  if (routeDefinition.status === "tunda") return "Tunda";
   return undefined;
 };
 
@@ -155,7 +159,95 @@ const withHrSidebarBadges = (subItems: SubMenuItem[]): SubMenuItem[] =>
 
 const withPayrollSidebarBadges = (subItems: SubMenuItem[]): SubMenuItem[] => subItems;
 
-const MENU_GROUPS: MenuGroup[] = [
+const HR_SIDEBAR_ICON_MAP: Record<HrSidebarIconKey, React.ElementType> = {
+  layout_dashboard: LayoutDashboard,
+  building2: Building2,
+  users: Users,
+  settings: Settings,
+  file_text: FileText,
+  calendar: Calendar,
+  map_pin: MapPin,
+  log_out: LogOut,
+  help_circle: HelpCircle,
+  briefcase: Briefcase,
+  clock: Clock,
+  user_check: UserCheck,
+  clipboard_list: ClipboardList,
+  alert_triangle: AlertTriangle,
+  file_spreadsheet: FileSpreadsheet,
+  folder_tree: FolderTree,
+  timer: Timer,
+  activity: Activity,
+  ticket: Ticket,
+  graduation_cap: GraduationCap,
+  award: Award,
+  brain_circuit: BrainCircuit,
+  home: Home,
+  list_checks: ListChecks,
+};
+
+const buildHrSidebarSubItems = (items: HrSidebarItemDefinition[]): SubMenuItem[] =>
+  withHrSidebarBadges(
+    items.map((item) => ({
+      title: item.title || getHrWorkspaceRouteDefinition(item.path)?.label || item.path,
+      path: item.path,
+      icon: HR_SIDEBAR_ICON_MAP[item.iconKey],
+      badgeLabel: item.badgeLabel,
+    })),
+  );
+
+const buildHrOverviewMenuItems = (): MenuItem[] =>
+  HR_OVERVIEW_SIDEBAR_SECTIONS.map((section) => ({
+    title: section.title,
+    icon: HR_SIDEBAR_ICON_MAP[section.iconKey],
+    subItems: buildHrSidebarSubItems(section.items),
+  }));
+
+const buildHrFocusedMenuGroups = (): MenuGroup[] =>
+  HR_FOCUSED_SIDEBAR_GROUPS.map((group) => ({
+    label: group.label,
+    items: group.items.map((item) => ({
+      title: item.title || getHrWorkspaceRouteDefinition(item.path)?.label || item.path,
+      icon: HR_SIDEBAR_ICON_MAP[item.iconKey],
+      path: item.path,
+    })),
+  }));
+
+const PAYROLL_OVERVIEW_SUB_ITEMS = withPayrollSidebarBadges([
+  { title: "Beranda Payroll", path: "/org/payroll", icon: Receipt },
+  { title: "Kompensasi Pegawai", path: "/org/payroll/employees", icon: Users },
+  { title: "Struktur Organisasi dan Grade", path: "/org/payroll/org-grade", icon: Building2 },
+  { title: "Komponen Penghasilan", path: "/org/payroll/income-components", icon: Briefcase },
+  { title: "Komponen Potongan", path: "/org/payroll/deduction-components", icon: Briefcase },
+  { title: "Kebijakan Payroll", path: "/org/payroll/policies", icon: ClipboardList },
+  { title: "Master Kepatuhan Payroll", path: "/org/payroll/compliance-master", icon: ShieldCheck },
+  { title: "Periode Payroll", path: "/org/payroll/periods", icon: Calendar },
+  { title: "Input Variabel", path: "/org/payroll/variable-input", icon: FileText },
+  { title: "Validasi Payroll", path: "/org/payroll/validation", icon: ShieldCheck },
+  { title: "Proses Payroll", path: "/org/payroll/run-engine", icon: Timer },
+  { title: "Persetujuan Payroll", path: "/org/payroll/approval", icon: UserCheck },
+  { title: "Slip Gaji", path: "/org/payroll/slips", icon: FileSpreadsheet },
+  { title: "Pembayaran Payroll", path: "/org/payroll/payment", icon: Receipt },
+  { title: "Pajak dan Kepatuhan", path: "/org/payroll/tax-compliance", icon: LandmarkIcon },
+  { title: "Laporan Payroll", path: "/org/payroll/reports", icon: FileSpreadsheet },
+  { title: "Log Audit Payroll", path: "/org/payroll/audit-log", icon: ClipboardList },
+  { title: "Hak Akses Payroll", path: "/org/payroll/roles", icon: Settings },
+  { title: "Integrasi Payroll", path: "/org/payroll/integrations", icon: Database },
+  { title: "Bantuan Payroll", path: "/org/payroll/help", icon: LifeBuoy },
+]);
+
+const HRIS_MENU_ITEMS: MenuItem[] = [
+  ...buildHrOverviewMenuItems(),
+  {
+    title: "Payroll",
+    icon: Receipt,
+    subItems: PAYROLL_OVERVIEW_SUB_ITEMS,
+  },
+];
+
+const HR_FOCUSED_MENU_GROUPS: MenuGroup[] = buildHrFocusedMenuGroups();
+
+const BASE_MENU_GROUPS: MenuGroup[] = [
   {
     label: "Utama",
     items: [
@@ -227,86 +319,6 @@ const MENU_GROUPS: MenuGroup[] = [
     ],
   },
   {
-    label: "HRIS",
-    items: [
-      {
-        title: "Masuk Area Kerja HR",
-        icon: LayoutDashboard,
-        subItems: withHrSidebarBadges([{ title: "Buka Area Kerja HR", path: "/org/hr", icon: LayoutDashboard }]),
-      },
-      {
-        title: "Fondasi HR",
-        icon: Building2,
-        subItems: withHrSidebarBadges([
-          { title: "Data Pegawai", path: "/org/hr/employees", icon: Users },
-          { title: "Status Kepegawaian", path: "/org/hr/employee-status", icon: UserCheck },
-          { title: "Riwayat Jabatan", path: "/org/hr/job-history", icon: Briefcase },
-          { title: "Struktur Organisasi", path: "/org/hr/structure", icon: Building2 },
-          { title: "Jabatan dan Grade", path: "/org/hr/position-grade", icon: Briefcase },
-          { title: "Kontrak Kerja", path: "/org/hr/contracts", icon: FileText },
-          { title: "Dokumen HR", path: "/org/hr/documents", icon: FileText },
-          { title: "Templat Dokumen", path: "/org/hr/document-templates", icon: FileText },
-        ]),
-      },
-      {
-        title: "Layanan dan Pemantauan HR",
-        icon: Activity,
-        subItems: withHrSidebarBadges([
-          { title: "Proses Masuk Pegawai", path: "/org/hr/onboarding", icon: UserCheck },
-          { title: "Proses Keluar Pegawai", path: "/org/hr/offboarding", icon: LogOut },
-          { title: "Pengaturan Keterlambatan", path: "/org/hr/late-settings", icon: AlertTriangle },
-          { title: "Jenis Cuti", path: "/org/hr/leave-types", icon: ClipboardList },
-          { title: "Kuota Cuti", path: "/org/hr/leave-quota", icon: ListChecks },
-          { title: "Laporan HR", path: "/org/hr/reports", icon: FileSpreadsheet },
-          { title: "Analitik Kehadiran HR", path: "/org/hr/attendance-insights", icon: Activity },
-          { title: "Log Error HR", path: "/org/hr/help/error-logs", icon: ClipboardList },
-        ]),
-      },
-      {
-        title: "Dukungan HR",
-        icon: HelpCircle,
-        subItems: withHrSidebarBadges([
-          { title: "FAQ HR", path: "/org/hr/help/faq", icon: HelpCircle },
-          { title: "Tiket HR", path: "/org/hr/help/tickets", icon: Ticket },
-        ]),
-      },
-      {
-        title: "Konfigurasi HR",
-        icon: Settings,
-        subItems: withHrSidebarBadges([
-          { title: "Pengaturan HR", path: "/org/hr/settings", icon: Settings },
-          { title: "Hierarki Persetujuan", path: "/org/hr/approval-hierarchy", icon: UserCheck },
-        ]),
-      },
-      {
-        title: "Payroll",
-        icon: Receipt,
-        subItems: withPayrollSidebarBadges([
-          { title: "Beranda Payroll", path: "/org/payroll", icon: Receipt },
-          { title: "Data Pegawai Payroll", path: "/org/payroll/employees", icon: Users },
-          { title: "Struktur Organisasi dan Grade", path: "/org/payroll/org-grade", icon: Building2 },
-          { title: "Komponen Penghasilan", path: "/org/payroll/income-components", icon: Briefcase },
-          { title: "Komponen Potongan", path: "/org/payroll/deduction-components", icon: Briefcase },
-          { title: "Kebijakan Payroll", path: "/org/payroll/policies", icon: ClipboardList },
-          { title: "Periode Payroll", path: "/org/payroll/periods", icon: Calendar },
-          { title: "Input Variabel", path: "/org/payroll/variable-input", icon: FileText },
-          { title: "Validasi Payroll", path: "/org/payroll/validation", icon: ShieldCheck },
-          { title: "Proses Payroll", path: "/org/payroll/run-engine", icon: Timer },
-          { title: "Persetujuan Payroll", path: "/org/payroll/approval", icon: UserCheck },
-          { title: "Slip Gaji", path: "/org/payroll/slips", icon: FileSpreadsheet },
-          { title: "Pembayaran Payroll", path: "/org/payroll/payment", icon: Receipt },
-          { title: "Pajak dan Kepatuhan", path: "/org/payroll/tax-compliance", icon: LandmarkIcon },
-          { title: "Laporan Payroll", path: "/org/payroll/reports", icon: FileSpreadsheet },
-          { title: "Log Audit Payroll", path: "/org/payroll/audit-log", icon: ClipboardList },
-          { title: "Log Error Payroll", path: "/org/payroll/error-log", icon: ClipboardList },
-          { title: "Hak Akses Payroll", path: "/org/payroll/roles", icon: Settings },
-          { title: "Integrasi Payroll", path: "/org/payroll/integrations", icon: Database },
-          { title: "Bantuan Payroll", path: "/org/payroll/help", icon: LifeBuoy },
-        ]),
-      },
-    ],
-  },
-  {
     label: "Pengaturan",
     items: [
       { title: "Pengaturan Umum", icon: Settings, path: "/org/settings" },
@@ -360,138 +372,15 @@ const PAYROLL_MENU_SECTIONS: PayrollMenuSection[] = [
       "/org/payroll/payment",
       "/org/payroll/tax-compliance",
       "/org/payroll/audit-log",
-      "/org/payroll/error-log",
       "/org/payroll/integrations",
     ],
   },
   {
     title: "Pengaturan",
     icon: Settings,
-    paths: ["/org/payroll/roles", "/org/payroll/help"],
+    paths: ["/org/payroll/compliance-master", "/org/payroll/roles", "/org/payroll/help"],
   },
 ];
-
-const HR_MENU_SECTIONS: HrMenuSection[] = [
-  {
-    label: "Beranda",
-    title: "Beranda HR",
-    icon: LayoutDashboard,
-    subItems: withHrSidebarBadges([{ title: "Ringkasan HR", path: "/org/hr", icon: LayoutDashboard }]),
-  },
-  {
-    label: "Organisasi",
-    title: "Organisasi",
-    icon: Building2,
-    subItems: withHrSidebarBadges([
-      { title: "Struktur Organisasi", path: "/org/hr/structure", icon: Building2 },
-      { title: "Jabatan dan Grade", path: "/org/hr/position-grade", icon: Briefcase },
-    ]),
-  },
-  {
-    label: "Pegawai",
-    title: "Pegawai",
-    icon: Users,
-    subItems: withHrSidebarBadges([
-      { title: "Data Pegawai", path: "/org/hr/employees", icon: Users },
-      { title: "Status Kepegawaian", path: "/org/hr/employee-status", icon: UserCheck },
-      { title: "Riwayat Jabatan", path: "/org/hr/job-history", icon: Briefcase },
-      { title: "Persetujuan Mutasi", path: "/org/hr/mutation-approval", icon: FolderTree },
-      { title: "Kontrak Kerja", path: "/org/hr/contracts", icon: FileText },
-    ]),
-  },
-  {
-    label: "Administrasi HR",
-    title: "Administrasi HR",
-    icon: Settings,
-    subItems: withHrSidebarBadges([
-      { title: "Dokumen HR", path: "/org/hr/documents", icon: FileText },
-      { title: "Templat Dokumen", path: "/org/hr/document-templates", icon: FileText },
-      { title: "Jenis Cuti", path: "/org/hr/leave-types", icon: ClipboardList },
-      { title: "Kuota Cuti", path: "/org/hr/leave-quota", icon: ListChecks },
-      { title: "Pengaturan HR", path: "/org/hr/settings", icon: Settings },
-      { title: "Hierarki Persetujuan", path: "/org/hr/approval-hierarchy", icon: UserCheck },
-    ]),
-  },
-  {
-    label: "Operasional",
-    title: "Operasional",
-    icon: Activity,
-    subItems: withHrSidebarBadges([
-      { title: "Proses Masuk Pegawai", path: "/org/hr/onboarding", icon: UserCheck },
-      { title: "Proses Keluar Pegawai", path: "/org/hr/offboarding", icon: LogOut },
-      { title: "Pengaturan Keterlambatan", path: "/org/hr/late-settings", icon: AlertTriangle },
-      { title: "Laporan HR", path: "/org/hr/reports", icon: FileSpreadsheet },
-      { title: "Analitik Kehadiran HR", path: "/org/hr/attendance-insights", icon: Activity },
-    ]),
-  },
-  {
-    label: "Kinerja",
-    title: "Kinerja",
-    icon: Activity,
-    subItems: withHrSidebarBadges([
-      { title: "KPI", path: "/org/hr/kpi", icon: Activity },
-      { title: "Periode Penilaian", path: "/org/hr/performance-periods", icon: Calendar },
-      { title: "Form Penilaian", path: "/org/hr/performance-forms", icon: ClipboardList },
-      { title: "Ulasan 360", path: "/org/hr/review-360", icon: Users },
-      { title: "Hasil Evaluasi", path: "/org/hr/evaluation-results", icon: FileSpreadsheet },
-    ]),
-  },
-  {
-    label: "Pengembangan",
-    title: "Pengembangan",
-    icon: GraduationCap,
-    subItems: withHrSidebarBadges([
-      { title: "Data Pelatihan", path: "/org/hr/training-data", icon: GraduationCap },
-      { title: "Sertifikasi", path: "/org/hr/certifications", icon: Award },
-      { title: "Matriks Kompetensi", path: "/org/hr/skill-matrix", icon: BrainCircuit },
-    ]),
-  },
-  {
-    label: "Rekrutmen",
-    title: "Rekrutmen",
-    icon: Briefcase,
-    subItems: withHrSidebarBadges([
-      { title: "Lowongan Kerja", path: "/org/hr/recruitment/jobs", icon: Briefcase },
-      { title: "Kandidat", path: "/org/hr/recruitment/candidates", icon: Users },
-      { title: "Tahap Interview", path: "/org/hr/recruitment/interviews", icon: ClipboardList },
-      { title: "Penawaran Kerja", path: "/org/hr/recruitment/offers", icon: FileText },
-    ]),
-  },
-  {
-    label: "ESS",
-    title: "ESS",
-    icon: UserCheck,
-    subItems: withHrSidebarBadges([
-      { title: "Pengajuan Saya", path: "/org/hr/ess/requests", icon: ClipboardList },
-      { title: "Cuti dan Izin Saya", path: "/org/hr/ess/leave-requests", icon: FileText },
-      { title: "WFH Pegawai", path: "/org/hr/ess/wfh-requests", icon: Home },
-      { title: "Absensi Khusus", path: "/org/hr/ess/flexible-attendance", icon: MapPin },
-      { title: "Lembur Pegawai", path: "/org/hr/ess/overtime-requests", icon: Timer },
-      { title: "Kehadiran Saya", path: "/org/hr/ess/attendance", icon: Activity },
-      { title: "Dokumen Saya", path: "/org/hr/ess/documents", icon: FileText },
-      { title: "Profil Saya", path: "/org/hr/ess/profile", icon: UserCheck },
-    ]),
-  },
-  {
-    label: "Bantuan",
-    title: "Bantuan",
-    icon: HelpCircle,
-    subItems: withHrSidebarBadges([
-      { title: "FAQ HR", path: "/org/hr/help/faq", icon: HelpCircle },
-      { title: "Tiket HR", path: "/org/hr/help/tickets", icon: Ticket },
-      { title: "Log Error HR", path: "/org/hr/help/error-logs", icon: ClipboardList },
-    ]),
-  },
-];
-
-const HR_FOCUSED_MENU_GROUPS: MenuGroup[] = HR_MENU_SECTIONS.map((section) => ({
-  label: section.label,
-  items: section.subItems.map((subItem) => ({
-    title: subItem.title,
-    icon: subItem.icon,
-    path: subItem.path,
-  })),
-}));
 
 interface OrganizationSidebarProps {
   organizationName?: string;
@@ -500,6 +389,7 @@ interface OrganizationSidebarProps {
   workspaceModules?: OrgWorkspaceModules;
   activeTenantId?: string | null;
   currentUserId?: string | null;
+  workspaceAccessState?: TenantHrPayrollAccessState | null;
 }
 
 export function OrganizationSidebar({
@@ -509,6 +399,7 @@ export function OrganizationSidebar({
   workspaceModules = DEFAULT_ORG_WORKSPACE_MODULES,
   activeTenantId = null,
   currentUserId = null,
+  workspaceAccessState = null,
 }: OrganizationSidebarProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -589,6 +480,11 @@ export function OrganizationSidebar({
   };
 
   const handleNavigation = (path: string) => {
+    if (path.startsWith("/manuals/") || path.endsWith(".pdf")) {
+      window.open(path, "_blank", "noopener,noreferrer");
+      if (isMobile) setOpenMobile(false);
+      return;
+    }
     navigate(path);
     if (isMobile) {
       setOpenMobile(false);
@@ -602,7 +498,7 @@ export function OrganizationSidebar({
 
   const baseMenuGroups = useMemo<MenuGroup[]>(
     () =>
-      MENU_GROUPS.map((group) => {
+      [...BASE_MENU_GROUPS, { label: "HRIS", items: HRIS_MENU_ITEMS }].map((group) => {
         if (group.label !== "Master Data") return group;
         return {
           ...group,
@@ -716,7 +612,9 @@ export function OrganizationSidebar({
       }))
       .filter((item) => (item.subItems?.length ?? 0) > 0);
 
-    return [{ label: "Payroll", items: groupedPayrollItems }].filter((group) => group.items.length > 0);
+    return [
+      { label: "Payroll", items: groupedPayrollItems },
+    ].filter((group) => group.items.length > 0);
   }, [
     accessLevel,
     currentWorkspace,
@@ -818,6 +716,15 @@ export function OrganizationSidebar({
       : hasOnboardingIncomplete
         ? "TIDAK SIAP"
         : "SIAP";
+  const hrWorkspaceBadge =
+    workspaceAccessState && workspaceModules.hr
+      ? `HR ${getWorkspaceModeLabel(workspaceAccessState.hrMode)}`
+      : null;
+  const payrollWorkspaceBadge =
+    workspaceAccessState && workspaceModules.payroll
+      ? `Payroll ${getWorkspaceModeLabel(workspaceAccessState.payrollMode)}`
+      : null;
+  const accessStageBadge = workspaceAccessState ? getAccessStageLabel(workspaceAccessState.stage) : null;
 
   const renderMenuItem = (item: MenuItem) => {
     if (item.subItems) {
@@ -938,6 +845,23 @@ export function OrganizationSidebar({
             <div className="flex flex-col min-w-0">
               <span className="font-bold text-sidebar-foreground truncate">{organizationName}</span>
               <span className="text-xs text-sidebar-foreground/70">{organizationType}</span>
+              {accessLevel === "admin" && accessStageBadge ? (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  <Badge variant="outline" className="h-5 border-sidebar-border/60 bg-sidebar-accent/20 px-1.5 text-[10px]">
+                    {accessStageBadge}
+                  </Badge>
+                  {hrWorkspaceBadge ? (
+                    <Badge variant="outline" className="h-5 border-sidebar-border/60 bg-sidebar-accent/20 px-1.5 text-[10px]">
+                      {hrWorkspaceBadge}
+                    </Badge>
+                  ) : null}
+                  {payrollWorkspaceBadge ? (
+                    <Badge variant="outline" className="h-5 border-sidebar-border/60 bg-sidebar-accent/20 px-1.5 text-[10px]">
+                      {payrollWorkspaceBadge}
+                    </Badge>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           )}
         </div>

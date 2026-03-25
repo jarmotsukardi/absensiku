@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,8 +26,11 @@ import { OrganizationOffices } from "@/components/admin/organization/Organizatio
 import { OrganizationSubscription } from "@/components/admin/organization/OrganizationSubscription";
 import { OrganizationSettings } from "@/components/admin/organization/OrganizationSettings";
 import { OrganizationAuditLog } from "@/components/admin/organization/OrganizationAuditLog";
+import { AdminOrgOverlayDialog } from "@/components/admin/organization/AdminOrgOverlayDialog";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import { useAdminOrgContextNavigate } from "@/hooks/useAdminOrgContextNavigate";
+import { ADMIN_ORG_EMBED_PARAM } from "@/lib/adminOrgOverlay";
 
 interface Organization {
   id: string;
@@ -53,12 +56,19 @@ export default function OrganizationDetail() {
   const ADMIN_ORG_DETAIL_QUERY_TIMEOUT_MS = 15000;
   const ADMIN_ORG_DETAIL_QUERY_RETRY_MAX = 1;
   const navigate = useNavigate();
+  const navigateWithOverlay = useAdminOrgContextNavigate();
+  const [searchParams] = useSearchParams();
+  const isEmbeddedFromAdminOrgOverlay = searchParams.get(ADMIN_ORG_EMBED_PARAM) === "1";
+  const requestedTab = searchParams.get("tab");
   const { id: orgId } = useParams();
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRetrying, setIsRetrying] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState("overview");
+  const [activeTab, setActiveTab] = useState(() => {
+    const validTabs = new Set(["overview", "employees", "offices", "subscription", "settings", "audit"]);
+    return requestedTab && validTabs.has(requestedTab) ? requestedTab : "overview";
+  });
   const [stats, setStats] = useState({
     employeesCount: 0,
     officesCount: 0,
@@ -94,7 +104,7 @@ export default function OrganizationDetail() {
       const message = appendErrorReference("Gagal memuat data organisasi", errorRef);
       setLoadError(message);
       toast.error(message);
-      navigate("/admin");
+      navigate("/admin/organizations");
     } finally {
       setIsLoading(false);
       setIsRetrying(false);
@@ -107,6 +117,13 @@ export default function OrganizationDetail() {
       fetchStats(orgId);
     }
   }, [orgId, fetchOrganization]);
+
+  useEffect(() => {
+    const validTabs = new Set(["overview", "employees", "offices", "subscription", "settings", "audit"]);
+    if (requestedTab && validTabs.has(requestedTab)) {
+      setActiveTab(requestedTab);
+    }
+  }, [requestedTab]);
 
   const fetchStats = async (tenantId: string) => {
     try {
@@ -174,7 +191,7 @@ export default function OrganizationDetail() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className={`${isEmbeddedFromAdminOrgOverlay ? "flex min-h-[320px]" : "min-h-screen"} bg-background items-center justify-center`}>
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
       </div>
     );
@@ -183,22 +200,24 @@ export default function OrganizationDetail() {
   if (!organization) return null;
 
   const tabs = [
-    { id: "overview", label: "Overview", icon: Building2 },
+    { id: "overview", label: "Ringkasan", icon: Building2 },
     { id: "employees", label: "Pegawai", icon: Users },
     { id: "offices", label: "Kantor", icon: MapPin },
     { id: "subscription", label: "Langganan", icon: CreditCard },
     { id: "settings", label: "Pengaturan", icon: Settings },
-    { id: "audit", label: "Audit Log", icon: FileText },
+    { id: "audit", label: "Log Audit", icon: FileText },
   ];
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className={`${isEmbeddedFromAdminOrgOverlay ? "bg-background" : "min-h-screen bg-background"}`}>
       <header className="bg-card border-b border-border">
-        <div className="container mx-auto px-4 py-4">
+        <div className={`${isEmbeddedFromAdminOrgOverlay ? "px-4 py-4" : "container mx-auto px-4 py-4"}`}>
           <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => navigate("/admin")}>
-              <ArrowLeft className="h-5 w-5" />
-            </Button>
+            {!isEmbeddedFromAdminOrgOverlay ? (
+              <Button variant="ghost" size="icon" onClick={() => navigate("/admin/organizations")}>
+                <ArrowLeft className="h-5 w-5" />
+              </Button>
+            ) : null}
             <div className="flex-1">
               <div className="flex items-center gap-3">
                 <h1 className="text-xl font-bold text-foreground">{organization.name}</h1>
@@ -213,18 +232,18 @@ export default function OrganizationDetail() {
                 Kode: {organization.code} • Terdaftar {organization.created_at ? format(new Date(organization.created_at), "d MMMM yyyy", { locale: id }) : "-"}
               </p>
             </div>
-            <Button onClick={() => navigate(`/admin/organizations/${orgId}/edit`)}>
+            <Button onClick={() => navigateWithOverlay(`/admin/organizations/${orgId}/edit`)}>
               Edit Organisasi
             </Button>
           </div>
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8">
+      <main className={`${isEmbeddedFromAdminOrgOverlay ? "px-4 py-6" : "container mx-auto px-4 py-8"}`}>
         {isRetrying && (
           <Card className="mb-4 border-amber-300/60 bg-amber-50">
             <CardContent className="pt-4">
-              <p className="text-sm text-amber-800">Sedang mencoba ulang koneksi data detail organisasi...</p>
+              <p className="text-sm text-amber-800">Sedang mencoba ulang koneksi data rincian organisasi...</p>
             </CardContent>
           </Card>
         )}
@@ -295,7 +314,7 @@ export default function OrganizationDetail() {
             <Card className="mt-6">
               <CardHeader>
                 <CardTitle>Informasi Organisasi</CardTitle>
-                <CardDescription>Detail lengkap organisasi</CardDescription>
+                <CardDescription>Rincian lengkap organisasi</CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="grid gap-4 md:grid-cols-2">
@@ -367,6 +386,7 @@ export default function OrganizationDetail() {
           </TabsContent>
         </Tabs>
       </main>
+      <AdminOrgOverlayDialog />
     </div>
   );
 }

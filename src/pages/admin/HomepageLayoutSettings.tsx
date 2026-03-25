@@ -7,11 +7,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { toast } from "sonner";
 import { 
-  GripVertical, Save, Layout, Image, FileText, Users, CreditCard, HelpCircle, Phone, Loader2, Megaphone, PanelRight, BarChart3, Newspaper, FileCheck, Share2, Info, Link2, Download, HeartHandshake, MessageSquare, ChevronDown,
+  GripVertical, Save, Layout, Image, FileText, Users, CreditCard, HelpCircle, Phone, Loader2, Megaphone, PanelRight, BarChart3, Newspaper, FileCheck, Share2, Info, Link2, Download, HeartHandshake, MessageSquare, ChevronDown, ArrowDown, ArrowUp,
 } from "lucide-react";
 import { BannerPromoSettings } from "@/components/admin/settings/BannerPromoSettings";
 import { BannerSidebarSettings } from "@/components/admin/settings/BannerSidebarSettings";
@@ -35,8 +35,10 @@ import { PromoSidebarSettings } from "@/components/admin/settings/PromoSidebarSe
 import { TargetSegmentSettings } from "@/components/admin/settings/TargetSegmentSettings";
 import { HomepageChatAgentSettings } from "@/components/admin/settings/HomepageChatAgentSettings";
 import { useNavigate } from "react-router-dom";
+import { Helmet } from "react-helmet-async";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import { getHomepagePinnedPlacement, stabilizeHomepageSectionRecords } from "@/lib/homepageLayout";
 
 interface HomepageSection {
   id: string;
@@ -88,7 +90,7 @@ const HOMEPAGE_TAB_GROUPS: Array<{
       { value: "cta", label: "CTA", icon: Phone },
       { value: "chat_agent", label: "Chat Agent", icon: MessageSquare },
       { value: "promo", label: "Promosi", icon: Megaphone },
-      { value: "download", label: "Download", icon: Download },
+      { value: "download", label: "Unduhan", icon: Download },
     ],
   },
   {
@@ -96,7 +98,7 @@ const HOMEPAGE_TAB_GROUPS: Array<{
     description: "Kelola footer, link penting, branding, dan area promosi.",
     items: [
       { value: "footer", label: "Footer", icon: Layout },
-      { value: "quicklinks", label: "Quick Links", icon: Link2 },
+      { value: "quicklinks", label: "Tautan Cepat", icon: Link2 },
       { value: "legal", label: "Legal", icon: FileCheck },
       { value: "social", label: "Sosmed", icon: Share2 },
       { value: "banners", label: "Banner", icon: Megaphone },
@@ -118,15 +120,76 @@ export default function HomepageLayoutSettings() {
   const [activeTab, setActiveTab] = useState("layout");
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [pendingSectionIds, setPendingSectionIds] = useState<string[]>([]);
+  const [isAccessReady, setIsAccessReady] = useState(false);
+  const [isAccessGranted, setIsAccessGranted] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({
     "Konversi & Engagement": true,
     "Navigasi & Branding": true,
   });
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const verifyAccess = async () => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+
+        if (!isMounted || !session?.user) {
+          if (isMounted) {
+            setIsAccessGranted(false);
+            setIsAccessReady(true);
+          }
+          return;
+        }
+
+        const { data: isSuperAdminByRpc } = await supabase.rpc("is_super_admin", {
+          _user_id: session.user.id,
+        });
+
+        if (!isMounted) return;
+
+        if (isSuperAdminByRpc === true) {
+          setIsAccessGranted(true);
+          setIsAccessReady(true);
+          return;
+        }
+
+        const { data: roles } = await supabase
+          .from("user_roles")
+          .select("role")
+          .eq("user_id", session.user.id)
+          .eq("role", "super_admin")
+          .limit(1);
+
+        if (!isMounted) return;
+
+        setIsAccessGranted(Boolean(roles?.length));
+      } catch {
+        if (isMounted) {
+          setIsAccessGranted(false);
+        }
+      } finally {
+        if (isMounted) {
+          setIsAccessReady(true);
+        }
+      }
+    };
+
+    void verifyAccess();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
   const fetchSections = useCallback(async () => {
     try {
       setLoadError(null);
       setIsRetrying(false);
+      setIsLoading(true);
       const { data, error } = await withExponentialBackoff(
         () =>
           withTimeout(
@@ -141,7 +204,7 @@ export default function HomepageLayoutSettings() {
         }
       );
       if (error) throw error;
-      setSections(data || []);
+      setSections(stabilizeHomepageSectionRecords(data || []));
     } catch (error) {
       const errorRef = reportError(error, "admin.homepage_layout.fetch_sections");
       const message = appendErrorReference("Gagal memuat data layout homepage", errorRef);
@@ -152,11 +215,16 @@ export default function HomepageLayoutSettings() {
     }
   }, []);
 
-  useEffect(() => { void fetchSections(); }, [fetchSections]);
+  useEffect(() => {
+    if (!isAccessGranted) return;
+    void fetchSections();
+  }, [fetchSections, isAccessGranted]);
 
   const handleToggle = async (id: string, isEnabled: boolean) => {
+    if (pendingSectionIds.includes(id)) return;
     try {
       setIsRetrying(false);
+      setPendingSectionIds((prev) => [...prev, id]);
       const { error } = await withExponentialBackoff(
         () =>
           withTimeout(
@@ -182,19 +250,37 @@ export default function HomepageLayoutSettings() {
         is_enabled: isEnabled,
       });
       toast.error(`Gagal mengubah status (Ref: ${errorRef})`);
+      void fetchSections();
+    } finally {
+      setPendingSectionIds((prev) => prev.filter((currentId) => currentId !== id));
     }
   };
 
-  const handleDragStart = (index: number) => setDraggedItem(index);
+  const moveSection = (fromIndex: number, toIndex: number) => {
+    if (toIndex < 0 || toIndex >= sections.length || fromIndex === toIndex) return;
+    if (getHomepagePinnedPlacement(sections[fromIndex]?.section_key || "")) return;
+    if (getHomepagePinnedPlacement(sections[toIndex]?.section_key || "")) return;
+    setSections((prev) => {
+      const next = [...prev];
+      const [movedSection] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, movedSection);
+      return stabilizeHomepageSectionRecords(next);
+    });
+  };
+
+  const handleDragStart = (index: number) => {
+    if (getHomepagePinnedPlacement(sections[index]?.section_key || "")) return;
+    setDraggedItem(index);
+  };
   const handleDragOver = (e: React.DragEvent, index: number) => {
     e.preventDefault();
     if (draggedItem === null || draggedItem === index) return;
+    if (getHomepagePinnedPlacement(sections[index]?.section_key || "")) return;
     const newSections = [...sections];
     const draggedSection = newSections[draggedItem];
     newSections.splice(draggedItem, 1);
     newSections.splice(index, 0, draggedSection);
-    newSections.forEach((s, i) => { s.sort_order = i + 1; });
-    setSections(newSections);
+    setSections(stabilizeHomepageSectionRecords(newSections));
     setDraggedItem(index);
   };
   const handleDragEnd = () => setDraggedItem(null);
@@ -204,17 +290,23 @@ export default function HomepageLayoutSettings() {
     try {
       setIsRetrying(false);
       const updatedAt = new Date().toISOString();
-      const results = await withExponentialBackoff(
+      const { error } = await withExponentialBackoff(
         () =>
           withTimeout(
-            Promise.all(
-              sections.map((section) =>
-                supabase
-                  .from("homepage_sections")
-                  .update({ sort_order: section.sort_order, updated_at: updatedAt })
-                  .eq("id", section.id),
-              )
-            ),
+            supabase
+              .from("homepage_sections")
+              .upsert(
+                sections.map((section) => ({
+                  id: section.id,
+                  section_key: section.section_key,
+                  section_name: section.section_name,
+                  is_enabled: section.is_enabled,
+                  settings: section.settings,
+                  sort_order: section.sort_order,
+                  updated_at: updatedAt,
+                })),
+                { onConflict: "id" }
+              ),
             HOMEPAGE_LAYOUT_QUERY_TIMEOUT_MS,
             "admin.homepage_layout.save_order timeout"
           ),
@@ -224,16 +316,15 @@ export default function HomepageLayoutSettings() {
           onRetry: () => setIsRetrying(true),
         }
       );
-      const failed = results.find((result) => result.error);
-      if (failed?.error) {
-        throw failed.error;
-      }
+      if (error) throw error;
+      void fetchSections();
       toast.success("Urutan berhasil disimpan");
     } catch (error) {
       const errorRef = reportError(error, "admin.homepage_layout.save_order", {
         section_count: sections.length,
       });
       toast.error(`Gagal menyimpan urutan (Ref: ${errorRef})`);
+      void fetchSections();
     } finally {
       setIsSaving(false);
     }
@@ -246,12 +337,15 @@ export default function HomepageLayoutSettings() {
     }));
   };
 
-  if (isLoading) {
+  if (!isAccessReady || !isAccessGranted || isLoading) {
     return (<SuperAdminLayout><div className="flex items-center justify-center h-64"><Loader2 className="h-8 w-8 animate-spin" /></div></SuperAdminLayout>);
   }
 
   return (
     <SuperAdminLayout>
+      <Helmet>
+        <title>Admin - Tata Letak Homepage | AbsensiKu</title>
+      </Helmet>
       <div className="mx-auto w-full max-w-7xl space-y-6">
         {isRetrying && (
           <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
@@ -267,8 +361,8 @@ export default function HomepageLayoutSettings() {
           </div>
         )}
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2"><Layout className="h-6 w-6" />Pengaturan Layout Halaman Depan</h1>
-          <p className="text-muted-foreground">Atur section, banner, dan konten halaman utama</p>
+          <h1 className="text-2xl font-bold flex items-center gap-2"><Layout className="h-6 w-6" />Pengaturan Tata Letak Halaman Depan</h1>
+          <p className="text-muted-foreground">Atur bagian, banner, dan konten halaman utama</p>
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -317,29 +411,21 @@ export default function HomepageLayoutSettings() {
                       )}
                     </div>
                     <CollapsibleContent forceMount className={collapsedGroups[group.title] ? "hidden" : ""}>
-                      <div className="mt-2 grid grid-cols-2 gap-1.5 md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+                      <TabsList className="mt-2 grid h-auto grid-cols-2 gap-1.5 border-0 bg-transparent p-0 shadow-none md:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
                         {group.items.map((item) => {
                           const Icon = item.icon;
-                          const isActive = activeTab === item.value;
                           return (
-                            <Button
+                            <TabsTrigger
                               key={item.value}
-                              type="button"
-                              variant={isActive ? "default" : "outline"}
-                              size="sm"
-                              onClick={() => setActiveTab(item.value)}
-                              className={`h-8 justify-start gap-1.5 rounded-md px-2 text-left text-xs ${
-                                isActive
-                                  ? "shadow-sm"
-                                  : "border-slate-200/70 bg-white hover:bg-slate-50"
-                              }`}
+                              value={item.value}
+                              className="h-8 justify-start gap-1.5 rounded-md border border-slate-200/70 bg-white px-2 text-left text-xs shadow-none hover:bg-slate-50 data-[state=active]:shadow-sm"
                             >
                               <Icon className="h-3.5 w-3.5 shrink-0" />
                               <span className="truncate">{item.label}</span>
-                            </Button>
+                            </TabsTrigger>
                           );
                         })}
-                      </div>
+                      </TabsList>
                     </CollapsibleContent>
                   </div>
                 </Collapsible>
@@ -351,7 +437,12 @@ export default function HomepageLayoutSettings() {
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
-                  <div><CardTitle>Section Halaman Depan</CardTitle><CardDescription>Drag & drop untuk mengubah urutan</CardDescription></div>
+                  <div>
+                    <CardTitle>Bagian Halaman Depan</CardTitle>
+                    <CardDescription>
+                      Urutan tengah tetap bisa diatur. Bagian inti seperti hero, solusi, pricing, CTA, dan footer dipin agar landing publik tetap stabil.
+                    </CardDescription>
+                  </div>
                   <Button onClick={handleSaveOrder} disabled={isSaving}>{isSaving ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Save className="h-4 w-4 mr-2" />}Simpan Urutan</Button>
                 </div>
               </CardHeader>
@@ -359,18 +450,63 @@ export default function HomepageLayoutSettings() {
                 <div className="space-y-2">
                   {sections.map((section, index) => {
                     const IconComponent = sectionIcons[section.section_key] || Layout;
+                    const pinnedPlacement = getHomepagePinnedPlacement(section.section_key);
+                    const isPinned = Boolean(pinnedPlacement);
                     return (
-                      <div key={section.id} draggable onDragStart={() => handleDragStart(index)} onDragOver={(e) => handleDragOver(e, index)} onDragEnd={handleDragEnd}
+                      <div key={section.id} draggable={!isPinned} onDragStart={() => handleDragStart(index)} onDragOver={(e) => handleDragOver(e, index)} onDragEnd={handleDragEnd}
                         className={`flex items-center gap-4 p-4 rounded-lg border bg-card transition-all ${draggedItem === index ? "opacity-50 border-primary" : ""} ${!section.is_enabled ? "opacity-60" : ""}`}>
-                        <div className="cursor-grab active:cursor-grabbing"><GripVertical className="h-5 w-5 text-muted-foreground" /></div>
+                        <div className={isPinned ? "cursor-not-allowed opacity-40" : "cursor-grab active:cursor-grabbing"}>
+                          <GripVertical className="h-5 w-5 text-muted-foreground" />
+                        </div>
                         <div className="flex items-center gap-3 flex-1">
                           <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${section.is_enabled ? "bg-primary/10" : "bg-muted"}`}>
                             <IconComponent className={`h-5 w-5 ${section.is_enabled ? "text-primary" : "text-muted-foreground"}`} />
                           </div>
-                          <div><p className="font-medium">{section.section_name}</p><p className="text-sm text-muted-foreground">Key: {section.section_key}</p></div>
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-medium">{section.section_name}</p>
+                              {pinnedPlacement && (
+                                <Badge variant="outline" className="text-xs">
+                                  Dipin di {pinnedPlacement === "top" ? "atas" : "bawah"}
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-sm text-muted-foreground">Key: {section.section_key}</p>
+                          </div>
                         </div>
                         <Badge variant={section.is_enabled ? "default" : "secondary"}>{section.is_enabled ? "Aktif" : "Nonaktif"}</Badge>
-                        <Switch checked={section.is_enabled} onCheckedChange={(checked) => handleToggle(section.id, checked)} />
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={() => moveSection(index, index - 1)}
+                              disabled={isSaving || index === 0 || isPinned}
+                              aria-label={`Pindahkan ${section.section_name} ke atas`}
+                            >
+                              <ArrowUp className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              className="h-8 w-8"
+                              onClick={() => moveSection(index, index + 1)}
+                              disabled={isSaving || index === sections.length - 1 || isPinned}
+                              aria-label={`Pindahkan ${section.section_name} ke bawah`}
+                            >
+                              <ArrowDown className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          <Switch
+                            checked={section.is_enabled}
+                            disabled={pendingSectionIds.includes(section.id)}
+                            onCheckedChange={(checked) => handleToggle(section.id, checked)}
+                            aria-label={`Ubah status ${section.section_name}`}
+                          />
+                        </div>
                       </div>
                     );
                   })}

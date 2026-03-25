@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -93,6 +94,9 @@ const formatDateTime = (value: string | null) => {
 
 export default function OrgPayrollSlips() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target));
   const confirmDialog = useConfirmDialog();
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [runs, setRuns] = useState<PayrollRun[]>([]);
@@ -379,7 +383,7 @@ export default function OrgPayrollSlips() {
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
-    toast.success("Export CSV slip payroll berhasil");
+    toast.success("Ekspor CSV slip payroll berhasil");
   };
 
   return (
@@ -416,7 +420,7 @@ export default function OrgPayrollSlips() {
             </CardHeader>
             <CardContent className="space-y-3 text-sm text-muted-foreground">
               <p>Pastikan proses dan persetujuan payroll sudah beres sebelum slip dipublikasikan.</p>
-              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/approval")}>
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/payroll/approval")}>
                 Buka Persetujuan Payroll
               </Button>
             </CardContent>
@@ -438,7 +442,7 @@ export default function OrgPayrollSlips() {
                   className="pl-9"
                   value={searchTerm}
                   onChange={(event) => setSearchTerm(event.target.value)}
-                  placeholder="Cari nomor slip, trace id, catatan, atau URL PDF..."
+                  placeholder="Cari nomor slip, ID trace, catatan, atau URL PDF..."
                 />
               </div>
             </div>
@@ -478,11 +482,11 @@ export default function OrgPayrollSlips() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => navigate("/org/payroll/approval")}>
+              <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll/approval")}>
                 <ArrowLeft className="mr-2 h-4 w-4" />Persetujuan Payroll
               </Button>
               <Button onClick={openCreateDialog}><Plus className="mr-2 h-4 w-4" />Tambah Slip</Button>
-              <Button variant="secondary" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+              <Button variant="secondary" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Ekspor CSV</Button>
             </div>
 
             {loadError ? <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{loadError}</div> : null}
@@ -635,7 +639,7 @@ export default function OrgPayrollSlips() {
                   <Input id="pdf_url" value={formState.pdf_url} onChange={(event) => setFormState((prev) => ({ ...prev, pdf_url: event.target.value }))} placeholder="https://..." />
                 </div>
                 <div className="grid gap-1.5">
-                  <Label htmlFor="trace_id">Trace ID</Label>
+                  <Label htmlFor="trace_id">ID Trace</Label>
                   <Input id="trace_id" value={formState.trace_id} onChange={(event) => setFormState((prev) => ({ ...prev, trace_id: event.target.value }))} />
                 </div>
               </div>

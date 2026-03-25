@@ -26,22 +26,46 @@ interface Notification {
   link?: string;
 }
 
-const REALTIME_WARNING_SESSION_KEY = "employee:persistent_notifications:realtime_warning";
+const REALTIME_WARNING_STORAGE_KEY_PREFIX = "employee:persistent_notifications:realtime_warning";
+const REALTIME_WARNING_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 
-const showRealtimeWarningOncePerSession = (cb: () => void) => {
+const showRealtimeWarningWithCooldown = (userId: string | null, cb: () => void) => {
+  const key = `${REALTIME_WARNING_STORAGE_KEY_PREFIX}:${userId || "anonymous"}`;
   try {
-    if (sessionStorage.getItem(REALTIME_WARNING_SESSION_KEY) === "1") return;
+    const now = Date.now();
+    const lastShownRaw = localStorage.getItem(key);
+    const lastShownAt = lastShownRaw ? Number(lastShownRaw) : 0;
+    if (Number.isFinite(lastShownAt) && now - lastShownAt < REALTIME_WARNING_COOLDOWN_MS) return;
+
     cb();
-    sessionStorage.setItem(REALTIME_WARNING_SESSION_KEY, "1");
+    localStorage.setItem(key, String(now));
   } catch {
     cb();
   }
+};
+
+const isNetworkFetchFailure = (error: unknown): boolean => {
+  const message =
+    error instanceof Error
+      ? `${error.name || ""} ${error.message || ""}`.toLowerCase()
+      : String(error || "").toLowerCase();
+  return (
+    message.includes("failed to fetch") ||
+    message.includes("networkerror") ||
+    message.includes("network request failed") ||
+    message.includes("load failed")
+  );
 };
 
 export function PersistentNotificationDialog() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isOpen, setIsOpen] = useState(false);
+  const [isRealtimeEnabled, setIsRealtimeEnabled] = useState(
+    typeof document === "undefined"
+      ? true
+      : document.visibilityState === "visible" && (typeof navigator === "undefined" ? true : navigator.onLine)
+  );
 
   const fetchUnreadNotifications = useCallback(async (userId?: string) => {
     let resolvedUserId = userId ?? null;
@@ -65,11 +89,31 @@ export function PersistentNotificationDialog() {
         setIsOpen(true);
       }
     } catch (error) {
+      if (isNetworkFetchFailure(error)) {
+        // Skip toast spam for transient network hiccups on background notification polling.
+        return;
+      }
       const errorRef = reportError(error, "employee.persistent_notifications.fetch_unread", {
         user_id: resolvedUserId,
       });
       toast.error(appendErrorReference("Gagal memuat notifikasi", errorRef));
     }
+  }, []);
+
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const syncRealtimeState = () => {
+      setIsRealtimeEnabled(document.visibilityState === "visible" && navigator.onLine);
+    };
+    syncRealtimeState();
+    document.addEventListener("visibilitychange", syncRealtimeState);
+    window.addEventListener("online", syncRealtimeState);
+    window.addEventListener("offline", syncRealtimeState);
+    return () => {
+      document.removeEventListener("visibilitychange", syncRealtimeState);
+      window.removeEventListener("online", syncRealtimeState);
+      window.removeEventListener("offline", syncRealtimeState);
+    };
   }, []);
 
   useEffect(() => {
@@ -84,8 +128,11 @@ export function PersistentNotificationDialog() {
       activeUserId = user.id;
       await fetchUnreadNotifications(activeUserId);
 
-      // Setup realtime subscription for new notifications.
+      if (!isRealtimeEnabled) return;
+
+      // Setup realtime subscription for new notifications only when tab is visible/online.
       // Keep channel broad and validate recipient in callback for reliability.
+      let realtimeErrorCount = 0;
       channel = supabase
         .channel('persistent-notifications')
         .on(
@@ -107,8 +154,17 @@ export function PersistentNotificationDialog() {
           }
         )
         .subscribe((status) => {
+          if (status === "SUBSCRIBED") {
+            realtimeErrorCount = 0;
+            return;
+          }
+
           if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-            showRealtimeWarningOncePerSession(() => {
+            if (typeof navigator !== "undefined" && !navigator.onLine) return;
+            realtimeErrorCount += 1;
+            if (realtimeErrorCount < 2) return;
+
+            showRealtimeWarningWithCooldown(activeUserId, () => {
               toast.warning("Realtime notifikasi sedang bermasalah. Notifikasi baru mungkin terlambat muncul.");
             });
           }
@@ -123,7 +179,7 @@ export function PersistentNotificationDialog() {
         supabase.removeChannel(channel);
       }
     };
-  }, [fetchUnreadNotifications]);
+  }, [fetchUnreadNotifications, isRealtimeEnabled]);
 
   const handleAcknowledge = async () => {
     const currentNotification = notifications[currentIndex];

@@ -20,6 +20,7 @@ import { format } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { Helmet } from "react-helmet-async";
 import DOMPurify from "dompurify";
+import { PUBLIC_BASE_URL, PUBLIC_LOGO_URL, usePublicSeoSettings } from "@/hooks/usePublicSeoSettings";
 
 interface ArticleData {
   id: string;
@@ -34,6 +35,7 @@ interface ArticleData {
 
 export default function NewsDetail() {
   const { id } = useParams<{ id: string }>();
+  const siteSeo = usePublicSeoSettings();
   const [article, setArticle] = useState<ArticleData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -162,21 +164,76 @@ export default function NewsDetail() {
 
   const excerpt = article.excerpt || stripHtml(article.content).substring(0, 160);
   const displayDate = article.published_at || article.created_at;
+  const canonicalUrl = `${PUBLIC_BASE_URL}/news/${id}`;
+  const ogImage = article.image_url || siteSeo.ogImage;
+  const articleJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Article",
+    headline: article.title,
+    description: excerpt,
+    datePublished: article.published_at || article.created_at,
+    dateModified: article.published_at || article.created_at,
+    mainEntityOfPage: canonicalUrl,
+    image: ogImage ? [ogImage] : undefined,
+    author: {
+      "@type": "Organization",
+      name: "AbsensiKu",
+    },
+    publisher: {
+      "@type": "Organization",
+      name: "AbsensiKu",
+      logo: {
+        "@type": "ImageObject",
+        url: PUBLIC_LOGO_URL,
+      },
+    },
+    articleSection: article.category || "Berita",
+  };
+  const breadcrumbJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      {
+        "@type": "ListItem",
+        position: 1,
+        name: "Beranda",
+        item: PUBLIC_BASE_URL,
+      },
+      {
+        "@type": "ListItem",
+        position: 2,
+        name: "Berita",
+        item: `${PUBLIC_BASE_URL}/news`,
+      },
+      {
+        "@type": "ListItem",
+        position: 3,
+        name: article.title,
+        item: canonicalUrl,
+      },
+    ],
+  };
 
   return (
     <>
       <Helmet>
         <title>{article.title} | AbsensiKu</title>
         <meta name="description" content={excerpt} />
+        <link rel="canonical" href={canonicalUrl} />
+        <meta property="og:site_name" content="AbsensiKu" />
         <meta property="og:title" content={article.title} />
         <meta property="og:description" content={excerpt} />
-        {article.image_url && <meta property="og:image" content={article.image_url} />}
+        {ogImage ? <meta property="og:image" content={ogImage} /> : null}
         <meta property="og:type" content="article" />
-        <meta property="og:url" content={shareUrl} />
+        <meta property="og:url" content={canonicalUrl} />
+        <meta property="article:published_time" content={article.published_at || article.created_at} />
+        {article.category ? <meta property="article:section" content={article.category} /> : null}
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:title" content={article.title} />
         <meta name="twitter:description" content={excerpt} />
-        {article.image_url && <meta name="twitter:image" content={article.image_url} />}
+        {ogImage ? <meta name="twitter:image" content={ogImage} /> : null}
+        <script type="application/ld+json">{JSON.stringify(articleJsonLd)}</script>
+        <script type="application/ld+json">{JSON.stringify(breadcrumbJsonLd)}</script>
       </Helmet>
 
       <div className="min-h-screen bg-background">

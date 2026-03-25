@@ -143,7 +143,7 @@ export default function AdminHRHelp() {
 
   return (
     <AdminHRPageShell
-      title="Pusat Bantuan HR"
+      title="Pusat Bantuan Platform HR"
       subtitle="Pusat bantuan dan eskalasi HR lintas tenant"
       description="Halaman ringkasan untuk navigasi cepat ke tiket, FAQ operasional, dan panduan dukungan HR."
     >

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +20,8 @@ import { z } from "zod";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { applyOrgOnboardingTemplateToTenant } from "@/lib/orgOnboardingTemplates";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import { AdminOrgOverlayDialog } from "@/components/admin/organization/AdminOrgOverlayDialog";
+import { ADMIN_ORG_EMBED_PARAM } from "@/lib/adminOrgOverlay";
 
 const organizationSchema = z.object({
   name: z.string().min(1, "Nama organisasi wajib diisi").max(200),
@@ -38,6 +40,8 @@ export default function OrganizationForm() {
   const ADMIN_ORG_FORM_QUERY_TIMEOUT_MS = 15000;
   const ADMIN_ORG_FORM_QUERY_RETRY_MAX = 1;
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const isEmbeddedFromAdminOrgOverlay = searchParams.get(ADMIN_ORG_EMBED_PARAM) === "1";
   const { id } = useParams();
   const isEdit = Boolean(id);
   
@@ -154,7 +158,7 @@ export default function OrganizationForm() {
       const message = appendErrorReference("Gagal memuat data organisasi", errorRef);
       setLoadError(message);
       toast.error(message);
-      navigate("/admin");
+      navigate("/admin/organizations");
     } finally {
       setIsFetching(false);
       setIsRetrying(false);
@@ -286,7 +290,7 @@ export default function OrganizationForm() {
             });
             toast.warning(
               appendErrorReference(
-                "Organisasi berhasil dibuat, tetapi template setup awal gagal disalin.",
+                "Organisasi berhasil dibuat, tetapi templat penyiapan awal gagal disalin.",
                 errorRef
               )
             );
@@ -296,7 +300,7 @@ export default function OrganizationForm() {
         toast.success("Organisasi berhasil ditambahkan");
       }
 
-      navigate("/admin");
+      navigate("/admin/organizations");
     } catch (error: unknown) {
       const isUniqueCodeError =
         typeof error === "object" &&
@@ -325,20 +329,22 @@ export default function OrganizationForm() {
 
   if (isFetching || !isAuthorized) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className={`${isEmbeddedFromAdminOrgOverlay ? "flex min-h-[320px]" : "min-h-screen"} bg-background items-center justify-center`}>
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className={`${isEmbeddedFromAdminOrgOverlay ? "bg-background" : "min-h-screen bg-background"}`}>
       <header className="bg-card border-b border-border">
-        <div className="container mx-auto px-4 py-4">
+        <div className={`${isEmbeddedFromAdminOrgOverlay ? "px-4 py-4" : "container mx-auto px-4 py-4"}`}>
           <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => navigate("/admin")}>
-              <ArrowLeft className="h-5 w-5" />
-            </Button>
+            {!isEmbeddedFromAdminOrgOverlay ? (
+              <Button variant="ghost" size="icon" onClick={() => navigate("/admin/organizations")}>
+                <ArrowLeft className="h-5 w-5" />
+              </Button>
+            ) : null}
             <div>
               <h1 className="text-xl font-bold text-foreground">
                 {isEdit ? "Edit Organisasi" : "Tambah Organisasi Baru"}
@@ -351,7 +357,7 @@ export default function OrganizationForm() {
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8 max-w-2xl">
+      <main className={`${isEmbeddedFromAdminOrgOverlay ? "max-w-2xl px-4 py-6" : "container mx-auto max-w-2xl px-4 py-8"}`}>
         {isRetrying && (
           <Card className="mb-4 border-amber-300/60 bg-amber-50">
             <CardContent className="pt-4">
@@ -491,7 +497,7 @@ export default function OrganizationForm() {
                   type="button"
                   variant="outline"
                   className="flex-1"
-                  onClick={() => navigate("/admin")}
+                  onClick={() => navigate("/admin/organizations")}
                 >
                   Batal
                 </Button>
@@ -513,6 +519,7 @@ export default function OrganizationForm() {
           </CardContent>
         </Card>
       </main>
+      <AdminOrgOverlayDialog />
     </div>
   );
 }

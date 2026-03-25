@@ -1,4 +1,5 @@
 import { useEffect, type PropsWithChildren } from "react";
+import { useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import {
   getAndroidBridge,
@@ -7,9 +8,14 @@ import {
 } from "@/lib/androidBridge";
 
 export function AndroidSessionSync({ children }: PropsWithChildren) {
+  const location = useLocation();
+
   useEffect(() => {
     const bridge = getAndroidBridge();
     if (!bridge) return;
+    if (location.pathname === "/employee/native-bootstrap") {
+      return;
+    }
 
     const syncCurrentSession = async () => {
       const {
@@ -54,7 +60,7 @@ export function AndroidSessionSync({ children }: PropsWithChildren) {
     });
 
     return () => subscription.unsubscribe();
-  }, []);
+  }, [location.pathname]);
 
   return <>{children}</>;
 }

@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
 import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import { resolveOrgTenantIdWithQueryOverride } from "@/lib/orgTenantContext";
 import {
   isRetryableError,
   withExponentialBackoff,
@@ -57,6 +59,8 @@ const WORK_UNITS_MAX_RETRIES = 2;
 
 export default function OrgWorkUnitsManagement() {
   const confirmDialog = useConfirmDialog();
+  const [searchParams] = useSearchParams();
+  const queryTenantId = searchParams.get("tenant_id");
   const [workUnits, setWorkUnits] = useState<WorkUnit[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -75,11 +79,23 @@ export default function OrgWorkUnitsManagement() {
     is_active: true,
   });
 
-  const fetchData = async () => {
+  const resolveTenantId = useCallback(
+    () => resolveOrgTenantIdWithQueryOverride(queryTenantId),
+    [queryTenantId],
+  );
+
+  const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
       setLoadError(null);
       setIsRetrying(false);
+      const resolvedTenantId = await resolveTenantId();
+      if (!resolvedTenantId) {
+        setWorkUnits([]);
+        setOpdList([]);
+        setLoadError("Tenant organisasi tidak ditemukan.");
+        return;
+      }
       // Fetch OPD list
       const { data: opdData, error: opdError } = await withExponentialBackoff(
         () =>
@@ -87,6 +103,7 @@ export default function OrgWorkUnitsManagement() {
             supabase
               .from("opd")
               .select("id, name, code")
+              .eq("tenant_id", resolvedTenantId)
               .eq("is_active", true)
               .order("name"),
             WORK_UNITS_READ_TIMEOUT_MS,
@@ -112,6 +129,7 @@ export default function OrgWorkUnitsManagement() {
                 *,
                 opd:opd_id (name, code)
               `)
+              .eq("tenant_id", resolvedTenantId)
               .order("name"),
             WORK_UNITS_READ_TIMEOUT_MS,
             "Permintaan data satuan kerja timeout."
@@ -136,37 +154,19 @@ export default function OrgWorkUnitsManagement() {
       setIsRetrying(false);
       setIsLoading(false);
     }
-  };
+  }, [resolveTenantId]);
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    void fetchData();
+  }, [fetchData]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
 
     try {
-      // Get tenant_id from current user
-      const { data: { user } } = await withTimeout(
-        supabase.auth.getUser(),
-        WORK_UNITS_WRITE_TIMEOUT_MS,
-        "Permintaan user auth timeout."
-      );
-      if (!user) throw new Error("User tidak ditemukan");
-
-      const { data: employeeData, error: empError } = await withTimeout(
-        supabase
-          .from("employees")
-          .select("tenant_id")
-          .eq("user_id", user.id)
-          .maybeSingle(),
-        WORK_UNITS_WRITE_TIMEOUT_MS,
-        "Permintaan tenant pegawai timeout."
-      );
-
-      if (empError) throw empError;
-      if (!employeeData) throw new Error("Data pegawai tidak ditemukan");
+      const resolvedTenantId = await resolveTenantId();
+      if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan");
 
       const payload = {
         name: formData.name.trim(),
@@ -175,7 +175,7 @@ export default function OrgWorkUnitsManagement() {
         institution_type: formData.institution_type,
         description: formData.description.trim() || null,
         is_active: formData.is_active,
-        tenant_id: employeeData.tenant_id,
+        tenant_id: resolvedTenantId,
       };
 
       if (editingUnit) {
@@ -183,7 +183,8 @@ export default function OrgWorkUnitsManagement() {
           supabase
             .from("work_units")
             .update(payload)
-            .eq("id", editingUnit.id),
+            .eq("id", editingUnit.id)
+            .eq("tenant_id", resolvedTenantId),
           WORK_UNITS_WRITE_TIMEOUT_MS,
           "Update satuan kerja timeout."
         );
@@ -205,7 +206,7 @@ export default function OrgWorkUnitsManagement() {
 
       setIsDialogOpen(false);
       resetForm();
-      fetchData();
+      void fetchData();
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.master.work_units.save", {
         editing_id: editingUnit?.id ?? null,
@@ -242,18 +243,21 @@ export default function OrgWorkUnitsManagement() {
     }
 
     try {
+      const resolvedTenantId = await resolveTenantId();
+      if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan");
       const { error } = await withTimeout(
         supabase
           .from("work_units")
           .delete()
-          .eq("id", id),
+          .eq("id", id)
+          .eq("tenant_id", resolvedTenantId),
         WORK_UNITS_WRITE_TIMEOUT_MS,
         "Hapus satuan kerja timeout."
       );
 
       if (error) throw error;
       toast.success("Satuan kerja berhasil dihapus");
-      fetchData();
+      void fetchData();
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.master.work_units.delete", { work_unit_id: id });
       toast.error(appendErrorReference("Gagal menghapus satuan kerja", errorRef));
@@ -262,18 +266,21 @@ export default function OrgWorkUnitsManagement() {
 
   const handleToggleStatus = async (id: string, currentStatus: boolean) => {
     try {
+      const resolvedTenantId = await resolveTenantId();
+      if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan");
       const { error } = await withTimeout(
         supabase
           .from("work_units")
           .update({ is_active: !currentStatus })
-          .eq("id", id),
+          .eq("id", id)
+          .eq("tenant_id", resolvedTenantId),
         WORK_UNITS_WRITE_TIMEOUT_MS,
         "Ubah status satuan kerja timeout."
       );
 
       if (error) throw error;
       toast.success("Status berhasil diperbarui");
-      fetchData();
+      void fetchData();
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.master.work_units.toggle_status", {
         work_unit_id: id,
@@ -331,6 +338,12 @@ export default function OrgWorkUnitsManagement() {
           </h1>
           <p className="text-muted-foreground">Kelola satuan kerja dalam organisasi</p>
         </div>
+
+        {queryTenantId ? (
+          <div className="rounded-md border border-sky-300/40 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+            Mode tindak lanjut super admin aktif. Halaman ini sedang menampilkan satuan kerja tenant yang dipilih dari panel admin.
+          </div>
+        ) : null}
 
         {loadError && (
           <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">

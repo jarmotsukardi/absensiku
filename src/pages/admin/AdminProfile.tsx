@@ -365,7 +365,7 @@ export default function AdminProfile() {
             const { data: userData } = await withTimeout(
                 supabase.auth.getUser(),
                 ADMIN_PROFILE_READ_TIMEOUT_MS,
-                "Refresh auth user timeout."
+                "Timeout muat ulang autentikasi pengguna."
             );
             if (userData.user) {
                 setUser(userData.user);

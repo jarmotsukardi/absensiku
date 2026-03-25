@@ -41,9 +41,14 @@ interface SecuritySettings {
   otp_send_window_minutes: number;
   // APK Compatibility
   min_android_version: number;
+  native_app_code: string;
 }
 const ATTENDANCE_SECURITY_QUERY_TIMEOUT_MS = 12000;
 const ATTENDANCE_SECURITY_QUERY_RETRY_MAX = 2;
+const MAX_DEVICE_RESET_COUNT_LIMIT = 20;
+
+const clampNumber = (value: number, min: number, max: number) =>
+  Math.min(Math.max(value, min), max);
 
 export default function AttendanceSecuritySettings() {
   const [isLoading, setIsLoading] = useState(true);
@@ -67,6 +72,7 @@ export default function AttendanceSecuritySettings() {
     otp_send_window_minutes: 60,
     // APK Compatibility
     min_android_version: 7,
+    native_app_code: "AKN1",
   });
 
   useEffect(() => {
@@ -109,7 +115,10 @@ export default function AttendanceSecuritySettings() {
           allow_iphone_safari: typeof savedSettings.allow_iphone_safari === 'boolean' ? savedSettings.allow_iphone_safari : prev.allow_iphone_safari,
           // Pengikatan Perangkat
           enable_device_binding: typeof savedSettings.enable_device_binding === 'boolean' ? savedSettings.enable_device_binding : prev.enable_device_binding,
-          max_device_reset_count: typeof savedSettings.max_device_reset_count === 'number' ? savedSettings.max_device_reset_count : prev.max_device_reset_count,
+          max_device_reset_count:
+            typeof savedSettings.max_device_reset_count === 'number'
+              ? clampNumber(savedSettings.max_device_reset_count, 1, MAX_DEVICE_RESET_COUNT_LIMIT)
+              : prev.max_device_reset_count,
           require_password_change_for_reset: typeof savedSettings.require_password_change_for_reset === 'boolean' ? savedSettings.require_password_change_for_reset : prev.require_password_change_for_reset,
           otp_send_rate_limit_enabled: typeof savedSettings.otp_send_rate_limit_enabled === 'boolean' ? savedSettings.otp_send_rate_limit_enabled : prev.otp_send_rate_limit_enabled,
           otp_send_max_attempts: typeof savedSettings.otp_send_max_attempts === 'number' ? savedSettings.otp_send_max_attempts : prev.otp_send_max_attempts,
@@ -117,6 +126,10 @@ export default function AttendanceSecuritySettings() {
           otp_send_window_minutes: typeof savedSettings.otp_send_window_minutes === 'number' ? savedSettings.otp_send_window_minutes : prev.otp_send_window_minutes,
           // APK Compatibility
           min_android_version: typeof savedSettings.min_android_version === 'number' ? savedSettings.min_android_version : prev.min_android_version,
+          native_app_code:
+            typeof savedSettings.native_app_code === 'string' && savedSettings.native_app_code.trim().length > 0
+              ? savedSettings.native_app_code.trim()
+              : prev.native_app_code,
         }));
       }
     } catch (error) {
@@ -253,7 +266,7 @@ export default function AttendanceSecuritySettings() {
           </Button>
         </div>
         <div className="flex justify-end">
-          <GlossaryPanel defaultCategory="absensi" />
+          <GlossaryPanel />
         </div>
 
         {isRetrying && (
@@ -343,7 +356,7 @@ export default function AttendanceSecuritySettings() {
                   <div className="space-y-1">
                     <Label className="font-medium">Blokir Semua Browser</Label>
                     <p className="text-sm text-muted-foreground">
-                      Memblokir akses absensi dari browser (desktop & seluler) dan memaksa penggunaan aplikasi seluler internal.
+                      Memblokir akses absensi dari browser dan memprioritaskan penggunaan APK/WebView internal. Safari iPhone masih bisa dikecualikan jika pengaturan di bawah diaktifkan.
                     </p>
                   </div>
                   <Switch
@@ -384,7 +397,8 @@ export default function AttendanceSecuritySettings() {
                     <div>
                       <h4 className="font-medium text-warning">Catatan Penting</h4>
                       <ul className="text-sm text-muted-foreground mt-2 space-y-1 list-disc list-inside">
-                        <li>"Blokir Semua Browser" akan memaksa pegawai menggunakan aplikasi seluler internal</li>
+                        <li>"Blokir Semua Browser" menutup akses absensi dari browser umum dan memprioritaskan APK/WebView internal</li>
+                        <li>Jika pengecualian Safari iPhone aktif, iPhone masih dapat memakai Safari sebagai fallback sementara</li>
                         <li>Jika dimatikan, /employee/login dapat diakses sesuai kebijakan blokir lainnya</li>
                         <li>Pastikan aplikasi internal sudah tersedia sebelum mengaktifkan fitur ini</li>
                         <li>Admin tetap bisa mengakses halaman via browser</li>
@@ -401,10 +415,10 @@ export default function AttendanceSecuritySettings() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Fingerprint className="h-5 w-5" />
-                  Pengikatan Perangkat (Android ID)
+                  Pengikatan Perangkat
                 </CardTitle>
                 <CardDescription>
-                  Pengaturan untuk mencegah titip absen dengan mengikat perangkat ke pegawai
+                  Pengaturan untuk mencegah titip absen dengan mengikat perangkat atau identitas klien yang dipakai pegawai
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
@@ -412,7 +426,7 @@ export default function AttendanceSecuritySettings() {
                   <div className="space-y-1">
                     <Label className="font-medium">Aktifkan Pengikatan Perangkat</Label>
                     <p className="text-sm text-muted-foreground">
-                      Setiap pegawai hanya bisa absen dari perangkat yang sudah terdaftar (Android ID)
+                      Setiap pegawai hanya bisa absen dari perangkat atau klien yang sudah terdaftar. Pada Android umumnya memakai identitas perangkat aplikasi, sedangkan fallback browser mengikuti identitas klien yang tersimpan.
                     </p>
                   </div>
                   <Switch
@@ -431,9 +445,17 @@ export default function AttendanceSecuritySettings() {
                   <Input
                     type="number"
                     min={1}
-                    max={10}
+                    max={MAX_DEVICE_RESET_COUNT_LIMIT}
                     value={settings.max_device_reset_count}
-                    onChange={(e) => setSettings(prev => ({ ...prev, max_device_reset_count: parseInt(e.target.value) || 3 }))}
+                    onChange={(e) => {
+                      const parsedValue = parseInt(e.target.value, 10);
+                      setSettings((prev) => ({
+                        ...prev,
+                        max_device_reset_count: Number.isFinite(parsedValue)
+                          ? clampNumber(parsedValue, 1, MAX_DEVICE_RESET_COUNT_LIMIT)
+                          : 3,
+                      }));
+                    }}
                     className="w-20"
                   />
                 </div>
@@ -457,10 +479,10 @@ export default function AttendanceSecuritySettings() {
                     <div>
                       <h4 className="font-medium text-info">Cara Kerja Pengikatan Perangkat</h4>
                       <ul className="text-sm text-muted-foreground mt-2 space-y-1 list-disc list-inside">
-                        <li>Saat pertama kali absen, Android ID akan otomatis tersimpan</li>
-                        <li>Absen selanjutnya harus dari perangkat dengan Android ID yang sama</li>
-                        <li>Jika ganti HP, pegawai bisa reset mandiri via OTP (dan wajib ganti password jika pengaturan di bawah diaktifkan)</li>
-                        <li>Admin dapat reset device ID pegawai melalui menu manajemen pegawai</li>
+                        <li>Saat pertama kali absen, identitas perangkat atau klien akan otomatis tersimpan</li>
+                        <li>Absen selanjutnya harus dari perangkat atau klien yang sama sampai dilakukan reset</li>
+                        <li>Jika ganti HP atau jalur akses resmi berubah, pegawai bisa reset mandiri via OTP jika diizinkan</li>
+                        <li>Admin dapat membantu reset binding perangkat pegawai melalui menu manajemen pegawai</li>
                       </ul>
                     </div>
                   </div>
@@ -532,7 +554,7 @@ export default function AttendanceSecuritySettings() {
                       <h4 className="font-medium text-warning">Rekomendasi Pengaturan</h4>
                       <ul className="text-sm text-muted-foreground mt-2 space-y-1 list-disc list-inside">
                         <li>Aktifkan device binding untuk mencegah titip absen</li>
-                        <li>Set maksimal reset 3x untuk menghindari penyalahgunaan</li>
+                        <li>Gunakan batas reset yang ketat sesuai kebijakan instansi, misalnya 3x untuk produksi disiplin tinggi</li>
                         <li>Wajibkan ganti password saat reset untuk verifikasi identitas</li>
                         <li>Kombinasikan dengan deteksi GPS untuk keamanan maksimal</li>
                       </ul>

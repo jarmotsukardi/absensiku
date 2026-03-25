@@ -13,6 +13,18 @@ interface AndroidBridge {
   getAndroidId?: () => string;
 }
 
+const getStorage = (): Storage | null => {
+  if (typeof window !== "undefined" && window.localStorage) {
+    return window.localStorage;
+  }
+
+  if (typeof localStorage !== "undefined") {
+    return localStorage;
+  }
+
+  return null;
+};
+
 /**
  * Generate fingerprint yang STABIL (tanpa canvas karena hasilnya bisa berbeda)
  */
@@ -109,14 +121,18 @@ export const generateAllPossibleDeviceIds = (): string[] => {
  * Cek apakah ada device ID tersimpan di localStorage
  */
 export const hasStoredDeviceId = (): boolean => {
-  return !!(localStorage.getItem(WEB_DEVICE_ID_KEY) || localStorage.getItem(ANDROID_DEVICE_ID_KEY));
+  const storage = getStorage();
+  if (!storage) return false;
+  return !!(storage.getItem(WEB_DEVICE_ID_KEY) || storage.getItem(ANDROID_DEVICE_ID_KEY));
 };
 
 /**
  * Get device ID dari localStorage (tanpa generate baru)
  */
 export const getStoredDeviceId = (): string | null => {
-  return localStorage.getItem(ANDROID_DEVICE_ID_KEY) || localStorage.getItem(WEB_DEVICE_ID_KEY);
+  const storage = getStorage();
+  if (!storage) return null;
+  return storage.getItem(ANDROID_DEVICE_ID_KEY) || storage.getItem(WEB_DEVICE_ID_KEY);
 };
 
 /**
@@ -124,14 +140,15 @@ export const getStoredDeviceId = (): string | null => {
  * @param saveToStorage - apakah langsung simpan ke localStorage
  */
 export const generateStableWebDeviceId = (saveToStorage: boolean = true): string => {
+  const storage = getStorage();
   // Cek localStorage dulu
-  const storedId = localStorage.getItem(WEB_DEVICE_ID_KEY);
+  const storedId = storage?.getItem(WEB_DEVICE_ID_KEY);
   if (storedId) return storedId;
 
   const deviceId = hashFingerprint(generateStableFingerprint());
   
-  if (saveToStorage) {
-    localStorage.setItem(WEB_DEVICE_ID_KEY, deviceId);
+  if (saveToStorage && storage) {
+    storage.setItem(WEB_DEVICE_ID_KEY, deviceId);
     debugLog("[DeviceId] Generated and saved stable device ID:", deviceId);
   }
   
@@ -143,14 +160,15 @@ export const generateStableWebDeviceId = (saveToStorage: boolean = true): string
  * @param saveToStorage - apakah langsung simpan ke localStorage
  */
 export const getAndroidId = (saveToStorage: boolean = true): string => {
+  const storage = getStorage();
   // Cek apakah ada Android interface dari native app
   const androidBridge = (window as unknown as { Android?: AndroidBridge }).Android;
   if (typeof androidBridge !== "undefined" && androidBridge?.getAndroidId) {
     try {
       const nativeId = androidBridge.getAndroidId();
       if (nativeId && nativeId.length > 0) {
-        if (saveToStorage) {
-          localStorage.setItem(ANDROID_DEVICE_ID_KEY, nativeId);
+        if (saveToStorage && storage) {
+          storage.setItem(ANDROID_DEVICE_ID_KEY, nativeId);
         }
         return nativeId;
       }
@@ -160,7 +178,7 @@ export const getAndroidId = (saveToStorage: boolean = true): string => {
   }
 
   // Cek stored native ID
-  const storedNativeId = localStorage.getItem(ANDROID_DEVICE_ID_KEY);
+  const storedNativeId = storage?.getItem(ANDROID_DEVICE_ID_KEY);
   if (storedNativeId) return storedNativeId;
 
   // Fallback ke web device ID
@@ -173,13 +191,15 @@ export const getAndroidId = (saveToStorage: boolean = true): string => {
  */
 export const syncDeviceIdFromDatabase = (dbDeviceId: string): void => {
   if (!dbDeviceId) return;
+  const storage = getStorage();
+  if (!storage) return;
   
   debugLog("[DeviceId] Syncing device ID from database:", dbDeviceId);
   
   if (dbDeviceId.startsWith("WEB-")) {
-    localStorage.setItem(WEB_DEVICE_ID_KEY, dbDeviceId);
+    storage.setItem(WEB_DEVICE_ID_KEY, dbDeviceId);
   } else {
-    localStorage.setItem(ANDROID_DEVICE_ID_KEY, dbDeviceId);
+    storage.setItem(ANDROID_DEVICE_ID_KEY, dbDeviceId);
   }
 };
 

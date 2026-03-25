@@ -24,18 +24,25 @@ import {
   withTimeout,
 } from "@/lib/attendanceResilience";
 import { GlossaryPanel } from "@/components/common/GlossaryPanel";
+import {
+  buildAdminAttendanceCsv,
+  enrichAdminAttendanceRecords,
+  formatAdminAttendanceDate,
+  type AdminAttendanceEmployeeRow,
+  type AdminAttendanceOfficeRow,
+  type AdminAttendanceRecord,
+  type AdminAttendanceRecordRow,
+} from "@/lib/adminAttendanceReport";
 
-type AttendanceRecord = Tables<"attendance_records">;
-type Employee = Tables<"employees">;
 type OPD = Tables<"opd">;
-type Office = Tables<"offices">;
 
 const ITEMS_PER_PAGE = 20;
 const ADMIN_ATTENDANCE_TIMEOUT_MS = 12000;
 const ADMIN_ATTENDANCE_MAX_RETRIES = 2;
+const ADMIN_ATTENDANCE_CHUNK_SIZE = 500;
 
 export default function AttendanceReport() {
-  const [records, setRecords] = useState<(AttendanceRecord & { employee?: Employee & { opd?: OPD }; office?: Office })[]>([]);
+  const [records, setRecords] = useState<AdminAttendanceRecord[]>([]);
   const [opdList, setOpdList] = useState<OPD[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [filterOpd, setFilterOpd] = useState<string>("all");
@@ -46,27 +53,31 @@ export default function AttendanceReport() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
 
-  const fetchData = useCallback(async () => {
-    try {
-      setIsLoading(true);
-      setLoadError(null);
-      setIsRetrying(false);
-      
-      const [opdResult, recordResult] = await withExponentialBackoff(
+  const chunkValues = <T,>(items: T[], size: number) => {
+    const result: T[][] = [];
+    for (let index = 0; index < items.length; index += size) {
+      result.push(items.slice(index, index + size));
+    }
+    return result;
+  };
+
+  const fetchAttendanceRows = useCallback(async (startDateValue: string, endDateValue: string) => {
+    const rows: AdminAttendanceRecordRow[] = [];
+    let from = 0;
+
+    while (true) {
+      const { data, error } = await withExponentialBackoff(
         () =>
           withTimeout(
-            Promise.all([
-              supabase.from("opd").select("*").order("name"),
-              supabase
-                .from("attendance_records_partitioned")
-                .select("*")
-                .gte("date", startDate ? format(startDate, "yyyy-MM-dd") : "2024-01-01")
-                .lte("date", endDate ? format(endDate, "yyyy-MM-dd") : "2099-12-31")
-                .order("date", { ascending: false })
-                .limit(1000),
-            ]),
+            supabase
+              .from("attendance_records_partitioned")
+              .select("*")
+              .gte("date", startDateValue)
+              .lte("date", endDateValue)
+              .order("date", { ascending: false })
+              .range(from, from + ADMIN_ATTENDANCE_CHUNK_SIZE - 1),
             ADMIN_ATTENDANCE_TIMEOUT_MS,
-            "Permintaan laporan absensi admin timeout."
+            "Permintaan halaman laporan absensi admin timeout."
           ),
         {
           maxRetries: ADMIN_ATTENDANCE_MAX_RETRIES,
@@ -75,11 +86,100 @@ export default function AttendanceReport() {
         }
       );
 
+      if (error) throw error;
+      const batch = (data || []) as AdminAttendanceRecordRow[];
+      rows.push(...batch);
+      if (batch.length < ADMIN_ATTENDANCE_CHUNK_SIZE) break;
+      from += ADMIN_ATTENDANCE_CHUNK_SIZE;
+    }
+
+    return rows;
+  }, []);
+
+  const fetchData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setLoadError(null);
+      setIsRetrying(false);
+
+      const startDateValue = startDate ? format(startDate, "yyyy-MM-dd") : "2024-01-01";
+      const endDateValue = endDate ? format(endDate, "yyyy-MM-dd") : "2099-12-31";
+
+      const [opdResult, rawRows] = await Promise.all([
+        withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase.from("opd").select("*").order("name"),
+              ADMIN_ATTENDANCE_TIMEOUT_MS,
+              "Permintaan daftar OPD admin timeout."
+            ),
+          {
+            maxRetries: ADMIN_ATTENDANCE_MAX_RETRIES,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        ),
+        fetchAttendanceRows(startDateValue, endDateValue),
+      ]);
+
       if (opdResult.error) throw opdResult.error;
-      if (recordResult.error) throw recordResult.error;
+
+      const employeeIds = [...new Set(rawRows.map((row) => row.employee_id).filter(Boolean))];
+      const officeIds = [...new Set(rawRows.map((row) => row.office_id).filter(Boolean))];
+
+      const employeeChunks = chunkValues(employeeIds, ADMIN_ATTENDANCE_CHUNK_SIZE);
+      const officeChunks = chunkValues(officeIds, ADMIN_ATTENDANCE_CHUNK_SIZE);
+
+      const [employeeGroups, officeGroups] = await Promise.all([
+        Promise.all(
+          employeeChunks.map(async (chunk) => {
+            const { data, error } = await withExponentialBackoff(
+              () =>
+                withTimeout(
+                  supabase.from("employees").select("id, name, nip, opd_id").in("id", chunk),
+                  ADMIN_ATTENDANCE_TIMEOUT_MS,
+                  "Permintaan data pegawai laporan absensi admin timeout."
+                ),
+              {
+                maxRetries: ADMIN_ATTENDANCE_MAX_RETRIES,
+                shouldRetry: isRetryableError,
+                onRetry: () => setIsRetrying(true),
+              }
+            );
+            if (error) throw error;
+            return (data || []) as AdminAttendanceEmployeeRow[];
+          })
+        ),
+        Promise.all(
+          officeChunks.map(async (chunk) => {
+            const { data, error } = await withExponentialBackoff(
+              () =>
+                withTimeout(
+                  supabase.from("offices").select("id, name").in("id", chunk),
+                  ADMIN_ATTENDANCE_TIMEOUT_MS,
+                  "Permintaan data lokasi laporan absensi admin timeout."
+                ),
+              {
+                maxRetries: ADMIN_ATTENDANCE_MAX_RETRIES,
+                shouldRetry: isRetryableError,
+                onRetry: () => setIsRetrying(true),
+              }
+            );
+            if (error) throw error;
+            return (data || []) as AdminAttendanceOfficeRow[];
+          })
+        ),
+      ]);
 
       setOpdList(opdResult.data || []);
-      setRecords(recordResult.data || []);
+      setRecords(
+        enrichAdminAttendanceRecords({
+          records: rawRows,
+          employees: employeeGroups.flat(),
+          offices: officeGroups.flat(),
+          opds: opdResult.data || [],
+        })
+      );
       setCurrentPage(1);
     } catch (error) {
       const errorRef = reportError(error, "admin.reports.attendance.fetch", {
@@ -94,28 +194,14 @@ export default function AttendanceReport() {
       setIsRetrying(false);
       setIsLoading(false);
     }
-  }, [startDate, endDate]);
+  }, [endDate, fetchAttendanceRows, startDate]);
 
   useEffect(() => {
-    fetchData();
+    void fetchData();
   }, [fetchData]);
 
   const handleExport = () => {
-    const headers = ["No", "Tanggal", "NIP", "Nama", "OPD", "Lokasi", "Jam Masuk", "Jam Keluar", "Status"];
-    const csvContent = [
-      headers.join(","),
-      ...filteredRecords.map((rec, index) => [
-        index + 1,
-        format(new Date(rec.date), "dd/MM/yyyy"),
-        rec.employee?.nip || "-",
-        `"${rec.employee?.name || "-"}"`,
-        rec.employee?.opd?.code || "-",
-        `"${rec.office?.name || "-"}"`,
-        rec.check_in_time ? format(new Date(rec.check_in_time), "HH:mm") : "-",
-        rec.check_out_time ? format(new Date(rec.check_out_time), "HH:mm") : "-",
-        rec.status || "-",
-      ].join(","))
-    ].join("\n");
+    const csvContent = buildAdminAttendanceCsv(filteredRecords);
 
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const link = document.createElement("a");
@@ -126,6 +212,7 @@ export default function AttendanceReport() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    URL.revokeObjectURL(url);
     
     toast.success("Laporan berhasil diekspor");
   };
@@ -156,7 +243,7 @@ export default function AttendanceReport() {
   });
 
   // Pagination
-  const totalPages = Math.ceil(filteredRecords.length / ITEMS_PER_PAGE);
+  const totalPages = Math.max(1, Math.ceil(filteredRecords.length / ITEMS_PER_PAGE));
   const paginatedRecords = filteredRecords.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
     currentPage * ITEMS_PER_PAGE
@@ -343,7 +430,7 @@ export default function AttendanceReport() {
                       <TableRow key={rec.id}>
                         <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
                         <TableCell>
-                          {format(new Date(rec.date), "dd MMM yyyy", { locale: localeId })}
+                          {formatAdminAttendanceDate(rec.date, "dd MMM yyyy", { locale: localeId })}
                         </TableCell>
                         <TableCell className="font-mono text-sm">
                           {rec.employee?.nip || "-"}

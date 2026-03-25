@@ -69,6 +69,9 @@ interface TenantAdminRole {
   user_id: string | null;
 }
 
+const ORG_NOTIFICATION_SOURCE = "org_notification";
+const EMPLOYEE_NOTIFICATIONS_LINK = "/employee/dashboard?tab=notifications";
+
 export default function OrgNotificationManagement() {
   const PAGE_SIZE = 20;
   const ORG_NOTIFICATIONS_QUERY_TIMEOUT_MS = 15000;
@@ -511,14 +514,23 @@ export default function OrgNotificationManagement() {
         message,
         type,
         is_read: false,
+        link: EMPLOYEE_NOTIFICATIONS_LINK,
+        metadata: {
+          source: ORG_NOTIFICATION_SOURCE,
+          tenant_id: tenantId,
+          sent_by_role: "admin_instansi",
+          sent_via: "org_notifications",
+          target_type: targetType,
+        },
       }));
 
-      const { error: insertError } = await withExponentialBackoff(
+      const { data: insertedNotifications, error: insertError } = await withExponentialBackoff(
         () =>
           withTimeout(
             supabase
               .from('notifications')
-              .insert(notificationsToInsert),
+              .insert(notificationsToInsert)
+              .select("id"),
             ORG_NOTIFICATIONS_QUERY_TIMEOUT_MS,
             "org.notifications.send.insert timeout",
           ),
@@ -531,11 +543,54 @@ export default function OrgNotificationManagement() {
 
       if (insertError) throw insertError;
 
+      const insertedNotificationIds = (insertedNotifications || [])
+        .map((row) => row.id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+      let pushSummary:
+        | {
+            devices_selected?: number;
+            sent?: number;
+          }
+        | null = null;
+
+      if (tenantId && insertedNotificationIds.length > 0) {
+        const { data: pushData, error: pushError } = await supabase.functions.invoke<{
+          devices_selected?: number;
+          sent?: number;
+        }>("dispatch-device-pushes", {
+          body: {
+            tenant_id: tenantId,
+            notification_ids: insertedNotificationIds,
+            notification_sources: [ORG_NOTIFICATION_SOURCE],
+            limit: Math.min(insertedNotificationIds.length, 500),
+          },
+        });
+
+        if (pushError) {
+          console.warn("Gagal memicu dispatch push org notification", pushError);
+        } else {
+          pushSummary = pushData ?? null;
+        }
+      }
+
       toast.success(
         targetType === "selected" || targetType === "opd" || targetType === "work_unit"
           ? `Notifikasi terkirim ke: ${uniqueTargetNames.join(", ")}`
           : `Notifikasi berhasil dikirim ke ${uniqueUserIds.length} pegawai`
       );
+
+      if (pushSummary) {
+        const devicesSelected = Number(pushSummary.devices_selected ?? 0);
+        const pushSent = Number(pushSummary.sent ?? 0);
+
+        if (devicesSelected === 0) {
+          toast.info("Notifikasi in-app terkirim. Push APK belum dikirim karena belum ada perangkat Android aktif yang terdaftar.");
+        } else if (pushSent === 0) {
+          toast.info("Notifikasi in-app terkirim. Push APK diproses, tetapi belum ada perangkat yang berhasil menerima.");
+        }
+      }
+
       setIsDialogOpen(false);
       resetForm();
       if (tenantId) void fetchNotifications(tenantId);
@@ -586,6 +641,10 @@ export default function OrgNotificationManagement() {
 
   const deleteNotification = async (id: string) => {
     try {
+      if (!tenantId) {
+        toast.error("Tenant tidak ditemukan");
+        return;
+      }
       setIsRetrying(false);
       const deletedNotification = notifications.find((notification) => notification.id === id) || null;
       const { error } = await withExponentialBackoff(
@@ -594,7 +653,8 @@ export default function OrgNotificationManagement() {
             supabase
               .from('notifications')
               .delete()
-              .eq('id', id),
+              .eq('id', id)
+              .in('user_id', targetBaseEmployees.map((employee) => employee.user_id).filter(Boolean) as string[]),
             ORG_NOTIFICATIONS_QUERY_TIMEOUT_MS,
             "org.notifications.delete timeout",
           ),

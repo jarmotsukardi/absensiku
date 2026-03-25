@@ -10,6 +10,7 @@ import { useToast } from "@/hooks/use-toast";
 import { MapPin, Mail, Lock, Loader2, Eye, EyeOff, Building2, User, Phone, AlertTriangle, ArrowLeft, Key } from "lucide-react";
 import { ForgotPasswordDialog } from "@/components/auth/ForgotPasswordDialog";
 import { SimpleCaptcha } from "@/components/common/SimpleCaptcha";
+import { SmartAppBanner } from "@/components/common/SmartAppBanner";
 import { useLoginRateLimit } from "@/hooks/useLoginRateLimit";
 import { OrgRegistrationForm } from "@/components/org/OrgRegistrationForm";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
@@ -44,6 +45,7 @@ export default function OrgLogin() {
   const [activeTab, setActiveTab] = useState(defaultTab);
   const [isLoading, setIsLoading] = useState(false);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
+  const [apkUrl, setApkUrl] = useState<string | null>(null);
 
   // Login form
   const [email, setEmail] = useState("");
@@ -124,6 +126,69 @@ export default function OrgLogin() {
       isMounted = false;
     };
   }, [fetchUserRoles, navigate]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchApkUrl = async () => {
+      try {
+        const [apkSettingsRes, globalApkRes, appDownloadRes] = await Promise.all([
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "apk_settings")
+            .maybeSingle(),
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "global_apk")
+            .maybeSingle(),
+          supabase
+            .from("system_settings")
+            .select("value")
+            .eq("key", "app_download_settings")
+            .maybeSingle(),
+        ]);
+
+        let resolvedUrl: string | null = null;
+
+        if (apkSettingsRes.data?.value && typeof apkSettingsRes.data.value === "object" && !Array.isArray(apkSettingsRes.data.value)) {
+          const apkSettings = apkSettingsRes.data.value as Record<string, unknown>;
+          if (typeof apkSettings.url === "string" && apkSettings.url.trim().length > 0) {
+            resolvedUrl = apkSettings.url.trim();
+          }
+        }
+
+        if (!resolvedUrl && globalApkRes.data?.value && typeof globalApkRes.data.value === "object" && !Array.isArray(globalApkRes.data.value)) {
+          const globalApk = globalApkRes.data.value as Record<string, unknown>;
+          if (typeof globalApk.url === "string" && globalApk.url.trim().length > 0) {
+            resolvedUrl = globalApk.url.trim();
+          }
+        }
+
+        if (!resolvedUrl && appDownloadRes.data?.value && typeof appDownloadRes.data.value === "object" && !Array.isArray(appDownloadRes.data.value)) {
+          const appDownload = appDownloadRes.data.value as Record<string, unknown>;
+          if (typeof appDownload.apk_url === "string" && appDownload.apk_url.trim().length > 0) {
+            resolvedUrl = appDownload.apk_url.trim();
+          }
+        }
+
+        if (isMounted) {
+          setApkUrl(resolvedUrl);
+        }
+      } catch {
+        if (isMounted) {
+          setApkUrl(null);
+        }
+      }
+    };
+
+    void fetchApkUrl();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -279,6 +344,11 @@ export default function OrgLogin() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-primary/5 flex items-center justify-center p-4">
+      <SmartAppBanner
+        apkUrl={apkUrl}
+        appName="AbsensiKu Admin"
+        dismissKey="smart_app_banner_org_login_dismissed"
+      />
       <div className="w-full max-w-md">
         {/* Back to Home */}
         <Link

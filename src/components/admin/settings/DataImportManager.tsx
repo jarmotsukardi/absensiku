@@ -244,7 +244,7 @@ export function DataImportManager() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    toast.success("Schema SQL berhasil diekstrak");
+    toast.success("Skema SQL berhasil diekstrak");
   };
 
   const downloadRlsSql = () => {
@@ -299,7 +299,7 @@ export function DataImportManager() {
 
     // Validate table name
     if (!IMPORT_ORDER.includes(tableName)) {
-      result.errors.push(`Tabel "${tableName}" tidak didukung untuk import`);
+      result.errors.push(`Tabel "${tableName}" tidak didukung untuk impor`);
       result.failed = data.length;
       return result;
     }
@@ -326,7 +326,7 @@ export function DataImportManager() {
               ignoreDuplicates: false,
             }),
           15000,
-          `Import tabel ${tableName} timeout`
+          `Impor tabel ${tableName} timeout`
         );
 
         if (error) {
@@ -346,7 +346,7 @@ export function DataImportManager() {
 
   const runImport = async () => {
     if (!importData || selectedTables.size === 0) {
-      toast.error("Pilih tabel yang akan diimport");
+      toast.error("Pilih tabel yang akan diimpor");
       return;
     }
 
@@ -379,15 +379,15 @@ export function DataImportManager() {
       const totalFailed = results.reduce((acc, r) => acc + r.failed, 0);
 
       if (totalFailed === 0) {
-        toast.success(`Import selesai: ${totalSuccess} records berhasil diimport`);
+        toast.success(`Impor selesai: ${totalSuccess} rekaman berhasil diimpor`);
       } else {
-        toast.warning(`Import selesai: ${totalSuccess} berhasil, ${totalFailed} gagal`);
+        toast.warning(`Impor selesai: ${totalSuccess} berhasil, ${totalFailed} gagal`);
       }
     } catch (error) {
       const errorRef = reportError(error, "admin.settings.data_import.run_import", {
         selected_table_count: selectedTables.size,
       });
-      toast.error(appendErrorReference("Import gagal dijalankan", errorRef));
+      toast.error(appendErrorReference("Impor gagal dijalankan", errorRef));
     } finally {
       setCurrentTable("");
       setIsImporting(false);
@@ -408,10 +408,10 @@ export function DataImportManager() {
         <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Upload className="h-5 w-5 text-primary" />
-          Import Data JSON
+          Impor Data JSON
         </CardTitle>
         <CardDescription>
-          Import data dari file JSON backup ke database
+          Impor data dari file JSON backup ke database
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -420,10 +420,10 @@ export function DataImportManager() {
           <AlertTitle className="text-amber-800 dark:text-amber-200">Perhatian</AlertTitle>
           <AlertDescription className="text-amber-700 dark:text-amber-300">
             <ul className="list-disc list-inside mt-2 space-y-1 text-sm">
-              <li>Import akan menggunakan mode UPSERT (update jika ada, insert jika baru)</li>
-              <li>Pastikan schema database sudah sesuai sebelum import</li>
-              <li>Import dilakukan sesuai urutan foreign key dependencies</li>
-              <li>Backup data yang ada sebelum melakukan import</li>
+              <li>Impor akan menggunakan mode UPSERT (update jika ada, insert jika baru)</li>
+              <li>Pastikan skema database sudah sesuai sebelum impor</li>
+              <li>Impor dilakukan sesuai urutan foreign key dependencies</li>
+              <li>Backup data yang ada sebelum melakukan impor</li>
             </ul>
           </AlertDescription>
         </Alert>
@@ -543,7 +543,7 @@ export function DataImportManager() {
                   <div className="space-y-2">
                     <h5 className="text-sm font-medium flex items-center gap-2">
                       <HardDrive className="h-4 w-4" />
-                      Storage Buckets yang Diperlukan
+                      Bucket Storage yang Diperlukan
                     </h5>
                     <div className="flex flex-wrap gap-2">
                       {backupMetadata.storage_buckets.map(bucket => (
@@ -563,7 +563,7 @@ export function DataImportManager() {
               <div className="flex items-center justify-between">
                 <h4 className="font-medium flex items-center gap-2">
                   <Database className="h-4 w-4" />
-                  Pilih Tabel untuk Import
+                  Pilih Tabel untuk Impor
                 </h4>
                 <div className="flex gap-2">
                   <Button variant="ghost" size="sm" onClick={selectAll}>
@@ -606,7 +606,7 @@ export function DataImportManager() {
                           </label>
                         </div>
                         <Badge variant={hasData ? "default" : "secondary"}>
-                          {recordCount} records
+                          {recordCount} rekaman
                         </Badge>
                       </div>
                     );
@@ -630,7 +630,7 @@ export function DataImportManager() {
                             <Badge variant="outline" className="text-xs">Tidak didukung</Badge>
                           </div>
                           <Badge variant="secondary">
-                            {recordCount} records
+                            {recordCount} rekaman
                           </Badge>
                         </div>
                       );
@@ -641,7 +641,7 @@ export function DataImportManager() {
               <div className="flex items-center justify-between pt-2 border-t">
                 <div className="text-sm text-muted-foreground">
                   <span className="font-medium">{selectedTables.size}</span> tabel dipilih, 
-                  <span className="font-medium ml-1">{getTotalRecords()}</span> records
+                  <span className="font-medium ml-1">{getTotalRecords()}</span> rekaman
                 </div>
                 <Button 
                   onClick={runImport} 
@@ -651,12 +651,12 @@ export function DataImportManager() {
                   {isImporting ? (
                     <>
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      Importing...
+                      Mengimpor...
                     </>
                   ) : (
                     <>
                       <Play className="h-4 w-4" />
-                      Mulai Import
+                      Mulai Impor
                     </>
                   )}
                 </Button>
@@ -665,18 +665,18 @@ export function DataImportManager() {
           </>
         )}
 
-        {/* Import Progress */}
+        {/* Progres Impor */}
         {isImporting && (
           <div className="space-y-2">
             <div className="flex items-center justify-between text-sm">
-              <span>Importing: <span className="font-medium">{currentTable}</span></span>
+              <span>Mengimpor: <span className="font-medium">{currentTable}</span></span>
               <span>{importProgress}%</span>
             </div>
             <Progress value={importProgress} className="h-2" />
           </div>
         )}
 
-        {/* Import Results */}
+        {/* Hasil Impor */}
         {importResults.length > 0 && (
           <>
             <Separator />

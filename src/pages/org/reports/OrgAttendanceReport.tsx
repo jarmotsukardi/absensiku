@@ -17,7 +17,7 @@ import {
   PaginationPrevious,
   PaginationEllipsis,
 } from "@/components/ui/pagination";
-import { FileSpreadsheet, Download, Search, Printer, RotateCcw } from "lucide-react";
+import { FileSpreadsheet, Download, Search, FileText, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
@@ -31,6 +31,14 @@ import {
   withTimeout,
 } from "@/lib/attendanceResilience";
 import { AttendanceRecapTabs } from "@/components/org/reports/AttendanceRecapTabs";
+import {
+  buildReportCsv,
+  createReportTraceId,
+  downloadCsvFile,
+  downloadReportPdf,
+  recordReportOutputAudit,
+  type ReportOutputColumn,
+} from "@/lib/reportOutput";
 
 type OPD = Tables<"opd">;
 
@@ -55,13 +63,26 @@ const ATTENDANCE_READ_TIMEOUT_MS = 12000;
 const ATTENDANCE_OUTPUT_TIMEOUT_MS = 20000;
 const ATTENDANCE_MAX_RETRIES = 2;
 
-const escapeHtml = (value: string): string =>
-  value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+const toDateOnly = (dateValue: string) => {
+  const [year, month, day] = dateValue.split("-").map(Number);
+  return new Date(year, (month || 1) - 1, day || 1);
+};
+
+const formatAttendanceDateLabel = (dateValue: string, pattern: string) =>
+  format(toDateOnly(dateValue), pattern, { locale: id });
+
+const attendanceOutputColumns: ReportOutputColumn<AttendanceReportRecord>[] = [
+  { header: "No", value: (_row, index) => index + 1, align: "right", width: 28 },
+  { header: "Tanggal", value: (row) => formatAttendanceDateLabel(row.date, "dd/MM/yyyy"), width: 56 },
+  { header: "NIP", value: (row) => row.employee_nip || "-" },
+  { header: "Nama", value: (row) => row.employee_name || "-" },
+  { header: "OPD", value: (row) => row.employee_opd_code || "-" },
+  { header: "Lokasi", value: (row) => row.office_name || "-" },
+  { header: "Jam Masuk", value: (row) => (row.check_in_time ? format(new Date(row.check_in_time), "HH:mm") : "-"), align: "center", width: 44 },
+  { header: "Jam Keluar", value: (row) => (row.check_out_time ? format(new Date(row.check_out_time), "HH:mm") : "-"), align: "center", width: 48 },
+  { header: "Status", value: (row) => row.status_label || "-" },
+  { header: "Keterangan", value: (row) => row.keterangan || "-" },
+];
 
 const getStatusBadge = (status: string) => {
   const variants: Record<string, { variant: "default" | "secondary" | "destructive" | "outline"; className: string }> = {
@@ -381,37 +402,46 @@ export default function OrgAttendanceReport() {
         toast.error("Tidak ada data untuk diexport");
         return;
       }
+      const traceId = createReportTraceId("ATT-CSV");
+      const csv = buildReportCsv({
+        columns: attendanceOutputColumns,
+        rows: outputRows,
+      });
 
-      const csv = [
-        ["No", "Tanggal", "NIP", "Nama", "OPD", "Lokasi", "Jam Masuk", "Jam Keluar", "Status", "Keterangan"].join(","),
-        ...outputRows.map((r, i) => [
-          i + 1,
-          r.date,
-          r.employee_nip || "",
-          `"${r.employee_name || ""}"`,
-          r.employee_opd_code || "",
-          `"${r.office_name || ""}"`,
-          r.check_in_time ? format(new Date(r.check_in_time), "HH:mm") : "",
-          r.check_out_time ? format(new Date(r.check_out_time), "HH:mm") : "",
-          r.status_label,
-          r.keterangan,
-        ].join(",")),
-      ].join("\n");
+      downloadCsvFile(`laporan-absensi-${startDate}-${endDate}.csv`, csv);
 
-      const blob = new Blob([csv], { type: "text/csv" });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `laporan-absensi-${startDate}-${endDate}.csv`;
-      a.click();
-      toast.success("Export berhasil");
+      const auditResult = await recordReportOutputAudit({
+        action: "attendance_report_export_csv",
+        filters: {
+          end_date: endDate,
+          keterangan: filterKeterangan === "all" ? null : filterKeterangan,
+          opd_id: filterOpd === "all" ? null : filterOpd,
+          search: searchTerm.trim() || null,
+          start_date: startDate,
+          status: filterStatus === "all" ? null : filterStatus,
+        },
+        outputType: "csv",
+        reportName: "Laporan Absensi Organisasi",
+        rowCount: outputRows.length,
+        tenantId,
+        traceId,
+      });
+
+      if (!auditResult.ok) {
+        toast.warning(
+          appendErrorReference(`CSV berhasil diunduh, tetapi audit log gagal dicatat. Ref dokumen: ${traceId}`, auditResult.errorRef),
+        );
+        return;
+      }
+
+      toast.success(`CSV berhasil diunduh (Ref: ${traceId})`);
     } catch (error) {
       const errorRef = reportError(error, "org.reports.attendance.export");
       toast.error(appendErrorReference("Gagal export data laporan", errorRef));
     }
   };
 
-  const handlePrintPdf = async () => {
+  const handleDownloadPdf = async () => {
     if (isBusyHours) {
       toast.error(busyHoursMessage);
       return;
@@ -427,70 +457,56 @@ export default function OrgAttendanceReport() {
         toast.error("Tidak ada data untuk dicetak");
         return;
       }
-
+      const traceId = createReportTraceId("ATT-PDF");
       const periodLabel = startDate && endDate ? `${startDate} s/d ${endDate}` : "Semua periode";
-      const printedAt = format(new Date(), "d MMMM yyyy HH:mm", { locale: id });
-      const rowsHtml = outputRows
-        .map((r, i) => `
-          <tr>
-            <td>${i + 1}</td>
-            <td>${escapeHtml(format(new Date(r.date), "d MMM yyyy", { locale: id }))}</td>
-            <td>${escapeHtml(r.employee_nip || "-")}</td>
-            <td>${escapeHtml(r.employee_name || "-")}</td>
-            <td>${escapeHtml(r.employee_opd_code || "-")}</td>
-            <td>${escapeHtml(r.check_in_time ? format(new Date(r.check_in_time), "HH:mm") : "-")}</td>
-            <td>${escapeHtml(r.check_out_time ? format(new Date(r.check_out_time), "HH:mm") : "-")}</td>
-            <td>${escapeHtml(r.status_label)}</td>
-            <td>${escapeHtml(r.keterangan)}</td>
-          </tr>
-        `)
-        .join("");
+      const opdLabel =
+        filterOpd === "all" ? "Semua OPD" : opds.find((item) => item.id === filterOpd)?.name || filterOpd;
 
-      const printWindow = window.open("", "_blank", "width=1200,height=800");
-      if (!printWindow) {
-        toast.error("Popup diblokir browser. Izinkan popup untuk cetak PDF.");
+      downloadReportPdf({
+        columns: attendanceOutputColumns,
+        filename: `laporan-absensi-${startDate}-${endDate}.pdf`,
+        metadataLines: [
+          `Periode: ${periodLabel}`,
+          `Filter OPD: ${opdLabel}`,
+          `Filter status: ${filterStatus === "all" ? "Semua status" : filterStatus}`,
+          `Filter keterangan: ${filterKeterangan === "all" ? "Semua keterangan" : filterKeterangan}`,
+          `Pencarian: ${searchTerm.trim() || "-"}`,
+          `Total data: ${outputRows.length}`,
+        ],
+        rows: outputRows,
+        sourceLabel: "AbsensiKu /org/reports/attendance",
+        title: "Laporan Absensi Pegawai",
+        traceId,
+      });
+
+      const auditResult = await recordReportOutputAudit({
+        action: "attendance_report_download_pdf",
+        filters: {
+          end_date: endDate,
+          keterangan: filterKeterangan === "all" ? null : filterKeterangan,
+          opd_id: filterOpd === "all" ? null : filterOpd,
+          search: searchTerm.trim() || null,
+          start_date: startDate,
+          status: filterStatus === "all" ? null : filterStatus,
+        },
+        outputType: "pdf",
+        reportName: "Laporan Absensi Organisasi",
+        rowCount: outputRows.length,
+        tenantId,
+        traceId,
+      });
+
+      if (!auditResult.ok) {
+        toast.warning(
+          appendErrorReference(`PDF berhasil diunduh, tetapi audit log gagal dicatat. Ref dokumen: ${traceId}`, auditResult.errorRef),
+        );
         return;
       }
 
-      printWindow.document.write(`
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta charset="UTF-8" />
-            <title>Laporan Absensi</title>
-            <style>
-              body { font-family: Arial, sans-serif; margin: 24px; color: #111; }
-              h1 { margin: 0 0 8px; font-size: 20px; }
-              .meta { margin: 0 0 16px; font-size: 12px; color: #444; }
-              table { width: 100%; border-collapse: collapse; font-size: 12px; }
-              th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
-              th { background: #f3f4f6; }
-              .footer { margin-top: 12px; font-size: 11px; color: #666; }
-            </style>
-          </head>
-          <body>
-            <h1>Laporan Absensi Pegawai</h1>
-            <p class="meta">Periode: ${escapeHtml(periodLabel)} | Total: ${outputRows.length} data | Dicetak: ${escapeHtml(printedAt)}</p>
-            <table>
-              <thead>
-                <tr>
-                  <th>No</th><th>Tanggal</th><th>NIP</th><th>Nama</th><th>OPD</th><th>Masuk</th><th>Keluar</th><th>Status</th><th>Keterangan</th>
-                </tr>
-              </thead>
-              <tbody>${rowsHtml}</tbody>
-            </table>
-            <p class="footer">Sumber: AbsensiKu /org/reports/attendance</p>
-          </body>
-        </html>
-      `);
-      printWindow.document.close();
-      printWindow.onload = () => {
-        printWindow.focus();
-        printWindow.print();
-      };
+      toast.success(`PDF berhasil diunduh (Ref: ${traceId})`);
     } catch (error) {
-      const errorRef = reportError(error, "org.reports.attendance.print");
-      toast.error(appendErrorReference("Gagal menyiapkan print PDF", errorRef));
+      const errorRef = reportError(error, "org.reports.attendance.pdf_download");
+      toast.error(appendErrorReference("Gagal menyiapkan PDF laporan", errorRef));
     }
   };
 
@@ -512,8 +528,8 @@ export default function OrgAttendanceReport() {
             <p className="text-muted-foreground">Laporan absensi pegawai berdasarkan jadwal jam kerja</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={handlePrintPdf} disabled={totalRecords === 0 || isLoading || isBusyHours}>
-              <Printer className="mr-2 h-4 w-4" /> Print PDF
+            <Button variant="outline" onClick={handleDownloadPdf} disabled={totalRecords === 0 || isLoading || isBusyHours}>
+              <FileText className="mr-2 h-4 w-4" /> Unduh PDF
             </Button>
             <Button variant="outline" onClick={handleExport} disabled={totalRecords === 0 || isLoading || isBusyHours}>
               <Download className="mr-2 h-4 w-4" /> Export CSV
@@ -637,7 +653,7 @@ export default function OrgAttendanceReport() {
                     records.map((r, i) => (
                       <TableRow key={r.id}>
                         <TableCell>{(currentPage - 1) * itemsPerPage + i + 1}</TableCell>
-                        <TableCell>{format(new Date(r.date), "d MMM yyyy", { locale: id })}</TableCell>
+                        <TableCell>{formatAttendanceDateLabel(r.date, "d MMM yyyy")}</TableCell>
                         <TableCell className="font-mono text-sm">{r.employee_nip || "-"}</TableCell>
                         <TableCell>{r.employee_name}</TableCell>
                         <TableCell>{r.employee_opd_code || "-"}</TableCell>

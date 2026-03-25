@@ -206,10 +206,10 @@ const POLICY_DOMAINS: PolicyDomain[] = [
       { label: "Kandidat ATS", path: "/org/hr/recruitment/candidates" },
       { label: "Wawancara ATS", path: "/org/hr/recruitment/interviews" },
       { label: "Penawaran ATS", path: "/org/hr/recruitment/offers" },
-      { label: "ESS Pengajuan", path: "/org/hr/ess/requests" },
-      { label: "ESS Kehadiran", path: "/org/hr/ess/attendance" },
-      { label: "ESS Dokumen", path: "/org/hr/ess/documents" },
-      { label: "ESS Profil", path: "/org/hr/ess/profile" },
+      { label: "Pengajuan ESS", path: "/org/hr/ess/requests" },
+      { label: "Kehadiran ESS", path: "/org/hr/ess/attendance" },
+      { label: "Dokumen ESS", path: "/org/hr/ess/documents" },
+      { label: "Profil ESS", path: "/org/hr/ess/profile" },
     ],
   },
 ];
@@ -1153,11 +1153,11 @@ export default function AdminHRPolicies() {
                     </Button>
 
                     {[
-                      { label: "ESS Pengajuan", path: "/org/hr/ess/requests" },
-                      { label: "ESS Cuti dan Izin", path: "/org/hr/ess/leave-requests" },
-                      { label: "ESS Kehadiran", path: "/org/hr/ess/attendance" },
-                      { label: "ESS Dokumen", path: "/org/hr/ess/documents" },
-                      { label: "ESS Profil", path: "/org/hr/ess/profile" },
+                      { label: "Pengajuan ESS", path: "/org/hr/ess/requests" },
+                      { label: "Cuti & Izin ESS", path: "/org/hr/ess/leave-requests" },
+                      { label: "Kehadiran ESS", path: "/org/hr/ess/attendance" },
+                      { label: "Dokumen ESS", path: "/org/hr/ess/documents" },
+                      { label: "Profil ESS", path: "/org/hr/ess/profile" },
                     ].map((item) => (
                       <div key={item.path} className="rounded-lg border p-3">
                         <div className="flex items-center justify-between gap-2">

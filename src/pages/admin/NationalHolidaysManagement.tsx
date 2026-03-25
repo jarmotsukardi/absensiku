@@ -110,7 +110,7 @@ const fetchExternalNationalHolidays = async (year: string): Promise<{ holidays: 
     // fallback
   }
 
-  return { holidays: [], sourceLabel: "default lokal" };
+  return { holidays: [], sourceLabel: "bawaan lokal" };
 };
 
 export default function NationalHolidaysManagement() {
@@ -168,7 +168,7 @@ export default function NationalHolidaysManagement() {
       const nationalHolidays = external.holidays;
       
       if (nationalHolidays.length === 0) {
-        toast.info(`Data API kosong untuk tahun ${selectedYear}. Menggunakan impor default...`);
+        toast.info(`Data API kosong untuk tahun ${selectedYear}. Menggunakan impor bawaan...`);
         await importDefaultHolidays();
         return;
       }
@@ -211,7 +211,7 @@ export default function NationalHolidaysManagement() {
       });
       toast.info(
         appendErrorReference(
-          `Gagal mengambil data API. Menggunakan impor default untuk tahun ${selectedYear}...`,
+          `Gagal mengambil data API. Menggunakan impor bawaan untuk tahun ${selectedYear}...`,
           errorRef
         )
       );
@@ -492,7 +492,7 @@ export default function NationalHolidaysManagement() {
             </Button>
             <Button variant="outline" onClick={importDefaultHolidays}>
               <Download className="h-4 w-4 mr-2" />
-              Import Default
+              Impor Bawaan
             </Button>
             <Dialog open={isDialogOpen} onOpenChange={(open) => { setIsDialogOpen(open); if (!open) resetForm(); }}>
               <DialogTrigger asChild>

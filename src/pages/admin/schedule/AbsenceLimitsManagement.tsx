@@ -115,7 +115,7 @@ export default function AbsenceLimitsManagement({ embedded = false }: { embedded
             {
               key: ABSENCE_LIMIT_TEMPLATE_SETTING_KEY,
               value: payload,
-              description: "Template aturan batas absen default untuk tenant/member baru.",
+              description: "Templat aturan batas absen bawaan untuk tenant/member baru.",
               updated_at: new Date().toISOString(),
             },
             { onConflict: "key" }
@@ -182,7 +182,7 @@ export default function AbsenceLimitsManagement({ embedded = false }: { embedded
     nextLimits = [...nextLimits].sort((a, b) => a.max_days - b.max_days);
     const ok = await saveTemplate(
       nextLimits,
-      editingLimit ? "Template batas absen berhasil diperbarui." : "Template batas absen berhasil ditambahkan."
+      editingLimit ? "Templat batas absen berhasil diperbarui." : "Templat batas absen berhasil ditambahkan."
     );
 
     if (ok) {
@@ -206,8 +206,8 @@ export default function AbsenceLimitsManagement({ embedded = false }: { embedded
   const handleDelete = async (id: string) => {
     if (
       !(await confirmDialog({
-        title: "Hapus Template Batas Absen",
-        description: "Yakin ingin menghapus batas absen ini dari template admin?",
+        title: "Hapus Templat Batas Absen",
+        description: "Yakin ingin menghapus batas absen ini dari templat admin?",
         confirmText: "Ya, hapus",
         variant: "destructive",
       }))
@@ -215,12 +215,12 @@ export default function AbsenceLimitsManagement({ embedded = false }: { embedded
       return;
     }
     const next = limits.filter((item) => item.id !== id);
-    await saveTemplate(next, "Template batas absen berhasil dihapus.");
+    await saveTemplate(next, "Templat batas absen berhasil dihapus.");
   };
 
   const handleToggleStatus = async (target: AbsenceLimitTemplateItem, nextValue: boolean) => {
     const next = limits.map((item) => (item.id === target.id ? { ...item, is_active: nextValue } : item));
-    await saveTemplate(next, `Template aturan ${nextValue ? "diaktifkan" : "dinonaktifkan"}.`);
+    await saveTemplate(next, `Templat aturan ${nextValue ? "diaktifkan" : "dinonaktifkan"}.`);
   };
 
   const getWarningBadgeColor = (type: string) => {
@@ -248,15 +248,15 @@ export default function AbsenceLimitsManagement({ embedded = false }: { embedded
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">Template Batas Absen</h1>
+            <h1 className="text-3xl font-bold tracking-tight">Templat Batas Absen</h1>
             <p className="text-muted-foreground">
-              Template ini otomatis dipakai untuk tenant/member baru pada menu /org/schedule/absence-limits.
+              Templat ini otomatis dipakai untuk tenant/member baru pada menu /org/schedule/absence-limits.
             </p>
           </div>
           <div className="flex items-center gap-2">
             <Button variant="outline" onClick={() => void fetchTemplate()} disabled={isLoading || isSaving}>
               {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
-              Refresh
+              Muat Ulang
             </Button>
             <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
               <DialogTrigger asChild>
@@ -273,7 +273,7 @@ export default function AbsenceLimitsManagement({ embedded = false }: { embedded
               </DialogTrigger>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>{editingLimit ? "Edit Template Batas Absen" : "Tambah Template Batas Absen"}</DialogTitle>
+                  <DialogTitle>{editingLimit ? "Ubah Templat Batas Absen" : "Tambah Templat Batas Absen"}</DialogTitle>
                   <DialogDescription>
                     {editingLimit
                       ? "Perbarui aturan template yang akan dipakai tenant baru."
@@ -329,7 +329,7 @@ export default function AbsenceLimitsManagement({ embedded = false }: { embedded
                     </div>
                   </div>
                   <DialogFooter className={dialogActionBarClassName}>
-                    <DialogActionHint>Aturan ini menjadi default untuk tenant baru.</DialogActionHint>
+                    <DialogActionHint>Aturan ini menjadi bawaan untuk tenant baru.</DialogActionHint>
                     <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
                       <Button type="button" variant="outline" onClick={() => setIsDialogOpen(false)}>
                         Batal
@@ -365,10 +365,10 @@ export default function AbsenceLimitsManagement({ embedded = false }: { embedded
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <AlertTriangle className="h-5 w-5" />
-              Daftar Template Batas Absen
+              Daftar Templat Batas Absen
             </CardTitle>
             <CardDescription>
-              Aturan ini menjadi default untuk organisasi baru. Organisasi juga bisa menerapkan ulang template saat data masih kosong.
+              Aturan ini menjadi bawaan untuk organisasi baru. Organisasi juga bisa menerapkan ulang templat saat data masih kosong.
             </CardDescription>
           </CardHeader>
           <CardContent>

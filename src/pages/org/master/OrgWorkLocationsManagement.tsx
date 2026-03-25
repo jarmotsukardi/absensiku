@@ -146,7 +146,7 @@ export default function OrgWorkLocationsManagement() {
 
       if (isEditing) {
         const { error } = await withTimeout(
-          supabase.from("offices").update(payload).eq("id", formData.id),
+          supabase.from("offices").update(payload).eq("id", formData.id).eq("tenant_id", roleData.tenant_id),
           WORK_LOCATIONS_WRITE_TIMEOUT_MS,
           "Update lokasi kerja timeout."
         );
@@ -203,8 +203,29 @@ export default function OrgWorkLocationsManagement() {
     }
 
     try {
+      const {
+        data: { user },
+      } = await withTimeout(
+        supabase.auth.getUser(),
+        WORK_LOCATIONS_WRITE_TIMEOUT_MS,
+        "Permintaan user lokasi kerja timeout."
+      );
+      if (!user) {
+        toast.error("Sesi tidak ditemukan");
+        return;
+      }
+      const { data: roleData, error: roleError } = await withTimeout(
+        supabase.from("user_roles").select("tenant_id").eq("user_id", user.id).maybeSingle(),
+        WORK_LOCATIONS_WRITE_TIMEOUT_MS,
+        "Permintaan tenant role timeout."
+      );
+      if (roleError) throw roleError;
+      if (!roleData?.tenant_id) {
+        toast.error("Tenant tidak ditemukan");
+        return;
+      }
       const { error } = await withTimeout(
-        supabase.from("offices").delete().eq("id", id),
+        supabase.from("offices").delete().eq("id", id).eq("tenant_id", roleData.tenant_id),
         WORK_LOCATIONS_WRITE_TIMEOUT_MS,
         "Hapus lokasi kerja timeout."
       );

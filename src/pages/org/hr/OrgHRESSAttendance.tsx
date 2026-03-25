@@ -111,9 +111,9 @@ export default function OrgHRESSAttendance() {
       <div className="space-y-6">
         <div className="space-y-2">
           <Badge variant="outline">ESS</Badge>
-          <h1 className="text-2xl font-semibold tracking-tight">Kehadiran Saya</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Kehadiran ESS</h1>
           <p className="text-sm text-muted-foreground">
-            Ringkasan kehadiran pribadi admin organisasi yang juga tercatat sebagai pegawai pada tenant aktif.
+            Ringkasan kehadiran dari perspektif ESS untuk akun organisasi yang juga tercatat sebagai pegawai pada tenant aktif.
           </p>
           <p className="text-xs text-muted-foreground">
             Capability halaman: {isLoadingAccess ? "memverifikasi..." : access.canEdit ? "mode kelola" : "monitoring hanya-baca"}

@@ -297,11 +297,11 @@ export function ConnectionTester() {
               <CheckCircle className="h-3 w-3 text-green-500" /> Langkah Selanjutnya:
             </p>
             <ol className="list-decimal list-inside space-y-1">
-              <li>Export Schema SQL dari tab Schema</li>
-              <li>Jalankan Schema SQL di project target</li>
-              <li>Export RLS Policies dan jalankan di project target</li>
-              <li>Backup data dan import ke project target</li>
-              <li>Update environment variables di Lovable</li>
+              <li>Ekspor Skema SQL dari tab Skema</li>
+              <li>Jalankan Skema SQL di proyek target</li>
+              <li>Ekspor Kebijakan RLS dan jalankan di proyek target</li>
+              <li>Backup data dan impor ke proyek target</li>
+              <li>Perbarui environment variables di Lovable</li>
             </ol>
           </div>
         )}

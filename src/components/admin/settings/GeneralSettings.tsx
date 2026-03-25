@@ -26,7 +26,7 @@ interface GeneralSettingsData {
 
 const defaultSettings: GeneralSettingsData = {
   siteName: "AbsensiKu",
-  siteTagline: "Platform Absensi GPS Terpercaya",
+  siteTagline: "Sistem Absensi GPS Terpercaya",
   siteDescription: "Aplikasi absensi pegawai berbasis GPS untuk pemerintah dan swasta",
   logoUrl: "",
   adminEmail: "admin@absensi.app",
@@ -213,7 +213,7 @@ export function GeneralSettings() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="supportEmail">Email Support</Label>
+                <Label htmlFor="supportEmail">Email Dukungan</Label>
                 <Input
                   id="supportEmail"
                   type="email"
@@ -225,7 +225,7 @@ export function GeneralSettings() {
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="supportPhone">Telepon Support</Label>
+                <Label htmlFor="supportPhone">Telepon Dukungan</Label>
                 <Input
                   id="supportPhone"
                   value={settings.supportPhone}

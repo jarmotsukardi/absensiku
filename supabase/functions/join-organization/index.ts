@@ -108,6 +108,7 @@ serve(async (req: Request): Promise<Response> => {
       .select("*, tenants:tenant_id(name, code, logo_url)")
       .eq("invitation_code", invitation_code.trim())
       .eq("status", "pending")
+      .is("archived_at", null)
       .gte("expires_at", new Date().toISOString())
       .maybeSingle();
 

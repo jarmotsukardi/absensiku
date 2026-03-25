@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
-import type { Json } from "@/integrations/supabase/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,7 +10,11 @@ import { Switch } from "@/components/ui/switch";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { toast } from "sonner";
 import { CreditCard, ExternalLink, Loader2, Save } from "lucide-react";
-import { mapSubscriptionPackagesToPricingPlans, type HomepagePricingPlan } from "@/lib/pricingPlans";
+import {
+  mapSubscriptionPackagesToPublicPricingPlans,
+  type BillingPackageLike,
+  type HomepagePricingPlan,
+} from "@/lib/pricingPlans";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { withTimeout } from "@/lib/attendanceResilience";
 
@@ -21,20 +24,14 @@ interface PricingSectionSettings {
   show_section: boolean;
 }
 
-interface BillingPackageRow {
-  id: string;
-  name: string;
-  description: string | null;
-  base_price_per_month: number;
-  duration_months: number;
-  discount_percentage: number;
-  features: Json | null;
-  sort_order: number;
+interface BillingPackageRow extends BillingPackageLike {
+  module_scope?: string | null;
 }
 
 const defaultSectionSettings: PricingSectionSettings = {
   section_title: "Harga Transparan",
-  section_subtitle: "Pilih paket yang sesuai dengan kebutuhan instansi Anda.",
+  section_subtitle:
+    "Harga publik saat ini difokuskan untuk paket Absensi. Modul HR dan Payroll disiapkan sebagai tahap lanjutan.",
   show_section: true,
 };
 
@@ -51,6 +48,14 @@ export function PricingSettings() {
   const [sectionSettings, setSectionSettings] = useState<PricingSectionSettings>(defaultSectionSettings);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const previewGridClass =
+    plans.length >= 4
+      ? "md:grid-cols-2 xl:grid-cols-4"
+      : plans.length === 3
+        ? "md:grid-cols-3"
+        : plans.length === 2
+          ? "md:grid-cols-2"
+          : "md:grid-cols-1";
 
   useEffect(() => {
     void fetchSettings();
@@ -73,7 +78,7 @@ export function PricingSettings() {
           () =>
             supabase
               .from("subscription_packages")
-              .select("id, name, description, base_price_per_month, duration_months, discount_percentage, features, sort_order")
+              .select("*")
               .eq("is_active", true)
               .order("sort_order"),
           10000,
@@ -105,7 +110,11 @@ export function PricingSettings() {
         : [];
 
       const packageRows = (packageRes.data || []) as BillingPackageRow[];
-      setPlans(mapSubscriptionPackagesToPricingPlans(packageRows, legacyPlans));
+      if (packageRows.length > 0) {
+        setPlans(mapSubscriptionPackagesToPublicPricingPlans(packageRows, legacyPlans));
+      } else {
+        setPlans(legacyPlans);
+      }
     } catch (error) {
       const errorRef = reportError(error, "admin.settings.pricing.fetch");
       toast.error(appendErrorReference("Gagal memuat pengaturan harga", errorRef));
@@ -199,14 +208,15 @@ export function PricingSettings() {
             Relasi Harga dengan Billing
           </CardTitle>
           <CardDescription>
-            Section <strong>Harga Transparan</strong> sekarang memakai sumber data yang sama dengan <strong>/admin/billing</strong>.
+            Bagian <strong>Harga Transparan</strong> sekarang memakai sumber data yang sama dengan <strong>/admin/billing</strong>.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <Alert>
+            <Alert>
             <AlertDescription>
               Paket, nominal, durasi, dan fitur dikelola terpusat pada tab <strong>Paket Langganan</strong> di Billing & Payment.
-              Halaman ini hanya mengatur tampilan section di landing page.
+              Landing page publik saat ini hanya menampilkan paket <strong>Absensi</strong>.
+              Bundle <strong>Absensi + HR</strong> dan <strong>Absensi + HR + Payroll</strong> tetap tersedia di Billing & Payment untuk kebutuhan internal, penawaran bertahap, dan flow organisasi.
             </AlertDescription>
           </Alert>
           <Button variant="outline" onClick={() => navigate("/admin/billing")}>
@@ -218,14 +228,14 @@ export function PricingSettings() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Pengaturan Section Harga</CardTitle>
-          <CardDescription>Atur visibilitas dan copywriting section harga di halaman utama.</CardDescription>
+          <CardTitle>Pengaturan Bagian Harga</CardTitle>
+          <CardDescription>Atur visibilitas dan copywriting bagian harga di halaman utama.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between p-3 rounded-lg border">
             <div>
-              <Label className="font-medium">Tampilkan Section Harga</Label>
-              <p className="text-sm text-muted-foreground">Aktifkan/tutup section harga di landing page</p>
+              <Label className="font-medium">Tampilkan Bagian Harga</Label>
+              <p className="text-sm text-muted-foreground">Aktifkan/tutup bagian harga di landing page</p>
             </div>
             <Switch
               checked={sectionSettings.show_section}
@@ -235,7 +245,7 @@ export function PricingSettings() {
 
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
-              <Label>Judul Section</Label>
+              <Label>Judul Bagian</Label>
               <Input
                 value={sectionSettings.section_title}
                 onChange={(e) => setSectionSettings((prev) => ({ ...prev, section_title: e.target.value }))}
@@ -243,11 +253,11 @@ export function PricingSettings() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Subtitle</Label>
+              <Label>Subjudul</Label>
               <Input
                 value={sectionSettings.section_subtitle}
                 onChange={(e) => setSectionSettings((prev) => ({ ...prev, section_subtitle: e.target.value }))}
-                placeholder="Pilih paket yang sesuai..."
+                placeholder="Harga publik saat ini difokuskan untuk paket Absensi..."
               />
             </div>
           </div>
@@ -256,8 +266,8 @@ export function PricingSettings() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Paket Harga dari Billing ({plans.length})</CardTitle>
-          <CardDescription>Preview realtime paket aktif yang akan tampil di halaman utama.</CardDescription>
+          <CardTitle>Paket Publik dari Billing ({plans.length})</CardTitle>
+          <CardDescription>Pratinjau realtime paket Absensi yang akan tampil di halaman utama.</CardDescription>
         </CardHeader>
         <CardContent>
           {plans.length === 0 ? (
@@ -265,7 +275,7 @@ export function PricingSettings() {
               Belum ada paket aktif di Billing. Tambahkan paket pada <strong>/admin/billing</strong> agar section harga terisi.
             </div>
           ) : (
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className={`grid gap-4 ${previewGridClass}`}>
               {plans.map((plan) => (
                 <Card key={plan.id} className={`relative ${plan.is_popular ? "border-primary border-2" : ""}`}>
                   {plan.is_popular && (

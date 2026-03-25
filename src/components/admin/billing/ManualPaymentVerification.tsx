@@ -37,7 +37,11 @@ import { supabase } from "@/integrations/supabase/client";
 import type { TablesUpdate } from "@/integrations/supabase/types";
 import { toast } from "sonner";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { logCriticalAudit } from "@/lib/auditLoggingPolicy";
 import { withTimeout } from "@/lib/attendanceResilience";
+import { buildAttendanceSubscriptionSnapshotFromInvoice } from "@/lib/attendanceOnboardingPromo";
+import { buildSubscriptionHeadcountSnapshotFromInvoice } from "@/lib/billingHeadcountSnapshot";
+import { mergeBillingSubscriptionJourneyNotes } from "@/lib/billingSubscriptionJourney";
 
 const formatCurrency = (amount: number) => {
   return new Intl.NumberFormat("id-ID", {
@@ -47,17 +51,136 @@ const formatCurrency = (amount: number) => {
   }).format(amount);
 };
 
+const formatIdNumber = (value: number) => {
+  if (!Number.isFinite(value) || value <= 0) return "";
+  return new Intl.NumberFormat("id-ID", { maximumFractionDigits: 0 }).format(Math.round(value));
+};
+
+const parseIdNumberInput = (raw: string) => {
+  const normalized = (raw || "").replace(/[^\d]/g, "");
+  if (!normalized) return 0;
+  return Number(normalized);
+};
+
+const MANUAL_PAYMENT_PENDING_STATUSES = new Set([
+  "pending",
+  "awaiting_verification",
+  "awaiting_verification_full",
+  "pending_verification_partial",
+]);
+
 const parseInvoiceBillingScope = (metadata: unknown): "individual" | "centralized" => {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return "centralized";
   const value = metadata as Record<string, unknown>;
   return value.billing_scope === "individual" ? "individual" : "centralized";
 };
 
+const parseInvoicePayerEmployeeId = (metadata: unknown): string | null => {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const value = metadata as Record<string, unknown>;
+  const manualConfirmedBy = value.manual_confirmed_by_employee_id;
+  if (typeof manualConfirmedBy === "string" && manualConfirmedBy.trim().length > 0) {
+    return manualConfirmedBy.trim();
+  }
+  const employeeId = value.employee_id;
+  if (typeof employeeId === "string" && employeeId.trim().length > 0) {
+    return employeeId.trim();
+  }
+  return null;
+};
+
+const parseInvoicePayerSnapshotFromMetadata = (metadata: unknown) => {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const value = metadata as Record<string, unknown>;
+  const pickString = (key: string) => {
+    const raw = value[key];
+    return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
+  };
+
+  const snapshot = {
+    name: pickString("manual_confirmed_by_name") || pickString("payer_name"),
+    email: pickString("manual_confirmed_by_email") || pickString("payer_email"),
+    whatsapp: pickString("manual_confirmed_by_whatsapp") || pickString("payer_whatsapp"),
+    phone: pickString("manual_confirmed_by_phone") || pickString("payer_phone"),
+  };
+
+  if (!snapshot.name && !snapshot.email && !snapshot.whatsapp && !snapshot.phone) return null;
+  return snapshot;
+};
+
+const buildSubscriptionPricingSnapshot = (
+  invoice: Pick<Invoice, "employee_count" | "price_per_employee" | "metadata">,
+  currentState?: TablesUpdate<"subscriptions"> | null,
+): Pick<
+  TablesUpdate<"subscriptions">,
+  | "price_per_employee"
+  | "price_per_month"
+  | "intro_promo_active"
+  | "intro_promo_price_per_employee"
+  | "intro_promo_duration_months"
+  | "intro_promo_months_consumed"
+  | "intro_promo_label"
+  | "intro_promo_started_at"
+  | "billing_headcount_mode"
+  | "contracted_employee_count"
+  | "max_employees"
+> =>
+  ({
+    ...buildAttendanceSubscriptionSnapshotFromInvoice({
+      employeeCount: invoice.employee_count,
+      fallbackRecurringPricePerEmployee: invoice.price_per_employee,
+      metadata: invoice.metadata,
+      currentState,
+    }),
+    ...buildSubscriptionHeadcountSnapshotFromInvoice(invoice, currentState),
+  });
+
 interface ManualPaymentVerificationProps {
   invoices?: Invoice[];
   isLoading?: boolean;
   onRefetch?: () => Promise<unknown> | void;
 }
+
+interface ManualPaymentEvidenceRow {
+  id: string;
+  amount: number | null;
+  confirmed_amount: number | null;
+  verified_amount: number | null;
+  verification_method: string | null;
+  status: string | null;
+  reference_number: string | null;
+  transfer_proof_url: string | null;
+  payment_date: string | null;
+  account_name: string | null;
+  account_number: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+interface ManualPayerIdentity {
+  id: string;
+  name: string;
+  email: string;
+  whatsapp: string | null;
+  phone: string | null;
+}
+
+const parsePayerSnapshotFromManualNote = (note: string | null | undefined) => {
+  if (!note || typeof note !== "string") return null;
+  const extractValue = (key: string) => {
+    const match = note.match(new RegExp(`${key}=([^|]+)`));
+    return match?.[1]?.trim() || null;
+  };
+
+  const snapshot = {
+    name: extractValue("payer_name"),
+    email: extractValue("payer_email"),
+    whatsapp: extractValue("payer_wa"),
+  };
+
+  if (!snapshot.name && !snapshot.email && !snapshot.whatsapp) return null;
+  return snapshot;
+};
 
 export function ManualPaymentVerification(props: ManualPaymentVerificationProps = {}) {
   const OP_TIMEOUT_MS = 12000;
@@ -83,6 +206,10 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
   const [verificationNotes, setVerificationNotes] = useState("");
   const [verifiedAmountInput, setVerifiedAmountInput] = useState("");
   const [verificationMethod, setVerificationMethod] = useState("manual");
+  const [selectedManualPayment, setSelectedManualPayment] = useState<ManualPaymentEvidenceRow | null>(null);
+  const [isLoadingManualPayment, setIsLoadingManualPayment] = useState(false);
+  const [selectedPayerIdentity, setSelectedPayerIdentity] = useState<ManualPayerIdentity | null>(null);
+  const [isLoadingPayerIdentity, setIsLoadingPayerIdentity] = useState(false);
 
   const filteredInvoices = allManualInvoices.filter((inv) => {
     if (!searchQuery) return true;
@@ -94,21 +221,127 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
     );
   });
 
+  const loadManualPaymentEvidence = async (invoice: Invoice) => {
+    setIsLoadingManualPayment(true);
+    setIsLoadingPayerIdentity(true);
+    setSelectedManualPayment(null);
+    setSelectedPayerIdentity(null);
+    try {
+      const payerEmployeeId = parseInvoicePayerEmployeeId(invoice.metadata);
+      const payerSnapshotFromMetadata = parseInvoicePayerSnapshotFromMetadata(invoice.metadata);
+      const [{ data, error }, { data: payerData, error: payerError }] = await withTimeout(
+        Promise.all([
+          supabase
+            .from("manual_payments")
+            .select("id, amount, confirmed_amount, verified_amount, verification_method, status, reference_number, transfer_proof_url, payment_date, account_name, account_number, notes, created_at")
+            .eq("tenant_id", invoice.tenant_id)
+            .eq("invoice_number", invoice.invoice_number)
+            .order("created_at", { ascending: false })
+            .limit(50),
+          payerEmployeeId
+            ? supabase
+                .from("employees")
+                .select("id, name, email, whatsapp, phone")
+                .eq("tenant_id", invoice.tenant_id)
+                .eq("id", payerEmployeeId)
+                .maybeSingle()
+            : Promise.resolve({ data: null, error: null }),
+        ]),
+        OP_TIMEOUT_MS,
+        "Memuat detail pembayaran manual terlalu lama",
+      );
+
+      if (error) throw error;
+
+      const rows = (data || []) as ManualPaymentEvidenceRow[];
+      const pendingRow =
+        rows.find((row) => MANUAL_PAYMENT_PENDING_STATUSES.has((row.status || "").toLowerCase())) || null;
+      const proofRow =
+        rows.find((row) => Boolean((row.transfer_proof_url || "").trim())) ||
+        rows.find((row) => Boolean((row.reference_number || "").trim())) ||
+        null;
+      const resolvedRow = pendingRow || proofRow || rows[0] || null;
+      setSelectedManualPayment(resolvedRow);
+      const payerSnapshotFromManualRow = resolvedRow
+        ? {
+            name: resolvedRow.account_name?.trim() || null,
+            email: parsePayerSnapshotFromManualNote(resolvedRow.notes)?.email || null,
+            whatsapp:
+              resolvedRow.account_number?.trim() ||
+              parsePayerSnapshotFromManualNote(resolvedRow.notes)?.whatsapp ||
+              null,
+          }
+        : null;
+
+      if (pendingRow) {
+        const suggestedAmount = Number(pendingRow.confirmed_amount ?? pendingRow.amount ?? 0);
+        if (Number.isFinite(suggestedAmount) && suggestedAmount > 0) {
+          setVerifiedAmountInput(formatIdNumber(suggestedAmount));
+        }
+      }
+
+      if (payerError) {
+        reportError(payerError, "admin.billing.manual_payment.dialog.fetch_payer_failed", {
+          invoice_id: invoice.id,
+          tenant_id: invoice.tenant_id,
+          invoice_number: invoice.invoice_number,
+          payer_employee_id: payerEmployeeId,
+        });
+      } else if (payerData) {
+        setSelectedPayerIdentity({
+          id: payerData.id,
+          name: payerData.name || "-",
+          email: payerData.email || "-",
+          whatsapp: payerData.whatsapp || null,
+          phone: payerData.phone || null,
+        });
+      } else if (payerSnapshotFromMetadata) {
+        setSelectedPayerIdentity({
+          id: payerEmployeeId || "manual-metadata",
+          name: payerSnapshotFromMetadata.name || "-",
+          email: payerSnapshotFromMetadata.email || "-",
+          whatsapp: payerSnapshotFromMetadata.whatsapp || null,
+          phone: payerSnapshotFromMetadata.phone || null,
+        });
+      } else if (payerSnapshotFromManualRow) {
+        setSelectedPayerIdentity({
+          id: payerEmployeeId || "manual-payment-row",
+          name: payerSnapshotFromManualRow.name || "-",
+          email: payerSnapshotFromManualRow.email || "-",
+          whatsapp: payerSnapshotFromManualRow.whatsapp || null,
+          phone: null,
+        });
+      }
+    } catch (error) {
+      reportError(error, "admin.billing.manual_payment.dialog.fetch_evidence_failed", {
+        invoice_id: invoice.id,
+        tenant_id: invoice.tenant_id,
+        invoice_number: invoice.invoice_number,
+      });
+    } finally {
+      setIsLoadingManualPayment(false);
+      setIsLoadingPayerIdentity(false);
+    }
+  };
+
   const handleVerifyClick = (invoice: Invoice) => {
     setSelectedInvoice(invoice);
     setRejectionReason("");
     setVerificationNotes("");
-    setVerifiedAmountInput(String(Math.max(0, Math.round(invoice.gross_amount || 0))));
+    setVerifiedAmountInput(formatIdNumber(Math.max(0, Math.round(invoice.gross_amount || 0))));
     setVerificationMethod("manual");
+    setSelectedManualPayment(null);
+    setSelectedPayerIdentity(null);
     setShowVerifyDialog(true);
+    void loadManualPaymentEvidence(invoice);
   };
 
-  const openProofPreview = (invoice: Invoice) => {
-    if (!invoice.payment_proof_url) return;
+  const openProofPreview = (url: string, invoiceNumber: string | null | undefined, tenantName: string | null | undefined) => {
+    if (!url) return;
     setProofPreview({
-      url: invoice.payment_proof_url,
-      invoiceNumber: invoice.invoice_number || "-",
-      tenantName: invoice.tenant?.name || "Unknown",
+      url,
+      invoiceNumber: invoiceNumber || "-",
+      tenantName: tenantName || "Unknown",
     });
   };
 
@@ -128,7 +361,7 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
       const { data: manualPaymentRows, error: manualPaymentFetchError } = await withTimeout(
         supabase
           .from("manual_payments")
-          .select("id, amount, confirmed_amount, verified_amount, verification_method, status, reference_number, transfer_proof_url, payment_date, created_at")
+          .select("id, amount, confirmed_amount, verified_amount, verification_method, status, reference_number, transfer_proof_url, payment_date, account_name, account_number, notes, created_at")
           .eq("tenant_id", selectedInvoice.tenant_id)
           .eq("invoice_number", selectedInvoice.invoice_number)
           .order("created_at", { ascending: false })
@@ -153,11 +386,7 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
 
       const manualPayments = manualPaymentRows || [];
       const pendingManualPayment =
-        manualPayments.find((row) =>
-          ["pending", "awaiting_verification_full", "pending_verification_partial"].includes(
-            (row.status || "").toLowerCase(),
-          ),
-        ) || null;
+        manualPayments.find((row) => MANUAL_PAYMENT_PENDING_STATUSES.has((row.status || "").toLowerCase())) || null;
       const verifiedAmount = manualPayments
         .filter((row) => (row.status || "").toLowerCase() === "verified")
         .reduce((sum, row) => sum + Number(row.verified_amount ?? row.amount ?? 0), 0);
@@ -184,11 +413,11 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
         }
 
         const isIndividualBilling = parseInvoiceBillingScope(selectedInvoice.metadata) === "individual";
-        const hasReferenceFallback = isIndividualBilling && Boolean((pendingManualPayment.reference_number || "").trim());
+        const hasReferenceFallback = Boolean((pendingManualPayment.reference_number || "").trim());
         const hasTransferProof = Boolean(
           selectedInvoice.payment_proof_url || pendingManualPayment.transfer_proof_url || hasReferenceFallback,
         );
-        if (!hasTransferProof) {
+        if (!isIndividualBilling && !hasTransferProof) {
           const errorRef = reportError(
             new Error("MANUAL_PAYMENT_PROOF_MISSING"),
             "admin.billing.manual_payment.evidence.missing_proof",
@@ -219,7 +448,7 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
         }
 
         const confirmedAmount = Number(pendingManualPayment.confirmed_amount ?? pendingManualPayment.amount ?? 0);
-        const verifiedInputAmount = Number((verifiedAmountInput || "").replace(/[^\d.]/g, ""));
+        const verifiedInputAmount = parseIdNumberInput(verifiedAmountInput);
         if (!Number.isFinite(verifiedInputAmount) || verifiedInputAmount <= 0) {
           const errorRef = reportError(
             new Error("MANUAL_PAYMENT_VERIFIED_AMOUNT_INVALID"),
@@ -395,6 +624,26 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
           return;
         }
 
+        await logCriticalAudit({
+          payload: {
+            tenant_id: selectedInvoice.tenant_id,
+            user_id: user?.id || null,
+            table_name: "manual_payments",
+            action: "manual_payment_verified",
+            record_id: pendingManualPayment.id,
+            old_values: {
+              status: pendingManualPayment.status,
+              amount: pendingManualPayment.amount,
+              confirmed_amount: pendingManualPayment.confirmed_amount,
+            },
+            new_values: {
+              status: "verified",
+              verified_amount: verifiedInputAmount,
+              verification_method: verificationMethod,
+            },
+          },
+        });
+
         if (afterApprovalCents < expectedCents) {
           const remaining = expectedAmount - amountAfterApproval;
           updates.status = "PARTIALLY_PAID";
@@ -453,8 +702,29 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
             return;
           }
 
+          const { data: { user: rejectUser } } = await supabase.auth.getUser();
+          await logCriticalAudit({
+            payload: {
+              tenant_id: selectedInvoice.tenant_id,
+              user_id: rejectUser?.id || null,
+              table_name: "manual_payments",
+              action: "manual_payment_rejected",
+              record_id: pendingManualPayment.id,
+              old_values: {
+                status: pendingManualPayment.status,
+                amount: pendingManualPayment.amount,
+                confirmed_amount: pendingManualPayment.confirmed_amount,
+              },
+              new_values: {
+                status: "rejected",
+                rejection_reason: rejectionReason,
+                verification_method: verificationMethod,
+              },
+            },
+          });
+
           const claimedAmount = Number(pendingManualPayment.confirmed_amount ?? pendingManualPayment.amount ?? 0);
-          const parsedVerifiedInput = Number((verifiedAmountInput || "").replace(/[^\d.]/g, ""));
+          const parsedVerifiedInput = parseIdNumberInput(verifiedAmountInput);
           const verifiedAmountForAudit = Number.isFinite(parsedVerifiedInput) ? parsedVerifiedInput : 0;
           const { error: auditError } = await withTimeout(
             supabase.rpc("log_manual_payment_verification_audit" as never, {
@@ -519,6 +789,8 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
                 end_date: endDate.toISOString().split("T")[0],
                 last_invoice_id: selectedInvoice.id,
                 grace_period_end: null,
+                notes: mergeBillingSubscriptionJourneyNotes(currentSub?.notes, selectedInvoice.metadata),
+                ...buildSubscriptionPricingSnapshot(selectedInvoice, currentSub),
                 updated_at: new Date().toISOString(),
               })
               .eq("id", currentSub.id);
@@ -539,6 +811,8 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
                 end_date: endDate.toISOString().split("T")[0],
                 last_invoice_id: selectedInvoice.id,
                 grace_period_end: null,
+                notes: mergeBillingSubscriptionJourneyNotes(null, selectedInvoice.metadata),
+                ...buildSubscriptionPricingSnapshot(selectedInvoice, currentSub),
                 updated_at: new Date().toISOString(),
               });
             if (subInsertError) {
@@ -674,7 +948,7 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
       }
 
       if (approved && !isFullyPaid) {
-        const parsedVerifiedInput = Number((verifiedAmountInput || "").replace(/[^\d.]/g, ""));
+        const parsedVerifiedInput = parseIdNumberInput(verifiedAmountInput);
         const totalVerifiedAfter = verifiedAmount + (Number.isFinite(parsedVerifiedInput) ? parsedVerifiedInput : 0);
         const remaining = Math.max(0, expectedAmount - totalVerifiedAfter);
         toast.success(`Pembayaran cicilan diverifikasi. Sisa tagihan: ${formatCurrency(remaining)}.`);
@@ -775,7 +1049,17 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
 
                   <div className="flex items-center gap-2">
                     {invoice.payment_proof_url && (
-                      <Button variant="outline" size="sm" onClick={() => openProofPreview(invoice)}>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() =>
+                          openProofPreview(
+                            invoice.payment_proof_url || "",
+                            invoice.invoice_number,
+                            invoice.tenant?.name,
+                          )
+                        }
+                      >
                         <FileImage className="mr-2 h-4 w-4" />
                         Bukti
                       </Button>
@@ -794,7 +1078,7 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
 
       {/* Verification Dialog */}
       <Dialog open={showVerifyDialog} onOpenChange={setShowVerifyDialog}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Verifikasi Pembayaran Manual</DialogTitle>
           </DialogHeader>
@@ -803,12 +1087,14 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
             <div className="space-y-4">
               <Card>
                 <CardContent className="p-4 space-y-3">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <Building2 className="h-4 w-4 text-muted-foreground" />
                       <span className="font-medium">{selectedInvoice.tenant?.name}</span>
                     </div>
-                    <Badge variant="outline">{selectedInvoice.tenant?.code}</Badge>
+                    <Badge variant="outline" className="max-w-full truncate">
+                      {selectedInvoice.tenant?.code}
+                    </Badge>
                   </div>
                   
                   <div className="grid grid-cols-2 gap-2 text-sm">
@@ -839,12 +1125,69 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
                 </CardContent>
               </Card>
 
-              {selectedInvoice.payment_proof_url && (
-                <Button variant="outline" className="w-full" onClick={() => openProofPreview(selectedInvoice)}>
-                  <ExternalLink className="mr-2 h-4 w-4" />
-                  Lihat Bukti Pembayaran
-                </Button>
-              )}
+              <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-medium">Data Konfirmasi Transfer</p>
+                  {selectedManualPayment?.payment_date ? (
+                    <p className="text-xs text-muted-foreground">
+                      Tanggal transfer:{" "}
+                      {format(new Date(selectedManualPayment.payment_date), "dd MMM yyyy", { locale: id })}
+                    </p>
+                  ) : null}
+                </div>
+                {isLoadingManualPayment ? (
+                  <p className="mt-2 text-xs text-muted-foreground">Memuat data konfirmasi transfer...</p>
+                ) : (
+                  <div className="mt-2 space-y-2">
+                    <div>
+                      <p className="text-xs text-muted-foreground">No. Ref</p>
+                      <p className="text-sm font-medium">{selectedManualPayment?.reference_number?.trim() || "-"}</p>
+                    </div>
+                    <div className="grid gap-2 rounded-md border bg-white/70 p-2 text-xs sm:grid-cols-3">
+                      <div>
+                        <p className="text-muted-foreground">Nama Pembayar</p>
+                        <p className="font-medium text-foreground">
+                          {isLoadingPayerIdentity ? "Memuat..." : selectedPayerIdentity?.name || "-"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">Email</p>
+                        <p className="font-medium text-foreground">
+                          {isLoadingPayerIdentity ? "Memuat..." : selectedPayerIdentity?.email || "-"}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-muted-foreground">No. WA</p>
+                        <p className="font-medium text-foreground">
+                          {isLoadingPayerIdentity
+                            ? "Memuat..."
+                            : selectedPayerIdentity?.whatsapp?.trim() ||
+                              selectedPayerIdentity?.phone?.trim() ||
+                              "-"}
+                        </p>
+                      </div>
+                    </div>
+                    {selectedInvoice.payment_proof_url || selectedManualPayment?.transfer_proof_url ? (
+                      <Button
+                        variant="outline"
+                        className="w-full"
+                        onClick={() =>
+                          openProofPreview(
+                            selectedInvoice.payment_proof_url ||
+                              selectedManualPayment?.transfer_proof_url ||
+                              "",
+                            selectedInvoice.invoice_number,
+                            selectedInvoice.tenant?.name,
+                          )
+                        }
+                      >
+                        <ExternalLink className="mr-2 h-4 w-4" />
+                        Lihat Bukti Lama (Jika Ada)
+                      </Button>
+                    ) : null}
+                  </div>
+                )}
+              </div>
 
               <div className="space-y-3">
                 <div className="space-y-2">
@@ -861,9 +1204,11 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
                   <div className="space-y-2">
                     <Label>Nominal Verifikasi Admin</Label>
                     <Input
-                      inputMode="decimal"
+                      inputMode="numeric"
                       value={verifiedAmountInput}
-                      onChange={(event) => setVerifiedAmountInput(event.target.value)}
+                      onChange={(event) =>
+                        setVerifiedAmountInput(formatIdNumber(parseIdNumberInput(event.target.value)))
+                      }
                       placeholder="Nominal yang benar-benar diterima"
                     />
                   </div>
@@ -896,8 +1241,8 @@ export function ManualPaymentVerification(props: ManualPaymentVerificationProps 
             </div>
           )}
 
-          <DialogFooter className={dialogActionBarClassName}>
-            <DialogActionHint>
+          <DialogFooter className={`${dialogActionBarClassName} flex-col gap-3 sm:flex-col sm:space-x-0`}>
+            <DialogActionHint className="mr-0 w-full text-left">
               Pastikan nominal verifikasi sudah sesuai bukti transfer sebelum menyetujui pembayaran.
             </DialogActionHint>
             <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">

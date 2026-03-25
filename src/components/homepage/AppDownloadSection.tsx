@@ -1,8 +1,15 @@
 import { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Smartphone, Download, QrCode, CheckCircle2 } from "lucide-react";
+import { Smartphone, Download, QrCode, CheckCircle2, ShieldCheck, Package } from "lucide-react";
+import type { Feature } from "@/hooks/useHomepageData";
+import { APK_DOWNLOAD_PAGE_PATH, HOMEPAGE_PUBLIC_APK_URL } from "@/lib/apkDownload";
+
+interface AppDownloadSectionProps {
+  features: Feature[];
+}
 
 interface AppDownloadSettings {
   enabled: boolean;
@@ -12,7 +19,6 @@ interface AppDownloadSettings {
   apk_url: string;
   playstore_url: string;
   appstore_url: string;
-  features: string[];
   show_qr_code: boolean;
 }
 
@@ -21,19 +27,13 @@ const defaultSettings: AppDownloadSettings = {
   title: "Unduh Aplikasi AbsensiKu",
   subtitle: "Tersedia untuk Android",
   description: "Unduh aplikasi mobile AbsensiKu untuk kemudahan absensi di mana saja.",
-  apk_url: "",
+  apk_url: HOMEPAGE_PUBLIC_APK_URL,
   playstore_url: "",
   appstore_url: "",
-  features: [
-    "Absensi dengan GPS akurat",
-    "Notifikasi pengingat absen",
-    "Riwayat kehadiran lengkap",
-    "Pengajuan izin & cuti online",
-  ],
   show_qr_code: false,
 };
 
-export function AppDownloadSection() {
+export function AppDownloadSection({ features }: AppDownloadSectionProps) {
   const [settings, setSettings] = useState<AppDownloadSettings>(defaultSettings);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -50,7 +50,8 @@ export function AppDownloadSection() {
         .maybeSingle();
 
       if (data?.value) {
-        setSettings({ ...defaultSettings, ...(data.value as Partial<AppDownloadSettings>) });
+        const nextSettings = { ...defaultSettings, ...(data.value as Partial<AppDownloadSettings>) };
+        setSettings(nextSettings);
       }
     } catch (error) {
       console.error("Error fetching app download settings:", error);
@@ -60,9 +61,16 @@ export function AppDownloadSection() {
   };
 
   if (isLoading) return null;
+  if (!settings.enabled) return null;
+  const latestApkUrl = settings.apk_url || HOMEPAGE_PUBLIC_APK_URL;
 
-  // Show section if enabled, regardless of download link availability
-  // The section will still be useful to show the app info
+  const featureHighlights = Array.from(
+    new Set(
+      features
+        .map((feature) => feature.title?.trim())
+        .filter((title): title is string => Boolean(title))
+    )
+  ).slice(0, 4);
 
   return (
     <section id="download" className="py-16 px-4 bg-gradient-to-br from-primary/5 via-background to-primary/10">
@@ -84,10 +92,10 @@ export function AppDownloadSection() {
             </p>
 
             {/* Features List */}
-            {settings.features.length > 0 && (
+            {featureHighlights.length > 0 && (
               <ul className="space-y-3">
-                {settings.features.map((feature, index) => (
-                  <li key={index} className="flex items-center gap-3 text-foreground">
+                {featureHighlights.map((feature) => (
+                  <li key={feature} className="flex items-center gap-3 text-foreground">
                     <CheckCircle2 className="w-5 h-5 text-primary shrink-0" />
                     <span>{feature}</span>
                   </li>
@@ -97,12 +105,12 @@ export function AppDownloadSection() {
 
             {/* Download Buttons */}
             <div className="flex flex-wrap gap-4 pt-4">
-              {settings.apk_url && (
+              {latestApkUrl && (
                 <Button size="lg" asChild className="gap-2">
-                  <a href={settings.apk_url} target="_blank" rel="noopener noreferrer">
+                  <Link to={APK_DOWNLOAD_PAGE_PATH}>
                     <Download className="w-5 h-5" />
-                    Unduh Aplikasi
-                  </a>
+                    Lihat Versi Android
+                  </Link>
                 </Button>
               )}
               {settings.playstore_url && (
@@ -144,13 +152,43 @@ export function AppDownloadSection() {
                   </div>
                   <h3 className="font-bold text-xl text-foreground mb-2">AbsensiKu</h3>
                   <p className="text-sm text-muted-foreground">Absensi GPS Terpercaya</p>
-                  
-                  {settings.show_qr_code && (
-                    <div className="mt-6 p-4 bg-white rounded-xl shadow-inner">
-                      <QrCode className="w-24 h-24 text-foreground" />
-                      <p className="text-xs text-muted-foreground mt-2">Scan untuk unduh aplikasi</p>
+
+                  <div className="mt-6 w-full max-w-[220px] rounded-2xl bg-white/95 p-4 shadow-inner backdrop-blur">
+                    <div className="flex items-start gap-3 text-left">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                        <Package className="h-5 w-5" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold text-foreground">Aplikasi Android</p>
+                        <p className="text-xs text-muted-foreground">Instal langsung aplikasi AbsensiKu</p>
+                      </div>
                     </div>
-                  )}
+
+                    <div className="mt-3 flex items-center gap-2 rounded-xl bg-emerald-50 px-3 py-2 text-left">
+                      <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-600" />
+                      <span className="text-[11px] font-medium text-emerald-700">
+                        Siap diunduh untuk perangkat Android
+                      </span>
+                    </div>
+
+                    {latestApkUrl && (
+                      <Button size="sm" asChild className="mt-3 w-full gap-2">
+                        <Link to={APK_DOWNLOAD_PAGE_PATH}>
+                          <Download className="h-4 w-4" />
+                          Lihat Halaman Download
+                        </Link>
+                      </Button>
+                    )}
+
+                    {settings.show_qr_code && (
+                      <div className="mt-4 rounded-xl border border-border/70 bg-background px-4 py-3">
+                        <QrCode className="mx-auto h-16 w-16 text-foreground" />
+                        <p className="mt-2 text-center text-[11px] text-muted-foreground">
+                          Scan untuk unduh aplikasi
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Phone Home Bar */}

@@ -1,10 +1,11 @@
 import { expect, type Browser, type Locator, type Page } from "@playwright/test";
-import { loginAsOrgAdmin, waitForStable } from "./orgAuth";
+import { ensureWorkspaceEnabled, loginAsOrgAdmin, waitForStable } from "./orgAuth";
 
 export const createOrgAdminHrPage = async (browser: Browser) => {
   const context = await browser.newContext();
   const page = await context.newPage();
   await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+  await ensureWorkspaceEnabled(page, "Aktifkan workspace HR");
   return { context, page };
 };
 

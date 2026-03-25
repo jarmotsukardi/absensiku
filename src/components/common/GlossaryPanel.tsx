@@ -28,6 +28,8 @@ const GLOSSARY_TERMS: GlossaryTerm[] = [
   { term: "Transfer Manual", description: "Metode pembayaran via transfer bank dengan angka unik sebagai identifikasi otomatis.", category: "billing" },
   { term: "Angka Unik", description: "3 digit angka acak yang ditambahkan ke total pembayaran untuk memudahkan verifikasi otomatis transfer bank.", category: "billing" },
   { term: "Paket Langganan", description: "Pilihan durasi berlangganan (1, 3, 6, atau 12 bulan) dengan harga per-pegawai yang sudah ditentukan.", category: "billing" },
+  { term: "Komitmen Pembayaran", description: "Penanda bahwa organisasi sudah menyatakan kesiapan melanjutkan aktivasi. Pada tahap ini, HR dapat dibuka lebih jauh sesuai kebijakan akses yang berlaku.", category: "billing" },
+  { term: "Langganan Aktif", description: "Status ketika layanan sudah berjalan penuh dan fitur dibuka sesuai paket yang dipilih organisasi.", category: "billing" },
   { term: "Pemisahan Pajak PPN/PPH", description: "Di panel admin tagihan, komponen pajak ditampilkan terpisah (PPN dan PPH) untuk memudahkan rekonsiliasi dan pelaporan.", category: "billing" },
   { term: "Komponen Pajak Internal", description: "Komponen biaya internal platform (termasuk PPN/PPH) yang sudah diperhitungkan ke total tagihan tanpa ditampilkan sebagai baris terpisah di sisi klien.", category: "billing" },
   { term: "Total Tagihan Akhir", description: "Nilai akhir pada tagihan yang menjadi nominal pembayaran tenant. Tidak memerlukan penjumlahan manual tambahan di sisi klien.", category: "billing" },
@@ -51,17 +53,27 @@ const GLOSSARY_TERMS: GlossaryTerm[] = [
   { term: "WFH (Kerja dari Rumah)", description: "Status kerja dari rumah ketika validasi lokasi GPS tidak diperlukan.", category: "absensi" },
   { term: "Shift Kerja", description: "Pengaturan jadwal kerja dengan jam masuk dan pulang tertentu yang bisa berbeda per unit kerja.", category: "absensi" },
   { term: "Toleransi Keterlambatan", description: "Jumlah menit (bawaan: 0) setelah jam masuk sebelum status dinilai terlambat. Nilai 0 berarti keterlambatan dihitung langsung dari jam masuk.", category: "absensi" },
+  { term: "Validasi Lokasi Realtime", description: "Pemeriksaan agar koordinat absensi diambil dari pembacaan lokasi terbaru, bukan cache lokasi lama.", category: "absensi" },
+  { term: "Blokir Semua Browser", description: "Kebijakan yang menutup akses absensi dari browser umum dan memprioritaskan APK atau WebView internal. Safari iPhone bisa tetap diizinkan jika pengecualian diaktifkan.", category: "absensi" },
+  { term: "Blokir Browser Desktop", description: "Kebijakan yang menolak akses absensi dari browser di PC atau laptop, meskipun browser seluler bisa diatur terpisah.", category: "absensi" },
+  { term: "Safari iPhone", description: "Jalur fallback sementara untuk absensi berbasis browser di iPhone ketika aplikasi iOS belum tersedia dan pengecualian Safari diaktifkan.", category: "absensi" },
+  { term: "Versi Android Minimum", description: "Versi Android terendah yang diizinkan agar fitur absensi, GPS, dan sinkronisasi tetap stabil.", category: "absensi" },
 
   // Organisasi
   { term: "Tenant", description: "Istilah teknis untuk organisasi/instansi yang terdaftar dalam sistem multi-tenant.", category: "organisasi" },
   { term: "OPD", description: "Organisasi Perangkat Daerah — unit kerja dalam instansi pemerintah daerah.", category: "organisasi" },
   { term: "Admin Instansi", description: "Pengelola organisasi yang memiliki akses penuh untuk mengatur pegawai, kantor, jadwal, dan langganan.", category: "organisasi" },
   { term: "Super Admin", description: "Administrator tertinggi platform yang mengelola seluruh organisasi, pengaturan global, dan tagihan.", category: "organisasi" },
+  { term: "Fondasi Absensi", description: "Kesiapan dasar organisasi seperti satuan kerja, lokasi kerja, jam kerja, batas absen, pegawai, dan rekam absensi awal yang diperlukan sebelum HR dibuka bertahap.", category: "organisasi" },
+  { term: "Mode Lihat Saja", description: "Status ketika halaman sudah dapat dibuka untuk ditinjau, tetapi data belum bisa ditambah, diubah, atau dihapus.", category: "organisasi" },
+  { term: "Bisa Diedit", description: "Status ketika data pada modul sudah dapat ditambah, diperbarui, dan dikelola penuh sesuai hak akses pengguna.", category: "organisasi" },
   { term: "Kode Organisasi", description: "Kode unik pendek yang digunakan pegawai untuk bergabung ke organisasi tertentu.", category: "organisasi" },
   { term: "Pengikatan Perangkat", description: "Pengikatan perangkat HP ke akun pegawai sehingga hanya bisa absensi dari 1 perangkat yang terdaftar.", category: "organisasi" },
 
   // Umum
   { term: "OTP (Kata Sandi Sekali Pakai)", description: "Kode verifikasi sekali pakai yang dikirim via WhatsApp atau email untuk keamanan.", category: "umum" },
+  { term: "Window OTP", description: "Periode waktu untuk menghitung berapa kali OTP boleh dikirim sebelum sistem mengunci sementara permintaan berikutnya.", category: "umum" },
+  { term: "Durasi Lock", description: "Lama waktu akun atau aksi reset perangkat dikunci sementara setelah batas pengiriman OTP tercapai.", category: "umum" },
   { term: "RLS (Keamanan Tingkat Baris)", description: "Kebijakan keamanan database yang memastikan setiap pengguna hanya bisa mengakses data miliknya sendiri.", category: "umum" },
   { term: "Mutasi", description: "Permintaan perubahan data pegawai (nama, jabatan, unit kerja, dll) yang memerlukan persetujuan admin.", category: "umum" },
 ];

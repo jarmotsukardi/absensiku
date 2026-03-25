@@ -4,9 +4,17 @@ import { spawn } from "node:child_process";
 import process from "node:process";
 
 const isWindows = process.platform === "win32";
-const args = new Set(process.argv.slice(2));
+const argv = process.argv.slice(2);
+const args = new Set(argv);
 const checkOnly = args.has("--check");
 const includeAttendance = args.has("--with-attendance");
+const includeLeave = args.has("--with-leave");
+const loginRolesArg = argv.find((arg) => arg.startsWith("--login-roles="));
+const loginRoles = loginRolesArg
+  ? loginRolesArg.slice("--login-roles=".length).trim() || "all"
+  : includeLeave
+    ? "employee,org_admin"
+    : "all";
 const BASE_URL = process.env.DASHBOARD_BASE_URL || "http://127.0.0.1:5173";
 
 const runPrefixed = (label, command, commandArgs) =>
@@ -75,12 +83,22 @@ async function main() {
   }
 
   const suites = [
-    { label: "smoke:login", args: ["run", "smoke:login"] },
+    {
+      label: "smoke:login",
+      args:
+        loginRoles === "all"
+          ? ["run", "smoke:login"]
+          : ["run", "smoke:login", "--", `--role=${loginRoles}`],
+    },
     { label: "smoke:dashboard", args: ["run", "smoke:dashboard"] },
   ];
 
   if (includeAttendance) {
     suites.push({ label: "smoke:attendance", args: ["run", "smoke:attendance"] });
+  }
+
+  if (includeLeave) {
+    suites.push({ label: "e2e:leave:all", args: ["run", "e2e:leave:all"] });
   }
 
   process.stdout.write(`Menjalankan ${suites.length} suite secara paralel.\n`);

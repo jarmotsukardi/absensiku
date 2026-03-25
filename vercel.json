@@ -1,7 +1,56 @@
 {
+  "framework": null,
+  "functions": {
+    "api/admin/full-backup.ts": {
+      "excludeFiles": "artifacts/**"
+    }
+  },
+  "redirects": [
+    {
+      "source": "/",
+      "has": [
+        {
+          "type": "host",
+          "value": "www.absensipro.com"
+        }
+      ],
+      "destination": "https://absensipro.com/",
+      "permanent": true
+    },
+    {
+      "source": "/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "www.absensipro.com"
+        }
+      ],
+      "destination": "https://absensipro.com/:path*",
+      "permanent": true
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/admin/full-backup",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store"
+        }
+      ]
+    }
+  ],
   "rewrites": [
     {
-      "source": "/(.*)",
+      "source": "/mobile-api/:path*",
+      "destination": "/api/mobile-api/:path*"
+    },
+    {
+      "source": "/downloads/:path*",
+      "destination": "/404.html"
+    },
+    {
+      "source": "/:path*",
       "destination": "/index.html"
     }
   ]

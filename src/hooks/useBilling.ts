@@ -2,6 +2,14 @@ import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { TablesUpdate } from "@/integrations/supabase/types";
+import {
+  type BillingPackageModuleScope,
+  normalizeBillingPackageModuleScope,
+} from "@/lib/billingPackageScope";
+import { sanitizeBillingPackagePricing } from "@/lib/billingPackagePricing";
+import { buildAttendanceSubscriptionSnapshotFromInvoice } from "@/lib/attendanceOnboardingPromo";
+import { buildSubscriptionHeadcountSnapshotFromInvoice } from "@/lib/billingHeadcountSnapshot";
+import { mergeBillingSubscriptionJourneyNotes } from "@/lib/billingSubscriptionJourney";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 
 const getErrorMessage = (error: unknown): string => {
@@ -21,12 +29,19 @@ export interface SubscriptionPackage {
   name: string;
   duration_months: number;
   base_price_per_month: number;
+  attendance_base_price: number;
+  hr_addon_price: number;
+  payroll_addon_price: number;
+  promo_active: boolean;
+  promo_price_per_month: number | null;
+  promo_label: string | null;
   discount_percentage: number;
   is_active: boolean;
   applies_to: string;
   description: string | null;
   features: unknown;
   sort_order: number;
+  module_scope: BillingPackageModuleScope;
 }
 
 export interface Invoice {
@@ -92,7 +107,19 @@ export interface FinancialTransaction {
   [key: string]: unknown;
 }
 
-const MANUAL_VERIFICATION_STATUSES = [
+interface UpdateBillingSettingOptions {
+  silent?: boolean;
+  skipRefetch?: boolean;
+  throwOnError?: boolean;
+  successMessage?: string;
+}
+
+const MANUAL_PAYMENT_QUEUE_STATUSES = [
+  "pending",
+  "awaiting_verification",
+  "awaiting_verification_full",
+  "pending_verification_partial",
+  "PENDING",
   "AWAITING_VERIFICATION",
   "AWAITING_VERIFICATION_FULL",
   "PENDING_VERIFICATION_PARTIAL",
@@ -103,6 +130,33 @@ const parseInvoiceBillingScope = (metadata: unknown): "individual" | "centralize
   const value = metadata as Record<string, unknown>;
   return value.billing_scope === "individual" ? "individual" : "centralized";
 };
+
+const buildSubscriptionPricingSnapshot = (
+  invoice: Pick<Invoice, "employee_count" | "price_per_employee" | "metadata">,
+  currentState?: TablesUpdate<"subscriptions"> | null,
+): Pick<
+  TablesUpdate<"subscriptions">,
+  | "price_per_employee"
+  | "price_per_month"
+  | "intro_promo_active"
+  | "intro_promo_price_per_employee"
+  | "intro_promo_duration_months"
+  | "intro_promo_months_consumed"
+  | "intro_promo_label"
+  | "intro_promo_started_at"
+  | "billing_headcount_mode"
+  | "contracted_employee_count"
+  | "max_employees"
+> =>
+  ({
+    ...buildAttendanceSubscriptionSnapshotFromInvoice({
+      employeeCount: invoice.employee_count,
+      fallbackRecurringPricePerEmployee: invoice.price_per_employee,
+      metadata: invoice.metadata,
+      currentState,
+    }),
+    ...buildSubscriptionHeadcountSnapshotFromInvoice(invoice, currentState),
+  });
 
 export function useBillingSettings() {
   const [settings, setSettings] = useState<BillingSetting[]>([]);
@@ -134,7 +188,11 @@ export function useBillingSettings() {
     return setting?.setting_value || null;
   };
 
-  const updateSetting = async (key: string, value: unknown): Promise<boolean> => {
+  const updateSetting = async (
+    key: string,
+    value: unknown,
+    options: UpdateBillingSettingOptions = {},
+  ): Promise<boolean> => {
     try {
       const { error } = await supabase
         .from("billing_settings")
@@ -142,12 +200,21 @@ export function useBillingSettings() {
         .eq("setting_key", key);
 
       if (error) throw error;
-      toast.success("Pengaturan berhasil disimpan");
-      await fetchSettings();
+      if (!options.silent) {
+        toast.success(options.successMessage ?? "Pengaturan berhasil disimpan");
+      }
+      if (!options.skipRefetch) {
+        await fetchSettings();
+      }
       return true;
     } catch (error: unknown) {
       const errorRef = reportError(error, "admin.billing.settings.update", { key });
-      toast.error(appendErrorReference("Gagal menyimpan: " + getErrorMessage(error), errorRef));
+      if (!options.silent) {
+        toast.error(appendErrorReference("Gagal menyimpan: " + getErrorMessage(error), errorRef));
+      }
+      if (options.throwOnError) {
+        throw error;
+      }
       return false;
     }
   };
@@ -167,7 +234,13 @@ export function useSubscriptionPackages() {
         .order("sort_order");
 
       if (error) throw error;
-      setPackages(data || []);
+      setPackages(
+        ((data || []) as SubscriptionPackage[]).map((pkg) => ({
+          ...pkg,
+          module_scope: normalizeBillingPackageModuleScope(pkg.module_scope),
+          ...sanitizeBillingPackagePricing(pkg, pkg.base_price_per_month),
+        })),
+      );
     } catch (error) {
       reportError(error, "admin.billing.packages.fetch");
       console.error("Error fetching packages:", error);
@@ -182,15 +255,26 @@ export function useSubscriptionPackages() {
 
   const createPackage = async (pkg: Partial<SubscriptionPackage>): Promise<boolean> => {
     try {
+      const pricing = sanitizeBillingPackagePricing(
+        pkg,
+        typeof pkg.base_price_per_month === "number" ? pkg.base_price_per_month : 15000,
+      );
       const insertData = {
         name: pkg.name!,
         duration_months: pkg.duration_months!,
-        base_price_per_month: pkg.base_price_per_month || 15000,
+        base_price_per_month: pricing.base_price_per_month,
+        attendance_base_price: pricing.attendance_base_price,
+        hr_addon_price: pricing.hr_addon_price,
+        payroll_addon_price: pricing.payroll_addon_price,
+        promo_active: pricing.promo_active,
+        promo_price_per_month: pricing.promo_price_per_month,
+        promo_label: pricing.promo_label,
         discount_percentage: pkg.discount_percentage || 0,
         is_active: pkg.is_active !== false,
         applies_to: pkg.applies_to || "ALL",
         description: pkg.description || null,
         features: pkg.features || [],
+        module_scope: pricing.module_scope,
         sort_order: pkg.sort_order || 0,
       };
       const { error } = await supabase.from("subscription_packages").insert([insertData]);
@@ -207,9 +291,27 @@ export function useSubscriptionPackages() {
 
   const updatePackage = async (id: string, updates: Partial<SubscriptionPackage>): Promise<boolean> => {
     try {
+      const existingPackage = packages.find((pkg) => pkg.id === id);
+      const mergedPackage = { ...existingPackage, ...updates };
+      const pricing = sanitizeBillingPackagePricing(
+        mergedPackage,
+        existingPackage?.base_price_per_month ?? 0,
+      );
+      const normalizedUpdates: TablesUpdate<"subscription_packages"> = {
+        ...updates,
+        attendance_base_price: pricing.attendance_base_price,
+        hr_addon_price: pricing.hr_addon_price,
+        payroll_addon_price: pricing.payroll_addon_price,
+        base_price_per_month: pricing.base_price_per_month,
+        promo_active: pricing.promo_active,
+        promo_price_per_month: pricing.promo_price_per_month,
+        promo_label: pricing.promo_label,
+        updated_at: new Date().toISOString(),
+      };
+      normalizedUpdates.module_scope = pricing.module_scope;
       const { error } = await supabase
         .from("subscription_packages")
-        .update({ ...updates, updated_at: new Date().toISOString() })
+        .update(normalizedUpdates)
         .eq("id", id);
       if (error) throw error;
       toast.success("Paket berhasil diperbarui");
@@ -283,7 +385,7 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
     try {
       const { data: invoice, error: invoiceError } = await supabase
         .from("invoices")
-        .select(`
+          .select(`
           id,
           tenant_id,
           invoice_number,
@@ -295,6 +397,8 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
           net_amount,
           xendit_fee,
           payment_method_type,
+          employee_count,
+          price_per_employee,
           metadata
         `)
         .eq("id", invoiceId)
@@ -359,6 +463,8 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
                 end_date: endDate.toISOString().split("T")[0],
                 last_invoice_id: invoice.id,
                 grace_period_end: null,
+                notes: mergeBillingSubscriptionJourneyNotes(currentSub?.notes, invoice.metadata),
+                ...buildSubscriptionPricingSnapshot(invoice, currentSub),
                 updated_at: new Date().toISOString(),
               })
               .eq("id", currentSub.id);
@@ -380,6 +486,8 @@ export function useInvoices(filters?: { status?: string; tenantId?: string }) {
                 end_date: endDate.toISOString().split("T")[0],
                 last_invoice_id: invoice.id,
                 grace_period_end: null,
+                notes: mergeBillingSubscriptionJourneyNotes(null, invoice.metadata),
+                ...buildSubscriptionPricingSnapshot(invoice, currentSub),
                 updated_at: new Date().toISOString(),
               });
             if (subInsertError) {
@@ -515,22 +623,66 @@ export function useManualVerificationInvoices(filters?: { tenantId?: string }) {
   const fetchInvoices = useCallback(async () => {
     setIsLoading(true);
     try {
-      let query = supabase
+      let pendingManualQuery = supabase
+        .from("manual_payments")
+        .select("tenant_id, invoice_number, created_at, status")
+        .in("status", [...MANUAL_PAYMENT_QUEUE_STATUSES])
+        .eq("is_archived", false)
+        .order("created_at", { ascending: false })
+        .limit(1000);
+
+      if (filters?.tenantId) {
+        pendingManualQuery = pendingManualQuery.eq("tenant_id", filters.tenantId);
+      }
+
+      const { data: pendingManualRows, error: pendingManualError } = await pendingManualQuery;
+      if (pendingManualError) throw pendingManualError;
+
+      const queueEntries = (pendingManualRows || [])
+        .map((row) => ({
+          tenant_id: String((row as { tenant_id?: string }).tenant_id || "").trim(),
+          invoice_number: String((row as { invoice_number?: string | null }).invoice_number || "").trim(),
+          created_at: String((row as { created_at?: string | null }).created_at || ""),
+        }))
+        .filter((row) => row.tenant_id.length > 0 && row.invoice_number.length > 0);
+
+      if (queueEntries.length === 0) {
+        setInvoices([]);
+        return;
+      }
+
+      const invoiceNumbers = Array.from(new Set(queueEntries.map((row) => row.invoice_number)));
+      const { data: invoicesData, error: invoicesError } = await supabase
         .from("invoices")
         .select(`
           *,
           tenant:tenants(id, name, code)
         `)
-        .in("status", [...MANUAL_VERIFICATION_STATUSES])
-        .order("created_at", { ascending: false });
+        .in("invoice_number", invoiceNumbers);
+      if (invoicesError) throw invoicesError;
 
-      if (filters?.tenantId) {
-        query = query.eq("tenant_id", filters.tenantId);
-      }
+      const queueByInvoiceKey = new Map<string, string>();
+      queueEntries.forEach((entry) => {
+        const key = `${entry.tenant_id}::${entry.invoice_number}`;
+        if (!queueByInvoiceKey.has(key)) {
+          queueByInvoiceKey.set(key, entry.created_at || "");
+        }
+      });
 
-      const { data, error } = await query;
-      if (error) throw error;
-      setInvoices(data || []);
+      const resolvedInvoices = (invoicesData || []).filter((invoice) => {
+        const key = `${invoice.tenant_id}::${invoice.invoice_number}`;
+        return queueByInvoiceKey.has(key);
+      });
+
+      resolvedInvoices.sort((left, right) => {
+        const leftKey = `${left.tenant_id}::${left.invoice_number}`;
+        const rightKey = `${right.tenant_id}::${right.invoice_number}`;
+        const leftCreatedAt = queueByInvoiceKey.get(leftKey) || "";
+        const rightCreatedAt = queueByInvoiceKey.get(rightKey) || "";
+        return rightCreatedAt.localeCompare(leftCreatedAt);
+      });
+
+      setInvoices(resolvedInvoices as Invoice[]);
     } catch (error) {
       reportError(error, "admin.billing.invoices.manual_verification.fetch", {
         tenant_id: filters?.tenantId || null,

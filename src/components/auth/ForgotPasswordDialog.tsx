@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import SingleOTPInput, { SingleOTPInputRef } from "@/components/common/SingleOTPInput";
 import { useToast } from "@/hooks/use-toast";
+import { supabasePublishableKey, supabaseUrl } from "@/integrations/supabase/env";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { Key, Lock, Mail, MessageCircle, Loader2, ArrowLeft, RefreshCw, Eye, EyeOff, Phone, CheckCircle2, ShieldCheck } from "lucide-react";
 
@@ -114,12 +115,12 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
     setIsValidating(true);
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-reset-password`,
+        `${supabaseUrl}/functions/v1/send-reset-password`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            apikey: supabasePublishableKey,
           },
           body: JSON.stringify({
             email: emailValue.trim().toLowerCase(),
@@ -166,12 +167,12 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
     setIsLoading(true);
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-reset-password`,
+        `${supabaseUrl}/functions/v1/send-reset-password`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            apikey: supabasePublishableKey,
           },
           body: JSON.stringify({
             email: emailValue.trim().toLowerCase(),
@@ -218,12 +219,12 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
     setIsLoading(true);
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-password-otp`,
+        `${supabaseUrl}/functions/v1/send-password-otp`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            apikey: supabasePublishableKey,
           },
           body: JSON.stringify({
             email: emailValue.trim().toLowerCase(),
@@ -296,12 +297,12 @@ export function ForgotPasswordDialog({ open, onOpenChange, loginType }: ForgotPa
     setIsLoading(true);
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-password-otp`,
+        `${supabaseUrl}/functions/v1/verify-password-otp`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            apikey: supabasePublishableKey,
           },
           body: JSON.stringify({
             email: emailValue.trim().toLowerCase(),

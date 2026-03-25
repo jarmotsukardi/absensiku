@@ -11,7 +11,7 @@ import { toast } from "sonner";
 export function HomepageSettings() {
   const [isLoading, setIsLoading] = useState(false);
   const [settings, setSettings] = useState({
-    heroTitle: "Platform Absensi #1 untuk Pemerintah & Swasta",
+    heroTitle: "Sistem Absensi #1 untuk Pemerintah & Swasta",
     heroSubtitle: "Kelola kehadiran pegawai dengan akurat menggunakan teknologi GPS",
     heroCta: "Mulai Gratis",
     showStats: true,
@@ -46,7 +46,7 @@ export function HomepageSettings() {
       <div className="grid gap-6">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Hero Section</CardTitle>
+            <CardTitle className="text-base">Bagian Hero</CardTitle>
             <CardDescription>Bagian utama yang pertama dilihat pengunjung</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -56,7 +56,7 @@ export function HomepageSettings() {
                 id="heroTitle"
                 value={settings.heroTitle}
                 onChange={(e) => handleChange("heroTitle", e.target.value)}
-                placeholder="Judul hero section"
+                placeholder="Judul bagian hero"
               />
             </div>
             <div className="space-y-2">
@@ -95,8 +95,8 @@ export function HomepageSettings() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Visibility Section</CardTitle>
-            <CardDescription>Pilih section yang ingin ditampilkan</CardDescription>
+            <CardTitle className="text-base">Bagian Visibilitas</CardTitle>
+            <CardDescription>Pilih bagian yang ingin ditampilkan</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex items-center justify-between rounded-lg border p-4">

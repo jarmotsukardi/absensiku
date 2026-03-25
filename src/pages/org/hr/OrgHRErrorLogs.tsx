@@ -329,7 +329,15 @@ export default function OrgHRErrorLogs() {
     }
 
     try {
-      const { error } = await supabase.from("client_error_logs").update(patch).in("id", ids);
+      if (!tenantId) {
+        toast.error("Tenant organisasi tidak ditemukan.");
+        return;
+      }
+      const { error } = await supabase
+        .from("client_error_logs")
+        .update(patch)
+        .eq("tenant_id", tenantId)
+        .in("id", ids);
       if (error) throw error;
       toast.success(`Status ${ids.length} log diperbarui.`);
       await fetchRows();
@@ -344,12 +352,21 @@ export default function OrgHRErrorLogs() {
 
   const handleRetentionNow = async () => {
     try {
-      const { error } = await supabase.rpc("apply_client_error_logs_retention");
+      if (!tenantId) {
+        toast.error("Tenant organisasi tidak ditemukan.");
+        return;
+      }
+
+      const { error } = await supabase.rpc("apply_client_error_logs_retention_for_tenant", {
+        p_tenant_id: tenantId,
+      });
       if (error) throw error;
       toast.success("Retensi log dijalankan.");
       await fetchRows();
     } catch (error) {
-      const ref = reportError(error, "org.hr.error_logs.retention.run");
+      const ref = reportError(error, "org.hr.error_logs.retention.run", {
+        tenant_id: tenantId,
+      });
       toast.error(appendErrorReference("Gagal menjalankan retensi log", ref));
     }
   };

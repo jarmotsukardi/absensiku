@@ -209,7 +209,7 @@ export function QuickLinksSettings() {
   const getLinkTypeLabel = (type: string) => {
     switch (type) {
       case "internal": return "Halaman Internal";
-      case "anchor": return "Anchor (Scroll ke Section)";
+      case "anchor": return "Anchor (gulir ke bagian)";
       case "overlay": return "Overlay/Popup";
       default: return type;
     }
@@ -229,7 +229,7 @@ export function QuickLinksSettings() {
           <div>
             <CardTitle className="flex items-center gap-2">
               <Link2 className="h-5 w-5" />
-              Quick Links (Menu Cepat)
+              Tautan Cepat
             </CardTitle>
             <CardDescription>Kelola link navigasi seperti Fitur, Harga, FAQ yang tampil di footer dan header</CardDescription>
           </div>
@@ -275,7 +275,7 @@ export function QuickLinksSettings() {
                       {link.link_type === "overlay" ? (
                         <Button variant="ghost" size="sm" onClick={() => handlePreview(link)}>
                           <Eye className="h-4 w-4 mr-1" />
-                          Preview
+                          Pratinjau
                         </Button>
                       ) : (
                         <span className="text-muted-foreground text-sm">{link.url}</span>
@@ -354,7 +354,7 @@ export function QuickLinksSettings() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="anchor">Anchor (Scroll ke Section)</SelectItem>
+                    <SelectItem value="anchor">Anchor (gulir ke bagian)</SelectItem>
                     <SelectItem value="internal">Halaman Internal (/path)</SelectItem>
                     <SelectItem value="overlay">Overlay/Popup dengan Rich Text</SelectItem>
                   </SelectContent>
@@ -404,7 +404,7 @@ export function QuickLinksSettings() {
         </DialogContent>
       </Dialog>
 
-      {/* Preview Dialog */}
+      {/* Dialog pratinjau */}
       <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>

@@ -8,6 +8,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import { executeRpcWithAvailability } from "@/lib/rpcAvailability";
 import { toast } from "sonner";
 import {
   Activity,
@@ -37,6 +38,9 @@ interface HealthCheck {
   value?: string | number;
 }
 
+const GET_PARTITION_STATS_RPC_NAME = "get_partition_stats";
+const GET_GPS_CLEANUP_LOGS_RPC_NAME = "get_gps_cleanup_logs";
+
 export function DatabaseHealthMonitor() {
   const DB_HEALTH_OP_TIMEOUT_MS = 12000;
   const DB_HEALTH_OP_RETRY_MAX = 1;
@@ -56,9 +60,13 @@ export function DatabaseHealthMonitor() {
       const { data: partitions, error: partitionError } = await withExponentialBackoff(
         () =>
           withTimeout(
-            () => supabase.rpc("get_partition_stats"),
+            () =>
+              executeRpcWithAvailability<PartitionStat[]>(
+                GET_PARTITION_STATS_RPC_NAME,
+                () => supabase.rpc(GET_PARTITION_STATS_RPC_NAME),
+              ),
             DB_HEALTH_OP_TIMEOUT_MS,
-            "Health check partisi timeout"
+            "Pemeriksaan kesehatan partisi timeout"
           ),
         {
           maxRetries: DB_HEALTH_OP_RETRY_MAX,
@@ -93,7 +101,7 @@ export function DatabaseHealthMonitor() {
                 .select("*", { count: "exact", head: true })
                 .eq("is_active", true),
             10000,
-            "Health check employees timeout"
+            "Pemeriksaan kesehatan pegawai timeout"
           ),
           withTimeout(
             () =>
@@ -102,7 +110,7 @@ export function DatabaseHealthMonitor() {
                 .select("*", { count: "exact", head: true })
                 .eq("is_active", true),
             10000,
-            "Health check tenants timeout"
+            "Pemeriksaan kesehatan tenant timeout"
           ),
         ]);
 
@@ -131,7 +139,7 @@ export function DatabaseHealthMonitor() {
             .is("office_id", null)
             .eq("is_active", true),
         10000,
-        "Health check integritas data timeout"
+        "Pemeriksaan kesehatan integritas data timeout"
       );
 
       if (orphanedError) {
@@ -163,7 +171,7 @@ export function DatabaseHealthMonitor() {
             .select("*", { count: "exact", head: true })
             .eq("date", today),
         10000,
-        "Health check absensi hari ini timeout"
+        "Pemeriksaan kesehatan absensi hari ini timeout"
       );
 
       checks.push({
@@ -183,7 +191,7 @@ export function DatabaseHealthMonitor() {
             .lt("end_date", today)
             .eq("status", "active"),
         10000,
-        "Health check subscription timeout"
+        "Pemeriksaan kesehatan langganan timeout"
       );
 
       if (expiredSubsError) {
@@ -210,9 +218,13 @@ export function DatabaseHealthMonitor() {
       const { data: cleanupLogs, error: cleanupLogsError } = await withExponentialBackoff(
         () =>
           withTimeout(
-            () => supabase.rpc("get_gps_cleanup_logs", { limit_count: 1 }),
+            () =>
+              executeRpcWithAvailability<Array<{ executed_at: string; total_cleaned?: number | null }>>(
+                GET_GPS_CLEANUP_LOGS_RPC_NAME,
+                () => supabase.rpc(GET_GPS_CLEANUP_LOGS_RPC_NAME, { limit_count: 1 }),
+              ),
             10000,
-            "Health check GPS cleanup timeout"
+            "Pemeriksaan kesehatan pembersihan GPS timeout"
           ),
         {
           maxRetries: DB_HEALTH_OP_RETRY_MAX,
@@ -248,7 +260,7 @@ export function DatabaseHealthMonitor() {
 
       setHealthChecks(checks);
       setLastChecked(new Date());
-      toast.success("Health check selesai");
+      toast.success("Pemeriksaan kesehatan selesai");
     } catch (error) {
       const errorRef = reportError(error, "admin.settings.database_health.run");
       toast.error(appendErrorReference("Gagal menjalankan health check", errorRef));
@@ -291,7 +303,7 @@ export function DatabaseHealthMonitor() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Activity className="h-5 w-5 text-primary" />
-            Database Health Monitor
+            Pemantauan Kesehatan Database
           </CardTitle>
           <CardDescription>
             Pantau kesehatan dan performa database secara real-time
@@ -301,7 +313,7 @@ export function DatabaseHealthMonitor() {
           <div className="flex items-center justify-between">
             <Button onClick={runHealthCheck} disabled={isLoading} className="gap-2">
               {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              {isLoading ? "Memeriksa..." : "Jalankan Health Check"}
+              {isLoading ? "Memeriksa..." : "Jalankan Pemeriksaan Kesehatan"}
             </Button>
             
             {lastChecked && (
@@ -361,7 +373,7 @@ export function DatabaseHealthMonitor() {
               Statistik Partisi
             </CardTitle>
             <CardDescription>
-              Detail ukuran dan performa setiap partisi attendance_records
+              Rincian ukuran dan performa setiap partisi attendance_records
             </CardDescription>
           </CardHeader>
           <CardContent>

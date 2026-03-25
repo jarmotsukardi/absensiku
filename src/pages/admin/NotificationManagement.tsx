@@ -19,6 +19,7 @@ import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { APK_DOWNLOAD_PAGE_PATH, HOMEPAGE_PUBLIC_APK_VERSION } from "@/lib/apkDownload";
 import {
   Pagination,
   PaginationContent,
@@ -42,8 +43,52 @@ interface TenantOption {
   id: string;
   name: string;
 }
+
+interface AndroidPushDeviceRow {
+  user_id: string | null;
+  app_version: string | null;
+  fcm_token?: string | null;
+  is_active?: boolean | null;
+  notification_permission_state?: string | null;
+}
+
+type BroadcastTargetType =
+  | "all_admin"
+  | "org_admin"
+  | "org_employee"
+  | "android_active_users"
+  | "android_outdated_users";
+
 const NOTIFICATION_QUERY_TIMEOUT_MS = 12000;
 const NOTIFICATION_QUERY_RETRY_MAX = 2;
+const ADMIN_BROADCAST_SOURCE = "admin_broadcast";
+const EMPLOYEE_NOTIFICATIONS_LINK = "/employee/dashboard?tab=notifications";
+
+const normalizeVersionParts = (value: string | null | undefined): number[] => {
+  if (!value) return [];
+  const matched = value.match(/\d+(?:\.\d+)*/)?.[0] ?? "";
+  return matched
+    .split(".")
+    .map((part) => Number.parseInt(part, 10))
+    .filter((part) => Number.isFinite(part));
+};
+
+const isOlderThanRelease = (installedVersion: string | null | undefined, releaseVersion: string): boolean => {
+  const currentParts = normalizeVersionParts(installedVersion);
+  const releaseParts = normalizeVersionParts(releaseVersion);
+
+  if (currentParts.length === 0) return true;
+
+  const maxLength = Math.max(currentParts.length, releaseParts.length);
+  for (let index = 0; index < maxLength; index += 1) {
+    const current = currentParts[index] ?? 0;
+    const release = releaseParts[index] ?? 0;
+    if (current < release) return true;
+    if (current > release) return false;
+  }
+
+  return false;
+};
 
 export default function NotificationManagement() {
   const PAGE_SIZE = 20;
@@ -65,7 +110,7 @@ export default function NotificationManagement() {
   const [title, setTitle] = useState("");
   const [message, setMessage] = useState("");
   const [type, setType] = useState<string>("info");
-  const [targetType, setTargetType] = useState<string>("all_admin");
+  const [targetType, setTargetType] = useState<BroadcastTargetType>("all_admin");
   const [selectedTenantId, setSelectedTenantId] = useState<string>("");
 
   const requiresTenantTarget = targetType === "org_admin" || targetType === "org_employee";
@@ -223,6 +268,15 @@ export default function NotificationManagement() {
       // Get all users based on target
       let uniqueUserIds: string[] = [];
 
+      const untypedSupabase = supabase as typeof supabase & {
+        from: (table: string) => {
+          select: (columns: string) => {
+            eq: (column: string, value: unknown) => ReturnType<typeof untypedSupabase.from>;
+            not: (column: string, operator: string, value: unknown) => ReturnType<typeof untypedSupabase.from>;
+          };
+        };
+      };
+
       if (targetType === "all_admin") {
         const { data: users, error: usersError } = await withExponentialBackoff(
           () =>
@@ -283,28 +337,128 @@ export default function NotificationManagement() {
         );
         if (employeeError) throw employeeError;
         uniqueUserIds = Array.from(new Set((employeeRows || []).map((e) => e.user_id).filter(Boolean))) as string[];
+      } else if (targetType === "android_active_users" || targetType === "android_outdated_users") {
+        const { data: deviceRows, error: deviceError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              untypedSupabase
+                .from("user_push_devices")
+                .select("user_id, app_version")
+                .eq("platform", "android")
+                .eq("is_active", true)
+                .eq("notification_permission_state", "granted")
+                .not("fcm_token", "is", null),
+              NOTIFICATION_QUERY_TIMEOUT_MS,
+              "admin.notifications.send.fetch_android_push_users timeout"
+            ),
+          {
+            maxRetries: NOTIFICATION_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          }
+        );
+        if (deviceError) throw deviceError;
+
+        const filteredDeviceRows = ((deviceRows || []) as AndroidPushDeviceRow[]).filter((row) => {
+          if (!row.user_id) return false;
+          if (targetType !== "android_outdated_users") return true;
+          return isOlderThanRelease(row.app_version, HOMEPAGE_PUBLIC_APK_VERSION);
+        });
+
+        uniqueUserIds = Array.from(new Set(filteredDeviceRows.map((row) => row.user_id).filter(Boolean))) as string[];
       }
 
+      const isAndroidBroadcastTarget =
+        targetType === "android_active_users" || targetType === "android_outdated_users";
+
       if (uniqueUserIds.length === 0) {
+        if (isAndroidBroadcastTarget) {
+          const { data: androidDeviceRows, error: androidDeviceRowsError } = await withExponentialBackoff(
+            () =>
+              withTimeout(
+                untypedSupabase
+                  .from("user_push_devices")
+                  .select("user_id, app_version, fcm_token, is_active, notification_permission_state")
+                  .eq("platform", "android"),
+                NOTIFICATION_QUERY_TIMEOUT_MS,
+                "admin.notifications.send.fetch_android_push_diagnostics timeout"
+              ),
+            {
+              maxRetries: NOTIFICATION_QUERY_RETRY_MAX,
+              shouldRetry: isRetryableError,
+              onRetry: () => setIsRetrying(true),
+            }
+          );
+
+          if (androidDeviceRowsError) throw androidDeviceRowsError;
+
+          const diagnosticsRows = (androidDeviceRows || []) as AndroidPushDeviceRow[];
+          const totalAndroidDevices = diagnosticsRows.length;
+          const eligibleAndroidDevices = diagnosticsRows.filter((row) => {
+            return (
+              row.is_active === true &&
+              row.notification_permission_state === "granted" &&
+              typeof row.fcm_token === "string" &&
+              row.fcm_token.length > 0
+            );
+          });
+
+          if (totalAndroidDevices === 0) {
+            toast.error(
+              "Belum ada perangkat Android yang terdaftar. Minta user login di APK Android terbaru dan izinkan notifikasi terlebih dahulu."
+            );
+            return;
+          }
+
+          if (eligibleAndroidDevices.length === 0) {
+            toast.error(
+              "Perangkat Android sudah terdaftar, tetapi belum ada yang siap menerima FCM. Pastikan notifikasi diizinkan dan token push sudah terbentuk."
+            );
+            return;
+          }
+
+          if (targetType === "android_outdated_users") {
+            toast.info(
+              `Tidak ada perangkat Android dengan versi di bawah ${HOMEPAGE_PUBLIC_APK_VERSION}. Semua perangkat yang siap FCM sudah memakai versi terbaru atau belum melaporkan versi.`
+            );
+            return;
+          }
+        }
+
         toast.error("Tidak ada user yang ditemukan");
         return;
       }
 
       // Create notifications for all users
+      const notificationLink = isAndroidBroadcastTarget
+        ? APK_DOWNLOAD_PAGE_PATH
+        : EMPLOYEE_NOTIFICATIONS_LINK;
+
       const notificationsToInsert = uniqueUserIds.map(userId => ({
         user_id: userId,
         title,
         message,
         type,
         is_read: false,
+        link: notificationLink,
+        metadata: {
+          source: ADMIN_BROADCAST_SOURCE,
+          sent_by_role: "super_admin",
+          sent_via: "admin_notifications",
+          target_type: targetType,
+          tenant_id: selectedTenantId || null,
+          release_version: isAndroidBroadcastTarget ? HOMEPAGE_PUBLIC_APK_VERSION : null,
+          release_download_path: isAndroidBroadcastTarget ? APK_DOWNLOAD_PAGE_PATH : null,
+        },
       }));
 
-      const { error: insertError } = await withExponentialBackoff(
+      const { data: insertedNotifications, error: insertError } = await withExponentialBackoff(
         () =>
           withTimeout(
             supabase
               .from('notifications')
-              .insert(notificationsToInsert),
+              .insert(notificationsToInsert)
+              .select("id"),
             NOTIFICATION_QUERY_TIMEOUT_MS,
             "admin.notifications.send.insert timeout"
           ),
@@ -317,13 +471,59 @@ export default function NotificationManagement() {
 
       if (insertError) throw insertError;
 
+      const insertedNotificationIds = (insertedNotifications || [])
+        .map((row) => row.id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+      let pushSummary:
+        | {
+            devices_selected?: number;
+            sent?: number;
+          }
+        | null = null;
+
+      if (insertedNotificationIds.length > 0) {
+        const { data: pushData, error: pushError } = await supabase.functions.invoke<{
+          devices_selected?: number;
+          sent?: number;
+        }>("dispatch-device-pushes", {
+          body: {
+            notification_ids: insertedNotificationIds,
+            notification_sources: [ADMIN_BROADCAST_SOURCE],
+            limit: Math.min(insertedNotificationIds.length, 500),
+          },
+        });
+
+        if (pushError) {
+          console.warn("Gagal memicu dispatch push admin notification", pushError);
+        } else {
+          pushSummary = pushData ?? null;
+        }
+      }
+
       const targetLabel =
         targetType === "all_admin"
           ? "seluruh admin"
           : targetType === "org_admin"
             ? `admin organisasi ${selectedTenantName || "terpilih"}`
-            : `pegawai organisasi ${selectedTenantName || "terpilih"}`;
+            : targetType === "org_employee"
+              ? `pegawai organisasi ${selectedTenantName || "terpilih"}`
+              : targetType === "android_active_users"
+                ? "seluruh pengguna APK Android aktif"
+                : `pengguna APK Android versi lama (< ${HOMEPAGE_PUBLIC_APK_VERSION})`;
       toast.success(`Notifikasi berhasil dikirim ke ${uniqueUserIds.length} user (${targetLabel})`);
+
+      if (pushSummary) {
+        const devicesSelected = Number(pushSummary.devices_selected ?? 0);
+        const pushSent = Number(pushSummary.sent ?? 0);
+
+        if (devicesSelected === 0) {
+          toast.info("Notifikasi in-app tersimpan, tetapi belum ada perangkat Android aktif yang terdaftar untuk FCM.");
+        } else if (pushSent === 0) {
+          toast.info("Notifikasi in-app tersimpan, tetapi belum ada perangkat Android yang berhasil menerima FCM pada percobaan ini.");
+        }
+      }
+
       setIsDialogOpen(false);
       setTitle("");
       setMessage("");
@@ -492,9 +692,21 @@ export default function NotificationManagement() {
                           <SelectItem value="all_admin">Seluruh Admin</SelectItem>
                           <SelectItem value="org_admin">Admin Organisasi (pilih organisasi)</SelectItem>
                           <SelectItem value="org_employee">Pegawai Suatu Organisasi</SelectItem>
+                          <SelectItem value="android_active_users">Semua Pengguna APK Android Aktif</SelectItem>
+                          <SelectItem value="android_outdated_users">Pengguna APK Android Versi Lama</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
+                    {targetType === "android_outdated_users" && (
+                      <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                        Broadcast ini hanya menyasar pengguna APK Android yang versi aplikasinya lebih rendah dari rilis publik saat ini: <span className="font-semibold">{HOMEPAGE_PUBLIC_APK_VERSION}</span>.
+                      </div>
+                    )}
+                    {targetType === "android_active_users" && (
+                      <div className="rounded-md border border-blue-300/60 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+                        Broadcast ini mengirim notifikasi in-app dan mencoba FCM ke seluruh perangkat Android aktif yang sudah memberikan izin notifikasi.
+                      </div>
+                    )}
                     {requiresTenantTarget && (
                       <div className="space-y-2">
                         <Label>Nama Organisasi</Label>

@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { BarChart3, Download, Printer, RotateCcw } from "lucide-react";
+import { BarChart3, Download, FileText, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import type { Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
@@ -19,6 +19,15 @@ import {
   withTimeout,
 } from "@/lib/attendanceResilience";
 import { AttendanceRecapTabs } from "@/components/org/reports/AttendanceRecapTabs";
+import { resolveOrgTenantId } from "@/lib/orgTenantContext";
+import {
+  buildReportCsv,
+  createReportTraceId,
+  downloadCsvFile,
+  downloadReportPdf,
+  recordReportOutputAudit,
+  type ReportOutputColumn,
+} from "@/lib/reportOutput";
 
 type OPD = Tables<"opd">;
 
@@ -39,14 +48,6 @@ interface RecapData {
   wfh: number;
 }
 
-const escapeHtml = (value: string): string =>
-  value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-
 const months = [
   "Januari", "Februari", "Maret", "April", "Mei", "Juni",
   "Juli", "Agustus", "September", "Oktober", "November", "Desember",
@@ -54,6 +55,38 @@ const months = [
 const RECAP_READ_TIMEOUT_MS = 12000;
 const RECAP_OUTPUT_TIMEOUT_MS = 20000;
 const RECAP_MAX_RETRIES = 2;
+
+const normalizeRecapRows = (rows: Array<RecapData & { total_count?: number }>): RecapData[] =>
+  rows.map(({ total_count: _ignore, ...rest }) => ({
+    ...rest,
+    hadir: Number(rest.hadir || 0),
+    terlambat: Number(rest.terlambat || 0),
+    pulang_cepat: Number(rest.pulang_cepat || 0),
+    terlambat_pulang_cepat: Number(rest.terlambat_pulang_cepat || 0),
+    tidak_hadir: Number(rest.tidak_hadir || 0),
+    izin: Number(rest.izin || 0),
+    cuti: Number(rest.cuti || 0),
+    sakit: Number(rest.sakit || 0),
+    tugas_luar: Number(rest.tugas_luar || 0),
+    wfh: Number(rest.wfh || 0),
+  }));
+
+const recapOutputColumns: ReportOutputColumn<RecapData>[] = [
+  { header: "No", value: (_row, index) => index + 1, align: "right", width: 28 },
+  { header: "NIP", value: (row) => row.employee_nip || "-" },
+  { header: "Nama", value: (row) => row.employee_name || "-" },
+  { header: "OPD", value: (row) => row.opd_code || "-" },
+  { header: "Hadir", value: (row) => row.hadir, align: "right", width: 36 },
+  { header: "Terlambat", value: (row) => row.terlambat, align: "right", width: 44 },
+  { header: "Pulang Cepat", value: (row) => row.pulang_cepat, align: "right", width: 48 },
+  { header: "Telat + Pulang Cepat", value: (row) => row.terlambat_pulang_cepat, align: "right", width: 56 },
+  { header: "Tidak Hadir", value: (row) => row.tidak_hadir, align: "right", width: 46 },
+  { header: "Izin", value: (row) => row.izin, align: "right", width: 36 },
+  { header: "Cuti", value: (row) => row.cuti, align: "right", width: 36 },
+  { header: "Sakit", value: (row) => row.sakit, align: "right", width: 36 },
+  { header: "Tugas Luar", value: (row) => row.tugas_luar, align: "right", width: 46 },
+  { header: "WFH", value: (row) => row.wfh, align: "right", width: 36 },
+];
 
 export default function OrgRecapReport() {
   const [recap, setRecap] = useState<RecapData[]>([]);
@@ -69,40 +102,51 @@ export default function OrgRecapReport() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
   const [isBusyHours, setIsBusyHours] = useState<boolean>(() => isPeakHours());
+  const [tenantId, setTenantId] = useState<string | null>(null);
   const ITEMS_PER_PAGE = 15;
   const busyHoursMessage =
     "Jam sibuk absensi sedang berlangsung. Penarikan Rekapitulasi sementara dibatasi. Coba lagi di luar jam sibuk (06:00-09:00 dan 15:00-18:00).";
 
-  useEffect(() => {
-    const fetchOpds = async () => {
-      try {
-        setIsRetrying(false);
-        const { data, error } = await withExponentialBackoff(
-          () =>
-            withTimeout(
-              supabase.from("opd").select("*").order("name"),
-              RECAP_READ_TIMEOUT_MS,
-              "Permintaan data OPD timeout."
-            ),
-          {
-            maxRetries: RECAP_MAX_RETRIES,
-            shouldRetry: isRetryableError,
-            onRetry: () => setIsRetrying(true),
-          }
-        );
-        if (error) throw error;
-        setOpds(data || []);
-      } catch (error) {
-        const errorRef = reportError(error, "org.reports.recap.fetch_opd");
-        const message = appendErrorReference("Gagal memuat data OPD", errorRef);
-        toast.error(message);
-        setLoadError(message);
-      } finally {
-        setIsRetrying(false);
+  const fetchInitialData = useCallback(async () => {
+    try {
+      setLoadError(null);
+      setIsRetrying(false);
+      const resolvedTenantId = await resolveOrgTenantId();
+      if (!resolvedTenantId) {
+        throw new Error("Tenant organisasi tidak ditemukan.");
       }
-    };
-    void fetchOpds();
+
+      setTenantId(resolvedTenantId);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.from("opd").select("*").eq("tenant_id", resolvedTenantId).order("name"),
+            RECAP_READ_TIMEOUT_MS,
+            "Permintaan data OPD timeout."
+          ),
+        {
+          maxRetries: RECAP_MAX_RETRIES,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+      if (error) throw error;
+      setOpds(data || []);
+    } catch (error) {
+      const errorRef = reportError(error, "org.reports.recap.fetch_initial_data");
+      const message = appendErrorReference("Gagal memuat data awal rekapitulasi", errorRef);
+      toast.error(message);
+      setLoadError(message);
+      setTenantId(null);
+      setOpds([]);
+    } finally {
+      setIsRetrying(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void fetchInitialData();
+  }, [fetchInitialData]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -112,6 +156,7 @@ export default function OrgRecapReport() {
   }, []);
 
   const fetchRecapPage = useCallback(async (page: number) => {
+    if (!tenantId) return;
     if (isPeakHours()) {
       setLoadError(busyHoursMessage);
       return;
@@ -143,24 +188,13 @@ export default function OrgRecapReport() {
       if (error) throw error;
 
       const rows = (data || []) as Array<RecapData & { total_count: number }>;
-      setRecap(rows.map(({ total_count: _ignore, ...rest }) => ({
-        ...rest,
-        hadir: Number(rest.hadir || 0),
-        terlambat: Number(rest.terlambat || 0),
-        pulang_cepat: Number(rest.pulang_cepat || 0),
-        terlambat_pulang_cepat: Number(rest.terlambat_pulang_cepat || 0),
-        tidak_hadir: Number(rest.tidak_hadir || 0),
-        izin: Number(rest.izin || 0),
-        cuti: Number(rest.cuti || 0),
-        sakit: Number(rest.sakit || 0),
-        tugas_luar: Number(rest.tugas_luar || 0),
-        wfh: Number(rest.wfh || 0),
-      })));
+      setRecap(normalizeRecapRows(rows));
       setTotalRows(rows[0]?.total_count ?? 0);
     } catch (error) {
       const errorRef = reportError(error, "org.reports.recap.fetch", {
         opd_id: filterOpd === "all" ? null : filterOpd,
         month,
+        tenant_id: tenantId,
         year,
       });
       const message = appendErrorReference("Gagal memuat rekapitulasi", errorRef);
@@ -172,9 +206,12 @@ export default function OrgRecapReport() {
       setIsRetrying(false);
       setIsLoading(false);
     }
-  }, [ITEMS_PER_PAGE, busyHoursMessage, filterOpd, month, searchTerm, year]);
+  }, [ITEMS_PER_PAGE, busyHoursMessage, filterOpd, month, searchTerm, tenantId, year]);
 
   const fetchAllRecapForOutput = useCallback(async (): Promise<RecapData[]> => {
+    if (!tenantId) {
+      return [];
+    }
     if (isPeakHours()) {
       return [];
     }
@@ -205,19 +242,7 @@ export default function OrgRecapReport() {
       if (error) throw error;
 
       const rows = (data || []) as Array<RecapData & { total_count: number }>;
-      const normalized = rows.map(({ total_count: _ignore, ...rest }) => ({
-        ...rest,
-        hadir: Number(rest.hadir || 0),
-        terlambat: Number(rest.terlambat || 0),
-        pulang_cepat: Number(rest.pulang_cepat || 0),
-        terlambat_pulang_cepat: Number(rest.terlambat_pulang_cepat || 0),
-        tidak_hadir: Number(rest.tidak_hadir || 0),
-        izin: Number(rest.izin || 0),
-        cuti: Number(rest.cuti || 0),
-        sakit: Number(rest.sakit || 0),
-        tugas_luar: Number(rest.tugas_luar || 0),
-        wfh: Number(rest.wfh || 0),
-      }));
+      const normalized = normalizeRecapRows(rows);
 
       allRows = allRows.concat(normalized);
       const total = rows[0]?.total_count ?? 0;
@@ -226,11 +251,15 @@ export default function OrgRecapReport() {
     }
 
     return allRows;
-  }, [filterOpd, month, searchTerm, year]);
+  }, [filterOpd, month, searchTerm, tenantId, year]);
 
   const handleShow = async () => {
     if (isBusyHours) {
       toast.error(busyHoursMessage);
+      return;
+    }
+    if (!tenantId) {
+      toast.error("Tenant organisasi belum terdeteksi. Muat ulang halaman.");
       return;
     }
     setCurrentPage(1);
@@ -266,41 +295,44 @@ export default function OrgRecapReport() {
         toast.error("Tidak ada data untuk diexport");
         return;
       }
+      const traceId = createReportTraceId("RECAP-CSV");
+      const csv = buildReportCsv({
+        columns: recapOutputColumns,
+        rows: outputRows,
+      });
 
-      const csv = [
-        ["No", "NIP", "Nama", "OPD", "Hadir", "Terlambat", "Pulang Cepat", "Telat & Pulang Cepat", "Tidak Hadir", "Izin", "Cuti", "Sakit", "Tugas Luar", "WFH"].join(","),
-        ...outputRows.map((r, i) => [
-          i + 1,
-          r.employee_nip || "",
-          r.employee_name,
-          r.opd_code || "",
-          r.hadir,
-          r.terlambat,
-          r.pulang_cepat,
-          r.terlambat_pulang_cepat,
-          r.tidak_hadir,
-          r.izin,
-          r.cuti,
-          r.sakit,
-          r.tugas_luar,
-          r.wfh,
-        ].join(",")),
-      ].join("\n");
+      downloadCsvFile(`rekapitulasi-${year}-${String(month).padStart(2, "0")}.csv`, csv);
 
-      const blob = new Blob([csv], { type: "text/csv" });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `rekapitulasi-${year}-${month}.csv`;
-      a.click();
-      toast.success("Export berhasil");
+      const auditResult = await recordReportOutputAudit({
+        action: "attendance_recap_export_csv",
+        filters: {
+          month,
+          opd_id: filterOpd === "all" ? null : filterOpd,
+          search: searchTerm.trim() || null,
+          year,
+        },
+        outputType: "csv",
+        reportName: "Rekapitulasi Absensi Organisasi",
+        rowCount: outputRows.length,
+        tenantId,
+        traceId,
+      });
+
+      if (!auditResult.ok) {
+        toast.warning(
+          appendErrorReference(`CSV berhasil diunduh, tetapi audit log gagal dicatat. Ref dokumen: ${traceId}`, auditResult.errorRef),
+        );
+        return;
+      }
+
+      toast.success(`CSV berhasil diunduh (Ref: ${traceId})`);
     } catch (error) {
       const errorRef = reportError(error, "org.reports.recap.export");
       toast.error(appendErrorReference("Gagal export rekapitulasi", errorRef));
     }
   };
 
-  const handlePrintPdf = async () => {
+  const handleDownloadPdf = async () => {
     if (isBusyHours) {
       toast.error(busyHoursMessage);
       return;
@@ -317,75 +349,52 @@ export default function OrgRecapReport() {
         return;
       }
 
+      const traceId = createReportTraceId("RECAP-PDF");
       const periodLabel = `${months[month - 1]} ${year}`;
-      const printedAt = new Date().toLocaleString("id-ID");
-      const rowsHtml = outputRows
-        .map((r, i) => `
-          <tr>
-            <td>${i + 1}</td>
-            <td>${escapeHtml(r.employee_nip || "-")}</td>
-            <td>${escapeHtml(r.employee_name || "-")}</td>
-            <td>${escapeHtml(r.opd_code || "-")}</td>
-            <td>${r.hadir}</td>
-            <td>${r.terlambat}</td>
-            <td>${r.pulang_cepat}</td>
-            <td>${r.terlambat_pulang_cepat}</td>
-            <td>${r.tidak_hadir}</td>
-            <td>${r.izin}</td>
-            <td>${r.cuti}</td>
-            <td>${r.sakit}</td>
-            <td>${r.tugas_luar}</td>
-            <td>${r.wfh}</td>
-          </tr>
-        `)
-        .join("");
+      const opdLabel =
+        filterOpd === "all" ? "Semua OPD" : opds.find((item) => item.id === filterOpd)?.name || filterOpd;
 
-      const printWindow = window.open("", "_blank", "width=1200,height=800");
-      if (!printWindow) {
-        toast.error("Popup diblokir browser. Izinkan popup untuk cetak PDF.");
+      downloadReportPdf({
+        columns: recapOutputColumns,
+        filename: `rekapitulasi-${year}-${String(month).padStart(2, "0")}.pdf`,
+        metadataLines: [
+          `Periode: ${periodLabel}`,
+          `Filter OPD: ${opdLabel}`,
+          `Pencarian: ${searchTerm.trim() || "-"}`,
+          `Total pegawai: ${outputRows.length}`,
+        ],
+        rows: outputRows,
+        sourceLabel: "AbsensiKu /org/reports/recap",
+        title: "Rekapitulasi Absensi Pegawai",
+        traceId,
+      });
+
+      const auditResult = await recordReportOutputAudit({
+        action: "attendance_recap_download_pdf",
+        filters: {
+          month,
+          opd_id: filterOpd === "all" ? null : filterOpd,
+          search: searchTerm.trim() || null,
+          year,
+        },
+        outputType: "pdf",
+        reportName: "Rekapitulasi Absensi Organisasi",
+        rowCount: outputRows.length,
+        tenantId,
+        traceId,
+      });
+
+      if (!auditResult.ok) {
+        toast.warning(
+          appendErrorReference(`PDF berhasil diunduh, tetapi audit log gagal dicatat. Ref dokumen: ${traceId}`, auditResult.errorRef),
+        );
         return;
       }
 
-      printWindow.document.write(`
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta charset="UTF-8" />
-            <title>Rekapitulasi Absensi</title>
-            <style>
-              body { font-family: Arial, sans-serif; margin: 24px; color: #111; }
-              h1 { margin: 0 0 8px; font-size: 20px; }
-              .meta { margin: 0 0 16px; font-size: 12px; color: #444; }
-              table { width: 100%; border-collapse: collapse; font-size: 12px; }
-              th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
-              th { background: #f3f4f6; }
-              .center { text-align: center; }
-              .footer { margin-top: 12px; font-size: 11px; color: #666; }
-            </style>
-          </head>
-          <body>
-            <h1>Rekapitulasi Absensi Pegawai</h1>
-            <p class="meta">Periode: ${escapeHtml(periodLabel)} | Total: ${outputRows.length} pegawai | Dicetak: ${escapeHtml(printedAt)}</p>
-            <table>
-              <thead>
-                <tr>
-                  <th>No</th><th>NIP</th><th>Nama</th><th>OPD</th><th class="center">Hadir</th><th class="center">Telat</th><th class="center">P. Cepat</th><th class="center">Telat+PC</th><th class="center">Alpa</th><th class="center">Izin</th><th class="center">Cuti</th><th class="center">Sakit</th><th class="center">Dinas</th><th class="center">WFH</th>
-                </tr>
-              </thead>
-              <tbody>${rowsHtml}</tbody>
-            </table>
-            <p class="footer">Sumber: AbsensiKu /org/reports/recap</p>
-          </body>
-        </html>
-      `);
-      printWindow.document.close();
-      printWindow.onload = () => {
-        printWindow.focus();
-        printWindow.print();
-      };
+      toast.success(`PDF berhasil diunduh (Ref: ${traceId})`);
     } catch (error) {
-      const errorRef = reportError(error, "org.reports.recap.print");
-      toast.error(appendErrorReference("Gagal menyiapkan print PDF", errorRef));
+      const errorRef = reportError(error, "org.reports.recap.pdf_download");
+      toast.error(appendErrorReference("Gagal menyiapkan PDF rekapitulasi", errorRef));
     }
   };
 
@@ -416,8 +425,8 @@ export default function OrgRecapReport() {
             <p className="text-muted-foreground">Rekap bulanan kehadiran pegawai</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={handlePrintPdf} disabled={totalRows === 0 || isLoading || isBusyHours}>
-              <Printer className="mr-2 h-4 w-4" /> Print PDF
+            <Button variant="outline" onClick={handleDownloadPdf} disabled={totalRows === 0 || isLoading || isBusyHours}>
+              <FileText className="mr-2 h-4 w-4" /> Unduh PDF
             </Button>
             <Button variant="outline" onClick={handleExport} disabled={totalRows === 0 || isLoading || isBusyHours}>
               <Download className="mr-2 h-4 w-4" /> Export CSV
@@ -511,6 +520,7 @@ export default function OrgRecapReport() {
                     <TableHead className="text-center">Telat+PC</TableHead>
                     <TableHead className="text-center">Alpa</TableHead>
                     <TableHead className="text-center">Izin</TableHead>
+                    <TableHead className="text-center">Cuti</TableHead>
                     <TableHead className="text-center">Sakit</TableHead>
                     <TableHead className="text-center">Dinas</TableHead>
                     <TableHead className="text-center">WFH</TableHead>
@@ -518,9 +528,9 @@ export default function OrgRecapReport() {
                 </TableHeader>
                 <TableBody>
                   {isLoading ? (
-                    <TableRow><TableCell colSpan={13} className="text-center py-8"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto"></div></TableCell></TableRow>
+                    <TableRow><TableCell colSpan={14} className="text-center py-8"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mx-auto"></div></TableCell></TableRow>
                   ) : recap.length === 0 ? (
-                    <TableRow><TableCell colSpan={13} className="text-center py-8 text-muted-foreground">Pilih filter dan klik Tampilkan</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={14} className="text-center py-8 text-muted-foreground">Pilih filter dan klik Tampilkan</TableCell></TableRow>
                   ) : (
                     recap.map((r, i) => (
                       <TableRow key={r.employee_id}>
@@ -534,6 +544,7 @@ export default function OrgRecapReport() {
                         <TableCell className="text-center">{r.terlambat_pulang_cepat}</TableCell>
                         <TableCell className="text-center">{r.tidak_hadir}</TableCell>
                         <TableCell className="text-center">{r.izin}</TableCell>
+                        <TableCell className="text-center">{r.cuti}</TableCell>
                         <TableCell className="text-center">{r.sakit}</TableCell>
                         <TableCell className="text-center">{r.tugas_luar}</TableCell>
                         <TableCell className="text-center">{r.wfh}</TableCell>

@@ -5,9 +5,9 @@ import { Button } from "@/components/ui/button";
 interface SmartAppBannerProps {
   apkUrl?: string | null;
   appName?: string;
+  dismissKey?: string;
 }
 
-const DISMISS_KEY = "smart_app_banner_dismissed";
 const DISMISS_DURATION_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
 
 function isAndroid(): boolean {
@@ -18,21 +18,25 @@ function isMobileDevice(): boolean {
   return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 }
 
-function isDismissed(): boolean {
-  const dismissed = localStorage.getItem(DISMISS_KEY);
+function isDismissed(dismissKey: string): boolean {
+  const dismissed = localStorage.getItem(dismissKey);
   if (!dismissed) return false;
   const dismissedAt = parseInt(dismissed, 10);
   if (isNaN(dismissedAt)) return false;
   return Date.now() - dismissedAt < DISMISS_DURATION_MS;
 }
 
-export function SmartAppBanner({ apkUrl, appName = "AbsensiKu" }: SmartAppBannerProps) {
+export function SmartAppBanner({
+  apkUrl,
+  appName = "AbsensiKu",
+  dismissKey = "smart_app_banner_dismissed",
+}: SmartAppBannerProps) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
     // Only show on Android mobile devices
     if (!isAndroid() || !isMobileDevice()) return;
-    if (isDismissed()) return;
+    if (isDismissed(dismissKey)) return;
     if (!apkUrl) return;
 
     // Show after 3 second delay
@@ -41,10 +45,10 @@ export function SmartAppBanner({ apkUrl, appName = "AbsensiKu" }: SmartAppBanner
     }, 3000);
 
     return () => clearTimeout(timer);
-  }, [apkUrl]);
+  }, [apkUrl, dismissKey]);
 
   const handleDismiss = () => {
-    localStorage.setItem(DISMISS_KEY, Date.now().toString());
+    localStorage.setItem(dismissKey, Date.now().toString());
     setVisible(false);
   };
 

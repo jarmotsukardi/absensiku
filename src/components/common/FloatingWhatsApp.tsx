@@ -66,6 +66,7 @@ export function FloatingWhatsApp({
   const [isOpen, setIsOpen] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const [iconLoadFailed, setIconLoadFailed] = useState(false);
+  const [isHomepageHeroVisible, setIsHomepageHeroVisible] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const fetchSettings = useCallback(async () => {
@@ -135,17 +136,39 @@ export function FloatingWhatsApp({
     };
   }, [isOpen]);
 
-  const resolvedPhone = (settings?.phone_number || settings?.phone || "").replace(/\D/g, "");
-  if (!settings?.enabled || !resolvedPhone) return null;
-
   const isMobile =
     typeof window !== "undefined" && typeof window.matchMedia === "function"
       ? window.matchMedia("(max-width: 768px)").matches
       : false;
+  const currentPath = typeof window !== "undefined" ? window.location.pathname : "";
+  const isHomepage = currentPath === "/";
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !isMobile || !isHomepage) {
+      setIsHomepageHeroVisible(false);
+      return;
+    }
+
+    const updateHeroVisibility = () => {
+      const heroThreshold = Math.min(Math.max(window.innerHeight * 0.72, 420), 620);
+      setIsHomepageHeroVisible(window.scrollY < heroThreshold);
+    };
+
+    updateHeroVisibility();
+    window.addEventListener("scroll", updateHeroVisibility, { passive: true });
+    window.addEventListener("resize", updateHeroVisibility);
+
+    return () => {
+      window.removeEventListener("scroll", updateHeroVisibility);
+      window.removeEventListener("resize", updateHeroVisibility);
+    };
+  }, [isHomepage, isMobile]);
+
+  const resolvedPhone = (settings?.phone_number || settings?.phone || "").replace(/\D/g, "");
+  if (!settings?.enabled || !resolvedPhone) return null;
   if (isMobile && settings.show_on_mobile === false) return null;
   if (!isMobile && settings.show_on_desktop === false) return null;
 
-  const currentPath = typeof window !== "undefined" ? window.location.pathname : "";
   if (Array.isArray(settings.show_on_pages) && settings.show_on_pages.length > 0) {
     const pathAllowed = settings.show_on_pages.some((item) => currentPath.startsWith(item));
     if (!pathAllowed) return null;
@@ -186,11 +209,12 @@ export function FloatingWhatsApp({
   const horizontalStyle = isLeftPosition
     ? { left: "1rem" }
     : { right: isOrgArea ? "6rem" : "1rem" };
+  const shouldTemporarilyHide = isMobile && isHomepage && isHomepageHeroVisible && !isOpen;
 
   return (
     <div
       ref={containerRef}
-      className="fixed z-50"
+      className={`fixed z-50 transition-opacity duration-200 ${shouldTemporarilyHide ? "pointer-events-none opacity-0" : "opacity-100"}`}
       style={{ bottom: bottomOffset, ...horizontalStyle }}
     >
       {isOpen && (

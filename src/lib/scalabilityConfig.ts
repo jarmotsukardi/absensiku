@@ -12,6 +12,38 @@
 import { reportError } from "@/lib/errorLogger";
 
 export type ScalabilityTier = 'small' | 'medium' | 'large' | 'enterprise';
+export type ScalabilityMode = 'manual' | 'auto';
+export type OffpeakReleaseStrategy = 'client_after_window' | 'worker_preferred' | 'worker_only';
+export type AdminVisibilityMode = 'final_only' | 'final_only_with_backlog' | 'final_and_pending_summary';
+export type LogoutPendingPolicy = 'keep_local_pending' | 'warn_then_logout' | 'block_logout';
+
+export interface PeakHourWindowSetting {
+  name?: string;
+  start: string;
+  end: string;
+}
+
+export interface AttendanceScalabilitySetting {
+  version?: number;
+  mode?: ScalabilityMode;
+  tier?: ScalabilityTier;
+  suggested_tier?: ScalabilityTier;
+  effective_tier?: ScalabilityTier;
+  measured_active_employees?: number;
+  measured_at?: string;
+  updated_at?: string;
+  last_transition_at?: string;
+  transition_reason?: string;
+  peak_hour_enabled?: boolean;
+  peak_hour_windows?: PeakHourWindowSetting[];
+  peak_hour_hold_sync?: boolean;
+  queue_only_ingest?: boolean;
+  offpeak_release_strategy?: OffpeakReleaseStrategy;
+  release_jitter_min_ms?: number;
+  release_jitter_max_ms?: number;
+  admin_visibility_mode?: AdminVisibilityMode;
+  logout_pending_policy?: LogoutPendingPolicy;
+}
 
 export interface ScalabilityProfile {
   tier: ScalabilityTier;
@@ -156,6 +188,123 @@ const PROFILES: Record<ScalabilityTier, ScalabilityProfile> = {
 };
 
 const STORAGE_KEY = 'scalability_config_v1';
+const STORAGE_POLICY_KEY = 'attendance_scalability_setting_v2';
+export const DEFAULT_PEAK_HOUR_WINDOWS: PeakHourWindowSetting[] = [
+  { name: 'check_in', start: '06:30', end: '09:00' },
+  { name: 'check_out', start: '16:00', end: '18:30' },
+];
+
+const VALID_MODES: ScalabilityMode[] = ['manual', 'auto'];
+const VALID_RELEASE_STRATEGIES: OffpeakReleaseStrategy[] = ['client_after_window', 'worker_preferred', 'worker_only'];
+const VALID_ADMIN_VISIBILITY_MODES: AdminVisibilityMode[] = ['final_only', 'final_only_with_backlog', 'final_and_pending_summary'];
+const VALID_LOGOUT_PENDING_POLICIES: LogoutPendingPolicy[] = ['keep_local_pending', 'warn_then_logout', 'block_logout'];
+
+const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null;
+
+export function isValidScalabilityTier(value: unknown): value is ScalabilityTier {
+  return typeof value === 'string' && value in PROFILES;
+}
+
+function normalizeTimeString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!/^\d{2}:\d{2}$/.test(trimmed)) return null;
+  const [hh, mm] = trimmed.split(':').map(Number);
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+function normalizePeakHourWindows(value: unknown): PeakHourWindowSetting[] {
+  if (!Array.isArray(value)) {
+    return DEFAULT_PEAK_HOUR_WINDOWS;
+  }
+
+  const windows = value
+    .map((item) => {
+      if (!isObject(item)) return null;
+      const start = normalizeTimeString(item.start);
+      const end = normalizeTimeString(item.end);
+      if (!start || !end) return null;
+      return {
+        name: typeof item.name === 'string' && item.name.trim().length > 0 ? item.name.trim() : undefined,
+        start,
+        end,
+      } satisfies PeakHourWindowSetting;
+    })
+    .filter((item): item is PeakHourWindowSetting => Boolean(item));
+
+  return windows.length > 0 ? windows : DEFAULT_PEAK_HOUR_WINDOWS;
+}
+
+export function normalizeAttendanceScalabilitySetting(value: unknown): Required<
+  Pick<
+    AttendanceScalabilitySetting,
+    | 'version'
+    | 'mode'
+    | 'tier'
+    | 'suggested_tier'
+    | 'effective_tier'
+    | 'peak_hour_enabled'
+    | 'peak_hour_windows'
+    | 'peak_hour_hold_sync'
+    | 'queue_only_ingest'
+    | 'offpeak_release_strategy'
+    | 'release_jitter_min_ms'
+    | 'release_jitter_max_ms'
+    | 'admin_visibility_mode'
+    | 'logout_pending_policy'
+  >
+> & AttendanceScalabilitySetting {
+  const record = isObject(value) ? value : {};
+  const tier = isValidScalabilityTier(record.tier) ? record.tier : 'medium';
+  const effectiveTier = isValidScalabilityTier(record.effective_tier) ? record.effective_tier : tier;
+  const suggestedTier = isValidScalabilityTier(record.suggested_tier) ? record.suggested_tier : effectiveTier;
+  const mode = VALID_MODES.includes(record.mode as ScalabilityMode) ? (record.mode as ScalabilityMode) : 'manual';
+  const peakHourWindows = normalizePeakHourWindows(record.peak_hour_windows);
+  const peakHourEnabled = typeof record.peak_hour_enabled === 'boolean' ? record.peak_hour_enabled : true;
+  const peakHourHoldSync = typeof record.peak_hour_hold_sync === 'boolean'
+    ? record.peak_hour_hold_sync
+    : effectiveTier === 'large' || effectiveTier === 'enterprise';
+  const queueOnlyIngest = typeof record.queue_only_ingest === 'boolean'
+    ? record.queue_only_ingest
+    : effectiveTier === 'enterprise';
+  const releaseStrategy = VALID_RELEASE_STRATEGIES.includes(record.offpeak_release_strategy as OffpeakReleaseStrategy)
+    ? (record.offpeak_release_strategy as OffpeakReleaseStrategy)
+    : 'client_after_window';
+  const adminVisibilityMode = VALID_ADMIN_VISIBILITY_MODES.includes(record.admin_visibility_mode as AdminVisibilityMode)
+    ? (record.admin_visibility_mode as AdminVisibilityMode)
+    : 'final_only_with_backlog';
+  const logoutPendingPolicy = VALID_LOGOUT_PENDING_POLICIES.includes(record.logout_pending_policy as LogoutPendingPolicy)
+    ? (record.logout_pending_policy as LogoutPendingPolicy)
+    : 'keep_local_pending';
+  const releaseJitterMinMs = typeof record.release_jitter_min_ms === 'number' ? record.release_jitter_min_ms : 15000;
+  const releaseJitterMaxMs = typeof record.release_jitter_max_ms === 'number'
+    ? Math.max(record.release_jitter_max_ms, releaseJitterMinMs)
+    : 120000;
+
+  return {
+    ...record,
+    version: typeof record.version === 'number' ? record.version : 2,
+    mode,
+    tier,
+    suggested_tier: suggestedTier,
+    effective_tier: effectiveTier,
+    peak_hour_enabled: peakHourEnabled,
+    peak_hour_windows: peakHourWindows,
+    peak_hour_hold_sync: peakHourHoldSync,
+    queue_only_ingest: queueOnlyIngest,
+    offpeak_release_strategy: releaseStrategy,
+    release_jitter_min_ms: releaseJitterMinMs,
+    release_jitter_max_ms: releaseJitterMaxMs,
+    admin_visibility_mode: adminVisibilityMode,
+    logout_pending_policy: logoutPendingPolicy,
+  };
+}
+
+export function getScalabilityPeakHourLabel(windows: PeakHourWindowSetting[] = DEFAULT_PEAK_HOUR_WINDOWS): string {
+  return windows.map((window) => `${window.start}-${window.end}`).join(', ');
+}
 
 /**
  * Get recommended tier based on user count
@@ -195,15 +344,41 @@ export function saveScalabilityConfig(tier: ScalabilityTier): void {
   }
 }
 
+export function saveAttendanceScalabilitySetting(setting: AttendanceScalabilitySetting): void {
+  try {
+    const normalized = normalizeAttendanceScalabilitySetting(setting);
+    localStorage.setItem(STORAGE_POLICY_KEY, JSON.stringify(normalized));
+    saveScalabilityConfig(normalized.effective_tier);
+  } catch (error: unknown) {
+    reportError(error, "attendance_scalability.save", { setting });
+  }
+}
+
+export function loadAttendanceScalabilitySetting(): ReturnType<typeof normalizeAttendanceScalabilitySetting> {
+  try {
+    const raw = localStorage.getItem(STORAGE_POLICY_KEY);
+    if (!raw) return normalizeAttendanceScalabilitySetting({});
+    return normalizeAttendanceScalabilitySetting(JSON.parse(raw));
+  } catch {
+    return normalizeAttendanceScalabilitySetting({});
+  }
+}
+
 /**
  * Load active scalability config (default: medium)
  */
 export function loadScalabilityConfig(): ScalabilityProfile {
   try {
+    const setting = loadAttendanceScalabilitySetting();
+    if (isValidScalabilityTier(setting.effective_tier)) {
+      return PROFILES[setting.effective_tier] || PROFILES.medium;
+    }
+
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return PROFILES.medium;
     const parsed = JSON.parse(raw);
-    return PROFILES[parsed.tier as ScalabilityTier] || PROFILES.medium;
+    const tier = isValidScalabilityTier(parsed?.tier) ? parsed.tier : 'medium';
+    return PROFILES[tier] || PROFILES.medium;
   } catch {
     return PROFILES.medium;
   }
@@ -214,6 +389,37 @@ export function loadScalabilityConfig(): ScalabilityProfile {
  */
 export function getActiveTier(): ScalabilityTier {
   return loadScalabilityConfig().tier;
+}
+
+/**
+ * Saat jam sibuk, semua tier dipaksa memakai deferred write untuk meredam spike.
+ * Tier small tetap immediate di luar peak hours.
+ */
+export function shouldUseDeferredAttendanceSync(
+  profile: ScalabilityProfile,
+  isBusyHours: boolean,
+): boolean {
+  return profile.syncMode === 'deferred' || isBusyHours;
+}
+
+/**
+ * Hitung delay deferred efektif.
+ * Untuk tier small pada jam sibuk, gunakan delay pendek agar tetap responsif
+ * tetapi tidak langsung menembak RPC foreground.
+ */
+export function getDeferredAttendanceSyncDelayMs(
+  profile: ScalabilityProfile,
+  isBusyHours: boolean,
+): number {
+  if (profile.syncMode === 'deferred') {
+    return profile.deferredSyncDelayMs;
+  }
+
+  if (isBusyHours) {
+    return Math.max(5000, Math.min(profile.jitterPeakMaxMs, 15000));
+  }
+
+  return 0;
 }
 
 /**

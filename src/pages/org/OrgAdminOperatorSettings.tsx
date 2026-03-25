@@ -5,6 +5,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Loader2, ShieldCheck, UserCog, AlertTriangle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
@@ -25,6 +35,26 @@ interface RoleMember {
   is_active: boolean;
 }
 
+interface RoleChangeIntent {
+  member: RoleMember;
+  targetRole: RoleType;
+}
+
+const isAccessRestrictedError = (error: unknown): boolean => {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: string; message?: string; status?: number; details?: string };
+  const text = `${candidate.message || ""} ${candidate.details || ""}`.toLowerCase();
+  return (
+    candidate.code === "P0001" ||
+    candidate.code === "42501" ||
+    candidate.status === 401 ||
+    candidate.status === 403 ||
+    text.includes("unauthorized") ||
+    text.includes("forbidden") ||
+    text.includes("permission denied")
+  );
+};
+
 export default function OrgAdminOperatorSettings() {
   const ORG_ROLE_SETTINGS_QUERY_TIMEOUT_MS = 15000;
   const ORG_ROLE_SETTINGS_QUERY_RETRY_MAX = 1;
@@ -33,12 +63,43 @@ export default function OrgAdminOperatorSettings() {
   const [isRetrying, setIsRetrying] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [members, setMembers] = useState<RoleMember[]>([]);
+  const [pendingRoleChange, setPendingRoleChange] = useState<RoleChangeIntent | null>(null);
 
   const fetchRoleMembers = useCallback(async () => {
     setIsLoading(true);
     try {
       setIsRetrying(false);
       setLoadError(null);
+      const {
+        data: { user },
+      } = await withTimeout(
+        Promise.resolve(supabase.auth.getUser()),
+        ORG_ROLE_SETTINGS_QUERY_TIMEOUT_MS,
+        "org.settings.admin_operator.resolve_user timeout",
+      );
+      if (!user) {
+        setMembers([]);
+        return;
+      }
+
+      const { data: allowedRoles, error: allowedRolesError } = await withTimeout(
+        Promise.resolve(
+          supabase
+            .from("user_roles")
+            .select("role")
+            .eq("user_id", user.id)
+            .in("role", ["admin_instansi", "super_admin"])
+            .limit(1),
+        ),
+        ORG_ROLE_SETTINGS_QUERY_TIMEOUT_MS,
+        "org.settings.admin_operator.resolve_access timeout",
+      );
+      if (allowedRolesError) throw allowedRolesError;
+      if (!allowedRoles || allowedRoles.length === 0) {
+        setMembers([]);
+        return;
+      }
+
       const resolvedTenantId = await withExponentialBackoff(
         () =>
           withTimeout(
@@ -88,6 +149,11 @@ export default function OrgAdminOperatorSettings() {
 
       setMembers(mappedMembers);
     } catch (error) {
+      if (isAccessRestrictedError(error)) {
+        setMembers([]);
+        setLoadError(null);
+        return;
+      }
       const errorRef = reportError(error, "org.settings.admin_operator.fetch");
       const message = appendErrorReference("Gagal memuat data Admin & Operator", errorRef);
       setLoadError(message);
@@ -111,8 +177,22 @@ export default function OrgAdminOperatorSettings() {
     () => members.filter((member) => member.role === "atasan"),
     [members],
   );
+  const duplicateEmails = useMemo(() => {
+    const countByEmail = new Map<string, number>();
+    for (const member of members) {
+      const normalizedEmail = member.email.trim().toLowerCase();
+      if (!normalizedEmail || normalizedEmail === "-") continue;
+      countByEmail.set(normalizedEmail, (countByEmail.get(normalizedEmail) || 0) + 1);
+    }
+    return new Set(
+      Array.from(countByEmail.entries())
+        .filter(([, count]) => count > 1)
+        .map(([email]) => email),
+    );
+  }, [members]);
+  const isDuplicateEmail = (email: string) => duplicateEmails.has(email.trim().toLowerCase());
 
-  const handleRoleChange = async (member: RoleMember, targetRole: RoleType) => {
+  const applyRoleChange = async (member: RoleMember, targetRole: RoleType) => {
     if (member.role === targetRole) return;
 
     if (member.role === "admin_instansi" && targetRole === "atasan" && adminMembers.length <= 1) {
@@ -161,60 +241,156 @@ export default function OrgAdminOperatorSettings() {
     }
   };
 
+  const queueRoleChange = (member: RoleMember, targetRole: RoleType) => {
+    if (member.role === targetRole) return;
+    if (member.role === "admin_instansi" && targetRole === "atasan" && adminMembers.length <= 1) {
+      toast.error("Minimal harus ada 1 Admin Organisasi aktif.");
+      return;
+    }
+    setPendingRoleChange({ member, targetRole });
+  };
+
+  const confirmRoleChange = async () => {
+    if (!pendingRoleChange) return;
+    const intent = pendingRoleChange;
+    setPendingRoleChange(null);
+    await applyRoleChange(intent.member, intent.targetRole);
+  };
+
+  const roleLabel = (role: RoleType) => (role === "admin_instansi" ? "Admin Organisasi" : "Operator");
+
   const renderRoleTable = (rows: RoleMember[], mode: RoleType) => (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>Nama</TableHead>
-          <TableHead>Email</TableHead>
-          <TableHead>NIK</TableHead>
-          <TableHead>Status Pegawai</TableHead>
-          <TableHead className="text-right">Aksi</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
+    <>
+      <div className="hidden md:block">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Nama</TableHead>
+              <TableHead>Email</TableHead>
+              <TableHead>NIK</TableHead>
+              <TableHead>Status Pegawai</TableHead>
+              <TableHead className="text-right">Aksi</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={5} className="text-center text-muted-foreground">
+                  Belum ada data.
+                </TableCell>
+              </TableRow>
+            ) : (
+              rows.map((member) => (
+                <TableRow key={member.id}>
+                  <TableCell className="font-medium">{member.name}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      <span>{member.email}</span>
+                      {isDuplicateEmail(member.email) ? (
+                        <Badge variant="outline" className="text-[11px]">
+                          Email Duplikat
+                        </Badge>
+                      ) : null}
+                    </div>
+                  </TableCell>
+                  <TableCell>{member.nik}</TableCell>
+                  <TableCell>
+                    <Badge variant={member.is_active ? "default" : "secondary"}>
+                      {member.is_active ? "Aktif" : "Nonaktif"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-right">
+                    {mode === "admin_instansi" ? (
+                      <Button
+                        variant="outline"
+                        data-testid="admin-operator-action"
+                        onClick={() => queueRoleChange(member, "atasan")}
+                        disabled={isSaving === member.id || adminMembers.length <= 1}
+                      >
+                        {isSaving === member.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        Jadikan Operator
+                      </Button>
+                    ) : (
+                      <Button
+                        data-testid="admin-operator-action"
+                        onClick={() => queueRoleChange(member, "admin_instansi")}
+                        disabled={isSaving === member.id}
+                      >
+                        {isSaving === member.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                        Jadikan Admin
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </div>
+
+      <div className="space-y-3 md:hidden">
         {rows.length === 0 ? (
-          <TableRow>
-            <TableCell colSpan={5} className="text-center text-muted-foreground">
-              Belum ada data.
-            </TableCell>
-          </TableRow>
+          <div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
+            Belum ada data.
+          </div>
         ) : (
           rows.map((member) => (
-            <TableRow key={member.id}>
-              <TableCell className="font-medium">{member.name}</TableCell>
-              <TableCell>{member.email}</TableCell>
-              <TableCell>{member.nik}</TableCell>
-              <TableCell>
+            <div key={member.id} className="space-y-3 rounded-xl border p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="font-medium leading-tight">{member.name}</p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <p className="text-xs text-muted-foreground break-all">{member.email}</p>
+                    {isDuplicateEmail(member.email) ? (
+                      <Badge variant="outline" className="text-[11px]">
+                        Email Duplikat
+                      </Badge>
+                    ) : null}
+                  </div>
+                </div>
                 <Badge variant={member.is_active ? "default" : "secondary"}>
                   {member.is_active ? "Aktif" : "Nonaktif"}
                 </Badge>
-              </TableCell>
-              <TableCell className="text-right">
-                {mode === "admin_instansi" ? (
-                  <Button
-                    variant="outline"
-                    onClick={() => handleRoleChange(member, "atasan")}
-                    disabled={isSaving === member.id || adminMembers.length <= 1}
-                  >
-                    {isSaving === member.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Jadikan Operator
-                  </Button>
-                ) : (
-                  <Button
-                    onClick={() => handleRoleChange(member, "admin_instansi")}
-                    disabled={isSaving === member.id}
-                  >
-                    {isSaving === member.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Jadikan Admin
-                  </Button>
-                )}
-              </TableCell>
-            </TableRow>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div>
+                  <p className="text-muted-foreground">NIK</p>
+                  <p className="font-medium">{member.nik}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Role Saat Ini</p>
+                  <p className="font-medium">{roleLabel(member.role)}</p>
+                </div>
+              </div>
+
+              {mode === "admin_instansi" ? (
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  data-testid="admin-operator-action"
+                  onClick={() => queueRoleChange(member, "atasan")}
+                  disabled={isSaving === member.id || adminMembers.length <= 1}
+                >
+                  {isSaving === member.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Jadikan Operator
+                </Button>
+              ) : (
+                <Button
+                  className="w-full"
+                  data-testid="admin-operator-action"
+                  onClick={() => queueRoleChange(member, "admin_instansi")}
+                  disabled={isSaving === member.id}
+                >
+                  {isSaving === member.id && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Jadikan Admin
+                </Button>
+              )}
+            </div>
           ))
         )}
-      </TableBody>
-    </Table>
+      </div>
+    </>
   );
 
   if (isLoading) {
@@ -275,6 +451,16 @@ export default function OrgAdminOperatorSettings() {
             <p>3. Sistem mencegah penurunan role jika tersisa 1 Admin Organisasi.</p>
           </CardContent>
         </Card>
+        {duplicateEmails.size > 0 ? (
+          <Card className="border-orange-300/70 bg-orange-50/80 dark:border-orange-800 dark:bg-orange-950/30">
+            <CardContent className="pt-4">
+              <p className="text-sm text-orange-900 dark:text-orange-100">
+                Terdeteksi email yang sama pada lebih dari satu entri pegawai.
+                Periksa kembali data pegawai agar role tidak membingungkan saat dikelola.
+              </p>
+            </CardContent>
+          </Card>
+        ) : null}
 
         <Tabs defaultValue="admin">
           <div className="overflow-x-auto pb-1">
@@ -315,6 +501,44 @@ export default function OrgAdminOperatorSettings() {
           </TabsContent>
         </Tabs>
       </div>
+      <AlertDialog
+        open={Boolean(pendingRoleChange)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingRoleChange(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Konfirmasi Perubahan Role</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingRoleChange
+                ? `Anda akan mengubah role ${pendingRoleChange.member.name} dari ${roleLabel(pendingRoleChange.member.role)} menjadi ${roleLabel(pendingRoleChange.targetRole)}. Lanjutkan?`
+                : "Perubahan role akan langsung disimpan."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={Boolean(isSaving)}>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault();
+                void confirmRoleChange();
+              }}
+              disabled={Boolean(isSaving)}
+            >
+              {isSaving ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Menyimpan...
+                </>
+              ) : (
+                "Ya, Ubah Role"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </OrganizationLayout>
   );
 }

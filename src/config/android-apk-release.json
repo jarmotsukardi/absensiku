@@ -1,0 +1,40 @@
+{
+  "downloadPagePath": "/download",
+  "versionCode": 10,
+  "currentVersion": "1.0.9",
+  "releases": [
+    {
+      "version": "1.0.9",
+      "url": "/downloads/AbsensiKu-Android-1.0.9.apk",
+      "releasedAt": "2026-03-25T14:00:37.441Z",
+      "notes": "Rilis Android AbsensiKu v1.0.9.",
+      "sha256": "6c2480e682e0c2601b266b8565713b8d2801d3a6a3e32b08fa4274cec61e55fa",
+      "fileSizeBytes": 2948151,
+      "signingSubject": "CN=AbsensiKu Dev, OU=Mobile, O=AbsensiKu, L=Jakarta, ST=DKI Jakarta, C=ID",
+      "signingSha256": "e46d295991516b271e31514ce34cd28372e74223a5d8efc4b1e88e727767c788",
+      "signingSha1": "7e2ae404c6dda3c1ac7b1d0bdf30e97e5b996cc4"
+    },
+    {
+      "version": "1.0.8",
+      "url": "/downloads/AbsensiKu-Android-1.0.8.apk",
+      "releasedAt": "2026-03-24T05:36:16.421Z",
+      "notes": "Rilis Android AbsensiKu v1.0.8 untuk tahap development. Karena signing key development baru, uninstall versi sebelumnya bila terjadi bentrok saat install.",
+      "sha256": "09fbee8561b079077722b8dba21fc3bd99e152d338f149f1d11483c80cac7be3",
+      "fileSizeBytes": 2948163,
+      "signingSubject": "CN=AbsensiKu Dev, OU=Mobile, O=AbsensiKu, L=Jakarta, ST=DKI Jakarta, C=ID",
+      "signingSha256": "e46d295991516b271e31514ce34cd28372e74223a5d8efc4b1e88e727767c788",
+      "signingSha1": "7e2ae404c6dda3c1ac7b1d0bdf30e97e5b996cc4"
+    },
+    {
+      "version": "1.0.7",
+      "url": "/downloads/AbsensiKu-Android-1.0.7.apk",
+      "releasedAt": "2026-03-19T22:20:20.616Z",
+      "notes": "Rilis Android AbsensiKu v1.0.7.",
+      "sha256": "f5f9e4cb32d958b7b0a7f35659cda6b8aad0594313e1536d36f01e86182108a9",
+      "fileSizeBytes": 2754837,
+      "signingSubject": "CN=AbsensiKu, OU=Mobile, O=AbsensiKu, L=Jakarta, ST=DKI Jakarta, C=ID",
+      "signingSha256": "d26ad9886bc79478f623c3ae7745e569f7fd29a36692cb1257b4c9d059d3958b",
+      "signingSha1": "f566f774c592e9c5954a6c7b19383cf48b1bc3da"
+    }
+  ]
+}

@@ -60,7 +60,7 @@ Panduan singkat untuk melanjutkan pengembangan modul `/org/payroll` di repo ini.
 
 ## 5. Standar Implementasi
 - Semua query wajib tenant-aware.
-- Error operasional harus menyertakan `ref` atau `trace_id`.
+- Error operasional harus menyertakan `ref` atau ID trace (`trace_id`).
 - Jangan campur payroll dengan billing jika tidak benar-benar perlu.
 - Untuk perubahan kecil:
   - lint file terkait
@@ -125,7 +125,7 @@ Tujuan diskusi awal ini adalah menahan scope payroll agar tidak langsung melebar
   - `/org/payroll/variable-input`
 - Validasi Payroll
   - `/org/payroll/validation`
-- Run Engine
+- Proses Payroll
   - `/org/payroll/run-engine`
 - Approval Payroll
   - `/org/payroll/approval`
@@ -250,7 +250,7 @@ Untuk modul payroll, semua elemen user-facing wajib menggunakan Bahasa Indonesia
 - `Payment` -> `Pembayaran Payroll`
 - `Tax Compliance` -> `Pajak dan Kepatuhan`
 - `Audit Log` -> `Log Audit Payroll`
-- `Error Log` -> `Log Error Payroll`
+- `Error Log` -> `Log Error Payroll (Admin)`
 - `Integrations` -> `Integrasi Payroll`
 
 ### Padanan Badge Status yang Disepakati
@@ -300,7 +300,7 @@ Untuk modul payroll, semua elemen user-facing wajib menggunakan Bahasa Indonesia
   - badge: `Ditunda`
 - Log Audit Payroll
   - badge: `Ditunda`
-- Log Error Payroll
+- Log Error Payroll (Admin)
   - badge: `Ditunda`
 - Integrasi Payroll
   - badge: `Ditunda`
@@ -350,7 +350,7 @@ Untuk modul payroll, semua elemen user-facing wajib menggunakan Bahasa Indonesia
   - badge: `Ditunda`
 - Log Audit Payroll
   - badge: `Ditunda`
-- Log Error Payroll
+- Log Error Payroll (Admin)
   - badge: `Ditunda`
 - Integrasi Payroll
   - badge: `Ditunda`
@@ -400,7 +400,7 @@ Untuk modul payroll, semua elemen user-facing wajib menggunakan Bahasa Indonesia
 - Pembayaran Payroll
 - Pajak dan Kepatuhan
 - Log Audit Payroll
-- Log Error Payroll
+- Log Error Payroll (Admin)
 - Integrasi Payroll
 
 #### Pengaturan
@@ -438,21 +438,21 @@ Untuk payroll sederhana tahap awal, tidak ada fitur unggah dokumen.
 
 ## 16. Keputusan Roadmap: Log Error Diaktifkan Saat Progres Mendekati 75%
 
-Halaman `Log Error Payroll` tetap ada dalam peta menu, tetapi tidak menjadi fokus tahap awal.
+Halaman `Log Error Payroll` hanya tersedia di admin (`/admin/payroll/error-logs`) dan tidak menjadi fokus tahap awal.
 
 ### Aturan
-- `Log Error Payroll` tidak diaktifkan sebagai prioritas awal
-- halaman ini mulai diaktifkan saat progres aplikasi payroll mendekati `75%`
+- `Log Error Payroll` (admin) tidak diaktifkan sebagai prioritas awal
+- halaman admin ini mulai diaktifkan saat progres aplikasi payroll mendekati `75%`
 - tujuannya untuk mempercepat deteksi error aktif ketika modul inti sudah cukup banyak dipakai
 
 ### Tujuan
 - menyediakan pusat triase error payroll sebelum fase akhir
-- membantu pelacakan `ref` dan `trace_id` saat modul inti mulai stabil
+- membantu pelacakan `ref` dan ID trace (`trace_id`) saat modul inti mulai stabil
 - menghindari beban implementasi observability terlalu dini saat alur dasar belum matang
 
 ### Implikasi
 - pada fase awal, error cukup ditangani lewat logging yang sudah ada di halaman inti
-- saat progres mendekati `75%`, `Log Error Payroll` menjadi salah satu prioritas dari grup `Lanjutan`
+- saat progres mendekati `75%`, `Log Error Payroll` (admin) menjadi salah satu prioritas observability
 - aktivasi halaman ini harus tetap memakai Bahasa Indonesia dan menonjolkan referensi error yang mudah ditindaklanjuti
 
 ## 17. Keputusan Roadmap: Log Audit Diprioritaskan Setelah 75%
@@ -470,7 +470,7 @@ Halaman `Log Error Payroll` tetap ada dalam peta menu, tetapi tidak menjadi foku
 - mencegah waktu implementasi habis terlalu awal pada observability lanjutan
 
 ### Implikasi
-- fase awal cukup menjaga `ref` dan `trace_id` pada halaman inti
+- fase awal cukup menjaga `ref` dan ID trace (`trace_id`) pada halaman inti
 - setelah progres melewati `75%`, `Log Audit Payroll` menjadi prioritas grup `Lanjutan`
 - audit trail harus tetap berbahasa Indonesia dan mudah dibaca oleh admin organisasi
 
@@ -507,7 +507,7 @@ Mode kerja payroll menggunakan pendekatan bertahap, cepat, dan terkunci scope ag
 - payroll membaca sumber data, bukan menduplikasi master
 
 #### Fase 5: Observability
-- aktifkan log error payroll saat progres mendekati `75%`
+- aktifkan log error payroll (admin `/admin/payroll/error-logs`) saat progres mendekati `75%`
 - aktifkan log audit payroll saat progres mendekati `75%`
 
 #### Fase 6: Finalisasi
@@ -548,7 +548,7 @@ Mode kerja payroll menggunakan pendekatan bertahap, cepat, dan terkunci scope ag
 - logic proses payroll
 - validasi payroll mendalam
 - overlay referensi HR atau absensi
-- log error payroll
+- log error payroll (admin)
 - log audit payroll
 - glosarium payroll
 - Playwright
@@ -571,7 +571,7 @@ Mode kerja payroll menggunakan pendekatan bertahap, cepat, dan terkunci scope ag
 - referensi absensi
 
 6. Batch F
-- log error payroll
+- log error payroll (admin)
 - log audit payroll
 
 7. Batch G

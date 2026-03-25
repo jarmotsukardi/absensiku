@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -61,6 +62,9 @@ const APPROVAL_STATUS_LABELS: Record<ApprovalStatus, string> = {
 
 export default function OrgPayrollApproval() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target));
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [runs, setRuns] = useState<PayrollRun[]>([]);
   const [periods, setPeriods] = useState<PayrollPeriod[]>([]);
@@ -251,7 +255,7 @@ export default function OrgPayrollApproval() {
       });
       if (error) throw error;
 
-      toast.success("Approval payroll berhasil disinkronkan dari run engine.");
+      toast.success("Persetujuan payroll berhasil disinkronkan dari proses payroll.");
       await fetchData();
     } catch (error) {
       const ref = reportError(error, "org.payroll.approval.sync");
@@ -283,16 +287,16 @@ export default function OrgPayrollApproval() {
           <StatCard title="Ditolak" value={summary.rejected} />
         </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-4">
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>Fokus tahap ini</CardDescription>
               <CardTitle className="text-lg">Keputusan persetujuan</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="text-xs text-muted-foreground">
-                Pastikan proses payroll yang masuk ke tahap ini sudah layak ditinjau dan punya jejak trace yang jelas.
-              </p>
+            <p className="text-xs text-muted-foreground">
+              Pastikan proses payroll yang masuk ke tahap ini sudah layak ditinjau dan punya ID trace yang jelas.
+            </p>
             </CardContent>
           </Card>
           <Card>
@@ -302,7 +306,7 @@ export default function OrgPayrollApproval() {
             </CardHeader>
             <CardContent>
               <p className="text-xs text-muted-foreground">
-                Simpan komentar singkat agar alasan persetujuan atau penolakan mudah ditindaklanjuti.
+                Simpan komentar singkat agar alasan persetujuan atau penolakan mudah ditindaklanjuti. Jika butuh log error payroll lintas tenant, eskalasi ke super admin.
               </p>
             </CardContent>
           </Card>
@@ -312,8 +316,22 @@ export default function OrgPayrollApproval() {
               <CardTitle className="text-lg">Laporan Payroll</CardTitle>
             </CardHeader>
             <CardContent>
-              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/reports")}>
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/payroll/reports")}>
                 Buka Laporan Payroll
+              </Button>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Referensi HR & Absensi</CardDescription>
+              <CardTitle className="text-lg">Cek sumber data</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/hr/employees")}>
+                Data Pegawai HR
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/reports/attendance")}>
+                Laporan Absensi
               </Button>
             </CardContent>
           </Card>
@@ -334,7 +352,7 @@ export default function OrgPayrollApproval() {
                   className="pl-9"
                   value={searchTerm}
                   onChange={(event) => setSearchTerm(event.target.value)}
-                  placeholder="Cari trace approval, trace run, atau catatan..."
+                  placeholder="Cari ID trace approval, ID trace run, atau catatan..."
                 />
               </div>
             </div>
@@ -372,7 +390,7 @@ export default function OrgPayrollApproval() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => navigate("/org/payroll/run-engine")}>
+              <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll/run-engine")}>
                 <ArrowLeft className="mr-2 h-4 w-4" />Proses Payroll
               </Button>
               <Button variant="secondary" onClick={syncApprovals}>
@@ -388,7 +406,7 @@ export default function OrgPayrollApproval() {
                   <TableHead>Periode / Proses</TableHead>
                   <TableHead>Tahap</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Trace</TableHead>
+                  <TableHead>ID Trace</TableHead>
                   <TableHead>Keputusan</TableHead>
                   <TableHead className="text-right">Aksi</TableHead>
                 </TableRow>

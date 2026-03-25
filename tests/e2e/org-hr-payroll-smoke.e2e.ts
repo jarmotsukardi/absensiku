@@ -76,7 +76,7 @@ test.describe.serial("Org HR/Payroll Smoke", () => {
     await waitForStable(page);
 
     await expect(page.getByRole("heading", { name: "Validasi Payroll", exact: true })).toBeVisible();
-    const searchInput = page.getByPlaceholder("Cari trace id, period key, atau catatan...");
+    const searchInput = page.getByPlaceholder("Cari ID trace, period key, atau catatan...");
     await expect(searchInput).toBeVisible();
     await searchInput.fill(`trace-1, warning() 'validasi'`);
     await waitForStable(page);

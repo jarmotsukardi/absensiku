@@ -18,7 +18,9 @@ interface SecurityCheckResult {
   isDesktop: boolean;
   isMobile: boolean;
   isAndroidApp: boolean;
+  isIphoneSafari: boolean;
   isBrowserBlocked: boolean;
+  clientMode: "android_webview" | "iphone_safari" | "mobile_browser" | "desktop_browser" | "unknown";
   userAgent: string;
 }
 
@@ -113,7 +115,9 @@ export function useSecurityCheck(tenantId?: string) {
     isDesktop: false,
     isMobile: false,
     isAndroidApp: false,
+    isIphoneSafari: false,
     isBrowserBlocked: false,
+    clientMode: "unknown",
     userAgent: "",
   });
 
@@ -191,15 +195,31 @@ export function useSecurityCheck(tenantId?: string) {
   useEffect(() => {
     if (isLoading || !settings) return;
 
-    // Jika konfigurasi gagal dimuat, jangan blokir login untuk menghindari false positive.
+    // Fail-closed untuk browser: saat policy tidak bisa dibaca, hanya aplikasi Android yang tetap boleh lanjut.
     if (settingsFetchFailed) {
+      const isDesktop = isDesktopBrowser();
+      const isMobile = isMobileBrowser();
+      const isAndroidApp = isAndroidWebView();
+      const isIphoneSafari = isIPhoneSafari();
       setSecurityResult({
-        isBlocked: false,
-        reason: null,
-        isDesktop: isDesktopBrowser(),
-        isMobile: isMobileBrowser(),
-        isAndroidApp: isAndroidWebView(),
-        isBrowserBlocked: false,
+        isBlocked: !isAndroidApp,
+        reason: isAndroidApp
+          ? null
+          : "Kebijakan keamanan absensi tidak dapat dimuat. Gunakan aplikasi internal atau coba lagi beberapa saat.",
+        isDesktop,
+        isMobile,
+        isAndroidApp,
+        isIphoneSafari,
+        isBrowserBlocked: !isAndroidApp,
+        clientMode: isAndroidApp
+          ? "android_webview"
+          : isIphoneSafari
+            ? "iphone_safari"
+            : isDesktop
+              ? "desktop_browser"
+              : isMobile
+                ? "mobile_browser"
+                : "unknown",
         userAgent: navigator.userAgent,
       });
       return;
@@ -246,7 +266,17 @@ export function useSecurityCheck(tenantId?: string) {
       isDesktop,
       isMobile,
       isAndroidApp,
+      isIphoneSafari,
       isBrowserBlocked,
+      clientMode: isAndroidApp
+        ? "android_webview"
+        : isIphoneSafari
+          ? "iphone_safari"
+          : isDesktop
+            ? "desktop_browser"
+            : isMobile
+              ? "mobile_browser"
+              : "unknown",
       userAgent: ua,
     });
   }, [isLoading, settings, settingsFetchFailed]);

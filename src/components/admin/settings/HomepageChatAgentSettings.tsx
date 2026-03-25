@@ -365,7 +365,7 @@ export function HomepageChatAgentSettings() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Auto Open (detik)</Label>
+              <Label>Buka Otomatis (detik)</Label>
               <Input
                 type="number"
                 min={0}
@@ -399,7 +399,7 @@ export function HomepageChatAgentSettings() {
           <div className="grid gap-4 md:grid-cols-2">
             <div className="flex items-center justify-between rounded-lg border p-4">
               <div>
-                <Label className="font-medium">Tampilkan di Mobile</Label>
+                <Label className="font-medium">Tampilkan di Seluler</Label>
                 <p className="text-xs text-muted-foreground">Browser ponsel/tablet</p>
               </div>
               <Switch

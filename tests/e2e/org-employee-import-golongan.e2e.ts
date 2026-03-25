@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { getRoleCreds } from "./helpers/testAccounts";
+import { loginAsOrgAdmin as sharedLoginAsOrgAdmin, waitForStable } from "./helpers/orgAuth";
 
 const DEFAULT_TEMPLATE_VALUES: Record<string, string> = {
   NIK: "",
@@ -21,14 +21,6 @@ const DEFAULT_TEMPLATE_VALUES: Record<string, string> = {
   "Kode OPD": "",
   "Lokasi Kerja": "",
   Alamat: "",
-};
-
-const waitForStable = async (page: Page) => {
-  try {
-    await page.waitForLoadState("networkidle", { timeout: 8_000 });
-  } catch {
-    // Abaikan jika ada polling panjang.
-  }
 };
 
 const buildCsvLine = (values: string[]): string =>
@@ -71,29 +63,6 @@ const buildRowFromHeaders = (
 const uniqueDigits = (length: number): string => {
   const source = `${Date.now()}${Math.floor(Math.random() * 1_000_000)}`;
   return source.slice(-length).padStart(length, "0");
-};
-
-const solveSimpleCaptcha = async (page: Page) => {
-  const captchaText = await page.$$eval("div.font-mono.text-xl.tracking-widest span", (spans) =>
-    spans.map((span) => (span.textContent || "").trim()).join(""),
-  );
-  expect(captchaText.length).toBeGreaterThanOrEqual(6);
-  await page.fill("#captcha-input", captchaText);
-};
-
-const loginAsOrgAdmin = async (page: Page) => {
-  const creds = await getRoleCreds("org_admin");
-  test.skip(!creds, "Kredensial org_admin belum diisi di ops/test-accounts.local.json");
-
-  await page.goto("/org/login", { waitUntil: "domcontentloaded" });
-  await waitForStable(page);
-
-  await page.fill("#email", creds!.email);
-  await page.fill("#password", creds!.password);
-  await solveSimpleCaptcha(page);
-  await page.getByRole("button", { name: "Masuk" }).click();
-
-  await page.waitForURL((url) => !url.pathname.startsWith("/org/login"), { timeout: 20_000 });
 };
 
 const openImportPage = async (page: Page) => {
@@ -153,7 +122,7 @@ test.describe.parallel("Org Employee Import Golongan", () => {
     const invalidCsvPath = path.join(tmpDir, "invalid-golongan.csv");
 
     try {
-      await loginAsOrgAdmin(page);
+      await sharedLoginAsOrgAdmin(page, ["org_admin"]);
       await openImportPage(page);
       await selectOfficeMapping(page);
       const activeHeaders = await getActiveTemplateHeaders(page);

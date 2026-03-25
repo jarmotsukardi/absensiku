@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { SmartAppBanner } from "@/components/common/SmartAppBanner";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import DOMPurify from "dompurify";
@@ -187,6 +188,12 @@ export default function OrganizationLanding() {
 
   return (
     <div className="min-h-screen bg-background">
+      <SmartAppBanner
+        apkUrl={organization.apk_url}
+        appName={organization.name}
+        dismissKey="smart_app_banner_org_landing_dismissed"
+      />
+
       {/* Hero Section with Hero Image */}
       <section className="relative overflow-hidden min-h-[70vh]">
         {/* Hero Image Background */}

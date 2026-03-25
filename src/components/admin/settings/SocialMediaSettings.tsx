@@ -4,12 +4,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Loader2, Save, Facebook, Instagram, Youtube, Linkedin, MessageCircle, Send, Twitter, Share2 } from "lucide-react";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { withTimeout } from "@/lib/attendanceResilience";
 
 interface SocialMediaData {
+  enable_social_media: boolean;
   social_facebook: string;
   social_instagram: string;
   social_twitter: string;
@@ -20,6 +22,7 @@ interface SocialMediaData {
 }
 
 const defaultSettings: SocialMediaData = {
+  enable_social_media: true,
   social_facebook: "",
   social_instagram: "",
   social_twitter: "",
@@ -60,6 +63,7 @@ export function SocialMediaSettings() {
       if (data?.value && typeof data.value === "object" && !Array.isArray(data.value)) {
         const footerData = data.value as Record<string, unknown>;
         setSettings({
+          enable_social_media: typeof footerData.enable_social_media === "boolean" ? footerData.enable_social_media : true,
           social_facebook: readString(footerData, "social_facebook"),
           social_instagram: readString(footerData, "social_instagram"),
           social_twitter: readString(footerData, "social_twitter"),
@@ -138,13 +142,31 @@ export function SocialMediaSettings() {
     <div className="space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Share2 className="h-5 w-5" />
-            Pengaturan Social Media
-          </CardTitle>
-          <CardDescription>Link social media yang akan ditampilkan di footer halaman utama</CardDescription>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle className="flex items-center gap-2">
+                <Share2 className="h-5 w-5" />
+                Pengaturan Social Media
+              </CardTitle>
+              <CardDescription>
+                {settings.enable_social_media
+                  ? "Link social media yang akan ditampilkan di footer halaman utama (gunakan URL valid, bukan '#')"
+                  : "Social media nonaktif dan tidak akan tampil di footer publik"}
+              </CardDescription>
+            </div>
+            <div className="flex items-center gap-3 rounded-lg border px-3 py-2">
+              <Label htmlFor="social-media-enabled" className="text-sm font-medium">
+                Tampilkan Social Media
+              </Label>
+              <Switch
+                id="social-media-enabled"
+                checked={settings.enable_social_media}
+                onCheckedChange={(checked) => setSettings({ ...settings, enable_social_media: checked })}
+              />
+            </div>
+          </div>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className={`space-y-4 ${settings.enable_social_media ? "" : "opacity-60"}`}>
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
               <Label className="flex items-center gap-2"><Facebook className="h-4 w-4" />Facebook</Label>
@@ -152,6 +174,7 @@ export function SocialMediaSettings() {
                 value={settings.social_facebook}
                 onChange={(e) => setSettings({ ...settings, social_facebook: e.target.value })}
                 placeholder="https://facebook.com/..."
+                disabled={!settings.enable_social_media}
               />
             </div>
             <div className="space-y-2">
@@ -160,6 +183,7 @@ export function SocialMediaSettings() {
                 value={settings.social_instagram}
                 onChange={(e) => setSettings({ ...settings, social_instagram: e.target.value })}
                 placeholder="https://instagram.com/..."
+                disabled={!settings.enable_social_media}
               />
             </div>
             <div className="space-y-2">
@@ -168,6 +192,7 @@ export function SocialMediaSettings() {
                 value={settings.social_twitter}
                 onChange={(e) => setSettings({ ...settings, social_twitter: e.target.value })}
                 placeholder="https://twitter.com/..."
+                disabled={!settings.enable_social_media}
               />
             </div>
             <div className="space-y-2">
@@ -176,6 +201,7 @@ export function SocialMediaSettings() {
                 value={settings.social_youtube}
                 onChange={(e) => setSettings({ ...settings, social_youtube: e.target.value })}
                 placeholder="https://youtube.com/..."
+                disabled={!settings.enable_social_media}
               />
             </div>
             <div className="space-y-2">
@@ -184,6 +210,7 @@ export function SocialMediaSettings() {
                 value={settings.social_linkedin}
                 onChange={(e) => setSettings({ ...settings, social_linkedin: e.target.value })}
                 placeholder="https://linkedin.com/company/..."
+                disabled={!settings.enable_social_media}
               />
             </div>
             <div className="space-y-2">
@@ -192,6 +219,7 @@ export function SocialMediaSettings() {
                 value={settings.social_tiktok}
                 onChange={(e) => setSettings({ ...settings, social_tiktok: e.target.value })}
                 placeholder="https://tiktok.com/@..."
+                disabled={!settings.enable_social_media}
               />
             </div>
             <div className="space-y-2">
@@ -200,6 +228,7 @@ export function SocialMediaSettings() {
                 value={settings.social_telegram}
                 onChange={(e) => setSettings({ ...settings, social_telegram: e.target.value })}
                 placeholder="https://t.me/..."
+                disabled={!settings.enable_social_media}
               />
             </div>
           </div>

@@ -15,8 +15,8 @@ export interface OrgWorkspaceModules {
 }
 
 export const DEFAULT_ORG_WORKSPACE_MODULES: OrgWorkspaceModules = {
-  hr: false,
-  payroll: false,
+  hr: true,
+  payroll: true,
 };
 
 const ORG_WORKSPACE_MODULE_KEYS: OrgWorkspaceModuleKey[] = ["hr", "payroll"];

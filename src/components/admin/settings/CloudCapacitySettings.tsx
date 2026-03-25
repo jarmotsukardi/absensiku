@@ -458,7 +458,7 @@ export function CloudCapacitySettings() {
               key: SETTING_KEY,
               value: payload,
               description:
-                "Monitoring kapasitas Supabase & Vercel (plan, limit, usage, dan warning threshold untuk antisipasi upgrade paket).",
+                "Pemantauan kapasitas Supabase & Vercel (plan, limit, usage, dan warning threshold untuk antisipasi upgrade paket).",
               updated_at: new Date().toISOString(),
             },
             { onConflict: "key" }
@@ -488,7 +488,7 @@ export function CloudCapacitySettings() {
             rpc: (fn: string, args?: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
           }).rpc("get_platform_usage_snapshot"),
         12000,
-        "Refresh cloud usage snapshot timeout"
+        "Timeout muat ulang snapshot penggunaan cloud"
       );
 
       if (error) {
@@ -496,12 +496,12 @@ export function CloudCapacitySettings() {
         setSnapshotMode("fallback");
         if (isMissingRpcError(error)) {
           setSnapshotNotice(
-            `Mode fallback aktif: RPC snapshot cloud belum tersedia. Jalankan migration terbaru lalu refresh halaman. (Ref: ${ref})`
+            `Mode fallback aktif: RPC snapshot cloud belum tersedia. Jalankan migration terbaru lalu muat ulang halaman. (Ref: ${ref})`
           );
         } else {
           setSnapshotNotice(`Snapshot otomatis belum tersedia saat ini, sistem memakai mode manual. (Ref: ${ref})`);
         }
-        toast.warning("Refresh snapshot otomatis belum tersedia. Data manual tetap bisa dipakai.");
+        toast.warning("Muat ulang snapshot otomatis belum tersedia. Data manual tetap bisa dipakai.");
         return;
       }
       const nextSnapshot = parseSnapshotPayload(data);
@@ -510,11 +510,11 @@ export function CloudCapacitySettings() {
         setSnapshotMode("rpc");
         setSnapshotNotice(null);
         await evaluateFreePlanAlerts(config, nextSnapshot);
-        toast.success("Snapshot usage cloud berhasil diperbarui");
+        toast.success("Snapshot penggunaan cloud berhasil diperbarui");
       }
     } catch (error) {
       const ref = reportError(error, "admin.cloud_capacity.refresh");
-      toast.error(`Gagal refresh snapshot usage cloud (Ref: ${ref})`);
+      toast.error(`Gagal memuat ulang snapshot penggunaan cloud (Ref: ${ref})`);
     } finally {
       setLoading(false);
     }
@@ -770,7 +770,7 @@ export function CloudCapacitySettings() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <AlertTriangle className="h-5 w-5 text-amber-600" />
-            Monitoring Paket Supabase & Vercel
+            Pemantauan Paket Supabase & Vercel
           </CardTitle>
           <CardDescription>
             Tab ini membantu superadmin memantau kapasitas layanan cloud (free/pro/team/enterprise), mendeteksi risiko limit,
@@ -808,7 +808,7 @@ export function CloudCapacitySettings() {
       <div className="flex flex-wrap gap-2">
         <Button onClick={refreshSnapshot} disabled={loading}>
           <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          Refresh Snapshot + Evaluasi Notifikasi
+          Muat Ulang Snapshot + Evaluasi Notifikasi
         </Button>
         <Button onClick={saveConfig} variant="secondary" disabled={saving}>
           Simpan Pengaturan Kapasitas

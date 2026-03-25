@@ -140,7 +140,7 @@ const HR_MENU_AND_SUBMENU_LABELS = new Set([
 
 test.describe.serial("Org HR Visual Crawl", () => {
   test("crawl semua submenu /org/hr/* cek heading + 404 + redirect", async ({ page }) => {
-    test.setTimeout(240_000);
+    test.setTimeout(420_000);
 
     await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
 

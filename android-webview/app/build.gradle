@@ -3,18 +3,149 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+import groovy.json.JsonSlurper
+import java.net.URI
+import java.util.Properties
+
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withInputStream { stream ->
+        localProperties.load(stream)
+    }
+}
+
+def resolveConfig = { String... keys ->
+    for (String key : keys) {
+        def projectValue = project.findProperty(key)?.toString()?.trim()
+        if (projectValue) return projectValue
+
+        def envValue = System.getenv(key)?.trim()
+        if (envValue) return envValue
+
+        def localValue = localProperties.getProperty(key)?.trim()
+        if (localValue) return localValue
+    }
+    return ""
+}
+
+def quoteBuildConfig = { String value ->
+    return "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+}
+
+def webBaseUrl = resolveConfig("ABSENSIKU_WEB_BASE_URL")
+if (!webBaseUrl) {
+    webBaseUrl = "https://absensipro.com"
+}
+
+def webAllowedHost = ""
+try {
+    webAllowedHost = new URI(webBaseUrl).getHost() ?: ""
+} catch (Exception ignored) {
+    webAllowedHost = ""
+}
+
+def supabaseUrl = resolveConfig("ABSENSIKU_SUPABASE_URL")
+def supabasePublishableKey = resolveConfig("ABSENSIKU_SUPABASE_PUBLISHABLE_KEY")
+def tenantDisplayName = resolveConfig("ABSENSIKU_TENANT_DISPLAY_NAME", "ABSENSIKU_LOGIN_BRAND_NAME")
+def supportEmail = resolveConfig("ABSENSIKU_SUPPORT_EMAIL", "ABSENSIKU_CONTACT_HR_EMAIL")
+def debugLoginEmail = resolveConfig("ABSENSIKU_DEBUG_LOGIN_EMAIL")
+def debugLoginPassword = resolveConfig("ABSENSIKU_DEBUG_LOGIN_PASSWORD")
+def nativeAppCode = resolveConfig("ABSENSIKU_NATIVE_APP_CODE")
+def firebaseProjectId = resolveConfig("ABSENSIKU_FIREBASE_PROJECT_ID")
+def firebaseSenderId = resolveConfig("ABSENSIKU_FIREBASE_SENDER_ID", "ABSENSIKU_FIREBASE_PROJECT_NUMBER")
+def firebaseAppId = resolveConfig("ABSENSIKU_FIREBASE_APP_ID")
+def firebaseApiKey = resolveConfig("ABSENSIKU_FIREBASE_API_KEY")
+def androidKeystorePath = resolveConfig("ABSENSIKU_ANDROID_KEYSTORE_FILE")
+def androidKeystorePassword = resolveConfig("ABSENSIKU_ANDROID_KEYSTORE_PASSWORD")
+def androidKeyAlias = resolveConfig("ABSENSIKU_ANDROID_KEY_ALIAS")
+def androidKeyPassword = resolveConfig("ABSENSIKU_ANDROID_KEY_PASSWORD")
+if (!nativeAppCode) {
+    nativeAppCode = "AKN1"
+}
+if (!firebaseProjectId) {
+    firebaseProjectId = "absensiku-3b3dc"
+}
+if (!firebaseSenderId) {
+    firebaseSenderId = "496996660860"
+}
+if (!tenantDisplayName) {
+    tenantDisplayName = "Aplikasi Internal Pegawai"
+}
+if (!androidKeystorePath) {
+    def defaultReleaseKeystore = rootProject.file("signing/absensiku-release-v101.keystore")
+    if (defaultReleaseKeystore.exists()) {
+        androidKeystorePath = defaultReleaseKeystore.absolutePath
+    }
+}
+def androidKeystoreFile = null
+if (androidKeystorePath) {
+    def candidateKeystore = new File(androidKeystorePath)
+    androidKeystoreFile = candidateKeystore.isAbsolute() ? candidateKeystore : rootProject.file(androidKeystorePath)
+}
+def hasReleaseSigningConfig = androidKeystorePath && androidKeystorePassword && androidKeyAlias && androidKeyPassword
+
+def apkReleaseConfigFile = rootProject.file("../src/config/android-apk-release.json")
+def apkReleaseConfig = [:]
+if (apkReleaseConfigFile.exists()) {
+    apkReleaseConfig = new JsonSlurper().parse(apkReleaseConfigFile) as Map
+}
+def androidVersionCode = (apkReleaseConfig.versionCode ?: 1) as Integer
+def androidVersionName = (apkReleaseConfig.currentVersion ?: "1.0.0").toString()
+def hasGoogleServicesConfig = [
+    file("google-services.json"),
+    file("src/debug/google-services.json"),
+    file("src/release/google-services.json"),
+].any { it.exists() }
+def hasManualFirebaseConfig = firebaseProjectId && firebaseSenderId && firebaseAppId && firebaseApiKey
+def fcmEnabled = hasGoogleServicesConfig || hasManualFirebaseConfig
+
+if (hasGoogleServicesConfig) {
+    apply plugin: "com.google.gms.google-services"
+}
+
 android {
     namespace 'com.absensiku.webview'
     compileSdk 35
+
+    signingConfigs {
+        if (hasReleaseSigningConfig) {
+            release {
+                storeFile androidKeystoreFile
+                storePassword androidKeystorePassword
+                keyAlias androidKeyAlias
+                keyPassword androidKeyPassword
+                enableV1Signing true
+                enableV2Signing true
+                enableV3Signing true
+                enableV4Signing true
+            }
+        }
+    }
 
     defaultConfig {
         applicationId "com.absensiku.webview"
         minSdk 24
         targetSdk 35
-        versionCode 1
-        versionName "1.0.0"
+        versionCode androidVersionCode
+        versionName androidVersionName
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField "String", "WEB_BASE_URL", quoteBuildConfig(webBaseUrl)
+        buildConfigField "String", "WEB_ALLOWED_HOST", quoteBuildConfig(webAllowedHost)
+        buildConfigField "String", "SUPABASE_URL", quoteBuildConfig(supabaseUrl)
+        buildConfigField "String", "SUPABASE_PUBLISHABLE_KEY", quoteBuildConfig(supabasePublishableKey)
+        buildConfigField "String", "TENANT_DISPLAY_NAME", quoteBuildConfig(tenantDisplayName)
+        buildConfigField "String", "SUPPORT_EMAIL", quoteBuildConfig(supportEmail)
+        buildConfigField "String", "DEBUG_LOGIN_EMAIL", quoteBuildConfig(debugLoginEmail)
+        buildConfigField "String", "DEBUG_LOGIN_PASSWORD", quoteBuildConfig(debugLoginPassword)
+        buildConfigField "String", "APP_CODE", quoteBuildConfig(nativeAppCode)
+        buildConfigField "String", "FIREBASE_PROJECT_ID", quoteBuildConfig(firebaseProjectId)
+        buildConfigField "String", "FIREBASE_SENDER_ID", quoteBuildConfig(firebaseSenderId)
+        buildConfigField "String", "FIREBASE_APP_ID", quoteBuildConfig(firebaseAppId)
+        buildConfigField "String", "FIREBASE_API_KEY", quoteBuildConfig(firebaseApiKey)
+        buildConfigField "boolean", "FCM_ENABLED", fcmEnabled ? "true" : "false"
     }
 
     buildTypes {
@@ -22,6 +153,9 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (hasReleaseSigningConfig) {
+                signingConfig signingConfigs.release
+            }
         }
         debug {
             minifyEnabled false
@@ -39,14 +173,31 @@ android {
     }
 
     buildFeatures {
+        buildConfig true
         viewBinding true
     }
 }
 
 dependencies {
+    implementation platform('com.google.firebase:firebase-bom:33.10.0')
     implementation 'androidx.core:core-ktx:1.13.1'
     implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.credentials:credentials:1.5.0'
+    implementation 'androidx.credentials:credentials-play-services-auth:1.5.0'
+    implementation 'androidx.security:security-crypto:1.1.0-alpha06'
     implementation 'com.google.android.material:material:1.12.0'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.4'
+    implementation 'androidx.swiperefreshlayout:swiperefreshlayout:1.1.0'
+    implementation 'com.google.firebase:firebase-messaging'
     implementation 'com.google.android.gms:play-services-location:21.3.0'
+    implementation 'com.github.bumptech.glide:glide:4.16.0'
+
+    testImplementation 'junit:junit:4.13.2'
+
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test:rules:1.6.1'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.6.1'
+    androidTestImplementation 'androidx.test.espresso:espresso-intents:3.6.1'
+    androidTestImplementation 'androidx.test.uiautomator:uiautomator:2.3.0'
 }

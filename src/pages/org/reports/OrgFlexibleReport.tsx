@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { format } from "date-fns";
+import { format, parseISO } from "date-fns";
 import { id as localeId } from "date-fns/locale";
-import { Download, MapPinOff, Printer, Search } from "lucide-react";
+import { Download, FileText, MapPinOff, Search } from "lucide-react";
 import { toast } from "sonner";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,14 @@ import { PageGlossarySection } from "@/components/admin/common/PageGlossarySecti
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { RequestReportsTabs } from "@/components/org/reports/RequestReportsTabs";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import {
+  buildReportCsv,
+  createReportTraceId,
+  downloadCsvFile,
+  downloadReportPdf,
+  recordReportOutputAudit,
+  type ReportOutputColumn,
+} from "@/lib/reportOutput";
 
 type WfhRequestRow = Tables<"wfh_requests">;
 type FlexibleRequestRow = Tables<"flexible_attendance_requests">;
@@ -32,13 +40,8 @@ interface EmployeeLite {
   work_unit_id: string | null;
 }
 
-interface WfhQueryRow extends WfhRequestRow {
-  employees: EmployeeLite | null;
-}
-
-interface FlexibleQueryRow extends FlexibleRequestRow {
-  employees: EmployeeLite | null;
-}
+type WfhQueryRow = WfhRequestRow;
+type FlexibleQueryRow = FlexibleRequestRow;
 
 interface CombinedRecord {
   id: string;
@@ -72,14 +75,6 @@ const FLEXIBLE_REASON_LABELS: Record<string, string> = {
   kegiatan_instansi: "Kegiatan Instansi",
 };
 
-const escapeHtml = (value: string): string =>
-  value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-
 const getStatusLabel = (status: string): string =>
   STATUS_OPTIONS.find((option) => option.value === status)?.label || status;
 
@@ -94,6 +89,54 @@ const getStatusBadge = (status: string) => {
   if (status === "ditolak") return <Badge variant="destructive">Ditolak</Badge>;
   return <Badge variant="outline">{status}</Badge>;
 };
+
+const getFlexibleCreatedAtLabel = (record: CombinedRecord, pattern: string) =>
+  format(new Date(record.created_at), pattern, { locale: localeId });
+
+const getFlexibleRequestDateLabel = (requestDate: string, pattern: string) =>
+  format(parseISO(requestDate), pattern, { locale: localeId });
+
+const getFlexibleOpdLabel = (record: CombinedRecord, opdMap: Map<string, OPD>) =>
+  record.employee?.opd_id ? opdMap.get(record.employee.opd_id)?.code || "-" : "-";
+
+const getFlexibleWorkUnitLabel = (record: CombinedRecord, workUnitMap: Map<string, WorkUnit>) =>
+  record.employee?.work_unit_id ? workUnitMap.get(record.employee.work_unit_id)?.name || "-" : "-";
+
+const buildFlexibleCsvColumns = (
+  opdMap: Map<string, OPD>,
+  workUnitMap: Map<string, WorkUnit>,
+) =>
+  [
+    { header: "No", value: (_row, index) => index + 1, align: "right", width: 28 },
+    { header: "Tanggal Pengajuan", value: (row) => format(new Date(row.created_at), "yyyy-MM-dd HH:mm"), width: 82 },
+    { header: "Tanggal Permohonan", value: (row) => row.request_date, width: 76 },
+    { header: "Tipe", value: (row) => getTypeLabel(row.request_type) },
+    { header: "Kategori", value: (row) => row.category_label },
+    { header: "Nama Pegawai", value: (row) => row.employee?.name || "-" },
+    { header: "NIP", value: (row) => row.employee?.nip || "-", width: 68 },
+    { header: "OPD", value: (row) => getFlexibleOpdLabel(row, opdMap) },
+    { header: "Satuan Kerja", value: (row) => getFlexibleWorkUnitLabel(row, workUnitMap) },
+    { header: "Status", value: (row) => getStatusLabel(row.status), width: 54 },
+    { header: "Alasan", value: (row) => row.reason || "-" },
+    { header: "Catatan Penolakan", value: (row) => row.rejection_reason || "-" },
+  ] satisfies ReportOutputColumn<CombinedRecord>[];
+
+const buildFlexiblePdfColumns = (
+  opdMap: Map<string, OPD>,
+  workUnitMap: Map<string, WorkUnit>,
+) =>
+  [
+    { header: "No", value: (_row, index) => index + 1, align: "right", width: 28 },
+    { header: "Tanggal Pengajuan", value: (row) => getFlexibleCreatedAtLabel(row, "d MMM yyyy HH:mm"), width: 82 },
+    { header: "Tanggal Permohonan", value: (row) => getFlexibleRequestDateLabel(row.request_date, "d MMM yyyy"), width: 70 },
+    { header: "Tipe", value: (row) => getTypeLabel(row.request_type) },
+    { header: "Kategori", value: (row) => row.category_label },
+    { header: "Nama Pegawai", value: (row) => row.employee?.name || "-" },
+    { header: "NIP", value: (row) => row.employee?.nip || "-", width: 68 },
+    { header: "OPD", value: (row) => getFlexibleOpdLabel(row, opdMap) },
+    { header: "Satuan Kerja", value: (row) => getFlexibleWorkUnitLabel(row, workUnitMap) },
+    { header: "Status", value: (row) => getStatusLabel(row.status), width: 54 },
+  ] satisfies ReportOutputColumn<CombinedRecord>[];
 
 export default function OrgFlexibleReport() {
   const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
@@ -170,6 +213,9 @@ export default function OrgFlexibleReport() {
     return map;
   }, [workUnits]);
 
+  const flexibleCsvColumns = useMemo(() => buildFlexibleCsvColumns(opdMap, workUnitMap), [opdMap, workUnitMap]);
+  const flexiblePdfColumns = useMemo(() => buildFlexiblePdfColumns(opdMap, workUnitMap), [opdMap, workUnitMap]);
+
   const fetchReport = useCallback(async () => {
     if (!tenantId) {
       setRecords([]);
@@ -196,16 +242,15 @@ export default function OrgFlexibleReport() {
         return;
       }
 
-      const combinedRows: CombinedRecord[] = [];
+      const wfhRows: WfhQueryRow[] = [];
+      const flexibleRows: FlexibleQueryRow[] = [];
 
       if (typeFilter === "all" || typeFilter === "wfh") {
         let offset = 0;
         while (true) {
           let query = supabase
             .from("wfh_requests")
-            .select(
-              "id, employee_id, request_date, reason, status, rejection_reason, approved_by, approved_at, created_at, updated_at, employees!wfh_requests_employee_id_fkey(id, name, nip, opd_id, work_unit_id)"
-            )
+            .select("id, employee_id, request_date, reason, status, rejection_reason, approved_by, approved_at, created_at, updated_at")
             .in("employee_id", employeeIds)
             .order("created_at", { ascending: false })
             .range(offset, offset + FETCH_CHUNK - 1);
@@ -235,20 +280,7 @@ export default function OrgFlexibleReport() {
           if (error) throw error;
 
           const chunk = (data || []) as WfhQueryRow[];
-          combinedRows.push(
-            ...chunk.map((row) => ({
-              id: row.id,
-              rowKey: `wfh:${row.id}`,
-              request_type: "wfh" as const,
-              request_date: row.request_date,
-              created_at: row.created_at,
-              status: row.status,
-              reason: row.reason,
-              rejection_reason: row.rejection_reason,
-              category_label: "WFH",
-              employee: row.employees || null,
-            }))
-          );
+          wfhRows.push(...chunk);
 
           if (chunk.length < FETCH_CHUNK) break;
           offset += FETCH_CHUNK;
@@ -260,9 +292,7 @@ export default function OrgFlexibleReport() {
         while (true) {
           let query = supabase
             .from("flexible_attendance_requests")
-            .select(
-              "id, employee_id, request_date, reason_type, reason, status, rejection_reason, approved_by, approved_at, created_at, updated_at, tenant_id, employees!flexible_attendance_requests_employee_id_fkey(id, name, nip, opd_id, work_unit_id)"
-            )
+            .select("id, employee_id, request_date, reason_type, reason, status, rejection_reason, approved_by, approved_at, created_at, updated_at, tenant_id")
             .eq("tenant_id", tenantId)
             .in("employee_id", employeeIds)
             .order("created_at", { ascending: false })
@@ -293,25 +323,112 @@ export default function OrgFlexibleReport() {
           if (error) throw error;
 
           const chunk = (data || []) as FlexibleQueryRow[];
-          combinedRows.push(
-            ...chunk.map((row) => ({
-              id: row.id,
-              rowKey: `flexible:${row.id}`,
-              request_type: "flexible" as const,
-              request_date: row.request_date,
-              created_at: row.created_at,
-              status: row.status,
-              reason: row.reason,
-              rejection_reason: row.rejection_reason,
-              category_label: FLEXIBLE_REASON_LABELS[row.reason_type] || row.reason_type,
-              employee: row.employees || null,
-            }))
-          );
+          flexibleRows.push(...chunk);
 
           if (chunk.length < FETCH_CHUNK) break;
           offset += FETCH_CHUNK;
         }
       }
+
+      const combinedEmployeeIds = Array.from(
+        new Set(
+          [...wfhRows, ...flexibleRows]
+            .map((row) => row.employee_id)
+            .filter((employeeId): employeeId is string => Boolean(employeeId)),
+        ),
+      );
+      let employeeMap = new Map<string, EmployeeLite>();
+
+      if (combinedEmployeeIds.length > 0) {
+        const { data: employeesData, error: employeesError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("employees")
+                .select("id, name, nip, opd_id, work_unit_id")
+                .in("id", combinedEmployeeIds),
+              FLEXIBLE_REPORT_QUERY_TIMEOUT_MS,
+              "org.reports.flexible.fetch.employee_detail timeout",
+            ),
+          {
+            maxRetries: FLEXIBLE_REPORT_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
+        );
+
+        if (employeesError) {
+          const { data: employeesFallback, error: employeesFallbackError } = await withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase
+                  .from("employees")
+                  .select("id, name, nip")
+                  .in("id", combinedEmployeeIds),
+                FLEXIBLE_REPORT_QUERY_TIMEOUT_MS,
+                "org.reports.flexible.fetch.employee_fallback timeout",
+              ),
+            {
+              maxRetries: FLEXIBLE_REPORT_QUERY_RETRY_MAX,
+              shouldRetry: isRetryableError,
+            },
+          );
+
+          if (employeesFallbackError) throw employeesFallbackError;
+
+          employeeMap = new Map(
+            (employeesFallback || []).map((employee) => [
+              employee.id,
+              {
+                id: employee.id,
+                name: employee.name,
+                nip: employee.nip,
+                opd_id: null,
+                work_unit_id: null,
+              },
+            ]),
+          );
+        } else {
+          employeeMap = new Map(
+            (employeesData || []).map((employee) => [
+              employee.id,
+              {
+                id: employee.id,
+                name: employee.name,
+                nip: employee.nip,
+                opd_id: employee.opd_id,
+                work_unit_id: employee.work_unit_id,
+              },
+            ]),
+          );
+        }
+      }
+
+      const combinedRows: CombinedRecord[] = [
+        ...wfhRows.map((row) => ({
+          id: row.id,
+          rowKey: `wfh:${row.id}`,
+          request_type: "wfh" as const,
+          request_date: row.request_date,
+          created_at: row.created_at,
+          status: row.status,
+          reason: row.reason,
+          rejection_reason: row.rejection_reason,
+          category_label: "WFH",
+          employee: employeeMap.get(row.employee_id) || null,
+        })),
+        ...flexibleRows.map((row) => ({
+          id: row.id,
+          rowKey: `flexible:${row.id}`,
+          request_type: "flexible" as const,
+          request_date: row.request_date,
+          created_at: row.created_at,
+          status: row.status,
+          reason: row.reason,
+          rejection_reason: row.rejection_reason,
+          category_label: FLEXIBLE_REASON_LABELS[row.reason_type] || row.reason_type,
+          employee: employeeMap.get(row.employee_id) || null,
+        })),
+      ];
 
       combinedRows.sort((a, b) => b.created_at.localeCompare(a.created_at));
       setRecords(combinedRows);
@@ -403,56 +520,47 @@ export default function OrgFlexibleReport() {
     }
 
     try {
-      const csv = [
-        [
-          "No",
-          "Tanggal Pengajuan",
-          "Tanggal Permohonan",
-          "Tipe",
-          "Kategori",
-          "Nama Pegawai",
-          "NIP",
-          "OPD",
-          "Satuan Kerja",
-          "Status",
-          "Alasan",
-          "Catatan Penolakan",
-        ].join(","),
-        ...filteredRecords.map((record, index) => {
-          const opdLabel = record.employee?.opd_id ? opdMap.get(record.employee.opd_id)?.code || "-" : "-";
-          const unitLabel = record.employee?.work_unit_id ? workUnitMap.get(record.employee.work_unit_id)?.name || "-" : "-";
-          return [
-            index + 1,
-            format(new Date(record.created_at), "yyyy-MM-dd HH:mm"),
-            record.request_date,
-            getTypeLabel(record.request_type),
-            `"${record.category_label.replace(/"/g, '""')}"`,
-            `"${(record.employee?.name || "-").replace(/"/g, '""')}"`,
-            record.employee?.nip || "-",
-            `"${opdLabel.replace(/"/g, '""')}"`,
-            `"${unitLabel.replace(/"/g, '""')}"`,
-            getStatusLabel(record.status),
-            `"${(record.reason || "-").replace(/"/g, '""')}"`,
-            `"${(record.rejection_reason || "-").replace(/"/g, '""')}"`,
-          ].join(",");
-        }),
-      ].join("\n");
+      const traceId = createReportTraceId("FLEX-CSV");
+      const csv = buildReportCsv({
+        columns: flexibleCsvColumns,
+        rows: filteredRecords,
+      });
 
-      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `laporan-wfh-absensi-khusus-${startDate || "all"}-${endDate || "all"}.csv`;
-      link.click();
-      window.URL.revokeObjectURL(url);
-      toast.success("Export berhasil");
+      downloadCsvFile(`laporan-wfh-absensi-khusus-${startDate || "all"}-${endDate || "all"}.csv`, csv);
+
+      const auditResult = await recordReportOutputAudit({
+        action: "flexible_report_export_csv",
+        filters: {
+          end_date: endDate || null,
+          opd_id: opdFilter === "all" ? null : opdFilter,
+          request_type: typeFilter === "all" ? null : typeFilter,
+          search: searchTerm.trim() || null,
+          start_date: startDate || null,
+          status: statusFilter === "all" ? null : statusFilter,
+          work_unit_id: workUnitFilter === "all" ? null : workUnitFilter,
+        },
+        outputType: "csv",
+        reportName: "Laporan WFH dan Absensi Khusus Organisasi",
+        rowCount: filteredRecords.length,
+        tenantId,
+        traceId,
+      });
+
+      if (!auditResult.ok) {
+        toast.warning(
+          appendErrorReference(`CSV berhasil diunduh, tetapi audit log gagal dicatat. Ref dokumen: ${traceId}`, auditResult.errorRef),
+        );
+        return;
+      }
+
+      toast.success(`CSV berhasil diunduh (Ref: ${traceId})`);
     } catch (error) {
       const errorRef = reportError(error, "org.reports.flexible.export");
       toast.error(appendErrorReference("Gagal export laporan WFH/Absensi Khusus", errorRef));
     }
   };
 
-  const handlePrintPdf = async () => {
+  const handleDownloadPdf = async () => {
     if (!hasQueried) {
       toast.error("Klik Tampilkan terlebih dahulu");
       return;
@@ -463,83 +571,75 @@ export default function OrgFlexibleReport() {
     }
 
     try {
-      const periodLabel = startDate && endDate ? `${startDate} s/d ${endDate}` : "Semua periode";
-      const printedAt = format(new Date(), "d MMMM yyyy HH:mm", { locale: localeId });
-      const rowsHtml = filteredRecords
-        .map((record, index) => {
-          const opdLabel = record.employee?.opd_id ? opdMap.get(record.employee.opd_id)?.code || "-" : "-";
-          const unitLabel = record.employee?.work_unit_id ? workUnitMap.get(record.employee.work_unit_id)?.name || "-" : "-";
-          return `
-            <tr>
-              <td>${index + 1}</td>
-              <td>${escapeHtml(format(new Date(record.created_at), "d MMM yyyy HH:mm", { locale: localeId }))}</td>
-              <td>${escapeHtml(record.request_date)}</td>
-              <td>${escapeHtml(getTypeLabel(record.request_type))}</td>
-              <td>${escapeHtml(record.category_label)}</td>
-              <td>${escapeHtml(record.employee?.name || "-")}</td>
-              <td>${escapeHtml(record.employee?.nip || "-")}</td>
-              <td>${escapeHtml(opdLabel)}</td>
-              <td>${escapeHtml(unitLabel)}</td>
-              <td>${escapeHtml(getStatusLabel(record.status))}</td>
-            </tr>
-          `;
-        })
-        .join("");
+      const traceId = createReportTraceId("FLEX-PDF");
+      const periodLabel =
+        startDate && endDate
+          ? `${startDate} s/d ${endDate}`
+          : startDate
+            ? `Mulai ${startDate}`
+            : endDate
+              ? `Sampai ${endDate}`
+              : "Semua periode";
+      const opdLabel =
+        opdFilter === "all"
+          ? "Semua OPD"
+          : (() => {
+              const opd = opds.find((item) => item.id === opdFilter);
+              return opd ? `${opd.code} - ${opd.name}` : opdFilter;
+            })();
+      const workUnitLabel =
+        workUnitFilter === "all" ? "Semua satuan kerja" : workUnits.find((item) => item.id === workUnitFilter)?.name || workUnitFilter;
+      const requestTypeLabel =
+        typeFilter === "all" ? "Semua tipe" : typeFilter === "wfh" ? "WFH" : "Absensi Khusus";
 
-      const printWindow = window.open("", "_blank", "width=1200,height=800");
-      if (!printWindow) {
-        toast.error("Popup diblokir browser. Izinkan popup untuk cetak PDF.");
+      downloadReportPdf({
+        columns: flexiblePdfColumns,
+        filename: `laporan-wfh-absensi-khusus-${startDate || "all"}-${endDate || "all"}.pdf`,
+        metadataLines: [
+          `Periode: ${periodLabel}`,
+          `Filter status: ${statusFilter === "all" ? "Semua status" : getStatusLabel(statusFilter)}`,
+          `Tipe permohonan: ${requestTypeLabel}`,
+          `Filter OPD: ${opdLabel}`,
+          `Filter satuan kerja: ${workUnitLabel}`,
+          `Pencarian: ${searchTerm.trim() || "-"}`,
+          `Total data: ${filteredRecords.length}`,
+        ],
+        orientation: "landscape",
+        rows: filteredRecords,
+        sourceLabel: "AbsensiKu /org/reports/flexible",
+        title: "Laporan WFH & Absensi Khusus",
+        traceId,
+      });
+
+      const auditResult = await recordReportOutputAudit({
+        action: "flexible_report_download_pdf",
+        filters: {
+          end_date: endDate || null,
+          opd_id: opdFilter === "all" ? null : opdFilter,
+          request_type: typeFilter === "all" ? null : typeFilter,
+          search: searchTerm.trim() || null,
+          start_date: startDate || null,
+          status: statusFilter === "all" ? null : statusFilter,
+          work_unit_id: workUnitFilter === "all" ? null : workUnitFilter,
+        },
+        outputType: "pdf",
+        reportName: "Laporan WFH dan Absensi Khusus Organisasi",
+        rowCount: filteredRecords.length,
+        tenantId,
+        traceId,
+      });
+
+      if (!auditResult.ok) {
+        toast.warning(
+          appendErrorReference(`PDF berhasil diunduh, tetapi audit log gagal dicatat. Ref dokumen: ${traceId}`, auditResult.errorRef),
+        );
         return;
       }
 
-      printWindow.document.write(`
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta charset="UTF-8" />
-            <title>Laporan WFH & Absensi Khusus</title>
-            <style>
-              body { font-family: Arial, sans-serif; margin: 24px; color: #111; }
-              h1 { margin: 0 0 8px; font-size: 20px; }
-              .meta { margin: 0 0 16px; font-size: 12px; color: #444; }
-              table { width: 100%; border-collapse: collapse; font-size: 11px; }
-              th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
-              th { background: #f3f4f6; }
-              .footer { margin-top: 12px; font-size: 11px; color: #666; }
-            </style>
-          </head>
-          <body>
-            <h1>Laporan WFH & Absensi Khusus</h1>
-            <p class="meta">Periode: ${escapeHtml(periodLabel)} | Total: ${filteredRecords.length} data | Dicetak: ${escapeHtml(printedAt)}</p>
-            <table>
-              <thead>
-                <tr>
-                  <th>No</th>
-                  <th>Tgl Pengajuan</th>
-                  <th>Tgl Permohonan</th>
-                  <th>Tipe</th>
-                  <th>Kategori</th>
-                  <th>Nama</th>
-                  <th>NIP</th>
-                  <th>OPD</th>
-                  <th>Satuan Kerja</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>${rowsHtml}</tbody>
-            </table>
-            <p class="footer">Sumber: AbsensiKu /org/reports/flexible</p>
-          </body>
-        </html>
-      `);
-      printWindow.document.close();
-      printWindow.onload = () => {
-        printWindow.focus();
-        printWindow.print();
-      };
+      toast.success(`PDF berhasil diunduh (Ref: ${traceId})`);
     } catch (error) {
-      const errorRef = reportError(error, "org.reports.flexible.print");
-      toast.error(appendErrorReference("Gagal menyiapkan print PDF", errorRef));
+      const errorRef = reportError(error, "org.reports.flexible.pdf_download");
+      toast.error(appendErrorReference("Gagal menyiapkan PDF laporan WFH/Absensi Khusus", errorRef));
     }
   };
 
@@ -555,8 +655,8 @@ export default function OrgFlexibleReport() {
             <p className="text-muted-foreground">Laporan pengajuan WFH dan permohonan absensi khusus pegawai</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={handlePrintPdf} disabled={filteredRecords.length === 0 || isLoading}>
-              <Printer className="mr-2 h-4 w-4" /> Print PDF
+            <Button variant="outline" onClick={handleDownloadPdf} disabled={filteredRecords.length === 0 || isLoading}>
+              <FileText className="mr-2 h-4 w-4" /> Unduh PDF
             </Button>
             <Button variant="outline" onClick={handleExport} disabled={filteredRecords.length === 0 || isLoading}>
               <Download className="mr-2 h-4 w-4" /> Export CSV
@@ -704,7 +804,7 @@ export default function OrgFlexibleReport() {
                       <TableRow key={record.rowKey}>
                         <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
                         <TableCell>{format(new Date(record.created_at), "d MMM yyyy HH:mm", { locale: localeId })}</TableCell>
-                        <TableCell>{format(new Date(record.request_date), "d MMM yyyy", { locale: localeId })}</TableCell>
+                        <TableCell>{getFlexibleRequestDateLabel(record.request_date, "d MMM yyyy")}</TableCell>
                         <TableCell>
                           <Badge variant="outline">{getTypeLabel(record.request_type)}</Badge>
                         </TableCell>

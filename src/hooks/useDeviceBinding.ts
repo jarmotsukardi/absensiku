@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import {
   getAndroidId,
@@ -46,15 +46,13 @@ export function useDeviceBinding(employeeId: string | null) {
     needsDeviceSync: false,
   });
 
-  // PENTING: Jangan simpan ke storage dulu, cek database dulu
-  // Ini untuk menangani kasus storage reset
-  const currentDeviceId = useMemo(() => getAndroidId(false), []);
-
   const fetchData = useCallback(async () => {
     if (!employeeId) {
       setState(prev => ({ ...prev, isLoading: false }));
       return;
     }
+
+    const currentDeviceId = getAndroidId(false);
 
     debugLog("[DeviceBinding] Fetching data for employee:", employeeId);
     debugLog("[DeviceBinding] Current device ID (generated):", currentDeviceId);
@@ -142,9 +140,8 @@ export function useDeviceBinding(employeeId: string | null) {
         debugLog("[DeviceBinding] Device binding disabled");
       } else if (isFirstTime) {
         debugLog("[DeviceBinding] First time, no device registered yet");
-        // Simpan device ID ke localStorage untuk pertama kali
         if (!storageHasDeviceId) {
-          localStorage.setItem("web_device_id", currentDeviceId);
+          syncDeviceIdFromDatabase(currentDeviceId);
         }
       }
 
@@ -168,7 +165,7 @@ export function useDeviceBinding(employeeId: string | null) {
         errorMessage: "Gagal memuat data device binding",
       }));
     }
-  }, [employeeId, currentDeviceId]);
+  }, [employeeId]);
 
   useEffect(() => {
     fetchData();
@@ -202,10 +199,10 @@ export function useDeviceBinding(employeeId: string | null) {
       console.error("Error registering device:", error);
       return false;
     }
-  }, [employeeId, currentDeviceId]);
+  }, [employeeId]);
 
   // Fungsi untuk get current Android ID
-  const getCurrentAndroidId = useCallback(() => currentDeviceId, [currentDeviceId]);
+  const getCurrentAndroidId = useCallback(() => getAndroidId(false), []);
 
   return {
     ...state,

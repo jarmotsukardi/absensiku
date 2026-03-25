@@ -300,11 +300,11 @@ export default function TenantDashboard() {
     
     switch (subscription.status) {
       case "trial":
-        return { label: "Trial", variant: "secondary" as const };
+        return { label: "Masa Coba", variant: "secondary" as const };
       case "active":
         return { label: "Aktif", variant: "default" as const };
       case "expired":
-        return { label: "Expired", variant: "destructive" as const };
+        return { label: "Berakhir", variant: "destructive" as const };
       default:
         return { label: subscription.status, variant: "outline" as const };
     }
@@ -347,7 +347,7 @@ export default function TenantDashboard() {
                 <Building2 className="h-5 w-5 text-primary-foreground" />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-foreground">{tenant?.name || "Dashboard"}</h1>
+                <h1 className="text-xl font-bold text-foreground">{tenant?.name || "Dasbor"}</h1>
                 <p className="text-sm text-muted-foreground">
                   {tenant?.organization_type && getOrganizationTypeLabel(tenant.organization_type)}
                 </p>
@@ -383,7 +383,7 @@ export default function TenantDashboard() {
           </div>
         )}
 
-        {/* Welcome & Trial Warning */}
+        {/* Sambutan & Peringatan Masa Coba */}
         <div className="space-y-4">
           <div>
             <h2 className="text-2xl font-bold">Selamat datang, {userName}!</h2>
@@ -399,11 +399,11 @@ export default function TenantDashboard() {
                       <Sparkles className="w-5 h-5 text-amber-600" />
                     </div>
                     <div>
-                      <p className="font-semibold text-amber-700">Masa Trial</p>
+                      <p className="font-semibold text-amber-700">Masa Coba</p>
                       <p className="text-sm text-muted-foreground">
                         {daysRemaining > 0 
                           ? `${daysRemaining} hari tersisa` 
-                          : "Trial telah berakhir"}
+                          : "Masa coba telah berakhir"}
                       </p>
                     </div>
                   </div>
@@ -462,7 +462,7 @@ export default function TenantDashboard() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                Pengajuan Pending
+                Pengajuan Menunggu
               </CardTitle>
               <Clock className="h-4 w-4 text-amber-500" />
             </CardHeader>
@@ -539,7 +539,7 @@ export default function TenantDashboard() {
               </div>
               <div className="p-4 rounded-lg bg-muted/50">
                 <p className="text-sm text-muted-foreground">Kebijakan Akses</p>
-                <p className="font-semibold mt-1">Streak Monitoring</p>
+                <p className="font-semibold mt-1">Pemantauan Streak</p>
               </div>
               <div className="p-4 rounded-lg bg-muted/50">
                 <p className="text-sm text-muted-foreground">Berakhir</p>

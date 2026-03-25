@@ -7,6 +7,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { HelmetProvider } from "react-helmet-async";
 import { PersistentNotificationDialog } from "@/components/common/PersistentNotificationDialog";
 import { ConfirmDialogProvider } from "@/components/common/ConfirmDialogProvider";
+import { LocalhostProductionGuardBanner } from "@/components/common/LocalhostProductionGuardBanner";
 import { AndroidBackButtonHandler } from "@/hooks/useAndroidBackButton";
 import { PayrollRouteGuard } from "@/components/org/payroll/PayrollRouteGuard";
 import { OrgHRRouteGuard } from "@/components/org/hr/OrgHRRouteGuard";
@@ -21,6 +22,11 @@ const ForgotPassword = lazy(() => import("./pages/auth/ForgotPassword"));
 const ResetPassword = lazy(() => import("./pages/auth/ResetPassword"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const FAQPage = lazy(() => import("./pages/FAQ"));
+const DownloadApk = lazy(() => import("./pages/DownloadApk"));
+const HRLanding = lazy(() => import("./pages/HRLanding"));
+const PayrollLanding = lazy(() => import("./pages/PayrollLanding"));
+const Consultation = lazy(() => import("./pages/Consultation"));
+const NewsIndex = lazy(() => import("./pages/news/NewsIndex"));
 const AdminDashboard = lazy(() => import("./pages/admin/AdminDashboard"));
 const Organizations = lazy(() => import("./pages/admin/Organizations"));
 const OrganizationForm = lazy(() => import("./pages/admin/OrganizationForm"));
@@ -29,6 +35,7 @@ const UserManagement = lazy(() => import("./pages/admin/UserManagement"));
 const RoleManagement = lazy(() => import("./pages/admin/RoleManagement"));
 const AuditLogs = lazy(() => import("./pages/admin/AuditLogs"));
 const Settings = lazy(() => import("./pages/admin/Settings"));
+const UatMonitoringPage = lazy(() => import("./pages/admin/UatMonitoringPage"));
 const SubscriptionManagement = lazy(() => import("./pages/admin/SubscriptionManagement"));
 const MasterOffices = lazy(() => import("./pages/admin/MasterOffices"));
 const MasterEmployees = lazy(() => import("./pages/admin/MasterEmployees"));
@@ -146,6 +153,7 @@ const OrgHRESSDocuments = lazy(() => import("./pages/org/hr/OrgHRESSDocuments"))
 const OrgHRESSProfile = lazy(() => import("./pages/org/hr/OrgHRESSProfile"));
 const OrgHRPriorityWorkspace = lazy(() => import("./pages/org/hr/OrgHRPriorityWorkspace"));
 const OrgPayrollPolicies = lazy(() => import("./pages/org/payroll/OrgPayrollPolicies"));
+const OrgPayrollComplianceMaster = lazy(() => import("./pages/org/payroll/OrgPayrollComplianceMaster"));
 const OrgPayrollPeriods = lazy(() => import("./pages/org/payroll/OrgPayrollPeriods"));
 const OrgPayrollValidation = lazy(() => import("./pages/org/payroll/OrgPayrollValidation"));
 const OrgPayrollEmployees = lazy(() => import("./pages/org/payroll/OrgPayrollEmployees"));
@@ -160,7 +168,6 @@ const OrgPayrollPayment = lazy(() => import("./pages/org/payroll/OrgPayrollPayme
 const OrgPayrollTaxCompliance = lazy(() => import("./pages/org/payroll/OrgPayrollTaxCompliance"));
 const OrgPayrollReports = lazy(() => import("./pages/org/payroll/OrgPayrollReports"));
 const OrgPayrollAuditLog = lazy(() => import("./pages/org/payroll/OrgPayrollAuditLog"));
-const OrgPayrollErrorLog = lazy(() => import("./pages/org/payroll/OrgPayrollErrorLog"));
 const OrgPayrollSettings = lazy(() => import("./pages/org/payroll/OrgPayrollSettings"));
 const OrgPayrollHelp = lazy(() => import("./pages/org/payroll/OrgPayrollHelp"));
 const OrgPayrollRoles = lazy(() => import("./pages/org/payroll/OrgPayrollRoles"));
@@ -215,12 +222,19 @@ const App = () => (
           <Toaster />
           <Sonner />
           <BrowserRouter>
+            <LocalhostProductionGuardBanner />
             <AndroidBackButtonHandler />
             <AndroidSessionSync>
               <Suspense fallback={<RouteLoadingFallback />}>
                 <Routes>
               <Route path="/" element={<Index />} />
+              <Route path="/hr" element={<HRLanding />} />
+              <Route path="/payroll" element={<PayrollLanding />} />
+              <Route path="/konsultasi" element={<Consultation />} />
+              <Route path="/news" element={<NewsIndex />} />
               <Route path="/faq" element={<FAQPage />} />
+              <Route path="/download" element={<DownloadApk />} />
+              <Route path="/download-apk" element={<Navigate to="/download" replace />} />
               <Route path="/about" element={<About />} />
               <Route path="/privacy-policy" element={<PrivacyPolicy />} />
               <Route path="/auth" element={<Auth />} />
@@ -252,6 +266,7 @@ const App = () => (
               <Route path="/admin/reports/recap" element={<RecapReport />} />
               <Route path="/admin/reports/audit" element={<AuditLogs />} />
               <Route path="/admin/settings" element={<Settings />} />
+              <Route path="/admin/uat" element={<UatMonitoringPage workspaceMode="absensi" lockedDomain="absensi" autoRedirectByWorkspace />} />
               <Route path="/admin/subscriptions" element={<SubscriptionManagement />} />
               <Route path="/admin/master/offices" element={<MasterOffices />} />
               <Route path="/admin/master/employees" element={<MasterEmployees />} />
@@ -264,6 +279,7 @@ const App = () => (
               <Route path="/admin/faq" element={<FAQManagement />} />
               <Route path="/admin/org-type-settings" element={<OrganizationTypeSettings />} />
               <Route path="/admin/homepage-layout" element={<HomepageLayoutSettings />} />
+              <Route path="/admin/homepage-layout/*" element={<Navigate to="/admin/homepage-layout" replace />} />
               <Route path="/admin/national-holidays" element={<NationalHolidaysManagement />} />
               <Route path="/admin/manual-payments" element={<ManualPaymentsManagement />} />
               <Route path="/admin/trial-settings" element={<TrialSettings />} />
@@ -280,7 +296,14 @@ const App = () => (
               <Route path="/admin/hr/policies" element={<AdminHRPolicies />} />
               <Route path="/admin/hr/error-logs" element={<AdminHRErrorLogs />} />
               <Route path="/admin/hr/audit" element={<AdminHRAudit />} />
+              <Route path="/admin/hr/uat" element={<UatMonitoringPage workspaceMode="hr" lockedDomain="hr" />} />
               <Route path="/admin/hr/settings" element={<AdminHRSettings />} />
+              <Route path="/admin/hr/sections/struktur-organisasi" element={<Navigate to="/admin/hr/sections/struktur-unit-organisasi" replace />} />
+              <Route path="/admin/hr/sections/departemen" element={<Navigate to="/admin/hr/sections/struktur-unit-organisasi" replace />} />
+              <Route path="/admin/hr/sections/divisi" element={<Navigate to="/admin/hr/sections/struktur-unit-organisasi" replace />} />
+              <Route path="/admin/hr/sections/jabatan" element={<Navigate to="/admin/hr/sections/jabatan-grade" replace />} />
+              <Route path="/admin/hr/sections/lokasi-kerja" element={<Navigate to="/admin/hr/sections/lokasi-kalender-kerja" replace />} />
+              <Route path="/admin/hr/sections/kalender-kerja" element={<Navigate to="/admin/hr/sections/lokasi-kalender-kerja" replace />} />
               <Route path="/admin/hr/sections/:sectionKey" element={<AdminHRSectionBridge />} />
               <Route path="/admin/hr/profile" element={<AdminHRProfile />} />
               <Route path="/admin/hr/faq" element={<Navigate to="/admin/hr/help/faq" replace />} />
@@ -293,6 +316,7 @@ const App = () => (
               <Route path="/admin/payroll" element={<AdminPayrollDashboard />} />
               <Route path="/admin/payroll/tenants" element={<AdminPayrollTenants />} />
               <Route path="/admin/payroll/monitoring" element={<AdminPayrollMonitoring />} />
+              <Route path="/admin/payroll/uat" element={<UatMonitoringPage workspaceMode="payroll" lockedDomain="payroll" />} />
               <Route path="/admin/payroll/error-logs" element={<AdminPayrollErrorLogs />} />
               <Route path="/admin/payroll/audit" element={<AdminPayrollAudit />} />
               <Route path="/admin/payroll/integrations" element={<AdminPayrollIntegrations />} />
@@ -366,6 +390,11 @@ const App = () => (
               <Route path="/org/hr/reports" element={withHrGuard("/org/hr/reports", <OrgHRReports />)} />
               <Route path="/org/hr/attendance-insights" element={withHrGuard("/org/hr/attendance-insights", <OrgHRAttendanceInsights />)} />
               <Route path="/org/hr/settings" element={withHrGuard("/org/hr/settings", <OrgHRSettings />)} />
+              <Route path="/org/hr/priority" element={withHrGuard("/org/hr/priority", <OrgHRPriorityWorkspace />)} />
+              <Route
+                path="/org/hr/priority-workspace"
+                element={withHrGuard("/org/hr/priority-workspace", <Navigate to="/org/hr/priority" replace />)}
+              />
               <Route path="/org/hr/faq" element={withHrGuard("/org/hr/faq", <Navigate to="/org/hr/help/faq" replace />)} />
               <Route path="/org/hr/support" element={withHrGuard("/org/hr/support", <Navigate to="/org/hr/help/tickets" replace />)} />
               <Route path="/org/hr/tickets" element={withHrGuard("/org/hr/tickets", <Navigate to="/org/hr/help/tickets" replace />)} />
@@ -437,6 +466,7 @@ const App = () => (
               <Route path="/org/payroll/income-components" element={<PayrollRouteGuard permission="payroll.master.manage"><OrgPayrollIncomeComponents /></PayrollRouteGuard>} />
               <Route path="/org/payroll/deduction-components" element={<PayrollRouteGuard permission="payroll.master.manage"><OrgPayrollDeductionComponents /></PayrollRouteGuard>} />
               <Route path="/org/payroll/policies" element={<PayrollRouteGuard permission="payroll.policy.manage"><OrgPayrollPolicies /></PayrollRouteGuard>} />
+              <Route path="/org/payroll/compliance-master" element={<PayrollRouteGuard permission="payroll.master.manage"><OrgPayrollComplianceMaster /></PayrollRouteGuard>} />
               <Route path="/org/payroll/periods" element={<PayrollRouteGuard permission="payroll.period.manage"><OrgPayrollPeriods /></PayrollRouteGuard>} />
               <Route path="/org/payroll/variable-input" element={<PayrollRouteGuard permission="payroll.variable.manage"><OrgPayrollVariableInput /></PayrollRouteGuard>} />
               <Route path="/org/payroll/validation" element={<PayrollRouteGuard permission="payroll.validation.manage"><OrgPayrollValidation /></PayrollRouteGuard>} />
@@ -447,7 +477,6 @@ const App = () => (
               <Route path="/org/payroll/tax-compliance" element={<PayrollRouteGuard permission="payroll.tax.manage"><OrgPayrollTaxCompliance /></PayrollRouteGuard>} />
               <Route path="/org/payroll/reports" element={<PayrollRouteGuard permission="payroll.reports.view"><OrgPayrollReports /></PayrollRouteGuard>} />
               <Route path="/org/payroll/audit-log" element={<PayrollRouteGuard permission="payroll.audit.view"><OrgPayrollAuditLog /></PayrollRouteGuard>} />
-              <Route path="/org/payroll/error-log" element={<PayrollRouteGuard permission="payroll.audit.view"><OrgPayrollErrorLog /></PayrollRouteGuard>} />
               <Route path="/org/payroll/settings" element={<PayrollRouteGuard permission="payroll.integration.manage"><OrgPayrollSettings /></PayrollRouteGuard>} />
               <Route path="/org/payroll/help" element={<PayrollRouteGuard permission="payroll.workspace.view"><OrgPayrollHelp /></PayrollRouteGuard>} />
               <Route path="/org/payroll/roles" element={<PayrollRouteGuard permission="payroll.roles.manage"><OrgPayrollRoles /></PayrollRouteGuard>} />

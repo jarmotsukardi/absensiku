@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { Helmet } from "react-helmet-async";
 import { supabase } from "@/integrations/supabase/client";
 import { NavigationBar } from "@/components/homepage/NavigationBar";
 import { FooterSection } from "@/components/homepage/FooterSection";
@@ -18,8 +19,12 @@ import {
   ArrowLeft,
   Sparkles,
   MessageCircle,
+  FileText,
+  ExternalLink,
+  ShieldCheck,
 } from "lucide-react";
 import type { FooterSettings } from "@/hooks/useHomepageData";
+import { PUBLIC_BASE_URL, usePublicSeoSettings } from "@/hooks/usePublicSeoSettings";
 import { isFaqVisibleToPublic } from "@/lib/faqAudience";
 import type { FaqAudience } from "@/lib/faqAudience";
 
@@ -38,11 +43,14 @@ interface FAQSettingsObject {
 }
 
 const ITEMS_PER_PAGE = 10;
-
+const TUTORIAL_DOCX_URL = "/tutorials/tutorial-absensiku-admin-pegawai.docx";
+const TUTORIAL_WEB_URL = "/tutorials/tutorial-absensiku-admin-pegawai.html";
 const defaultFooterSettings: FooterSettings = {
   company_name: "AbsensiKu",
   company_description: "Sistem absensi GPS modern untuk pemerintah dan perusahaan.",
   copyright_text: "© 2024 AbsensiKu. Hak cipta dilindungi.",
+  enable_contact: true,
+  enable_social_media: true,
   address: "",
   email: "",
   phone: "",
@@ -82,6 +90,12 @@ const asFaqArray = (value: unknown): FAQ[] => {
 };
 
 export default function FAQPage() {
+  const seoSettings = usePublicSeoSettings({
+    metaTitle: "FAQ AbsensiKu | Pertanyaan Umum Absensi dan Tahap Lanjutan",
+    metaDescription:
+      "Temukan jawaban seputar AbsensiKu, mulai dari absensi berbasis GPS hingga pembahasan tahap lanjutan seperti HR dan Payroll.",
+    metaKeywords: "faq absensi, absensi gps, panduan absensi, tahap lanjutan absensi",
+  });
   const [faqs, setFaqs] = useState<FAQ[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [bannerImageUrl, setBannerImageUrl] = useState("");
@@ -176,6 +190,35 @@ export default function FAQPage() {
 
   return (
     <div className="min-h-screen bg-background">
+      <Helmet>
+        <title>{seoSettings.metaTitle}</title>
+        <meta name="description" content={seoSettings.metaDescription} />
+        <meta name="keywords" content={seoSettings.metaKeywords} />
+        <link rel="canonical" href={`${PUBLIC_BASE_URL}/faq`} />
+        <meta property="og:type" content="website" />
+        <meta property="og:title" content={seoSettings.ogTitle} />
+        <meta property="og:description" content={seoSettings.ogDescription} />
+        <meta property="og:url" content={`${PUBLIC_BASE_URL}/faq`} />
+        {seoSettings.ogImage ? <meta property="og:image" content={seoSettings.ogImage} /> : null}
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content={seoSettings.twitterTitle} />
+        <meta name="twitter:description" content={seoSettings.twitterDescription} />
+        {seoSettings.ogImage ? <meta name="twitter:image" content={seoSettings.ogImage} /> : null}
+        <script
+          type="application/ld+json"
+        >{JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "FAQPage",
+          mainEntity: faqs.slice(0, 10).map((faq) => ({
+            "@type": "Question",
+            name: faq.question,
+            acceptedAnswer: {
+              "@type": "Answer",
+              text: faq.answer,
+            },
+          })),
+        })}</script>
+      </Helmet>
       <NavigationBar />
       
       <main className="pt-20 pb-16 relative overflow-hidden">
@@ -212,6 +255,111 @@ export default function FAQPage() {
               </p>
             </div>
           </section>
+
+          <section className="grid gap-4 md:grid-cols-3 mb-8 animate-fade-in">
+            <Card className="border-primary/20 bg-primary/5">
+              <CardContent className="p-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">Tahap 1</p>
+                <h2 className="mt-2 text-lg font-semibold text-foreground">Absensi sebagai fondasi</h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  Jalur utama AbsensiKu tetap dimulai dari kehadiran harian, validasi lokasi, sinkronisasi, dan kontrol operasional lapangan maupun kantor.
+                </p>
+              </CardContent>
+            </Card>
+            <Card className="border-info/20 bg-info/5">
+              <CardContent className="p-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-info">Tahap 2</p>
+                <h2 className="mt-2 text-lg font-semibold text-foreground">HR sebagai perluasan</h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  Setelah absensi stabil, organisasi dapat memperluas proses ke data pegawai, cuti, approval, onboarding, offboarding, dan dokumen.
+                </p>
+              </CardContent>
+            </Card>
+            <Card className="border-accent/30 bg-accent/10">
+              <CardContent className="p-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-foreground">Tahap 3</p>
+                <h2 className="mt-2 text-lg font-semibold text-foreground">Payroll sebagai penutup alur</h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  Jika organisasi sudah siap, payroll melanjutkan alur itu ke periode gaji, validasi, approval, slip, pembayaran, dan audit yang lebih rapi.
+                </p>
+              </CardContent>
+            </Card>
+          </section>
+
+          <section className="grid gap-4 lg:grid-cols-[1.2fr,0.8fr] mb-8 animate-fade-in">
+            <Card className="border-primary/20 bg-card/80">
+              <CardContent className="p-6">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-primary" />
+                  <p className="text-sm font-semibold text-foreground">Cara membaca tahap akses HR dan Payroll</p>
+                </div>
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-lg border bg-background/80 p-4">
+                    <p className="text-sm font-medium">Fondasi Absensi</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Tahap ketika struktur kerja, lokasi kerja, jam kerja, batas absen, data pegawai, dan rekam absensi awal sudah mulai siap.
+                    </p>
+                  </div>
+                  <div className="rounded-lg border bg-background/80 p-4">
+                    <p className="text-sm font-medium">Mode Lihat Saja</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Menu sudah bisa dibuka untuk dipelajari, tetapi data belum bisa ditambah atau diubah.
+                    </p>
+                  </div>
+                  <div className="rounded-lg border bg-background/80 p-4">
+                    <p className="text-sm font-medium">Bisa Diedit</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Organisasi sudah masuk tahap pengelolaan penuh sehingga data dapat dikelola sesuai hak aksesnya.
+                    </p>
+                  </div>
+                  <div className="rounded-lg border bg-background/80 p-4">
+                    <p className="text-sm font-medium">Langganan Aktif</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Layanan sudah berjalan penuh dan fitur dibuka sesuai paket yang dipilih organisasi.
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="border-primary/20 bg-primary/5">
+              <CardContent className="p-6">
+                <p className="text-sm font-semibold text-foreground">Ringkasan cepat</p>
+                <ul className="mt-4 space-y-3 text-sm text-muted-foreground">
+                  <li>Absensi tetap menjadi fondasi awal sebelum organisasi melangkah ke HR atau Payroll.</li>
+                  <li>HR biasanya dibuka bertahap: ditinjau dulu, lalu dikelola penuh setelah tahap aktivasi organisasi terpenuhi.</li>
+                  <li>Payroll umumnya menyusul setelah organisasi benar-benar siap karena prosesnya lebih sensitif.</li>
+                </ul>
+              </CardContent>
+            </Card>
+          </section>
+
+          {/* Search & Filter */}
+          <Card className="mb-6 border-primary/30 bg-primary/5 animate-fade-in">
+            <CardContent className="p-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="space-y-1">
+                <p className="text-sm font-semibold flex items-center gap-2">
+                  <FileText className="h-4 w-4 text-primary" />
+                  Tutorial Lengkap Admin dan Pegawai
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Unduh dokumen Word editable berisi panduan langkah demi langkah dengan gambar.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button asChild size="sm">
+                  <a href={TUTORIAL_DOCX_URL} target="_blank" rel="noreferrer">
+                    Unduh DOCX
+                  </a>
+                </Button>
+                <Button asChild size="sm" variant="outline">
+                  <a href={TUTORIAL_WEB_URL} target="_blank" rel="noreferrer">
+                    <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                    Lihat Versi Web
+                  </a>
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
 
           {/* Search & Filter */}
           <Card className="mb-6 animate-slide-up">

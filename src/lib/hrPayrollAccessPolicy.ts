@@ -114,9 +114,9 @@ export const getAccessStageLabel = (stage: HrPayrollAccessStage): string => {
 export const getWorkspaceModeLabel = (mode: WorkspaceAccessMode): string => {
   switch (mode) {
     case "full":
-      return "Editable";
+      return "Bisa Diedit";
     case "readonly":
-      return "Read Only";
+      return "Lihat Saja";
     default:
       return "Terkunci";
   }

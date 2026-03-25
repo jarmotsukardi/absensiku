@@ -284,16 +284,16 @@ export function NewsSettings() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Newspaper className="h-5 w-5" />
-            Pengaturan Section Berita
+            Pengaturan Bagian Berita
           </CardTitle>
           <CardDescription>
-            Atur tampilan section berita di halaman depan
+            Atur tampilan bagian berita di halaman depan
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
-              <Label>Judul Section</Label>
+              <Label>Judul Bagian</Label>
               <Input
                 value={settings.title}
                 onChange={(e) => setSettings({ ...settings, title: e.target.value })}
@@ -301,7 +301,7 @@ export function NewsSettings() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Subtitle</Label>
+              <Label>Subjudul</Label>
               <Input
                 value={settings.subtitle}
                 onChange={(e) => setSettings({ ...settings, subtitle: e.target.value })}
@@ -386,7 +386,7 @@ export function NewsSettings() {
                     </TableCell>
                     <TableCell>
                       <Badge variant={item.is_published ? "default" : "secondary"}>
-                        {item.is_published ? "Published" : "Draft"}
+                        {item.is_published ? "Dipublikasikan" : "Draf"}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-muted-foreground">

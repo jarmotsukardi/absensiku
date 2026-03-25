@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -76,11 +76,7 @@ export default function OrgWorkHoursManagement() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
 
-  useEffect(() => {
-    void fetchData();
-  }, []);
-
-  const getCurrentTenantId = async (): Promise<string | null> => {
+  const getCurrentTenantId = useCallback(async (): Promise<string | null> => {
     const { data: { user } } = await withExponentialBackoff(
       () =>
         withTimeout(
@@ -117,18 +113,26 @@ export default function OrgWorkHoursManagement() {
 
     if (roleError) throw roleError;
     return roleData?.tenant_id || null;
-  };
+  }, []);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoadError(null);
       setIsRetrying(false);
+      const tenantId = await getCurrentTenantId();
+      if (!tenantId) {
+        setWorkHours([]);
+        setLoadError("Tenant organisasi tidak ditemukan.");
+        setIsLoading(false);
+        return;
+      }
       const { data, error } = await withExponentialBackoff(
         () =>
           withTimeout(
             supabase
               .from("work_hours")
               .select("*")
+              .eq("tenant_id", tenantId)
               .order("institution_type", { ascending: true })
               .order("day_of_week", { ascending: true }),
             ORG_WORK_HOURS_QUERY_TIMEOUT_MS,
@@ -152,7 +156,11 @@ export default function OrgWorkHoursManagement() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [getCurrentTenantId]);
+
+  useEffect(() => {
+    void fetchData();
+  }, [fetchData]);
 
   const handleSubmit = async () => {
     if (!formData.time_in || !formData.time_out) {
@@ -354,11 +362,16 @@ export default function OrgWorkHoursManagement() {
     }
 
     try {
+      const tenantId = await getCurrentTenantId();
+      if (!tenantId) {
+        toast.error("Tenant tidak ditemukan");
+        return;
+      }
       setIsRetrying(false);
       const { error } = await withExponentialBackoff(
         () =>
           withTimeout(
-            supabase.from("work_hours").delete().eq("id", id),
+            supabase.from("work_hours").delete().eq("id", id).eq("tenant_id", tenantId),
             ORG_WORK_HOURS_QUERY_TIMEOUT_MS,
             "org.schedule.work_hours.delete timeout"
           ),

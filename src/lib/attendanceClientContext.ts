@@ -1,6 +1,9 @@
+import { getAndroidId } from "@/lib/deviceId";
+
 export interface AttendanceClientContext {
   client_mode: "android_webview" | "iphone_safari" | "mobile_browser" | "desktop_browser" | "unknown";
   device_id: string | null;
+  app_code: string | null;
   android_version: number | null;
   user_agent: string | null;
 }
@@ -59,17 +62,21 @@ const detectClientMode = (ua: string): AttendanceClientContext["client_mode"] =>
 
 const getDeviceId = (): string | null => {
   if (typeof window === "undefined") return null;
+  const deviceId = getAndroidId(false);
+  return deviceId && deviceId.trim().length > 0 ? deviceId.trim() : null;
+};
+
+const getAppCode = (): string | null => {
+  if (typeof window === "undefined") return null;
   const bridge = getAndroidBridge();
-  if (bridge && typeof bridge.getAndroidId === "function") {
-    try {
-      const value = (bridge.getAndroidId as () => unknown)();
-      if (typeof value === "string" && value.trim().length > 0) return value.trim();
-    } catch {
-      // ignore and fallback to web storage
-    }
+  if (!bridge || typeof bridge.getAppCode !== "function") return null;
+  try {
+    const value = (bridge.getAppCode as () => unknown)();
+    if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  } catch {
+    return null;
   }
-  const webDeviceId = window.localStorage.getItem("web_device_id");
-  return webDeviceId && webDeviceId.trim().length > 0 ? webDeviceId.trim() : null;
+  return null;
 };
 
 export const buildAttendanceClientContext = (): AttendanceClientContext => {
@@ -77,6 +84,7 @@ export const buildAttendanceClientContext = (): AttendanceClientContext => {
     return {
       client_mode: "unknown",
       device_id: null,
+      app_code: null,
       android_version: null,
       user_agent: null,
     };
@@ -86,6 +94,7 @@ export const buildAttendanceClientContext = (): AttendanceClientContext => {
   return {
     client_mode: detectClientMode(ua),
     device_id: getDeviceId(),
+    app_code: getAppCode(),
     android_version:
       callAndroidNumber(["getAndroidVersion", "getSystemAndroidVersion"]) ?? parseAndroidVersionFromUA(ua),
     user_agent: ua || null,

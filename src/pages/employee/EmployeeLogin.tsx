@@ -16,8 +16,18 @@ import { DesktopBlockedMessage } from "@/components/employee/DesktopBlockedMessa
 import { SessionLoadingScreen } from "@/components/employee/SessionLoadingScreen";
 import { MapPin, Mail, Lock, Loader2, RefreshCw, UserPlus, ArrowLeft, CheckCircle2, Eye, EyeOff, AlertTriangle, Phone, MapPinIcon, User, Building2, Key } from "lucide-react";
 import { ForgotPasswordDialog } from "@/components/auth/ForgotPasswordDialog";
+import { supabasePublishableKey, supabaseUrl } from "@/integrations/supabase/env";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import { getAndroidBridge } from "@/lib/androidBridge";
+import { APK_DOWNLOAD_PAGE_PATH } from "@/lib/apkDownload";
+import { getAndroidId } from "@/lib/deviceId";
+import {
+  buildEmployeeDashboardUrl,
+  buildOrgRegisterPath,
+  EMPLOYEE_DASHBOARD_PATH,
+  PENDING_INVITATION_CODE_STORAGE_KEY,
+} from "@/lib/employeeAuthRoutes";
 
 // Konstanta untuk optimasi performa
 const DEBOUNCE_MS = 1000;
@@ -62,6 +72,12 @@ const getErrorMessage = (error: unknown): string => {
   return "Terjadi kesalahan";
 };
 
+const isSignupRateLimitedError = (error: unknown): boolean => {
+  const message = error instanceof Error ? error.message : String(error || "");
+  const normalized = message.toLowerCase();
+  return normalized.includes("429") || normalized.includes("rate limit");
+};
+
 interface InvitationTenant {
   name: string | null;
   code: string | null;
@@ -71,6 +87,10 @@ interface InvitationTenant {
 interface InvitationData {
   id: string;
   tenant_id: string;
+  status: string | null;
+  is_used: boolean | null;
+  expires_at: string | null;
+  verified_at: string | null;
   name: string | null;
   email: string | null;
   phone: string | null;
@@ -80,11 +100,33 @@ interface InvitationData {
   tenants?: InvitationTenant | null;
 }
 
+interface EmployeeLoginApiSession {
+  access_token?: string;
+  refresh_token?: string;
+}
+
+interface EmployeeLoginApiResponse {
+  ok?: boolean;
+  code?: string;
+  message?: string;
+  ref_id?: string;
+  session?: EmployeeLoginApiSession;
+}
+
+interface CompleteInvitationRegistrationResponse {
+  success?: boolean;
+  error?: string;
+  code?: string;
+  message?: string;
+  trace_id?: string;
+}
+
 export default function EmployeeLogin() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const [searchParams] = useSearchParams();
   const inviteCode = searchParams.get("invite");
+  const nativeBypass = searchParams.get("native") === "1";
 
   // Session management dengan sliding expiration 7 hari
   const sessionManagement = useSessionManagement();
@@ -92,6 +134,7 @@ export default function EmployeeLogin() {
   // State untuk loading screen transisi
   const [showLoadingScreen, setShowLoadingScreen] = useState(true);
   const [sessionCheckComplete, setSessionCheckComplete] = useState(false);
+  const [androidBypassActive, setAndroidBypassActive] = useState(false);
 
   // Security check untuk block desktop browser
   const securityCheck = useSecurityCheck();
@@ -110,6 +153,8 @@ export default function EmployeeLogin() {
   // Refs untuk mencegah double-submit
   const isSubmittingRef = useRef(false);
   const lastRequestTimeRef = useRef(0);
+  const resolvingRoleUserRef = useRef<string | null>(null);
+  const routedRoleUserRef = useRef<string | null>(null);
 
   const [activeTab, setActiveTab] = useState<"login" | "register">(
     inviteCode ? "register" : "login"
@@ -193,7 +238,6 @@ export default function EmployeeLogin() {
   
   // Dialog overlay penjelasan tab daftar
   const [showRegisterInfoDialog, setShowRegisterInfoDialog] = useState<"email" | "invite" | null>(null);
-  const [apkUrl, setApkUrl] = useState<string | null>(null);
 
   const fetchLoginRoles = useCallback(async (userId: string): Promise<string[]> => {
     try {
@@ -259,7 +303,7 @@ export default function EmployeeLogin() {
         return;
       }
 
-      navigate("/employee/dashboard", { replace: true });
+      navigate(EMPLOYEE_DASHBOARD_PATH, { replace: true });
     },
     [navigate, toast],
   );
@@ -272,6 +316,25 @@ export default function EmployeeLogin() {
     [fetchLoginRoles, routeByLoginRole],
   );
 
+  const resolveRoleAndRouteSafely = useCallback(
+    async (userId: string, silent = false) => {
+      if (!userId) return;
+      if (routedRoleUserRef.current === userId) return;
+      if (resolvingRoleUserRef.current === userId) return;
+
+      resolvingRoleUserRef.current = userId;
+      try {
+        await resolveRoleAndRoute(userId, silent);
+        routedRoleUserRef.current = userId;
+      } finally {
+        if (resolvingRoleUserRef.current === userId) {
+          resolvingRoleUserRef.current = null;
+        }
+      }
+    },
+    [resolveRoleAndRoute],
+  );
+
   // Handler ketika loading screen selesai
   const handleLoadingComplete = useCallback(() => {
     setSessionCheckComplete(true);
@@ -280,20 +343,35 @@ export default function EmployeeLogin() {
   // Effect untuk cek sesi dan redirect jika valid
   useEffect(() => {
     if (sessionCheckComplete && !sessionManagement.isChecking) {
+      console.info("[employee-login] session-check", {
+        isValid: sessionManagement.isValid,
+        hasSession: Boolean(sessionManagement.session?.user),
+      });
       if (sessionManagement.isValid && sessionManagement.session?.user) {
-        void resolveRoleAndRoute(sessionManagement.session.user.id, true).catch((error) => {
+        void resolveRoleAndRouteSafely(sessionManagement.session.user.id, true).catch((error) => {
           reportError(error, "employee.login.restore_session_role_check", {
             user_id: sessionManagement.session?.user?.id || null,
           });
-          navigate("/employee/dashboard", { replace: true });
+          navigate(EMPLOYEE_DASHBOARD_PATH, { replace: true });
         });
       } else {
+        const bridge = getAndroidBridge();
+        if (bridge) {
+          if (nativeBypass) {
+            bridge.showNativeLogin?.("Login pegawai hanya tersedia di aplikasi.");
+            setAndroidBypassActive(true);
+          } else {
+            navigate("/employee/native-bootstrap", { replace: true });
+            return;
+          }
+        }
         setShowLoadingScreen(false);
       }
     }
   }, [
     navigate,
-    resolveRoleAndRoute,
+    nativeBypass,
+    resolveRoleAndRouteSafely,
     sessionCheckComplete,
     sessionManagement.isChecking,
     sessionManagement.isValid,
@@ -303,9 +381,13 @@ export default function EmployeeLogin() {
   // Listen untuk auth state changes (untuk handle login sukses)
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      console.info("[employee-login] auth-state-change", {
+        event,
+        hasSession: Boolean(session?.user),
+      });
       if (event === "SIGNED_IN" && session?.user) {
         sessionManagement.onLoginSuccess(session);
-        void resolveRoleAndRoute(session.user.id, true).catch((error) => {
+        void resolveRoleAndRouteSafely(session.user.id, true).catch((error) => {
           const errorRef = reportError(error, "employee.login.auth_state_change_role_check", {
             event,
             user_id: session.user.id,
@@ -315,40 +397,76 @@ export default function EmployeeLogin() {
             title: "Terjadi Kesalahan",
             description: appendErrorReference("Gagal memverifikasi role akun.", errorRef),
           });
-          navigate("/employee/dashboard", { replace: true });
+          navigate(EMPLOYEE_DASHBOARD_PATH, { replace: true });
         });
       }
     });
 
     return () => subscription.unsubscribe();
-  }, [navigate, resolveRoleAndRoute, sessionManagement, toast]);
+  }, [navigate, resolveRoleAndRouteSafely, sessionManagement, toast]);
+
+  useEffect(() => {
+    if (sessionManagement.session?.user?.id) return;
+    resolvingRoleUserRef.current = null;
+    routedRoleUserRef.current = null;
+  }, [sessionManagement.session?.user?.id]);
 
   const fetchInvitation = useCallback(async () => {
     if (!invitationCode) return;
     
     try {
-      const { data, error } = await supabase
-        .from("employee_invitations")
-        .select("*, tenants:tenant_id(name, code, logo_url)")
-        .eq("invitation_code", invitationCode)
-        .eq("status", "pending")
-        .maybeSingle();
+      const { data, error } = await supabase.rpc("validate_invitation_code", {
+        p_invitation_code: invitationCode,
+      });
 
       if (error) throw error;
-      
-      if (data) {
-        setInvitationData(data as InvitationData);
-        // Pre-fill fields from invitation data if available
-        setInviteRegName(data.name || "");
-        setInviteRegEmail(data.email || "");
-        setInviteRegWhatsapp(data.phone || "");
-      } else {
+
+      const invitation = data?.[0];
+      if (!invitation || invitation.validation_status === "invalid" || invitation.validation_status === "used") {
+        setInvitationData(null);
         toast({
           variant: "destructive",
           title: "Kode Undangan Tidak Valid",
           description: "Kode undangan tidak ditemukan atau sudah digunakan.",
         });
+        return;
       }
+
+      if (invitation.validation_status === "expired") {
+        setInvitationData(null);
+        toast({
+          variant: "destructive",
+          title: "Kode Undangan Kedaluwarsa",
+          description: "Masa berlaku undangan sudah habis. Minta admin mengirim ulang undangan.",
+        });
+        return;
+      }
+
+      const normalizedInvitation: InvitationData = {
+        id: invitation.id,
+        tenant_id: invitation.tenant_id,
+        status: invitation.status,
+        is_used: invitation.is_used,
+        expires_at: invitation.expires_at,
+        verified_at: invitation.verified_at,
+        name: invitation.name,
+        email: invitation.email,
+        phone: invitation.phone,
+        nik: invitation.nik,
+        opd_id: invitation.opd_id,
+        office_id: invitation.office_id,
+        tenants: {
+          name: invitation.tenant_name,
+          code: invitation.tenant_code,
+          logo_url: invitation.tenant_logo_url,
+        },
+      };
+
+      setInvitationData(normalizedInvitation);
+      // Pre-fill fields from invitation data if available
+      setInviteRegName(normalizedInvitation.name || "");
+      setInviteRegEmail(normalizedInvitation.email || "");
+      setInviteRegWhatsapp(normalizedInvitation.phone || "");
     } catch (error) {
       console.error("Error fetching invitation:", error);
     }
@@ -360,48 +478,6 @@ export default function EmployeeLogin() {
       void fetchInvitation();
     }
   }, [invitationCode, activeTab, registerMode, fetchInvitation]);
-
-  const fetchApkUrl = useCallback(async () => {
-    try {
-      const [globalApkRes, appDownloadRes] = await Promise.all([
-        supabase
-          .from("system_settings")
-          .select("value")
-          .eq("key", "global_apk")
-          .maybeSingle(),
-        supabase
-          .from("system_settings")
-          .select("value")
-          .eq("key", "app_download_settings")
-          .maybeSingle(),
-      ]);
-
-      let resolvedUrl: string | null = null;
-
-      if (globalApkRes.data?.value && typeof globalApkRes.data.value === "object" && !Array.isArray(globalApkRes.data.value)) {
-        const globalApk = globalApkRes.data.value as Record<string, unknown>;
-        if (typeof globalApk.url === "string" && globalApk.url.trim().length > 0) {
-          resolvedUrl = globalApk.url.trim();
-        }
-      }
-
-      if (!resolvedUrl && appDownloadRes.data?.value && typeof appDownloadRes.data.value === "object" && !Array.isArray(appDownloadRes.data.value)) {
-        const appDownload = appDownloadRes.data.value as Record<string, unknown>;
-        if (typeof appDownload.apk_url === "string" && appDownload.apk_url.trim().length > 0) {
-          resolvedUrl = appDownload.apk_url.trim();
-        }
-      }
-
-      setApkUrl(resolvedUrl);
-    } catch (error) {
-      console.error("Error fetching APK URL:", error);
-      setApkUrl(null);
-    }
-  }, []);
-
-  useEffect(() => {
-    void fetchApkUrl();
-  }, [fetchApkUrl]);
 
   const refreshForgotCaptcha = () => {
     setForgotCaptcha(generateCaptcha());
@@ -420,31 +496,12 @@ export default function EmployeeLogin() {
 
   // Fungsi untuk mendapatkan device ID
   const getDeviceId = (): string => {
-    const storedId = localStorage.getItem("web_device_id");
-    if (storedId) return storedId;
+    return getAndroidId(true);
+  };
 
-    const fingerprint = [
-      navigator.userAgent,
-      navigator.language,
-      screen.width,
-      screen.height,
-      screen.colorDepth,
-      navigator.hardwareConcurrency || 0,
-      navigator.maxTouchPoints || 0,
-      Intl.DateTimeFormat().resolvedOptions().timeZone,
-    ].join("|");
-
-    let hash = 0;
-    for (let i = 0; i < fingerprint.length; i++) {
-      const char = fingerprint.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-
-    const deviceId = `WEB-${Math.abs(hash).toString(16).toUpperCase().padStart(16, "0")}`;
-    localStorage.setItem("web_device_id", deviceId);
-    
-    return deviceId;
+  const getEmployeeLoginApiUrl = (): string => {
+    if (typeof window === "undefined") return "/mobile-api/auth/login";
+    return new URL("/mobile-api/auth/login", window.location.origin).toString();
   };
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -485,14 +542,33 @@ export default function EmployeeLogin() {
     setIsLoading(true);
 
     try {
-      const { data: authData, error } = await withExponentialBackoff(
+      const currentDeviceId = getDeviceId();
+      const loginResponse = await withExponentialBackoff(
         () =>
           withTimeout(
-            () =>
-              supabase.auth.signInWithPassword({
-                email: email.trim().toLowerCase(),
-                password,
-              }),
+            async () => {
+              const response = await fetch(getEmployeeLoginApiUrl(), {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                },
+                credentials: "same-origin",
+                body: JSON.stringify({
+                  email: email.trim().toLowerCase(),
+                  password,
+                  device_id: currentDeviceId,
+                }),
+              });
+
+              let result: EmployeeLoginApiResponse | null = null;
+              try {
+                result = (await response.json()) as EmployeeLoginApiResponse;
+              } catch {
+                result = null;
+              }
+
+              return { response, result };
+            },
             EMPLOYEE_LOGIN_TIMEOUT_MS,
           ),
         {
@@ -501,11 +577,22 @@ export default function EmployeeLogin() {
         },
       );
 
-      if (error) {
+      if (!loginResponse.response.ok) {
+        const apiErrorCode = loginResponse.result?.code || "auth_failed";
+        const apiErrorMessage = loginResponse.result?.message || "Login gagal.";
+        const authRef = loginResponse.result?.ref_id;
+
         if (isEnabled) {
-          const nowLocked = recordFailedAttempt();
-          
-          if (nowLocked) {
+          const isCredentialFailure = apiErrorCode === "invalid_credentials";
+          const nowLocked = isCredentialFailure ? recordFailedAttempt() : false;
+
+          if (apiErrorCode === "rate_limited") {
+            toast({
+              variant: "destructive",
+              title: "Akses Dikunci",
+              description: appendErrorReference(apiErrorMessage, authRef),
+            });
+          } else if (nowLocked) {
             toast({
               variant: "destructive",
               title: "Akses Dikunci",
@@ -515,34 +602,58 @@ export default function EmployeeLogin() {
             toast({
               variant: "destructive",
               title: "Login Gagal",
-              description: error.message.includes("Invalid login credentials")
-                ? `Email atau password salah. Sisa percobaan: ${remainingAttempts - 1}`
-                : error.message,
+              description: apiErrorCode === "invalid_credentials"
+                ? appendErrorReference(`Email atau password salah. Sisa percobaan: ${remainingAttempts - 1}`, authRef)
+                : appendErrorReference(apiErrorMessage, authRef),
             });
           }
         } else {
           toast({
             variant: "destructive",
             title: "Login Gagal",
-            description: error.message.includes("Invalid login credentials")
-              ? "Email atau password salah."
-              : error.message,
+            description: apiErrorCode === "invalid_credentials"
+              ? appendErrorReference("Email atau password salah.", authRef)
+              : appendErrorReference(apiErrorMessage, authRef),
           });
         }
         return;
       }
 
+      const accessToken = loginResponse.result?.session?.access_token;
+      const refreshToken = loginResponse.result?.session?.refresh_token;
+
+      if (!accessToken || !refreshToken) {
+        throw new Error(
+          appendErrorReference(
+            "Respons login tidak lengkap.",
+            loginResponse.result?.ref_id,
+          ),
+        );
+      }
+
+      const { data: authData, error: sessionError } = await supabase.auth.setSession({
+        access_token: accessToken,
+        refresh_token: refreshToken,
+      });
+
+      if (sessionError) {
+        throw new Error(
+          appendErrorReference(
+            sessionError.message || "Gagal menyimpan sesi login.",
+            loginResponse.result?.ref_id,
+          ),
+        );
+      }
+
       resetAttempts();
 
-      if (authData.user) {
-        const currentDeviceId = getDeviceId();
-        
+      if (authData.session?.user) {
         (async () => {
           try {
             const { data: employeeData } = await supabase
               .from("employees")
               .select("id, last_login_device_id")
-              .eq("user_id", authData.user!.id)
+              .eq("user_id", authData.session.user.id)
               .maybeSingle();
 
             if (employeeData) {
@@ -619,12 +730,12 @@ export default function EmployeeLogin() {
 
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-password-otp`,
+        `${supabaseUrl}/functions/v1/send-password-otp`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "apikey": supabasePublishableKey,
           },
           body: JSON.stringify({ email: forgotEmail.trim(), whatsapp: forgotWhatsapp.trim() }),
         }
@@ -683,12 +794,12 @@ export default function EmployeeLogin() {
     try {
       const otpValue = otpInputRef.current?.getValue() || "";
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-password-otp`,
+        `${supabaseUrl}/functions/v1/verify-password-otp`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "apikey": supabasePublishableKey,
           },
           body: JSON.stringify({ 
             email: forgotEmail.trim(),
@@ -727,12 +838,12 @@ export default function EmployeeLogin() {
     setIsLoading(true);
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-password-otp`,
+        `${supabaseUrl}/functions/v1/send-password-otp`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "apikey": supabasePublishableKey,
           },
           body: JSON.stringify({ email: forgotEmail.trim(), whatsapp: forgotWhatsapp.trim() }),
         }
@@ -783,12 +894,12 @@ export default function EmployeeLogin() {
 
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-registration-otp`,
+        `${supabaseUrl}/functions/v1/send-registration-otp`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "apikey": supabasePublishableKey,
           },
           body: JSON.stringify({ email: selfRegEmail.trim() }),
         }
@@ -861,12 +972,12 @@ export default function EmployeeLogin() {
     try {
       const otpValue = selfRegOtpRef.current?.getValue() || "";
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/verify-registration-otp`,
+        `${supabaseUrl}/functions/v1/verify-registration-otp`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "apikey": supabasePublishableKey,
           },
           body: JSON.stringify({
             email: selfRegEmail.trim(),
@@ -907,12 +1018,12 @@ export default function EmployeeLogin() {
     setIsLoading(true);
     try {
       const response = await fetch(
-        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-registration-otp`,
+        `${supabaseUrl}/functions/v1/send-registration-otp`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "apikey": supabasePublishableKey,
           },
           body: JSON.stringify({ email: selfRegEmail.trim() }),
         }
@@ -947,31 +1058,7 @@ export default function EmployeeLogin() {
 
   // ============ INVITE REGISTRATION HANDLERS ============
   const getDeviceIdForRegister = (): string => {
-    const storedId = localStorage.getItem("web_device_id");
-    if (storedId) return storedId;
-
-    const fingerprint = [
-      navigator.userAgent,
-      navigator.language,
-      screen.width,
-      screen.height,
-      screen.colorDepth,
-      navigator.hardwareConcurrency || 0,
-      navigator.maxTouchPoints || 0,
-      Intl.DateTimeFormat().resolvedOptions().timeZone,
-    ].join("|");
-
-    let hash = 0;
-    for (let i = 0; i < fingerprint.length; i++) {
-      const char = fingerprint.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-
-    const deviceId = `WEB-${Math.abs(hash).toString(16).toUpperCase().padStart(16, "0")}`;
-    localStorage.setItem("web_device_id", deviceId);
-    
-    return deviceId;
+    return getAndroidId(true);
   };
 
   const handleRegisterWithInvite = async (e: React.FormEvent) => {
@@ -1023,62 +1110,114 @@ export default function EmployeeLogin() {
 
     try {
       const currentDeviceId = getDeviceIdForRegister();
-
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: finalEmail,
-        password: registerPassword,
-        options: {
-          emailRedirectTo: `${window.location.origin}/employee/dashboard`,
-          data: { name: finalName },
-        },
-      });
-
-      if (authError) throw authError;
-
-      if (authData.user) {
-        // Update invitation with new data if provided
-        await supabase
-          .from("employee_invitations")
-          .update({ 
-            status: "verified", 
-            verified_at: new Date().toISOString(),
-            name: finalName,
+      const response = await fetch(
+        `${supabaseUrl}/functions/v1/complete-employee-invitation-registration`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "apikey": supabasePublishableKey,
+          },
+          body: JSON.stringify({
+            invitation_code: invitationCode.trim(),
             email: finalEmail,
-            phone: inviteRegWhatsapp || invitationData.phone,
-          })
-          .eq("id", invitationData.id);
+            name: finalName,
+            whatsapp: inviteRegWhatsapp || invitationData.phone,
+            address: inviteRegAddress || null,
+            password: registerPassword,
+            device_id: currentDeviceId,
+          }),
+        },
+      );
 
-        const { error: empError } = await supabase.from("employees").insert({
-          user_id: authData.user.id,
-          tenant_id: invitationData.tenant_id,
-          name: finalName,
-          email: finalEmail,
-          nik: invitationData.nik,
-          phone: inviteRegWhatsapp || invitationData.phone,
-          address: inviteRegAddress || null,
-          opd_id: invitationData.opd_id,
-          office_id: invitationData.office_id,
-          android_id: currentDeviceId,
-          is_active: true,
-        });
+      const rawResult = await response.text();
+      let result: CompleteInvitationRegistrationResponse = {};
+      try {
+        result = rawResult ? JSON.parse(rawResult) as CompleteInvitationRegistrationResponse : {};
+      } catch {
+        result = { message: rawResult };
+      }
 
-        if (empError) {
-          console.error("Error creating employee:", empError);
+      if (!response.ok) {
+        if (response.status === 404) {
+          const missingFunctionError = new Error("Function registrasi undangan belum tersedia di server.");
+          const missingRef = reportError(missingFunctionError, "employee.register_invite.edge_missing", {
+            invitation_code: invitationCode.trim(),
+          });
+          throw new Error(appendErrorReference(missingFunctionError.message, missingRef));
         }
 
-        await supabase.from("user_roles").insert({
-          user_id: authData.user.id,
-          tenant_id: invitationData.tenant_id,
-          role: "pegawai",
-        });
+        const code = String(result.code ?? "");
+        const message = String(result.error ?? result.message ?? "");
+        const messageWithTrace = result.trace_id
+          ? appendErrorReference(message || `Registrasi undangan gagal (HTTP ${response.status})`, result.trace_id)
+          : (message || `Registrasi undangan gagal (HTTP ${response.status})`);
 
-        toast({ title: "Registrasi Berhasil!", description: "Silakan login." });
+        if (code === "EMAIL_EXISTS") {
+          if (typeof window !== "undefined") {
+            window.localStorage.setItem(PENDING_INVITATION_CODE_STORAGE_KEY, invitationCode.trim());
+          }
+          setRegisterMode("self");
+          setSelfRegStep("email");
+          setSelfRegEmail(finalEmail);
+          setSelfRegName(finalName);
+          setSelfRegWhatsapp((inviteRegWhatsapp || invitationData.phone || "").trim());
+          setSelfRegAddress(inviteRegAddress.trim());
+          toast({
+            title: "Email Sudah Terdaftar",
+            description: "Silakan login dengan email tersebut, lalu lanjutkan pakai kartu Bergabung ke Organisasi. Kode undangan sudah disimpan otomatis.",
+          });
+          return;
+        }
 
-        setActiveTab("login");
-        setEmail(finalEmail);
+        if (code === "PENDING_ACTIVATION") {
+          toast({ variant: "destructive", title: "Menunggu Aktivasi Admin", description: messageWithTrace });
+          return;
+        }
+
+        if (code === "INVALID_CODE" || code === "EXPIRED_CODE" || code === "USED_CODE" || code === "EMPLOYEE_ALREADY_LINKED") {
+          toast({ variant: "destructive", title: "Registrasi Undangan Gagal", description: messageWithTrace });
+          return;
+        }
+
+        if (isSignupRateLimitedError(messageWithTrace)) {
+          if (typeof window !== "undefined") {
+            window.localStorage.setItem(PENDING_INVITATION_CODE_STORAGE_KEY, invitationCode.trim());
+          }
+          setRegisterMode("self");
+          setSelfRegStep("email");
+          setSelfRegEmail(finalEmail);
+          setSelfRegName(finalName);
+          setSelfRegWhatsapp((inviteRegWhatsapp || invitationData.phone || "").trim());
+          setSelfRegAddress(inviteRegAddress.trim());
+          toast({
+            title: "Pendaftaran Dialihkan ke Jalur Email",
+            description:
+              "Server auth sedang membatasi pendaftaran langsung. Lanjutkan daftar via email, lalu kode undangan ini akan disiapkan otomatis di dashboard untuk tahap bergabung ke organisasi.",
+          });
+          return;
+        }
+
+        throw new Error(messageWithTrace);
       }
+
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(PENDING_INVITATION_CODE_STORAGE_KEY);
+      }
+
+      toast({ title: "Registrasi Berhasil!", description: "Silakan login." });
+
+      setActiveTab("login");
+      setEmail(finalEmail);
     } catch (error: unknown) {
-      toast({ variant: "destructive", title: "Registrasi Gagal", description: getErrorMessage(error) });
+      const ref = reportError(error, "employee.register_invite.catch", {
+        invitation_code: invitationCode.trim(),
+      });
+      toast({
+        variant: "destructive",
+        title: "Registrasi Gagal",
+        description: appendErrorReference(getErrorMessage(error), ref),
+      });
     } finally {
       setIsLoading(false);
     }
@@ -1097,9 +1236,18 @@ export default function EmployeeLogin() {
     );
   }
 
+  if (androidBypassActive) {
+    return (
+      <DesktopBlockedMessage
+        reason="Login pegawai hanya tersedia di aplikasi."
+        downloadPagePath={APK_DOWNLOAD_PAGE_PATH}
+      />
+    );
+  }
+
   // Proteksi login mengikuti pengaturan /admin/attendance-security.
   if (securityCheck.securityResult.isBlocked) {
-    return <DesktopBlockedMessage reason={securityCheck.securityResult.reason} apkUrl={apkUrl} />;
+    return <DesktopBlockedMessage reason={securityCheck.securityResult.reason} downloadPagePath={APK_DOWNLOAD_PAGE_PATH} />;
   }
 
   return (
@@ -1149,7 +1297,7 @@ export default function EmployeeLogin() {
                     <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 flex items-center gap-2 text-sm text-amber-700 dark:text-amber-300">
                       <AlertTriangle className="w-4 h-4 flex-shrink-0" />
                       <span>
-                        Kebijakan keamanan absensi sedang tidak dapat dimuat. Login tetap diizinkan sementara.
+                        Kebijakan keamanan absensi sedang tidak dapat dimuat. Login browser dibatasi sampai konfigurasi kembali tersedia.
                       </span>
                     </div>
                   )}
@@ -1788,7 +1936,7 @@ export default function EmployeeLogin() {
             <Button
               onClick={() => {
                 setShowOrgRegisterDialog(false);
-                navigate("/org/login?mode=register");
+                navigate(buildOrgRegisterPath());
               }}
               className="w-full sm:w-auto"
             >

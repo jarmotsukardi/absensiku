@@ -1,14 +1,41 @@
+User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /org/
+Disallow: /dashboard
+Disallow: /auth
+Disallow: /employee/
+
 User-agent: Googlebot
 Allow: /
+Disallow: /admin/
+Disallow: /org/
+Disallow: /dashboard
+Disallow: /auth
+Disallow: /employee/
 
 User-agent: Bingbot
 Allow: /
+Disallow: /admin/
+Disallow: /org/
+Disallow: /dashboard
+Disallow: /auth
+Disallow: /employee/
 
 User-agent: Twitterbot
 Allow: /
+Disallow: /admin/
+Disallow: /org/
+Disallow: /dashboard
+Disallow: /auth
+Disallow: /employee/
 
 User-agent: facebookexternalhit
 Allow: /
+Disallow: /admin/
+Disallow: /org/
+Disallow: /dashboard
+Disallow: /auth
+Disallow: /employee/
 
-User-agent: *
-Allow: /
+Sitemap: https://absensipro.com/sitemap.xml

@@ -63,11 +63,14 @@ export function FooterSection({ settings }: FooterSectionProps) {
     // Jika url dimulai dengan # atau bukan path internal, biarkan default behavior
   };
 
-  // Check if any contact info is available
-  const hasContactInfo = settings.address || settings.email || settings.phone || settings.whatsapp;
+  // Check if contact section is enabled and has at least one value.
+  const contactEnabled = settings.enable_contact !== false;
+  const hasContactInfo =
+    contactEnabled && (settings.address || settings.email || settings.phone || settings.whatsapp);
 
-  // Check if social media is available
-  const hasSocialMedia =
+  // Check if social media is enabled and has at least one valid link.
+  const socialMediaEnabled = settings.enable_social_media !== false;
+  const hasSocialMediaLinks =
     isValidLink(settings.social_facebook) ||
     isValidLink(settings.social_instagram) ||
     isValidLink(settings.social_twitter) ||
@@ -75,13 +78,15 @@ export function FooterSection({ settings }: FooterSectionProps) {
     isValidLink(settings.social_linkedin) ||
     isValidLink(settings.social_tiktok) ||
     isValidLink(settings.social_telegram);
+  const showSocialMediaBlock = socialMediaEnabled;
+  const showRightColumn = hasContactInfo || showSocialMediaBlock;
 
   return (
     <>
       <footer id="contact" className="bg-muted/30 border-t border-border py-12 px-4">
         <div className="container mx-auto">
           <div id="tentang" className="relative -top-20" aria-hidden />
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
+          <div className={`grid md:grid-cols-2 ${showRightColumn ? "lg:grid-cols-4" : "lg:grid-cols-3"} gap-8`}>
             {/* Company Info */}
             <div>
               <div className="flex items-center gap-2 mb-4">
@@ -155,95 +160,101 @@ export function FooterSection({ settings }: FooterSectionProps) {
             </div>
 
             {/* Contact Info or Social Media */}
-            <div>
-              {/* Contact Info (if available) */}
-              {hasContactInfo && (
-                <div className="mb-6">
-                  <h4 className="font-semibold mb-4">Hubungi Kami</h4>
-                  <ul className="space-y-3 text-sm text-muted-foreground">
-                    {settings.address && (
-                      <li className="flex items-start gap-2">
-                        <MapPinned className="w-4 h-4 mt-0.5 shrink-0" />
-                        <span>{settings.address}</span>
-                      </li>
-                    )}
-                    {settings.email && (
-                      <li className="flex items-center gap-2">
-                        <Mail className="w-4 h-4 shrink-0" />
-                        <a href={`mailto:${settings.email}`} className="hover:text-foreground transition-colors">
-                          {settings.email}
-                        </a>
-                      </li>
-                    )}
-                    {settings.phone && (
-                      <li className="flex items-center gap-2">
-                        <Phone className="w-4 h-4 shrink-0" />
-                        <a href={`tel:${settings.phone}`} className="hover:text-foreground transition-colors">
-                          {settings.phone}
-                        </a>
-                      </li>
-                    )}
-                    {settings.whatsapp && (
-                      <li className="flex items-center gap-2">
-                        <MessageCircle className="w-4 h-4 shrink-0" />
-                        <a 
-                          href={`https://wa.me/${settings.whatsapp}`} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="hover:text-foreground transition-colors"
-                        >
-                          WhatsApp
-                        </a>
-                      </li>
-                    )}
-                  </ul>
-                </div>
-              )}
+            {showRightColumn && (
+              <div>
+                {/* Contact Info (if available) */}
+                {hasContactInfo && (
+                  <div className="mb-6">
+                    <h4 className="font-semibold mb-4">Hubungi Kami</h4>
+                    <ul className="space-y-3 text-sm text-muted-foreground">
+                      {settings.address && (
+                        <li className="flex items-start gap-2">
+                          <MapPinned className="w-4 h-4 mt-0.5 shrink-0" />
+                          <span>{settings.address}</span>
+                        </li>
+                      )}
+                      {settings.email && (
+                        <li className="flex items-center gap-2">
+                          <Mail className="w-4 h-4 shrink-0" />
+                          <a href={`mailto:${settings.email}`} className="hover:text-foreground transition-colors">
+                            {settings.email}
+                          </a>
+                        </li>
+                      )}
+                      {settings.phone && (
+                        <li className="flex items-center gap-2">
+                          <Phone className="w-4 h-4 shrink-0" />
+                          <a href={`tel:${settings.phone}`} className="hover:text-foreground transition-colors">
+                            {settings.phone}
+                          </a>
+                        </li>
+                      )}
+                      {settings.whatsapp && (
+                        <li className="flex items-center gap-2">
+                          <MessageCircle className="w-4 h-4 shrink-0" />
+                          <a
+                            href={`https://wa.me/${settings.whatsapp}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="hover:text-foreground transition-colors"
+                          >
+                            WhatsApp
+                          </a>
+                        </li>
+                      )}
+                    </ul>
+                  </div>
+                )}
 
-              {/* Social Media Links */}
-              {hasSocialMedia && (
-                <div>
-                  <h4 className="font-semibold mb-4">Ikuti Kami</h4>
-                  <div className="flex gap-3 flex-wrap">
-                    {isValidLink(settings.social_facebook) && (
-                      <a href={settings.social_facebook} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="Facebook">
-                        <Facebook className="w-5 h-5" />
-                      </a>
-                    )}
-                    {isValidLink(settings.social_instagram) && (
-                      <a href={settings.social_instagram} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="Instagram">
-                        <Instagram className="w-5 h-5" />
-                      </a>
-                    )}
-                    {isValidLink(settings.social_twitter) && (
-                      <a href={settings.social_twitter} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="Twitter">
-                        <Twitter className="w-5 h-5" />
-                      </a>
-                    )}
-                    {isValidLink(settings.social_youtube) && (
-                      <a href={settings.social_youtube} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="YouTube">
-                        <Youtube className="w-5 h-5" />
-                      </a>
-                    )}
-                    {isValidLink(settings.social_linkedin) && (
-                      <a href={settings.social_linkedin} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="LinkedIn">
-                        <Linkedin className="w-5 h-5" />
-                      </a>
-                    )}
-                    {isValidLink(settings.social_tiktok) && (
-                      <a href={settings.social_tiktok} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="TikTok">
-                        <MessageCircle className="w-5 h-5" />
-                      </a>
-                    )}
-                    {isValidLink(settings.social_telegram) && (
-                      <a href={settings.social_telegram} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="Telegram">
-                        <Send className="w-5 h-5" />
-                      </a>
+                {/* Social Media Links / Fallback */}
+                {showSocialMediaBlock && (
+                  <div>
+                    <h4 className="font-semibold mb-4">Ikuti Kami</h4>
+                    {hasSocialMediaLinks ? (
+                      <div className="flex gap-3 flex-wrap">
+                        {isValidLink(settings.social_facebook) && (
+                          <a href={settings.social_facebook} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="Facebook">
+                            <Facebook className="w-5 h-5" />
+                          </a>
+                        )}
+                        {isValidLink(settings.social_instagram) && (
+                          <a href={settings.social_instagram} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="Instagram">
+                            <Instagram className="w-5 h-5" />
+                          </a>
+                        )}
+                        {isValidLink(settings.social_twitter) && (
+                          <a href={settings.social_twitter} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="Twitter">
+                            <Twitter className="w-5 h-5" />
+                          </a>
+                        )}
+                        {isValidLink(settings.social_youtube) && (
+                          <a href={settings.social_youtube} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="YouTube">
+                            <Youtube className="w-5 h-5" />
+                          </a>
+                        )}
+                        {isValidLink(settings.social_linkedin) && (
+                          <a href={settings.social_linkedin} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="LinkedIn">
+                            <Linkedin className="w-5 h-5" />
+                          </a>
+                        )}
+                        {isValidLink(settings.social_tiktok) && (
+                          <a href={settings.social_tiktok} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="TikTok">
+                            <MessageCircle className="w-5 h-5" />
+                          </a>
+                        )}
+                        {isValidLink(settings.social_telegram) && (
+                          <a href={settings.social_telegram} target="_blank" rel="noopener noreferrer" className="p-2 rounded-lg bg-muted hover:bg-primary/10 transition-colors" aria-label="Telegram">
+                            <Send className="w-5 h-5" />
+                          </a>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">Link social media belum diatur.</p>
                     )}
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Copyright */}

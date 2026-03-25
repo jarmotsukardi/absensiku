@@ -284,11 +284,11 @@ const HR_SETTINGS_COVERAGE: Array<{ domain: string; items: HrCoverageItem[] }> =
   {
     domain: "13. Layanan Mandiri Karyawan (ESS)",
     items: [
-      { menu: "ESS", subMenu: "Pengajuan Saya", orgPath: "/org/hr/ess/requests", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Pemantauan" },
-      { menu: "ESS", subMenu: "Cuti dan Izin Saya", orgPath: "/org/hr/ess/leave-requests", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Pemantauan" },
-      { menu: "ESS", subMenu: "Kehadiran Saya", orgPath: "/org/hr/ess/attendance", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Pemantauan" },
-      { menu: "ESS", subMenu: "Dokumen Saya", orgPath: "/org/hr/ess/documents", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Pemantauan" },
-      { menu: "ESS", subMenu: "Profil Saya", orgPath: "/org/hr/ess/profile", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Pemantauan" },
+      { menu: "ESS", subMenu: "Pengajuan ESS", orgPath: "/org/hr/ess/requests", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Pemantauan" },
+      { menu: "ESS", subMenu: "Cuti & Izin ESS", orgPath: "/org/hr/ess/leave-requests", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Pemantauan" },
+      { menu: "ESS", subMenu: "Kehadiran ESS", orgPath: "/org/hr/ess/attendance", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Pemantauan" },
+      { menu: "ESS", subMenu: "Dokumen ESS", orgPath: "/org/hr/ess/documents", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Pemantauan" },
+      { menu: "ESS", subMenu: "Profil ESS", orgPath: "/org/hr/ess/profile", adminPath: "/admin/hr/sections/layanan-mandiri-karyawan", coverage: "Pemantauan" },
     ],
   },
 ];

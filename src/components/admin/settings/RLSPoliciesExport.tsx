@@ -347,17 +347,17 @@ export function RLSPoliciesExport() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Shield className="h-5 w-5 text-primary" />
-          Export RLS Policies
+          Ekspor Kebijakan RLS
         </CardTitle>
         <CardDescription>
-          Export semua Row Level Security policies dalam format SQL untuk migrasi ke project baru
+          Ekspor semua kebijakan Row Level Security dalam format SQL untuk migrasi ke proyek baru
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
         <div className="flex flex-wrap gap-3">
           <Button onClick={exportPoliciesSql} className="gap-2">
             <Download className="h-4 w-4" />
-            Download RLS Policies SQL
+            Unduh SQL Kebijakan RLS
           </Button>
           <Button variant="outline" onClick={copyToClipboard} className="gap-2">
             {copied ? <CheckCircle className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
@@ -370,7 +370,7 @@ export function RLSPoliciesExport() {
         <div className="space-y-4">
           <h4 className="font-medium flex items-center gap-2">
             <FileCode className="h-4 w-4" />
-            Preview RLS Policies
+            Pratinjau Kebijakan RLS
           </h4>
           <ScrollArea className="h-[400px] w-full rounded-md border bg-muted/50">
             <pre className="p-4 text-xs font-mono whitespace-pre-wrap">
@@ -382,7 +382,7 @@ export function RLSPoliciesExport() {
         <div className="text-sm text-muted-foreground space-y-2">
           <p className="font-medium">Cara Menggunakan:</p>
           <ol className="list-decimal list-inside space-y-1">
-            <li>Download atau copy SQL di atas</li>
+            <li>Unduh atau salin SQL di atas</li>
             <li>Buka SQL Editor di project Supabase target</li>
             <li>Jalankan schema SQL terlebih dahulu (buat tabel dan enum types)</li>
             <li>Jalankan RLS Policies SQL ini</li>

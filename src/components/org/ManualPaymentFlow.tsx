@@ -35,16 +35,30 @@ import { format, addMonths } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { useNavigate } from "react-router-dom";
 import type { Json, Tables } from "@/integrations/supabase/types";
+import {
+  getBillingPackageDisplayName,
+  isAttendanceOnlyBillingPackage,
+  normalizeBillingPackageModuleScope,
+} from "@/lib/billingPackageScope";
+import {
+  getBillingPackageEffectiveDiscountPercentage,
+  getBillingPackageEffectivePricePerMonth,
+  getBillingPackagePromoLabel,
+  isBillingPackagePromoActive,
+} from "@/lib/billingPackagePricing";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { ACTIVE_INVOICE_STATUSES, isActiveInvoiceStatus } from "@/lib/billingGuards";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import {
-  CENTRALIZED_MIN_DURATION_SETTING_KEYS,
-  INDIVIDUAL_MIN_DURATION_SETTING_KEY,
-  resolveMinimumBillingDuration,
-} from "@/lib/billingMinDuration";
+  calculateAttendanceIntroPromoBreakdown,
+  getAttendanceIntroPromoCampaignText,
+  normalizeAttendanceIntroPromoConfig,
+  normalizeAttendanceIntroPromoState,
+  type AttendanceIntroPromoConfig,
+} from "@/lib/attendanceOnboardingPromo";
 
 type SubscriptionPackage = Tables<"subscription_packages">;
+type Subscription = Tables<"subscriptions">;
 
 interface BillingSettingsValue {
   bank_name?: string;
@@ -92,6 +106,20 @@ interface BillingSettingRow {
   setting_value: unknown;
 }
 
+const parseNumericSettingValue = (raw: unknown, fallback: number): number => {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  if (typeof raw === "object" && raw !== null && !Array.isArray(raw)) {
+    const value = raw as Record<string, unknown>;
+    if ("value" in value) return parseNumericSettingValue(value.value, fallback);
+    if ("amount" in value) return parseNumericSettingValue(value.amount, fallback);
+  }
+  return fallback;
+};
+
 const toJsonObject = (value: Json | null | undefined): Record<string, Json> | null => {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
@@ -131,7 +159,11 @@ export function ManualPaymentFlow({
   const [flashPrefilledPackage, setFlashPrefilledPackage] = useState(false);
   const [flashPrefilledEmployeeCount, setFlashPrefilledEmployeeCount] = useState(false);
   const [negotiatedPricePerEmployee, setNegotiatedPricePerEmployee] = useState<number | null>(null);
-  const [minDurationMonths, setMinDurationMonths] = useState(1);
+  const [isCentralizedBilling, setIsCentralizedBilling] = useState(true);
+  const [b2bThreshold, setB2bThreshold] = useState(2001);
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
+  const [attendanceIntroPromoConfig, setAttendanceIntroPromoConfig] = useState<AttendanceIntroPromoConfig | null>(null);
+  const [attendanceIntroPromoCampaignText, setAttendanceIntroPromoCampaignText] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isCheckingActiveInvoice, setIsCheckingActiveInvoice] = useState(false);
   const [activeInvoice, setActiveInvoice] = useState<ActiveManualInvoiceSnapshot | null>(null);
@@ -150,19 +182,23 @@ export function ManualPaymentFlow({
       const subscriptionPricePromise = subscriptionId
         ? supabase
             .from("subscriptions")
-            .select("price_per_employee")
+            .select(
+              "id, price_per_employee, status, billing_headcount_mode, contracted_employee_count, intro_promo_active, intro_promo_duration_months, intro_promo_label, intro_promo_months_consumed, intro_promo_price_per_employee, intro_promo_started_at",
+            )
             .eq("id", subscriptionId)
             .maybeSingle()
         : supabase
             .from("subscriptions")
-            .select("price_per_employee")
+            .select(
+              "id, price_per_employee, status, billing_headcount_mode, contracted_employee_count, intro_promo_active, intro_promo_duration_months, intro_promo_label, intro_promo_months_consumed, intro_promo_price_per_employee, intro_promo_started_at",
+            )
             .eq("tenant_id", tenantId)
             .order("updated_at", { ascending: false })
             .order("created_at", { ascending: false })
             .limit(1)
             .maybeSingle();
 
-      const [{ data, error }, subscriptionRes, tenantRes, minDurationRes] = await withExponentialBackoff(
+      const [{ data, error }, subscriptionRes, tenantRes, promoRes, b2bThresholdRes] = await withExponentialBackoff(
         () =>
           withTimeout(
             () =>
@@ -173,13 +209,13 @@ export function ManualPaymentFlow({
                 supabase
                   .from("billing_settings")
                   .select("setting_key, setting_value")
-                  .in("setting_key", [
-                    INDIVIDUAL_MIN_DURATION_SETTING_KEY,
-                    CENTRALIZED_MIN_DURATION_SETTING_KEYS.pemerintah_daerah,
-                    CENTRALIZED_MIN_DURATION_SETTING_KEYS.instansi_pemerintah,
-                    CENTRALIZED_MIN_DURATION_SETTING_KEYS.perusahaan,
-                    CENTRALIZED_MIN_DURATION_SETTING_KEYS.sekolah,
-                  ]),
+                  .eq("setting_key", "attendance_intro_promo")
+                  .maybeSingle(),
+                supabase
+                  .from("system_settings")
+                  .select("value")
+                  .eq("key", "b2b_negotiation_threshold")
+                  .maybeSingle(),
               ]),
             MANUAL_PAYMENT_OP_TIMEOUT_MS,
             "org.activation.manual_payment.fetch_packages timeout",
@@ -192,43 +228,56 @@ export function ManualPaymentFlow({
 
       if (error) throw error;
       if (tenantRes.error) throw tenantRes.error;
-      if (minDurationRes.error) throw minDurationRes.error;
-
-      const minDurationRows = (minDurationRes.data || []) as BillingSettingRow[];
-      const minDurationMap = new Map(minDurationRows.map((row) => [row.setting_key, row.setting_value]));
-      const resolvedMinDuration = resolveMinimumBillingDuration({
-        billingMode: tenantRes.data?.billing_mode,
-        organizationType: tenantRes.data?.organization_type,
-        getSettingValue: (key) => minDurationMap.get(key),
-      });
-      setMinDurationMonths(resolvedMinDuration);
-
-      const eligiblePackages = (data || []).filter(
-        (pkg) => Number(pkg.duration_months || 0) >= resolvedMinDuration,
+      if (subscriptionRes.error) {
+        console.warn("Failed to load subscription negotiated price:", subscriptionRes.error);
+      }
+      const isCentralized = tenantRes.data?.billing_mode !== "individual";
+      const resolvedB2bThreshold = Math.max(
+        2001,
+        Math.floor(parseNumericSettingValue(b2bThresholdRes.data?.value, 2000)),
       );
-      setPackages(eligiblePackages);
-      if (eligiblePackages.length > 0) {
+      const isB2BEligible = isCentralized && currentEmployeeCount >= resolvedB2bThreshold;
+      setIsCentralizedBilling(isCentralized);
+      setB2bThreshold(resolvedB2bThreshold);
+      const promoConfig = normalizeAttendanceIntroPromoConfig((promoRes.data as BillingSettingRow | null)?.setting_value);
+      setAttendanceIntroPromoConfig(promoConfig.active ? promoConfig : null);
+      setAttendanceIntroPromoCampaignText(getAttendanceIntroPromoCampaignText(promoConfig));
+      const availablePackages = (data || []) as SubscriptionPackage[];
+      setPackages(availablePackages);
+      const resolvedSubscription = (subscriptionRes.data as Subscription | null) || null;
+      setSubscription(resolvedSubscription);
+      if (!prefilledEmployeeCount) {
+        const contractedEmployeeCount =
+          resolvedSubscription?.billing_headcount_mode === "manual_contract" &&
+          typeof resolvedSubscription?.contracted_employee_count === "number" &&
+          Number.isFinite(resolvedSubscription.contracted_employee_count) &&
+          resolvedSubscription.contracted_employee_count > 0
+            ? Math.floor(resolvedSubscription.contracted_employee_count)
+            : null;
+        if (contractedEmployeeCount) {
+          setEmployeeCount(contractedEmployeeCount);
+        }
+      }
+      if (availablePackages.length > 0) {
         const initialPkgIsValid =
-          Boolean(initialPackageId) && eligiblePackages.some((pkg) => pkg.id === initialPackageId);
+          Boolean(initialPackageId) && availablePackages.some((pkg) => pkg.id === initialPackageId);
         setSelectedPackage((prev) => {
           if (initialPkgIsValid) return initialPackageId as string;
-          if (eligiblePackages.some((pkg) => pkg.id === prev)) return prev;
-          return eligiblePackages[0].id;
+          if (availablePackages.some((pkg) => pkg.id === prev)) return prev;
+          return availablePackages[0].id;
         });
         setPrefilledPackage(initialPkgIsValid);
       } else {
         setSelectedPackage("");
         setPrefilledPackage(false);
       }
-      if (subscriptionRes.error) {
-        console.warn("Failed to load subscription negotiated price:", subscriptionRes.error);
-      } else {
+      if (!subscriptionRes.error) {
         const rawPrice = subscriptionRes.data?.price_per_employee;
         const parsedPrice =
           typeof rawPrice === "number" && Number.isFinite(rawPrice) && rawPrice > 0
             ? rawPrice
             : null;
-        setNegotiatedPricePerEmployee(parsedPrice);
+        setNegotiatedPricePerEmployee(isB2BEligible ? parsedPrice : null);
       }
     } catch (error) {
       const errorRef = reportError(error, "org.activation.manual_payment.fetch_packages", {
@@ -239,7 +288,7 @@ export function ManualPaymentFlow({
     } finally {
       setIsLoading(false);
     }
-  }, [initialPackageId, subscriptionId, tenantId]);
+  }, [currentEmployeeCount, initialPackageId, prefilledEmployeeCount, subscriptionId, tenantId]);
 
   useEffect(() => {
     void fetchPackages();
@@ -370,20 +419,82 @@ export function ManualPaymentFlow({
   }, [prefilledEmployeeCount, employeeCount]);
 
   const getSelectedPackageData = () => packages.find((p) => p.id === selectedPackage);
+  const getSelectedPackageLabel = (pkg: SubscriptionPackage | null | undefined) =>
+    pkg ? getBillingPackageDisplayName(pkg.name, pkg.module_scope) : "Paket Langganan";
 
   const calculateTotal = () => {
     const pkg = getSelectedPackageData();
     if (!pkg) {
-      return { unitPrice: 0, subtotal: 0, discount: 0, baseAmount: 0, internalTaxAmount: 0, total: 0 };
+      return {
+        unitPrice: 0,
+        subtotal: 0,
+        discount: 0,
+        baseAmount: 0,
+        internalTaxAmount: 0,
+        total: 0,
+        recurringPricePerEmployee: 0,
+        pricingReason: "package_base" as const,
+        promoBreakdown: null as ReturnType<typeof calculateAttendanceIntroPromoBreakdown> | null,
+      };
     }
 
-    const unitPrice = negotiatedPricePerEmployee ?? pkg.base_price_per_month;
-    const subtotal = unitPrice * employeeCount * pkg.duration_months;
-    const discount = subtotal * (pkg.discount_percentage / 100);
+    const canUseNegotiatedPrice =
+      negotiatedPricePerEmployee !== null && isAttendanceOnlyBillingPackage(pkg);
+    const currentPromoState = normalizeAttendanceIntroPromoState(subscription || undefined);
+    const promoBreakdown =
+      isAttendanceOnlyBillingPackage(pkg) && attendanceIntroPromoConfig && !canUseNegotiatedPrice
+        ? calculateAttendanceIntroPromoBreakdown({
+            normalPricePerEmployee: pkg.base_price_per_month,
+            packageDiscountPercentage: pkg.discount_percentage,
+            durationMonths: pkg.duration_months,
+            employeeCount,
+            promoConfig: attendanceIntroPromoConfig,
+            promoState: subscription || undefined,
+            canInitializePromo:
+              !subscription ||
+              (!currentPromoState.intro_promo_active && currentPromoState.intro_promo_months_consumed === 0),
+          })
+        : null;
+
+    if (promoBreakdown) {
+      const internalTaxAmount = Math.round(promoBreakdown.taxableBase * (INTERNAL_TAX_PERCENTAGE / 100));
+      const total = promoBreakdown.taxableBase + internalTaxAmount;
+      return {
+        unitPrice: promoBreakdown.effectiveAveragePricePerEmployee,
+        subtotal: promoBreakdown.subtotal,
+        discount: promoBreakdown.discountAmount,
+        baseAmount: promoBreakdown.taxableBase,
+        internalTaxAmount,
+        total,
+        recurringPricePerEmployee: promoBreakdown.discountedNormalPricePerEmployee,
+        pricingReason: "attendance_intro_promo" as const,
+        promoBreakdown,
+      };
+    }
+
+    const baseUnitPrice = canUseNegotiatedPrice
+      ? negotiatedPricePerEmployee
+      : getBillingPackageEffectivePricePerMonth(pkg, pkg.base_price_per_month);
+    const effectiveDiscountPercentage = getBillingPackageEffectiveDiscountPercentage(pkg);
+    const subtotal = baseUnitPrice * employeeCount * pkg.duration_months;
+    const discount = subtotal * (effectiveDiscountPercentage / 100);
     const baseAmount = subtotal - discount;
     const internalTaxAmount = Math.round(baseAmount * (INTERNAL_TAX_PERCENTAGE / 100));
     const total = baseAmount + internalTaxAmount;
-    return { unitPrice, subtotal, discount, baseAmount, internalTaxAmount, total };
+    const unitPrice = baseAmount / Math.max(1, employeeCount * pkg.duration_months);
+    const recurringPricePerEmployee =
+      baseUnitPrice * (1 - effectiveDiscountPercentage / 100);
+    return {
+      unitPrice,
+      subtotal,
+      discount,
+      baseAmount,
+      internalTaxAmount,
+      total,
+      recurringPricePerEmployee,
+      pricingReason: canUseNegotiatedPrice ? "negotiated_b2b" as const : "package_base" as const,
+      promoBreakdown: null,
+    };
   };
 
   const generateUniqueCode = () => {
@@ -396,6 +507,14 @@ export function ManualPaymentFlow({
       currency: "IDR",
       minimumFractionDigits: 0,
     }).format(amount);
+
+  const isTrialSubscription = subscription?.status === "trial";
+  const invoiceActionTitle = isTrialSubscription
+    ? "Aktivasi Awal (Buat Invoice)"
+    : "Buat Invoice";
+  const invoiceActionDescription = isTrialSubscription
+    ? "Gunakan langkah ini jika organisasi sudah siap berlangganan sebelum invoice otomatis dari trial dan streak diterbitkan."
+    : "Pilih paket untuk membuat invoice, lalu konfirmasi pembayaran setelah transfer.";
 
   const handleInitiatePayment = async () => {
     const latestActive = await checkLatestActiveInvoice();
@@ -420,9 +539,62 @@ export function ManualPaymentFlow({
         return;
       }
 
-      const { unitPrice, subtotal, discount, total, internalTaxAmount } = calculateTotal();
+      const totalBreakdown = calculateTotal();
+      const {
+        unitPrice,
+        subtotal,
+        discount,
+        total,
+        internalTaxAmount,
+        promoBreakdown,
+        recurringPricePerEmployee,
+        pricingReason,
+      } = totalBreakdown;
       const proposedUniqueCode = generateUniqueCode();
       const proposedFinalAmount = total + proposedUniqueCode;
+      const invoiceMetadata: Json = {
+        billing_scope: "centralized",
+        source: "org.manual_payment_flow",
+        billing_origin: isTrialSubscription ? "activation_early" : null,
+        billing_headcount_mode_after_payment: "manual_contract",
+        contracted_employee_count_after_payment: employeeCount,
+        employee_count_source: "manual_contract",
+        active_employee_count_at_invoice: currentEmployeeCount,
+        tenant_id: tenantId,
+        subscription_id: subscription?.id || subscriptionId || null,
+        package_scope: normalizeBillingPackageModuleScope(pkg.module_scope),
+        package_display_name: getSelectedPackageLabel(pkg),
+        package_base_price_per_employee: pkg.base_price_per_month,
+        package_discounted_normal_price_per_employee: recurringPricePerEmployee,
+        package_effective_price_reason: pricingReason,
+        subscription_recurring_price_per_employee: recurringPricePerEmployee,
+        attendance_intro_promo: promoBreakdown
+          ? {
+              active: promoBreakdown.introPromoActive,
+              label: promoBreakdown.promoLabel,
+              promo_price_per_employee: promoBreakdown.promoPricePerEmployee,
+              promo_months_applied: promoBreakdown.promoMonthsApplied,
+              promo_months_remaining_before_invoice: promoBreakdown.promoMonthsRemainingBeforeInvoice,
+              promo_months_remaining_after_invoice: promoBreakdown.promoMonthsRemainingAfterInvoice,
+              months_consumed_after_invoice: promoBreakdown.monthsConsumedAfterInvoice,
+            }
+          : null,
+        attendance_intro_promo_active:
+          isAttendanceOnlyBillingPackage(pkg) && (promoBreakdown?.introPromoActive || false),
+        attendance_intro_promo_price_per_employee: promoBreakdown?.promoPricePerEmployee || null,
+        attendance_intro_promo_duration_months: promoBreakdown?.promoLabel
+          ? attendanceIntroPromoConfig?.promo_duration_months || null
+          : null,
+        attendance_intro_promo_months_applied: promoBreakdown?.promoMonthsApplied || 0,
+        attendance_intro_promo_months_consumed_before_invoice: promoBreakdown
+          ? promoBreakdown.monthsConsumedAfterInvoice - promoBreakdown.promoMonthsApplied
+          : subscription?.intro_promo_months_consumed || 0,
+        attendance_intro_promo_months_consumed_after_invoice:
+          promoBreakdown?.monthsConsumedAfterInvoice || subscription?.intro_promo_months_consumed || 0,
+        attendance_intro_promo_months_remaining_after_invoice:
+          promoBreakdown?.promoMonthsRemainingAfterInvoice || 0,
+        attendance_intro_promo_label: promoBreakdown?.promoLabel || null,
+      };
 
       const { data: invoiceResult, error: invoiceError } = (await withExponentialBackoff(
         () =>
@@ -432,9 +604,9 @@ export function ManualPaymentFlow({
                 p_tenant_id: tenantId,
                 p_subscription_id: subscriptionId || null,
                 p_package_id: pkg.id,
-                p_package_name: pkg.name,
+                p_package_name: getSelectedPackageLabel(pkg),
                 p_package_duration_months: pkg.duration_months,
-                p_package_discount_percentage: pkg.discount_percentage,
+                p_package_discount_percentage: getBillingPackageEffectiveDiscountPercentage(pkg),
                 p_employee_count: employeeCount,
                 p_price_per_employee: unitPrice,
                 p_subtotal: subtotal,
@@ -447,6 +619,7 @@ export function ManualPaymentFlow({
                 p_due_date: format(addMonths(new Date(), 0), "yyyy-MM-dd"),
                 p_unique_code: proposedUniqueCode,
                 p_notes: `Angka unik: ${proposedUniqueCode}`,
+                p_metadata: invoiceMetadata,
               } as never),
             MANUAL_PAYMENT_OP_TIMEOUT_MS,
           ),
@@ -656,7 +829,7 @@ export function ManualPaymentFlow({
     );
   }
 
-  const { unitPrice, subtotal, discount, total } = calculateTotal();
+  const { unitPrice, subtotal, discount, total, promoBreakdown } = calculateTotal();
   const pkg = getSelectedPackageData();
 
   return (
@@ -665,16 +838,40 @@ export function ManualPaymentFlow({
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <CreditCard className="h-5 w-5 text-primary" />
-            Mau Bayar (Buat Invoice)
+            {invoiceActionTitle}
           </CardTitle>
           <CardDescription>
-            Pilih paket untuk membuat invoice, lalu konfirmasi pembayaran setelah transfer.
+            {invoiceActionDescription}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {negotiatedPricePerEmployee !== null && (
+          {isTrialSubscription ? (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/25 dark:text-blue-100">
+              Jalur normal tenant baru dipantau oleh <strong>Streak Monitoring</strong>. Jika
+              organisasi Anda sudah siap berlangganan sekarang, invoice ini akan dicatat sebagai
+              <strong> aktivasi awal</strong>.
+            </div>
+          ) : null}
+          {attendanceIntroPromoCampaignText ? (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/25 dark:text-emerald-100">
+              {attendanceIntroPromoCampaignText}
+            </div>
+          ) : null}
+
+          {isCentralizedBilling && negotiatedPricePerEmployee !== null && (
             <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-100">
-              Harga negosiasi B2B aktif: <strong>{formatCurrency(negotiatedPricePerEmployee)}</strong> per pegawai per bulan.
+              {pkg && !isAttendanceOnlyBillingPackage(pkg) ? (
+                <>
+                  Harga negosiasi B2B yang tersimpan saat ini hanya berlaku untuk paket{" "}
+                  <strong>Absensi</strong>. Bundle HR/Payroll memakai harga paket final.
+                </>
+              ) : (
+                <>
+                  Harga negosiasi B2B aktif: <strong>{formatCurrency(negotiatedPricePerEmployee)}</strong> per pegawai
+                  per bulan (otomatis berlaku mulai tenant mencapai{" "}
+                  <strong>{b2bThreshold.toLocaleString()}</strong> pegawai).
+                </>
+              )}
             </div>
           )}
 
@@ -714,9 +911,6 @@ export function ManualPaymentFlow({
               <Label>Paket Langganan</Label>
               {prefilledPackage && <Badge variant="secondary">Terisi dari kalkulator</Badge>}
             </div>
-            <p className="text-xs text-muted-foreground">
-              Minimum durasi pembayaran tenant ini: <strong>{minDurationMonths} bulan</strong>.
-            </p>
             <Select
               value={selectedPackage}
               onValueChange={(value) => {
@@ -736,23 +930,23 @@ export function ManualPaymentFlow({
               <SelectContent>
                 {packages.map((p) => (
                   <SelectItem key={p.id} value={p.id}>
-                    {p.name} - {p.duration_months} bulan
-                    {p.discount_percentage > 0 && ` (Hemat ${p.discount_percentage}%)`}
+                    {getSelectedPackageLabel(p)} - {p.duration_months} bulan
+                    {isBillingPackagePromoActive(p, p.base_price_per_month)
+                      ? ` (${getBillingPackagePromoLabel(p, p.base_price_per_month) || "Promo"})`
+                      : p.discount_percentage > 0
+                        ? ` (Hemat ${p.discount_percentage}%)`
+                        : ""}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            {packages.length === 0 && (
-              <p className="text-xs text-amber-700 dark:text-amber-300">
-                Tidak ada paket aktif yang memenuhi minimum {minDurationMonths} bulan.
-              </p>
-            )}
+            {packages.length === 0 && <p className="text-xs text-amber-700 dark:text-amber-300">Tidak ada paket aktif.</p>}
           </div>
 
           {/* Employee Count */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label>Jumlah Pegawai</Label>
+              <Label>Jumlah Pegawai yang Dibayar</Label>
               {prefilledEmployeeCount && <Badge variant="secondary">Terisi dari kalkulator</Badge>}
             </div>
             <Input
@@ -770,9 +964,15 @@ export function ManualPaymentFlow({
               }}
             />
             <p className="text-xs text-muted-foreground">
-              Digunakan untuk perhitungan billing invoice. Harga per pegawai: {pkg ? formatCurrency(unitPrice) : "-"}/bulan
+              Ini menjadi dasar tagihan invoice dan seat kontrak renewal. Harga per pegawai:{" "}
+              {pkg ? formatCurrency(unitPrice) : "-"}/bulan
               {currentEmployeeCount > 0 && ` • Pegawai aktif saat ini: ${currentEmployeeCount}`}
             </p>
+            {pkg && isBillingPackagePromoActive(pkg, pkg.base_price_per_month) ? (
+              <p className="text-xs text-emerald-700 dark:text-emerald-300">
+                {getBillingPackagePromoLabel(pkg, pkg.base_price_per_month) || "Promo aktif"} • harga normal {formatCurrency(pkg.base_price_per_month)}/bulan
+              </p>
+            ) : null}
           </div>
 
           {/* Summary */}
@@ -780,23 +980,39 @@ export function ManualPaymentFlow({
             <div className="rounded-lg border p-4 space-y-2">
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">
-                  {employeeCount} pegawai × {formatCurrency(unitPrice)} × {pkg.duration_months} bulan
+                  {employeeCount} pegawai dibayar × {formatCurrency(pkg.base_price_per_month)} × {pkg.duration_months} bulan
                 </span>
                 <span>{formatCurrency(subtotal)}</span>
               </div>
-              {discount > 0 && (
+              {promoBreakdown?.promoMonthsApplied ? (
+                <div className="flex justify-between text-sm text-emerald-700">
+                  <span>
+                    Promo onboarding {promoBreakdown.promoMonthsApplied} bulan ×{" "}
+                    {formatCurrency(promoBreakdown.promoPricePerEmployee || 0)}
+                  </span>
+                  <span>- {formatCurrency(promoBreakdown.introPromoAdditionalDiscount)}</span>
+                </div>
+              ) : null}
+              {promoBreakdown?.packageDiscountAmount ? (
+                <div className="flex justify-between text-sm text-blue-700">
+                  <span>Diskon paket ({promoBreakdown.packageDiscountPercentage}%)</span>
+                  <span>- {formatCurrency(promoBreakdown.packageDiscountAmount)}</span>
+                </div>
+              ) : discount > 0 ? (
                 <div className="flex justify-between text-sm text-green-600">
-                  <span>Diskon ({pkg.discount_percentage}%)</span>
+                  <span>Diskon ({getBillingPackageEffectiveDiscountPercentage(pkg)}%)</span>
                   <span>- {formatCurrency(discount)}</span>
                 </div>
-              )}
+              ) : null}
               <Separator />
               <div className="flex justify-between font-bold">
                 <span>Total</span>
                 <span className="text-primary">{formatCurrency(total)}</span>
               </div>
               <p className="text-xs text-muted-foreground">
-                Total tagihan sudah final sesuai kebijakan biaya internal. + angka unik 3 digit ditambahkan saat konfirmasi.
+                {promoBreakdown
+                  ? "Promo onboarding dihitung per subscription. + angka unik 3 digit ditambahkan saat konfirmasi."
+                  : "Total tagihan sudah final sesuai kebijakan biaya internal. + angka unik 3 digit ditambahkan saat konfirmasi."}
               </p>
             </div>
           )}
@@ -817,7 +1033,9 @@ export function ManualPaymentFlow({
       <Dialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Konfirmasi Mau Bayar</DialogTitle>
+            <DialogTitle>
+              {isTrialSubscription ? "Konfirmasi Aktivasi Awal" : "Konfirmasi Pembuatan Invoice"}
+            </DialogTitle>
             <DialogDescription>
               Langkah ini hanya membuat invoice. Langganan belum aktif sampai pembayaran dikonfirmasi
               dan diverifikasi admin.
@@ -826,7 +1044,7 @@ export function ManualPaymentFlow({
           <div className="space-y-3 py-4">
             <div className="flex justify-between text-sm">
               <span>Paket</span>
-              <span className="font-semibold">{pkg?.name}</span>
+              <span className="font-semibold">{getSelectedPackageLabel(pkg)}</span>
             </div>
             <div className="flex justify-between text-sm">
               <span>Durasi</span>
@@ -853,7 +1071,7 @@ export function ManualPaymentFlow({
                   Memproses...
                 </>
               ) : (
-                "Mau Bayar & Buat Invoice"
+                isTrialSubscription ? "Lanjutkan Aktivasi Awal" : "Buat Invoice Sekarang"
               )}
             </Button>
           </DialogFooter>

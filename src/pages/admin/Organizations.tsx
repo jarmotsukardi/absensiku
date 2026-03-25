@@ -59,11 +59,15 @@ import { toast } from "sonner";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { OrganizationDetailPanel } from "@/components/admin/organization/OrganizationDetailPanel";
+import { useAdminOrgContextNavigate } from "@/hooks/useAdminOrgContextNavigate";
 import AdminInstitutionTypesManagement from "@/pages/admin/InstitutionTypesManagement";
 
 const ITEMS_PER_PAGE = 15;
 const ORGANIZATIONS_QUERY_TIMEOUT_MS = 12000;
+const ORGANIZATIONS_CLEANUP_TIMEOUT_MS = 45000;
 const ORGANIZATIONS_QUERY_RETRY_MAX = 2;
+const E2E_ORGANIZATION_NAME_PREFIX = "Org E2E %";
+const E2E_ARCHIVED_ORGANIZATION_NAME_PREFIX = "[ARSIP E2E] %";
 
 interface Organization {
   id: string;
@@ -92,6 +96,7 @@ const orgTypeLabels: Record<string, string> = {
 
 export default function Organizations() {
   const navigate = useNavigate();
+  const navigateWithOverlay = useAdminOrgContextNavigate();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -101,6 +106,7 @@ export default function Organizations() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
   const [mainView, setMainView] = useState<"organizations" | "institution-types">("organizations");
+  const [hideE2EOrganizations, setHideE2EOrganizations] = useState(true);
   
   // Detail panel state
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
@@ -112,6 +118,9 @@ export default function Organizations() {
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [deletingOrg, setDeletingOrg] = useState<Organization | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isCleanupE2EOpen, setIsCleanupE2EOpen] = useState(false);
+  const [isCleaningE2E, setIsCleaningE2E] = useState(false);
+  const [cleanupE2EHardDelete, setCleanupE2EHardDelete] = useState(true);
   const [editForm, setEditForm] = useState({
     name: "",
     code: "",
@@ -140,6 +149,11 @@ export default function Organizations() {
 
         if (activeTab !== "all") {
           query = query.eq("organization_type", activeTab as Organization["organization_type"]);
+        }
+
+        if (hideE2EOrganizations) {
+          query = query.not("name", "ilike", E2E_ORGANIZATION_NAME_PREFIX);
+          query = query.not("name", "ilike", E2E_ARCHIVED_ORGANIZATION_NAME_PREFIX);
         }
 
         if (escapedQuery) {
@@ -178,7 +192,7 @@ export default function Organizations() {
     } finally {
       setIsLoading(false);
     }
-  }, [activeTab, currentPage, searchQuery]);
+  }, [activeTab, currentPage, hideE2EOrganizations, searchQuery]);
 
   useEffect(() => {
     if (mainView !== "organizations") return;
@@ -187,7 +201,7 @@ export default function Organizations() {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, activeTab]);
+  }, [searchQuery, activeTab, hideE2EOrganizations]);
 
   const openEditDialog = (org: Organization) => {
     setEditingOrg(org);
@@ -297,6 +311,64 @@ export default function Organizations() {
     }
   };
 
+  const handleCleanupE2EOrganizations = async () => {
+    setIsCleaningE2E(true);
+    setLoadError(null);
+    try {
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("cleanup_e2e_orgadmin_tenants" as never, {
+              p_hard_delete: cleanupE2EHardDelete,
+              p_archive_fallback: true,
+            } as never),
+            ORGANIZATIONS_CLEANUP_TIMEOUT_MS,
+            "admin.organizations.cleanup_e2e timeout"
+          ),
+        {
+          maxRetries: 1,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        }
+      );
+
+      if (error) throw error;
+
+      const payload =
+        data && typeof data === "object" && !Array.isArray(data)
+          ? (data as Record<string, unknown>)
+          : {};
+
+      const deleted = Number(payload.tenants_deleted || 0);
+      const archived = Number(payload.tenants_archived || 0);
+      const scanned = Number(payload.tenants_scanned || 0);
+      const errors = Array.isArray(payload.errors) ? payload.errors.length : 0;
+
+      if (errors > 0) {
+        toast.warning(
+          `Cleanup E2E selesai dengan catatan. Scan ${scanned}, hapus ${deleted}, arsip ${archived}, error ${errors}.`
+        );
+      } else {
+        toast.success(`Cleanup E2E selesai. Scan ${scanned}, hapus ${deleted}, arsip ${archived}.`);
+      }
+
+      setIsCleanupE2EOpen(false);
+      setCurrentPage(1);
+      void fetchOrganizations();
+    } catch (error) {
+      const errorRef = reportError(error, "admin.organizations.cleanup_e2e");
+      const message = appendErrorReference(
+        "Gagal cleanup organisasi E2E. Pastikan migration RPC terbaru sudah diterapkan.",
+        errorRef
+      );
+      toast.error(message);
+      setLoadError(message);
+    } finally {
+      setIsCleaningE2E(false);
+    }
+  };
+
   const tabs = [
     { id: "all", label: "Semua", icon: Building2 },
     { id: "pemerintah_daerah", label: "Pemda", icon: Landmark },
@@ -342,10 +414,28 @@ export default function Organizations() {
               className="pl-9"
             />
           </div>
-          <Button onClick={() => navigate("/admin/organizations/new")}>
-            <Plus className="h-4 w-4 mr-2" />
-            Tambah Organisasi
-          </Button>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <div className="flex items-center gap-2 rounded-md border px-3 py-2">
+              <Switch
+                checked={hideE2EOrganizations}
+                onCheckedChange={setHideE2EOrganizations}
+                aria-label="Sembunyikan data organisasi E2E"
+              />
+              <span className="text-sm text-muted-foreground whitespace-nowrap">Sembunyikan data E2E</span>
+            </div>
+            <Button
+              variant="destructive"
+              onClick={() => setIsCleanupE2EOpen(true)}
+              disabled={isLoading || isCleaningE2E}
+            >
+              {isCleaningE2E ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Trash2 className="h-4 w-4 mr-2" />}
+              Cleanup E2E
+            </Button>
+            <Button onClick={() => navigateWithOverlay("/admin/organizations/new")}>
+              <Plus className="h-4 w-4 mr-2" />
+              Tambah Organisasi
+            </Button>
+          </div>
         </div>
 
         {/* Tabs & Table */}
@@ -456,11 +546,11 @@ export default function Organizations() {
                               <DropdownMenuContent align="end">
                                 <DropdownMenuItem onClick={() => setSelectedOrgId(org.id)}>
                                   <PanelRightOpen className="h-4 w-4 mr-2" />
-                                  Lihat Detail
+                                  Lihat Rincian
                                 </DropdownMenuItem>
                                 <DropdownMenuItem onClick={() => openEditDialog(org)}>
                                   <Edit className="h-4 w-4 mr-2" />
-                                  Edit
+                                  Ubah
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
                                   className="text-destructive"
@@ -530,11 +620,11 @@ export default function Organizations() {
           </CardContent>
         </Card>
 
-        {/* Edit Dialog */}
+        {/* Dialog Ubah */}
         <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
           <DialogContent className="max-w-lg">
             <DialogHeader>
-              <DialogTitle>Edit Organisasi</DialogTitle>
+              <DialogTitle>Ubah Organisasi</DialogTitle>
               <DialogDescription>Perbarui informasi organisasi</DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
@@ -601,7 +691,61 @@ export default function Organizations() {
           </DialogContent>
         </Dialog>
 
-        {/* Delete Dialog */}
+        {/* Dialog Hapus */}
+        <Dialog
+          open={isCleanupE2EOpen}
+          onOpenChange={(open) => {
+            if (!isCleaningE2E) setIsCleanupE2EOpen(open);
+          }}
+        >
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle>Pembersihan Data E2E OrgAdmin</DialogTitle>
+              <DialogDescription>
+                Membersihkan data organisasi pola `e2e.orgadmin.*` dan `Org E2E *`. Gunakan untuk merapikan data uji.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-3 py-2">
+              <div className="rounded-md border p-3 text-xs text-muted-foreground">
+                Target pola: `Org E2E %`, `[ARSIP E2E] Org E2E %`, atau email `e2e.orgadmin.*@mailinator.com`.
+              </div>
+              <div className="flex items-center justify-between rounded-lg border p-3">
+                <div>
+                  <p className="text-sm font-medium">Mode hard delete</p>
+                  <p className="text-xs text-muted-foreground">
+                    Jika gagal hapus permanen karena constraint, sistem otomatis fallback ke arsip.
+                  </p>
+                </div>
+                <Switch checked={cleanupE2EHardDelete} onCheckedChange={setCleanupE2EHardDelete} />
+              </div>
+            </div>
+            <DialogFooter className={dialogActionBarClassName}>
+              <DialogActionHint>
+                Gunakan saat data uji E2E menumpuk agar daftar organisasi tetap bersih.
+              </DialogActionHint>
+              <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
+                <Button
+                  variant="outline"
+                  className="w-full sm:w-auto bg-white"
+                  onClick={() => setIsCleanupE2EOpen(false)}
+                  disabled={isCleaningE2E}
+                >
+                  Batal
+                </Button>
+                <Button
+                  className="w-full sm:w-auto"
+                  variant="destructive"
+                  onClick={handleCleanupE2EOrganizations}
+                  disabled={isCleaningE2E}
+                >
+                  {isCleaningE2E && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                  Jalankan Cleanup
+                </Button>
+              </div>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         <Dialog
           open={isDeleteOpen}
           onOpenChange={(open) => {
@@ -642,7 +786,7 @@ export default function Organizations() {
         </Dialog>
         </div>
         
-        {/* Detail Panel */}
+        {/* Panel Rincian */}
         {selectedOrgId && (
           <OrganizationDetailPanel 
             orgId={selectedOrgId} 

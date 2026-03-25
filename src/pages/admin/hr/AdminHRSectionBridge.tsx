@@ -231,7 +231,7 @@ const SECTION_CONFIG: Record<string, SectionConfig> = {
     orgTargets: ["/org/hr/documents", "/org/hr/document-templates", "/org/hr/digital-signature"],
   },
   "sla-monitoring": {
-    title: "Pemantauan SLA",
+    title: "Monitoring SLA",
     description: "Pemantauan SLA penanganan isu HR pada tenant.",
     domain: "Operasional Dukungan",
     checkpoints: ["Waktu respon tiket", "Pelanggaran SLA kritikal", "Kapasitas tim dukungan HR"],
@@ -239,7 +239,7 @@ const SECTION_CONFIG: Record<string, SectionConfig> = {
     orgTargets: ["/org/hr/help/tickets", "/org/hr/help/support"],
   },
   "playbook-eskalasi": {
-    title: "Panduan Eskalasi",
+    title: "Playbook Eskalasi",
     description: "Panduan eskalasi standar untuk insiden dan tiket HR.",
     domain: "Operasional Dukungan",
     checkpoints: ["Matriks eskalasi prioritas", "Jalur komunikasi insiden", "Postmortem dan tindak lanjut"],
@@ -256,7 +256,7 @@ const SECTION_CONFIG: Record<string, SectionConfig> = {
   },
   "rekrutmen-ats": {
     title: "Rekrutmen (ATS)",
-    description: "Tata kelola super admin untuk modul rekrutmen HR berbasis pipeline.",
+    description: "Governance superadmin untuk modul rekrutmen HR berbasis pipeline.",
     domain: "Rekrutmen",
     checkpoints: ["Standar pipeline kandidat", "SLA tahapan seleksi", "Templat evaluasi wawancara"],
     adminControls: ["/admin/hr/policies", "/admin/hr/audit", "/admin/hr/settings#coverage-map"],

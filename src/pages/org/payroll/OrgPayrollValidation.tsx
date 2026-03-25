@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,6 +20,7 @@ import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { buildPostgrestOrClause, sanitizeOrKeyword } from "@/lib/postgrestSearch";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { getComplianceSummary, resolvePayrollComplianceSettings } from "@/lib/payrollComplianceRules";
 
 type PayrollValidationRun = Database["public"]["Tables"]["payroll_validation_runs"]["Row"];
 type PayrollValidationRunInsert = Database["public"]["Tables"]["payroll_validation_runs"]["Insert"];
@@ -79,6 +81,9 @@ const VALIDATION_STATUS_LABELS: Record<ValidationStatus, string> = {
 
 export default function OrgPayrollValidation() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target));
   const confirmDialog = useConfirmDialog();
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [periods, setPeriods] = useState<PayrollPeriod[]>([]);
@@ -90,6 +95,7 @@ export default function OrgPayrollValidation() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingRunId, setEditingRunId] = useState<string | null>(null);
   const [formState, setFormState] = useState<ValidationFormState>(initialFormState);
+  const [isComplianceGenerating, setIsComplianceGenerating] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | ValidationStatus>("all");
   const [periodFilter, setPeriodFilter] = useState<"all" | string>("all");
@@ -199,6 +205,71 @@ export default function OrgPayrollValidation() {
   const openCreateDialog = () => {
     resetForm();
     setIsDialogOpen(true);
+  };
+
+  const buildComplianceSummaryJson = (payload: {
+    profile: string;
+    notes: string;
+    disabled: ReturnType<typeof getComplianceSummary>["disabledRules"];
+  }) => ({
+    type: "payroll_compliance_check",
+    profile: payload.profile,
+    notes: payload.notes,
+    disabled_rules: payload.disabled.map((rule) => ({
+      id: rule.id,
+      label: rule.label,
+      legal_basis: rule.legalBasis,
+    })),
+    generated_at: new Date().toISOString(),
+  });
+
+  const handleGenerateCompliance = async () => {
+    setIsComplianceGenerating(true);
+    try {
+      const resolvedTenantId = tenantId || (await resolveOrgTenantId());
+      if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan.");
+      if (!tenantId) setTenantId(resolvedTenantId);
+
+      const { data: policyRows, error: policyError } = await supabase
+        .from("payroll_policies")
+        .select("*")
+        .eq("tenant_id", resolvedTenantId)
+        .eq("is_active", true)
+        .order("effective_date", { ascending: false })
+        .limit(1);
+      if (policyError) throw policyError;
+      const policy = policyRows?.[0];
+      if (!policy) {
+        toast.error("Belum ada kebijakan payroll aktif untuk dijadikan dasar kepatuhan.");
+        return;
+      }
+
+      const compliance = resolvePayrollComplianceSettings(policy.metadata);
+      const summary = getComplianceSummary(compliance.rules);
+      const status: ValidationStatus = summary.isCompliant ? "passed" : "warning";
+      const traceId = `COMPLY-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}-${Date.now().toString().slice(-4)}`;
+      const summaryJson = buildComplianceSummaryJson({
+        profile: compliance.profile,
+        notes: compliance.notes || "",
+        disabled: summary.disabledRules,
+      });
+
+      setFormState({
+        period_id: periods[0]?.id ?? "",
+        status,
+        issue_count: String(summary.disabledCount),
+        critical_count: "0",
+        trace_id: traceId,
+        summary_json: JSON.stringify(summaryJson, null, 2),
+      });
+      setEditingRunId(null);
+      setIsDialogOpen(true);
+    } catch (error) {
+      const ref = reportError(error, "org.payroll.validation.generate_compliance");
+      toast.error(appendErrorReference("Gagal membuat validasi kepatuhan payroll", ref));
+    } finally {
+      setIsComplianceGenerating(false);
+    }
   };
 
   const openEditDialog = (item: PayrollValidationRun) => {
@@ -356,13 +427,17 @@ export default function OrgPayrollValidation() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" onClick={() => navigate("/org/payroll")}>
+            <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll")}>
               <ArrowLeft className="mr-2 h-4 w-4" />
               Kembali ke Beranda
             </Button>
             <Button variant="outline" onClick={exportCsv}>
               <Download className="mr-2 h-4 w-4" />
-              Export CSV
+              Ekspor CSV
+            </Button>
+            <Button variant="outline" onClick={() => void handleGenerateCompliance()} disabled={isComplianceGenerating}>
+              <ShieldCheck className="mr-2 h-4 w-4" />
+              {isComplianceGenerating ? "Menyiapkan..." : "Cek Kepatuhan"}
             </Button>
             <Button onClick={openCreateDialog}>
               <Plus className="mr-2 h-4 w-4" />
@@ -398,7 +473,7 @@ export default function OrgPayrollValidation() {
           </Card>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-4">
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>Fokus tahap ini</CardDescription>
@@ -417,7 +492,7 @@ export default function OrgPayrollValidation() {
             </CardHeader>
             <CardContent>
               <p className="text-xs text-muted-foreground">
-                Gunakan trace ID untuk menelusuri masalah yang perlu ditindaklanjuti lebih dulu.
+                Gunakan ID trace untuk menelusuri masalah yang perlu ditindaklanjuti lebih dulu. Jika butuh log error payroll lintas tenant, eskalasi ke super admin.
               </p>
             </CardContent>
           </Card>
@@ -427,8 +502,22 @@ export default function OrgPayrollValidation() {
               <CardTitle className="text-lg">Proses Payroll</CardTitle>
             </CardHeader>
             <CardContent>
-              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/run-engine")}>
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/payroll/run-engine")}>
                 Buka Proses Payroll
+              </Button>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Referensi HR & Absensi</CardDescription>
+              <CardTitle className="text-lg">Cek sumber data</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/hr/employees")}>
+                Data Pegawai HR
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/reports/attendance")}>
+                Laporan Absensi
               </Button>
             </CardContent>
           </Card>
@@ -453,7 +542,7 @@ export default function OrgPayrollValidation() {
                   <Input
                     id="search"
                     className="pl-9"
-                    placeholder="Cari trace id, period key, atau catatan..."
+                    placeholder="Cari ID trace, period key, atau catatan..."
                     value={searchTerm}
                     onChange={(event) => setSearchTerm(event.target.value)}
                   />
@@ -547,7 +636,7 @@ export default function OrgPayrollValidation() {
                     <TableHead>Periode</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Issue / Critical</TableHead>
-                    <TableHead>Trace ID</TableHead>
+                    <TableHead>ID Trace</TableHead>
                     <TableHead className="w-[130px]">Aksi</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -643,7 +732,7 @@ export default function OrgPayrollValidation() {
           <DialogHeader>
             <DialogTitle>{editingRunId ? "Edit Validasi Payroll" : "Tambah Validasi Payroll"}</DialogTitle>
             <DialogDescription>
-              Simpan hasil validasi payroll untuk periode terpilih, termasuk trace ID agar mudah ditelusuri.
+              Simpan hasil validasi payroll untuk periode terpilih, termasuk ID trace agar mudah ditelusuri.
             </DialogDescription>
           </DialogHeader>
 
@@ -705,7 +794,7 @@ export default function OrgPayrollValidation() {
           </div>
 
           <div className="space-y-1">
-            <Label htmlFor="trace_id">Trace ID (opsional)</Label>
+            <Label htmlFor="trace_id">ID Trace (opsional)</Label>
             <Input
               id="trace_id"
               placeholder="Contoh: TRACE-PR-20260224-0001"

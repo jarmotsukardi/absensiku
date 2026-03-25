@@ -6,6 +6,8 @@ const getWindowOrigin = (): string => {
 export const EMPLOYEE_LOGIN_PATH = "/employee/login";
 export const EMPLOYEE_DASHBOARD_PATH = "/employee/dashboard";
 export const ORG_LOGIN_PATH = "/org/login";
+export const WEB_AUTH_LOGIN_PATH = "/auth";
+export const PENDING_INVITATION_CODE_STORAGE_KEY = "absensiku_pending_invitation_code";
 
 export const buildEmployeeLoginPath = (inviteCode?: string | null): string => {
   const trimmedInviteCode = inviteCode?.trim();

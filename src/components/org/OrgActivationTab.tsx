@@ -31,10 +31,22 @@ import { ManualPaymentFlow } from "@/components/org/ManualPaymentFlow";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import type { Tables } from "@/integrations/supabase/types";
 import {
-  CENTRALIZED_MIN_DURATION_SETTING_KEYS,
-  INDIVIDUAL_MIN_DURATION_SETTING_KEY,
-  resolveMinimumBillingDuration,
-} from "@/lib/billingMinDuration";
+  getBillingPackageDisplayName,
+  isAttendanceOnlyBillingPackage,
+} from "@/lib/billingPackageScope";
+import {
+  getBillingPackageEffectiveDiscountPercentage,
+  getBillingPackageEffectivePricePerMonth,
+  getBillingPackagePromoLabel,
+  isBillingPackagePromoActive,
+} from "@/lib/billingPackagePricing";
+import {
+  calculateAttendanceIntroPromoBreakdown,
+  getAttendanceIntroPromoCampaignText,
+  normalizeAttendanceIntroPromoConfig,
+  normalizeAttendanceIntroPromoState,
+  type AttendanceIntroPromoConfig,
+} from "@/lib/attendanceOnboardingPromo";
 
 interface OrgActivationTabProps {
   tenantId: string;
@@ -177,7 +189,8 @@ export function OrgActivationTab({
   const [xenditEnabled, setXenditEnabled] = useState(false);
   const [b2bThreshold, setB2bThreshold] = useState(2000);
   const [isCentralizedBilling, setIsCentralizedBilling] = useState(true);
-  const [minDurationMonths, setMinDurationMonths] = useState(1);
+  const [attendanceIntroPromoConfig, setAttendanceIntroPromoConfig] = useState<AttendanceIntroPromoConfig | null>(null);
+  const [attendanceIntroPromoCampaignText, setAttendanceIntroPromoCampaignText] = useState<string | null>(null);
   const [manualBankNames, setManualBankNames] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -189,7 +202,7 @@ export function OrgActivationTab({
     setIsLoading(true);
     setIsSlowLoading(false);
     try {
-      const [pkgRes, subRes, invRes, empRes, xenditRes, b2bRes, tenantRes, billingRes, minDurationRes] = await Promise.all([
+      const [pkgRes, subRes, invRes, empRes, xenditRes, b2bRes, tenantRes, billingRes, promoRes] = await Promise.all([
         supabase.from("subscription_packages").select("*").eq("is_active", true).order("sort_order"),
         supabase.from("subscriptions").select("*").eq("tenant_id", tenantId).maybeSingle(),
         supabase.from("invoices").select("*").eq("tenant_id", tenantId).order("created_at", { ascending: false }).limit(20),
@@ -206,21 +219,19 @@ export function OrgActivationTab({
         supabase
           .from("billing_settings")
           .select("setting_key, setting_value")
-          .in("setting_key", [
-            INDIVIDUAL_MIN_DURATION_SETTING_KEY,
-            CENTRALIZED_MIN_DURATION_SETTING_KEYS.pemerintah_daerah,
-            CENTRALIZED_MIN_DURATION_SETTING_KEYS.instansi_pemerintah,
-            CENTRALIZED_MIN_DURATION_SETTING_KEYS.perusahaan,
-            CENTRALIZED_MIN_DURATION_SETTING_KEYS.sekolah,
-          ]),
+          .eq("setting_key", "attendance_intro_promo")
+          .maybeSingle(),
       ]);
 
-      setPackages(pkgRes.data || []);
+      setPackages((pkgRes.data || []) as SubscriptionPackage[]);
       setSubscription(subRes.data);
-      const centralizedInvoices = ((invRes.data || []) as Invoice[]).filter(
-        (invoice) => parseInvoiceBillingScope(invoice.metadata) !== "individual",
+      const tenantBillingMode = tenantRes.data?.billing_mode === "individual" ? "individual" : "centralized";
+      const scopedInvoices = ((invRes.data || []) as Invoice[]).filter((invoice) =>
+        tenantBillingMode === "individual"
+          ? parseInvoiceBillingScope(invoice.metadata) === "individual"
+          : parseInvoiceBillingScope(invoice.metadata) !== "individual",
       );
-      setInvoices(centralizedInvoices);
+      setInvoices(scopedInvoices);
       setEmployeeCount(empRes.count || 0);
       const xenditSetting = xenditRes.data as SystemSetting | null;
       const settingValue = xenditSetting?.value;
@@ -230,18 +241,13 @@ export function OrgActivationTab({
 
       const b2bRaw = (b2bRes.data as SystemSetting | null)?.value;
       setB2bThreshold(Math.max(1, Math.floor(parseNumericSettingValue(b2bRaw, 2000))));
-      setIsCentralizedBilling(tenantRes.data?.billing_mode !== "individual");
+      setIsCentralizedBilling(tenantBillingMode !== "individual");
       const billingRaw = (billingRes.data as SystemSetting | null)?.value;
       setManualBankNames(extractManualBankNames(billingRaw));
-      const minDurationRows = (minDurationRes.data || []) as BillingSettingRow[];
-      const minDurationMap = new Map(minDurationRows.map((row) => [row.setting_key, row.setting_value]));
-      setMinDurationMonths(
-        resolveMinimumBillingDuration({
-          billingMode: tenantRes.data?.billing_mode,
-          organizationType: tenantRes.data?.organization_type,
-          getSettingValue: (key) => minDurationMap.get(key),
-        }),
-      );
+      if (promoRes.error) throw promoRes.error;
+      const promoConfig = normalizeAttendanceIntroPromoConfig((promoRes.data as BillingSettingRow | null)?.setting_value);
+      setAttendanceIntroPromoConfig(promoConfig.active ? promoConfig : null);
+      setAttendanceIntroPromoCampaignText(getAttendanceIntroPromoCampaignText(promoConfig));
 
     } catch (error) {
       const errorRef = reportError(error, "org.activation.fetch_all", { tenant_id: tenantId });
@@ -268,20 +274,29 @@ export function OrgActivationTab({
     setHasHydratedCalculatorState(false);
   }, [tenantId]);
 
-  const eligiblePackages = useMemo(
-    () => packages.filter((pkg) => Number(pkg.duration_months || 0) >= minDurationMonths),
-    [packages, minDurationMonths],
-  );
+  const calculatorPackages = useMemo(() => packages, [packages]);
+  const defaultBilledEmployeeCount = useMemo(() => {
+    if (
+      subscription?.billing_headcount_mode === "manual_contract" &&
+      typeof subscription.contracted_employee_count === "number" &&
+      Number.isFinite(subscription.contracted_employee_count) &&
+      subscription.contracted_employee_count > 0
+    ) {
+      return Math.floor(subscription.contracted_employee_count);
+    }
+
+    return employeeCount > 0 ? employeeCount : 10;
+  }, [employeeCount, subscription?.billing_headcount_mode, subscription?.contracted_employee_count]);
 
   useEffect(() => {
     if (hasHydratedCalculatorState) return;
-    if (eligiblePackages.length === 0) {
+    if (calculatorPackages.length === 0) {
       setSelectedPkgId("");
       setHasHydratedCalculatorState(true);
       return;
     }
-    const defaultPkgId = eligiblePackages[0]?.id ?? "";
-    const defaultMemberCount = employeeCount > 0 ? employeeCount : 10;
+    const defaultPkgId = calculatorPackages[0]?.id ?? "";
+    const defaultMemberCount = defaultBilledEmployeeCount;
     if (typeof window === "undefined") {
       setSelectedPkgId(defaultPkgId);
       setMemberSlider([defaultMemberCount]);
@@ -301,7 +316,7 @@ export function OrgActivationTab({
       const memberCount = Number.isFinite(persistedMemberCount)
         ? Math.min(1000, Math.max(1, Math.floor(persistedMemberCount)))
         : defaultMemberCount;
-      const packageId = eligiblePackages.some((pkg) => pkg.id === persisted?.packageId)
+      const packageId = calculatorPackages.some((pkg) => pkg.id === persisted?.packageId)
         ? (persisted?.packageId as string)
         : defaultPkgId;
       setSelectedPkgId(packageId);
@@ -312,7 +327,7 @@ export function OrgActivationTab({
     } finally {
       setHasHydratedCalculatorState(true);
     }
-  }, [CALCULATOR_PREFS_KEY, eligiblePackages, employeeCount, hasHydratedCalculatorState]);
+  }, [CALCULATOR_PREFS_KEY, calculatorPackages, defaultBilledEmployeeCount, hasHydratedCalculatorState]);
 
   useEffect(() => {
     if (!hasHydratedCalculatorState || typeof window === "undefined") return;
@@ -338,39 +353,100 @@ export function OrgActivationTab({
 
   useEffect(() => {
     if (!selectedPkgId) {
-      if (eligiblePackages[0]?.id) {
-        setSelectedPkgId(eligiblePackages[0].id);
+      if (calculatorPackages[0]?.id) {
+        setSelectedPkgId(calculatorPackages[0].id);
       }
       return;
     }
-    if (!eligiblePackages.some((pkg) => pkg.id === selectedPkgId)) {
-      setSelectedPkgId(eligiblePackages[0]?.id || "");
+    if (!calculatorPackages.some((pkg) => pkg.id === selectedPkgId)) {
+      setSelectedPkgId(calculatorPackages[0]?.id || "");
     }
-  }, [eligiblePackages, selectedPkgId]);
+  }, [calculatorPackages, selectedPkgId]);
 
-  const selectedPkg = eligiblePackages.find((p) => p.id === selectedPkgId);
-  const hasNegotiatedB2BPrice =
+  const selectedPkg = calculatorPackages.find((p) => p.id === selectedPkgId);
+  const selectedPkgLabel = selectedPkg
+    ? getBillingPackageDisplayName(selectedPkg.name, selectedPkg.module_scope)
+    : "";
+  const b2bMinEmployees = Math.max(2001, b2bThreshold);
+  const hasSubscriptionNegotiatedPrice =
     typeof subscription?.price_per_employee === "number" &&
     Number.isFinite(subscription.price_per_employee) &&
     subscription.price_per_employee > 0;
-  const isB2BManualOnly = isCentralizedBilling && (hasNegotiatedB2BPrice || employeeCount >= b2bThreshold);
+  const isB2BHeadcount = isCentralizedBilling && employeeCount >= b2bMinEmployees;
+  const selectedPkgSupportsNegotiatedPrice = selectedPkg
+    ? isAttendanceOnlyBillingPackage(selectedPkg)
+    : false;
+  const hasNegotiatedB2BPrice =
+    isB2BHeadcount &&
+    hasSubscriptionNegotiatedPrice &&
+    selectedPkgSupportsNegotiatedPrice;
+  const isB2BManualOnly = isB2BHeadcount;
   const isXenditAllowed = isCentralizedBilling && xenditEnabled && !isB2BManualOnly;
 
-  const getEffectiveUnitPrice = (basePrice: number) => {
+  const getEffectiveUnitPrice = (pkg: SubscriptionPackage) => {
     const overridePrice = subscription?.price_per_employee;
-    return typeof overridePrice === "number" && Number.isFinite(overridePrice) && overridePrice > 0
+    return hasNegotiatedB2BPrice &&
+      isAttendanceOnlyBillingPackage(pkg) &&
+      typeof overridePrice === "number" &&
+      Number.isFinite(overridePrice) &&
+      overridePrice > 0
       ? overridePrice
-      : basePrice;
+      : getBillingPackageEffectivePricePerMonth(pkg, pkg.base_price_per_month);
   };
 
   const calculateTotal = () => {
-    if (!selectedPkg) return { unitPrice: 0, subtotal: 0, discount: 0, baseAmount: 0, internalTaxAmount: 0, total: 0 };
-    const unitPrice = getEffectiveUnitPrice(selectedPkg.base_price_per_month);
+    if (!selectedPkg) {
+      return {
+        unitPrice: 0,
+        subtotal: 0,
+        discount: 0,
+        baseAmount: 0,
+        internalTaxAmount: 0,
+        total: 0,
+        promoBreakdown: null as ReturnType<typeof calculateAttendanceIntroPromoBreakdown> | null,
+      };
+    }
+
+    const promoBreakdown =
+      isAttendanceOnlyBillingPackage(selectedPkg) &&
+      attendanceIntroPromoConfig &&
+      !hasNegotiatedB2BPrice
+        ? calculateAttendanceIntroPromoBreakdown({
+            normalPricePerEmployee: selectedPkg.base_price_per_month,
+            packageDiscountPercentage: selectedPkg.discount_percentage,
+            durationMonths: selectedPkg.duration_months,
+            employeeCount: memberSlider[0],
+            promoConfig: attendanceIntroPromoConfig,
+            promoState: subscription || undefined,
+            canInitializePromo:
+              !subscription ||
+              (() => {
+                const currentPromoState = normalizeAttendanceIntroPromoState(subscription || undefined);
+                return !currentPromoState.intro_promo_active && currentPromoState.intro_promo_months_consumed === 0;
+              })(),
+          })
+        : null;
+
+    if (promoBreakdown) {
+      const internalTaxAmount = Math.round(promoBreakdown.taxableBase * (INTERNAL_TAX_PERCENTAGE / 100));
+      return {
+        unitPrice: promoBreakdown.effectiveAveragePricePerEmployee,
+        subtotal: promoBreakdown.subtotal,
+        discount: promoBreakdown.discountAmount,
+        baseAmount: promoBreakdown.taxableBase,
+        internalTaxAmount,
+        total: promoBreakdown.taxableBase + internalTaxAmount,
+        promoBreakdown,
+      };
+    }
+
+    const unitPrice = getEffectiveUnitPrice(selectedPkg);
     const subtotal = unitPrice * memberSlider[0] * selectedPkg.duration_months;
-    const discount = subtotal * (selectedPkg.discount_percentage / 100);
+    const discountPercentage = getBillingPackageEffectiveDiscountPercentage(selectedPkg);
+    const discount = subtotal * (discountPercentage / 100);
     const baseAmount = subtotal - discount;
     const internalTaxAmount = Math.round(baseAmount * (INTERNAL_TAX_PERCENTAGE / 100));
-    return { unitPrice, subtotal, discount, baseAmount, internalTaxAmount, total: baseAmount + internalTaxAmount };
+    return { unitPrice, subtotal, discount, baseAmount, internalTaxAmount, total: baseAmount + internalTaxAmount, promoBreakdown: null };
   };
 
   const formatCurrency = (amount: number) =>
@@ -438,6 +514,9 @@ export function OrgActivationTab({
     () => invoices.some((inv) => inv.status === "PENDING" || inv.status === "AWAITING_VERIFICATION"),
     [invoices],
   );
+  const invoiceStepTitle = subscription?.status === "trial"
+    ? "Aktivasi Awal (Buat Invoice)"
+    : "Buat Invoice";
   const activationSteps = useMemo(() => {
     const hasSelectedPackage = Boolean(selectedPkgId);
     const hasCreatedInvoice = Boolean(latestInvoice);
@@ -449,7 +528,7 @@ export function OrgActivationTab({
     if (isSubscriptionHealthy) {
       return [
         { title: "Pilih Paket", description: "Paket langganan aktif.", state: "done" as ActivationStepState },
-        { title: "Mau Bayar (Buat Invoice)", description: "Invoice terakhir sudah diproses.", state: "done" as ActivationStepState },
+        { title: invoiceStepTitle, description: "Invoice terakhir sudah diproses.", state: "done" as ActivationStepState },
         { title: "Konfirmasi Pembayaran", description: "Pembayaran tercatat.", state: "done" as ActivationStepState },
         { title: "Verifikasi & Aktivasi", description: "Langganan sudah aktif.", state: "done" as ActivationStepState },
       ];
@@ -473,14 +552,16 @@ export function OrgActivationTab({
     return [
       {
         title: "Pilih Paket",
-        description: hasSelectedPackage ? "Paket sudah dipilih." : "Pilih paket dan jumlah member.",
+        description: hasSelectedPackage ? "Paket sudah dipilih." : "Pilih paket dan jumlah pegawai yang dibayar.",
         state: step1,
       },
       {
-        title: "Mau Bayar (Buat Invoice)",
+        title: invoiceStepTitle,
         description: hasCreatedInvoice
           ? `Invoice ${latestInvoice?.invoice_number || "-"} sudah dibuat.`
-          : "Buat invoice berdasarkan simulasi.",
+          : subscription?.status === "trial"
+            ? "Gunakan aktivasi awal jika organisasi sudah siap berlangganan sebelum trial selesai dipantau."
+            : "Buat invoice berdasarkan simulasi.",
         state: step2,
       },
       {
@@ -504,7 +585,7 @@ export function OrgActivationTab({
         state: step4,
       },
     ];
-  }, [selectedPkgId, latestInvoice, subscription?.status, hasOpenInvoice]);
+  }, [selectedPkgId, latestInvoice, subscription?.status, hasOpenInvoice, invoiceStepTitle]);
 
   const activationProgressPercent = useMemo(() => {
     const totalSegments = Math.max(activationSteps.length - 1, 1);
@@ -542,7 +623,7 @@ export function OrgActivationTab({
           package_id: selectedPkg.id,
           employee_count: memberSlider[0],
           duration_months: selectedPkg.duration_months,
-          description: `Langganan ${selectedPkg.name} - ${memberSlider[0]} pegawai`,
+          description: `Langganan ${selectedPkgLabel} - ${memberSlider[0]} pegawai`,
         },
       });
 
@@ -663,8 +744,8 @@ export function OrgActivationTab({
       window.localStorage.removeItem(CALCULATOR_PREFS_KEY);
       window.localStorage.removeItem(PAYMENT_METHOD_PREFS_KEY);
     }
-    const defaultPkgId = eligiblePackages[0]?.id ?? "";
-    const defaultMemberCount = employeeCount > 0 ? employeeCount : 10;
+    const defaultPkgId = calculatorPackages[0]?.id ?? "";
+    const defaultMemberCount = defaultBilledEmployeeCount;
     setSelectedPkgId(defaultPkgId);
     setMemberSlider([defaultMemberCount]);
     setManualFlowPrefill(null);
@@ -742,7 +823,7 @@ export function OrgActivationTab({
     );
   }
 
-  const { unitPrice, subtotal, discount, total } = calculateTotal();
+  const { subtotal, discount, total, promoBreakdown } = calculateTotal();
   const calculatorCard = (
     <Card>
       <CardHeader>
@@ -763,7 +844,7 @@ export function OrgActivationTab({
               {hasOpenInvoice && <Badge variant="secondary">Invoice Aktif</Badge>}
             </div>
             <p className="font-semibold">
-              {selectedPkg.name} • {memberSlider[0]} member • {selectedPkg.duration_months} bulan
+              {selectedPkgLabel} • {memberSlider[0]} member • {selectedPkg.duration_months} bulan
             </p>
             <p className="text-lg font-bold text-primary">{formatCurrency(total)}</p>
           </div>
@@ -793,15 +874,24 @@ export function OrgActivationTab({
 	              </DialogDescription>
 	            </DialogHeader>
 	            <div className="px-4 pb-4 sm:px-0 sm:pb-0 max-h-[calc(100dvh-6rem)] sm:max-h-[70vh] overflow-y-auto space-y-5">
-              <p className="text-xs text-muted-foreground">
-                Minimum durasi pembayaran untuk tenant ini: <strong>{minDurationMonths} bulan</strong>.
-              </p>
-	              {typeof subscription?.price_per_employee === "number" &&
-	                Number.isFinite(subscription.price_per_employee) &&
-                subscription.price_per_employee > 0 && (
+              {attendanceIntroPromoCampaignText ? (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/25 dark:text-emerald-100">
+                  {attendanceIntroPromoCampaignText}
+                </div>
+              ) : null}
+	              {isB2BHeadcount && typeof subscription?.price_per_employee === "number" && (
                   <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-100">
-                    Harga negosiasi B2B aktif: <strong>{formatCurrency(subscription.price_per_employee)}</strong> per
-                    pegawai per bulan.
+                    {selectedPkgSupportsNegotiatedPrice ? (
+                      <>
+                        Harga negosiasi B2B aktif:{" "}
+                        <strong>{formatCurrency(subscription.price_per_employee)}</strong> per pegawai per bulan.
+                      </>
+                    ) : (
+                      <>
+                        Harga negosiasi B2B yang tersimpan saat ini hanya berlaku untuk paket{" "}
+                        <strong>Absensi</strong>. Bundle HR/Payroll memakai harga paket final.
+                      </>
+                    )}
                   </div>
                 )}
               {hasOpenInvoice && activeInvoice && (
@@ -832,7 +922,7 @@ export function OrgActivationTab({
               )}
 
 	              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-	                {eligiblePackages.map((pkg) => (
+	                {calculatorPackages.map((pkg) => (
 	                  <button
                     key={pkg.id}
                     onClick={() => !hasOpenInvoice && setSelectedPkgId(pkg.id)}
@@ -841,24 +931,42 @@ export function OrgActivationTab({
                       selectedPkgId === pkg.id ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
                     } ${hasOpenInvoice ? "opacity-60 cursor-not-allowed" : ""}`}
                   >
-                    <p className="font-semibold">{pkg.name}</p>
+                    <p className="font-semibold">
+                      {getBillingPackageDisplayName(pkg.name, pkg.module_scope)}
+                    </p>
                     <p className="text-sm text-muted-foreground">{pkg.duration_months} bulan</p>
-                    <p className="text-sm font-medium mt-1">{formatCurrency(getEffectiveUnitPrice(pkg.base_price_per_month))}/org/bln</p>
-                    {pkg.discount_percentage > 0 && (
-                      <Badge variant="secondary" className="mt-2 text-xs">Hemat {pkg.discount_percentage}%</Badge>
+                    <div className="mt-1 space-y-1">
+                      <p className="text-sm font-medium">
+                        {formatCurrency(getEffectiveUnitPrice(pkg))}/org/bln
+                      </p>
+                      {isBillingPackagePromoActive(pkg, pkg.base_price_per_month) ? (
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className="text-muted-foreground line-through">
+                            {formatCurrency(pkg.base_price_per_month)}
+                          </span>
+                          <Badge variant="secondary">
+                            {getBillingPackagePromoLabel(pkg, pkg.base_price_per_month) || "Promo"}
+                          </Badge>
+                        </div>
+                      ) : null}
+                    </div>
+                    {getBillingPackageEffectiveDiscountPercentage(pkg) > 0 && (
+                      <Badge variant="secondary" className="mt-2 text-xs">
+                        Hemat {getBillingPackageEffectiveDiscountPercentage(pkg)}%
+                      </Badge>
                     )}
 	                  </button>
 	                ))}
 	              </div>
-              {eligiblePackages.length === 0 && (
+              {calculatorPackages.length === 0 && (
                 <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
-                  Tidak ada paket aktif yang memenuhi minimum {minDurationMonths} bulan.
+                  Tidak ada paket aktif.
                 </div>
               )}
 
               <div className="space-y-3">
                 <div className="flex justify-between items-center">
-                  <span className="font-medium">Jumlah Member</span>
+                  <span className="font-medium">Jumlah Pegawai yang Dibayar</span>
                   <span className="text-3xl font-bold text-primary">{memberSlider[0]}</span>
                 </div>
                 <Slider
@@ -874,6 +982,9 @@ export function OrgActivationTab({
                   <span>1</span>
                   <span>1000</span>
                 </div>
+                <p className="text-xs text-muted-foreground">
+                  Seat tagihan ini boleh berbeda dari pegawai aktif saat ini. Pegawai aktif terdaftar: {employeeCount}
+                </p>
                 {hasOpenInvoice && (
                   <p className="text-xs text-amber-700 dark:text-amber-300">
                     Simulasi dikunci sementara karena masih ada invoice aktif.
@@ -885,23 +996,39 @@ export function OrgActivationTab({
                 <div className="rounded-lg border p-4 space-y-2">
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">
-                      {memberSlider[0]} member × {formatCurrency(unitPrice)} × {selectedPkg.duration_months} bln
+                      {memberSlider[0]} pegawai dibayar × {formatCurrency(selectedPkg.base_price_per_month)} × {selectedPkg.duration_months} bln
                     </span>
                     <span>{formatCurrency(subtotal)}</span>
                   </div>
-                  {discount > 0 && (
+                  {promoBreakdown?.promoMonthsApplied ? (
+                    <div className="flex justify-between text-sm text-emerald-700">
+                      <span>
+                        Promo onboarding {promoBreakdown.promoMonthsApplied} bulan ×{" "}
+                        {formatCurrency(promoBreakdown.promoPricePerEmployee || 0)}
+                      </span>
+                      <span>- {formatCurrency(promoBreakdown.introPromoAdditionalDiscount)}</span>
+                    </div>
+                  ) : null}
+                  {promoBreakdown?.packageDiscountAmount ? (
+                    <div className="flex justify-between text-sm text-blue-700">
+                      <span>Diskon paket ({promoBreakdown.packageDiscountPercentage}%)</span>
+                      <span>- {formatCurrency(promoBreakdown.packageDiscountAmount)}</span>
+                    </div>
+                  ) : discount > 0 ? (
                     <div className="flex justify-between text-sm text-green-600">
-                      <span>Diskon ({selectedPkg.discount_percentage}%)</span>
+                      <span>Diskon ({getBillingPackageEffectiveDiscountPercentage(selectedPkg)}%)</span>
                       <span>- {formatCurrency(discount)}</span>
                     </div>
-                  )}
+                  ) : null}
                   <Separator />
                   <div className="flex justify-between font-bold text-lg">
                     <span>Total</span>
                     <span className="text-primary">{formatCurrency(total)}</span>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Total tagihan sudah final sesuai kebijakan biaya internal.
+                    {promoBreakdown
+                      ? "Promo onboarding dihitung per subscription."
+                      : "Total tagihan sudah final sesuai kebijakan biaya internal."}
                   </p>
                 </div>
               )}
@@ -911,7 +1038,7 @@ export function OrgActivationTab({
                   <div className="space-y-0.5">
                     <p className="text-xs text-muted-foreground">Ringkasan Cepat</p>
                     <p className="text-sm font-semibold">
-                      {selectedPkg ? `${selectedPkg.name} • ${memberSlider[0]} member` : "Pilih paket"}
+                      {selectedPkg ? `${selectedPkgLabel} • ${memberSlider[0]} pegawai dibayar` : "Pilih paket"}
                     </p>
                     <p className="text-lg font-bold text-primary">{formatCurrency(total)}</p>
                   </div>
@@ -919,9 +1046,13 @@ export function OrgActivationTab({
                     <Button variant="outline" onClick={() => setIsCalculatorOpen(false)}>
                       Tutup
                     </Button>
-	                    <Button onClick={handleContinueToInvoice} disabled={!selectedPkg || eligiblePackages.length === 0}>
-	                      {hasOpenInvoice ? "Lihat Invoice Aktif" : "Lanjut Buat Invoice"}
-	                    </Button>
+                    <Button onClick={handleContinueToInvoice} disabled={!selectedPkg || calculatorPackages.length === 0}>
+                      {hasOpenInvoice
+                        ? "Lihat Invoice Aktif"
+                        : subscription?.status === "trial"
+                          ? "Lanjut Aktivasi Awal"
+                          : "Lanjut Buat Invoice"}
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -1349,7 +1480,7 @@ export function OrgActivationTab({
                     ? "Tenant billing mandiri: pembayaran hanya tersedia di dashboard employee"
                     : !xenditEnabled
                     ? "Hubungi admin untuk mengaktifkan pembayaran online"
-                    : `Tenant B2B billing terpusat (≥ ${b2bThreshold.toLocaleString()} pegawai / harga negosiasi) wajib manual transfer`}
+                    : `Tenant billing terpusat dengan ≥ ${b2bMinEmployees.toLocaleString()} pegawai wajib manual transfer`}
                 </p>
               )}
             </button>

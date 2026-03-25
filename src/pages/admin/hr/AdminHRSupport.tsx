@@ -158,16 +158,16 @@ export default function AdminHRSupport() {
 
   return (
     <AdminHRPageShell
-      title="Dukungan HR Global"
+      title="Dukungan Global HR"
       subtitle="Panduan troubleshooting dukungan HR"
       description="Panduan dukungan untuk insiden, tiket, dan eskalasi HR lintas tenant agar triase dukungan tetap seragam dan dapat diaudit."
     >
       <div className="space-y-4">
         <div className="grid gap-3 md:grid-cols-4">
-          <MetricCard title="Tiket Terbuka" value={stats.openTickets} note="Menunggu triase atau tindak lanjut." icon={Ticket} />
-          <MetricCard title="Sedang Diproses" value={stats.inProgressTickets} note="Antrean aktif dukungan HR." icon={LifeBuoy} />
-          <MetricCard title="Event SLA 24 Jam" value={stats.overdueEvents24h} note="Pengingat/eskalasi terlambat." icon={AlertTriangle} />
-          <MetricCard title="Error Kritis 24 Jam" value={stats.criticalErrors24h} note="Belum selesai dan belum diarsipkan." icon={ShieldCheck} />
+          <MetricCard title="Tiket Terbuka" value={stats.openTickets} note="Menunggu triase atau follow-up." icon={Ticket} />
+          <MetricCard title="Sedang Diproses" value={stats.inProgressTickets} note="Antrian aktif support HR." icon={LifeBuoy} />
+          <MetricCard title="Event SLA 24 Jam" value={stats.overdueEvents24h} note="Reminder/escalation overdue." icon={AlertTriangle} />
+          <MetricCard title="Error Kritis 24 Jam" value={stats.criticalErrors24h} note="Belum resolved dan belum diarsipkan." icon={ShieldCheck} />
         </div>
 
         <Card>
@@ -201,7 +201,7 @@ export default function AdminHRSupport() {
         <div className="grid gap-4 xl:grid-cols-2">
           <Card>
             <CardHeader>
-              <CardTitle>Panduan Eskalasi</CardTitle>
+              <CardTitle>Playbook Eskalasi</CardTitle>
               <CardDescription>Urutan kerja minimal agar tiket HR tidak berhenti di respons tekstual tanpa bukti.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">

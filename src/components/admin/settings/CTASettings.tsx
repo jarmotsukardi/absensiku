@@ -121,8 +121,8 @@ export function CTASettings() {
     <div className="space-y-6">
       <div className="flex items-center justify-between p-4 rounded-lg border">
         <div>
-          <Label>Tampilkan Section CTA</Label>
-          <p className="text-sm text-muted-foreground">Aktifkan section Call to Action di halaman depan</p>
+          <Label>Tampilkan Bagian CTA</Label>
+          <p className="text-sm text-muted-foreground">Aktifkan bagian Call to Action di halaman depan</p>
         </div>
         <Switch 
           checked={settings.show_section} 

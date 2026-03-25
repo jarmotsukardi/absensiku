@@ -5,8 +5,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import { RichTextEditor } from "@/components/editor/RichTextEditor";
 import { toast } from "sonner";
-import { Loader2, Save, Plus, Trash2, Facebook, Instagram, Youtube, Linkedin, MessageCircle, Send } from "lucide-react";
+import { Loader2, Save, Plus, Trash2 } from "lucide-react";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { withTimeout } from "@/lib/attendanceResilience";
 
@@ -21,6 +23,8 @@ interface FooterSettingsData {
   company_name: string;
   company_description: string;
   copyright_text: string;
+  enable_contact: boolean;
+  enable_social_media: boolean;
   address: string;
   email: string;
   phone: string;
@@ -40,6 +44,8 @@ const defaultSettings: FooterSettingsData = {
   company_name: "AbsensiKu",
   company_description: "Sistem absensi digital modern dengan teknologi GPS untuk organisasi dan perusahaan.",
   copyright_text: "© 2024 AbsensiKu. All rights reserved.",
+  enable_contact: true,
+  enable_social_media: true,
   address: "",
   email: "",
   phone: "",
@@ -216,26 +222,64 @@ export function FooterSettings() {
       {/* Contact Info - Optional */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Kontak (Opsional)</CardTitle>
-          <CardDescription>Biarkan kosong jika tidak ingin ditampilkan</CardDescription>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <CardTitle className="text-lg">Kontak (Opsional)</CardTitle>
+              <CardDescription>
+                {settings.enable_contact
+                  ? "Biarkan kosong jika tidak ingin ditampilkan"
+                  : "Kontak sedang dinonaktifkan dan tidak akan tampil di footer publik"}
+              </CardDescription>
+            </div>
+            <div className="flex items-center gap-3 rounded-lg border px-3 py-2">
+              <Label htmlFor="footer-enable-contact" className="text-sm font-medium">
+                Tampilkan Kontak
+              </Label>
+              <Switch
+                id="footer-enable-contact"
+                checked={settings.enable_contact}
+                onCheckedChange={(checked) => setSettings({ ...settings, enable_contact: checked })}
+              />
+            </div>
+          </div>
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className={`space-y-4 ${settings.enable_contact ? "" : "opacity-60"}`}>
           <div className="space-y-2">
             <Label>Alamat</Label>
-            <Input value={settings.address} onChange={(e) => setSettings({ ...settings, address: e.target.value })} placeholder="Alamat (opsional)" />
+            <Input
+              value={settings.address}
+              onChange={(e) => setSettings({ ...settings, address: e.target.value })}
+              placeholder="Alamat (opsional)"
+              disabled={!settings.enable_contact}
+            />
           </div>
           <div className="grid gap-4 md:grid-cols-3">
             <div className="space-y-2">
               <Label>Email</Label>
-              <Input value={settings.email} onChange={(e) => setSettings({ ...settings, email: e.target.value })} placeholder="Email (opsional)" />
+              <Input
+                value={settings.email}
+                onChange={(e) => setSettings({ ...settings, email: e.target.value })}
+                placeholder="Email (opsional)"
+                disabled={!settings.enable_contact}
+              />
             </div>
             <div className="space-y-2">
               <Label>Telepon</Label>
-              <Input value={settings.phone} onChange={(e) => setSettings({ ...settings, phone: e.target.value })} placeholder="Telepon (opsional)" />
+              <Input
+                value={settings.phone}
+                onChange={(e) => setSettings({ ...settings, phone: e.target.value })}
+                placeholder="Telepon (opsional)"
+                disabled={!settings.enable_contact}
+              />
             </div>
             <div className="space-y-2">
               <Label>WhatsApp</Label>
-              <Input value={settings.whatsapp} onChange={(e) => setSettings({ ...settings, whatsapp: e.target.value })} placeholder="6281xxx (opsional)" />
+              <Input
+                value={settings.whatsapp}
+                onChange={(e) => setSettings({ ...settings, whatsapp: e.target.value })}
+                placeholder="6281xxx (opsional)"
+                disabled={!settings.enable_contact}
+              />
             </div>
           </div>
         </CardContent>
@@ -245,7 +289,7 @@ export function FooterSettings() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
-            <CardTitle className="text-lg">Quick Links (Menu Cepat)</CardTitle>
+            <CardTitle className="text-lg">Tautan Cepat</CardTitle>
             <CardDescription>Link navigasi seperti Fitur, Harga, FAQ, dll</CardDescription>
           </div>
           <Button size="sm" variant="outline" onClick={addQuickLink}><Plus className="h-4 w-4 mr-1" />Tambah</Button>
@@ -304,51 +348,14 @@ export function FooterSettings() {
               </div>
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">Konten (HTML) - Jika diisi, akan tampil sebagai overlay saat diklik</Label>
-                <Textarea
+                <RichTextEditor
                   value={link.content || ""}
-                  onChange={(e) => updateLegalLink(link.id, "content", e.target.value)}
-                  placeholder="<p>Konten HTML untuk overlay...</p>"
-                  rows={4}
-                  className="font-mono text-sm"
+                  onChange={(value) => updateLegalLink(link.id, "content", value)}
+                  placeholder="Tulis konten legal di sini..."
                 />
               </div>
             </div>
           ))}
-        </CardContent>
-      </Card>
-
-      {/* Social Media */}
-      <Card>
-        <CardHeader><CardTitle className="text-lg">Social Media</CardTitle></CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          <div className="space-y-2">
-            <Label className="flex items-center gap-2"><Facebook className="h-4 w-4" />Facebook</Label>
-            <Input value={settings.social_facebook} onChange={(e) => setSettings({ ...settings, social_facebook: e.target.value })} placeholder="https://facebook.com/..." />
-          </div>
-          <div className="space-y-2">
-            <Label className="flex items-center gap-2"><Instagram className="h-4 w-4" />Instagram</Label>
-            <Input value={settings.social_instagram} onChange={(e) => setSettings({ ...settings, social_instagram: e.target.value })} placeholder="https://instagram.com/..." />
-          </div>
-          <div className="space-y-2">
-            <Label className="flex items-center gap-2">Twitter/X</Label>
-            <Input value={settings.social_twitter} onChange={(e) => setSettings({ ...settings, social_twitter: e.target.value })} placeholder="https://twitter.com/..." />
-          </div>
-          <div className="space-y-2">
-            <Label className="flex items-center gap-2"><Youtube className="h-4 w-4" />YouTube</Label>
-            <Input value={settings.social_youtube} onChange={(e) => setSettings({ ...settings, social_youtube: e.target.value })} placeholder="https://youtube.com/..." />
-          </div>
-          <div className="space-y-2">
-            <Label className="flex items-center gap-2"><Linkedin className="h-4 w-4" />LinkedIn</Label>
-            <Input value={settings.social_linkedin} onChange={(e) => setSettings({ ...settings, social_linkedin: e.target.value })} placeholder="https://linkedin.com/company/..." />
-          </div>
-          <div className="space-y-2">
-            <Label className="flex items-center gap-2"><MessageCircle className="h-4 w-4" />TikTok</Label>
-            <Input value={settings.social_tiktok} onChange={(e) => setSettings({ ...settings, social_tiktok: e.target.value })} placeholder="https://tiktok.com/@..." />
-          </div>
-          <div className="space-y-2">
-            <Label className="flex items-center gap-2"><Send className="h-4 w-4" />Telegram</Label>
-            <Input value={settings.social_telegram} onChange={(e) => setSettings({ ...settings, social_telegram: e.target.value })} placeholder="https://t.me/..." />
-          </div>
         </CardContent>
       </Card>
 

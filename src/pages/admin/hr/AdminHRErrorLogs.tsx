@@ -241,9 +241,9 @@ export default function AdminHRErrorLogs() {
 
         <div className="grid gap-3 md:grid-cols-4">
           <MetricCard title="Total Error HR" value={summary.total} note="Seluruh log HR lintas tenant." />
-          <MetricCard title="Kritis Terbuka" value={summary.critical} note="Belum selesai dan belum diarsipkan." />
+          <MetricCard title="Kritis Terbuka" value={summary.critical} note="Belum resolved dan belum diarsipkan." />
           <MetricCard title="Non-Kritis" value={summary.nonCritical} note="Perlu triase tanpa eskalasi tinggi." />
-          <MetricCard title="Selesai / Arsip" value={summary.resolved + summary.archived} note="Sudah ditutup atau diparkir." />
+          <MetricCard title="Resolved / Arsip" value={summary.resolved + summary.archived} note="Sudah ditutup atau diparkir." />
         </div>
 
         <Card>
@@ -258,7 +258,7 @@ export default function AdminHRErrorLogs() {
                 <Input
                   value={searchTerm}
                   onChange={(event) => setSearchTerm(event.target.value)}
-                  placeholder="Cari ref, pesan, rute, trace id..."
+                  placeholder="Cari ref, pesan, route, trace id..."
                   className="pl-9"
                 />
               </div>
@@ -372,6 +372,7 @@ export default function AdminHRErrorLogs() {
                               size="icon"
                               onClick={() => navigate(row.route || "/admin/hr/audit")}
                               title="Buka rute sumber"
+                              aria-label="Buka route sumber"
                             >
                               <ExternalLink className="h-4 w-4" />
                             </Button>

@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type ConsoleMessage, type Locator, type Page } from "@playwright/test";
 import { loginAsOrgAdmin, waitForStable } from "./helpers/orgAuth";
 
 /**
@@ -24,11 +24,11 @@ const collectInteractives = async (page: Page) => {
 };
 
 // Helper: Click element safely and capture errors
-const clickElement = async (page: Page, element: any, index: number, type: string) => {
+const clickElement = async (page: Page, element: Locator, index: number, type: string) => {
   const errors: Array<{ type: string; message: string }> = [];
   
   // Capture console errors
-  const consoleHandler = (msg: any) => {
+  const consoleHandler = (msg: ConsoleMessage) => {
     if (msg.type() === "error") {
       errors.push({ type: "console", message: msg.text() });
     }

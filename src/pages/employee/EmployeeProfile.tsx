@@ -28,6 +28,8 @@ import {
   DEFAULT_ORG_MASTER_DATA_MODULES,
   fetchTenantOrgMasterDataModules,
 } from "@/lib/orgMasterDataModules";
+import { AttendanceAccessRestrictionMessage } from "@/components/employee/AttendanceAccessRestrictionMessage";
+import { useAttendanceResourceRestriction } from "@/hooks/useAttendanceResourceRestriction";
 
 interface EmployeeData {
   id: string;
@@ -45,7 +47,7 @@ interface EmployeeData {
   employee_category?: string;
   opd?: { name: string };
   work_unit?: { name: string };
-  offices?: { name: string; address?: string };
+  offices?: { name: string; address?: string; work_start_time?: string | null; work_end_time?: string | null };
 }
 
 export default function EmployeeProfile() {
@@ -64,6 +66,13 @@ export default function EmployeeProfile() {
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
+  const attendanceResourceRestriction = useAttendanceResourceRestriction({
+    tenantId: employee?.tenant_id || null,
+    officeScheduleFallback: {
+      work_start_time: employee?.offices?.work_start_time || null,
+      work_end_time: employee?.offices?.work_end_time || null,
+    },
+  });
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
@@ -153,11 +162,22 @@ export default function EmployeeProfile() {
     }
   };
 
-  if (isLoading) {
+  if (isLoading || (employee?.tenant_id && attendanceResourceRestriction.isLoading)) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
       </div>
+    );
+  }
+
+  if (attendanceResourceRestriction.isRestrictedNow) {
+    return (
+      <AttendanceAccessRestrictionMessage
+        reason={attendanceResourceRestriction.restrictionReason}
+        scheduleLabel={attendanceResourceRestriction.scheduleLabel}
+        reopensAtLabel={attendanceResourceRestriction.reopensAtLabel}
+        onBack={() => navigate("/employee/dashboard", { replace: true })}
+      />
     );
   }
 

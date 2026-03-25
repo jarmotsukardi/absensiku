@@ -146,6 +146,48 @@ const DUMMY_FAQS: FAQ[] = [
       "Pemisahan kolom PPN dan PPH tersedia di panel admin pada tab Paket Langganan dan Laporan Keuangan. Di sisi organisasi (/org/billing), invoice tetap tampil sebagai total akhir tagihan.",
   },
   {
+    id: "14a",
+    category: "Billing & Harga",
+    question: "Apa arti istilah Fondasi Absensi, Lihat Saja, dan Bisa Diedit pada akses HR?",
+    answer:
+      "Fondasi Absensi berarti setup dasar organisasi dan rekam absensi awal sudah siap. Lihat Saja berarti menu HR sudah bisa dibuka untuk ditinjau, tetapi data belum bisa ditambah atau diubah. Bisa Diedit berarti pengelolaan data HR sudah dibuka penuh sesuai hak akses.",
+  },
+  {
+    id: "14b",
+    category: "Billing & Harga",
+    question: "Kapan HR bisa dipakai penuh oleh admin organisasi?",
+    answer:
+      "HR dibuka bertahap. Biasanya organisasi perlu menyiapkan fondasi absensi lebih dulu, lalu melanjutkan aktivasi sesuai status pembayaran. Jika modul masih dalam mode lihat saja, artinya organisasi sudah bisa meninjau menu tetapi belum bisa mengelola data penuh.",
+  },
+  {
+    id: "14c",
+    category: "Billing & Harga",
+    question: "Kenapa Payroll belum bisa diedit walaupun HR sudah bisa dibuka?",
+    answer:
+      "Payroll mengikuti tahap aktivasi yang lebih ketat. Dalam banyak kasus, HR bisa dibuka lebih dulu untuk persiapan operasional, sedangkan Payroll menunggu langganan aktif agar perhitungan dan distribusi data tetap aman.",
+  },
+  {
+    id: "14d",
+    category: "Billing & Harga",
+    question: "Apa bedanya trial dan aktivasi awal?",
+    answer:
+      "Trial adalah jalur normal tenant baru. Sistem memantau pemakaian melalui Streak Monitoring sampai tenant siap ditagih. Aktivasi awal adalah jalur khusus ketika organisasi sudah siap berlangganan sebelum invoice otomatis dari trial diterbitkan.",
+  },
+  {
+    id: "14e",
+    category: "Billing & Harga",
+    question: "Kapan invoice pertama muncul otomatis dari streak monitoring?",
+    answer:
+      "Invoice pertama muncul otomatis setelah trial dinilai stabil dan siap ditagih oleh Streak Monitoring. Jika organisasi tidak ingin menunggu tahap itu, admin organisasi dapat membuat invoice lebih awal dari menu billing sebagai aktivasi awal.",
+  },
+  {
+    id: "14f",
+    category: "Billing & Harga",
+    question: "Bagaimana jika organisasi ingin langsung membayar paket Absensi + HR + Payroll?",
+    answer:
+      "Paket bundle boleh dibayar di awal melalui aktivasi awal. Namun pembukaan modul tetap bertahap. Absensi dan HR dapat dibuka sesuai tahap aktivasi, sedangkan Payroll dapat berstatus menunggu setup sampai data dan proses payroll siap.",
+  },
+  {
     id: "15",
     category: "Billing & Harga",
     question: "Apakah pilihan kalkulator langganan di /org/activation tersimpan otomatis?",
@@ -188,6 +230,8 @@ const DUMMY_FAQS: FAQ[] = [
       "Bisa. Gunakan template resmi CSV atau XLS dari halaman import pegawai, lalu isi header kolom persis seperti template agar lolos validasi.",
   },
 ];
+const TUTORIAL_DOCX_URL = "/tutorials/tutorial-absensiku-admin-pegawai.docx";
+const TUTORIAL_WEB_URL = "/tutorials/tutorial-absensiku-admin-pegawai.html";
 
 const CATEGORY_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   Umum: BookOpen,
@@ -526,6 +570,93 @@ export default function OrgHelp() {
             )}
           </CardContent>
         </Card>
+        <Card className="border-primary/30 bg-primary/5">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <FileText className="h-4 w-4 text-primary" />
+              Tutorial Lengkap Admin dan Pegawai
+            </CardTitle>
+            <CardDescription>
+              Dokumen tutorial Word editable lengkap dengan screenshot langkah operasional.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            <Button asChild size="sm">
+              <a href={TUTORIAL_DOCX_URL} target="_blank" rel="noreferrer">
+                Unduh DOCX
+              </a>
+            </Button>
+            <Button asChild size="sm" variant="outline">
+              <a href={TUTORIAL_WEB_URL} target="_blank" rel="noreferrer">
+                <ExternalLink className="h-3.5 w-3.5 mr-1" />
+                Lihat Versi Web
+              </a>
+            </Button>
+          </CardContent>
+        </Card>
+        <Card className="border-amber-300/60 bg-amber-50/70">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Shield className="h-4 w-4 text-amber-700" />
+              Memahami Trial, Aktivasi Awal, dan Akses Modul
+            </CardTitle>
+            <CardDescription>
+              Ringkasan singkat agar admin organisasi memahami jalur normal trial, kapan boleh membayar lebih awal, dan kapan modul dibuka penuh.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <div className="rounded-lg border bg-background/90 p-4">
+              <p className="text-sm font-medium">1. Fondasi Absensi</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Organisasi perlu menyiapkan struktur kerja, lokasi kerja, jam kerja, batas absen, data pegawai, dan rekam absensi awal.
+              </p>
+            </div>
+            <div className="rounded-lg border bg-background/90 p-4">
+              <p className="text-sm font-medium">2. Trial & Streak Monitoring</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Ini jalur normal tenant baru. Sistem memantau kestabilan penggunaan sampai tenant dinilai siap ditagih secara normal.
+              </p>
+            </div>
+            <div className="rounded-lg border bg-background/90 p-4">
+              <p className="text-sm font-medium">3. Aktivasi Awal</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Jika organisasi sudah siap berlangganan lebih awal, admin organisasi dapat membuat invoice lebih dulu tanpa menunggu streak siap tagih.
+              </p>
+            </div>
+            <div className="rounded-lg border bg-background/90 p-4">
+              <p className="text-sm font-medium">4. Langganan Aktif</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Saat invoice tervalidasi, langganan masuk fase aktif. Fitur dibuka sesuai paket organisasi dan kebijakan akses yang berlaku.
+              </p>
+            </div>
+            <div className="rounded-lg border bg-background/90 p-4">
+              <p className="text-sm font-medium">5. Mode Lihat Saja</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Menu HR atau Payroll sudah bisa dibuka untuk dipelajari, tetapi data belum bisa ditambah, diubah, atau diproses penuh.
+              </p>
+            </div>
+            <div className="rounded-lg border bg-background/90 p-4">
+              <p className="text-sm font-medium">6. Payroll Menunggu Setup</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Paket bundle dapat dibayar di awal, tetapi Payroll boleh tetap menunggu setup agar komponen gaji, data pegawai, dan periode payroll siap lebih dulu.
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+        {subscriptionStatus === "trial" && (
+          <Card className="border-blue-300/60 bg-blue-50/70">
+            <CardContent className="pt-6">
+              <div className="space-y-2">
+                <p className="text-sm font-medium text-blue-900">Tenant Anda masih berada di jalur trial.</p>
+                <p className="text-sm text-blue-900/90">
+                  Jalur normal tenant baru mengikuti <strong>Streak Monitoring</strong> sampai siap ditagih.
+                  Jika organisasi Anda sudah siap berlangganan sekarang, buka menu billing untuk memilih
+                  paket dan membuat invoice sebagai <strong>aktivasi awal</strong>.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
         {loadError && (
           <Card className="border-destructive/40">
             <CardContent className="pt-6">

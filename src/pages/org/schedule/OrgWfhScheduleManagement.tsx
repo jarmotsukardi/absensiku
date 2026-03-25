@@ -351,8 +351,12 @@ export default function OrgWfhScheduleManagement() {
     }
 
     try {
+      if (!tenantId) {
+        toast.error("Tenant tidak ditemukan");
+        return;
+      }
       const { error } = await withTimeout(
-        supabase.from("wfh_schedules").delete().eq("id", id),
+        supabase.from("wfh_schedules").delete().eq("id", id).eq("tenant_id", tenantId),
         WFH_WRITE_TIMEOUT_MS,
         "Hapus jadwal WFH timeout."
       );

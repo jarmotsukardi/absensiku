@@ -144,64 +144,64 @@ const ADMIN_ROLE_MAX_RETRIES = 2;
 
 const ROLE_GLOSSARY: RoleGlossaryItem[] = [
   {
-    term: "Role Assignment",
+    term: "Penetapan Peran",
     description:
-      "Pemetaan antara user dan role tertentu yang menentukan halaman/fungsi apa saja yang bisa diakses.",
+      "Pemetaan antara pengguna dan peran tertentu yang menentukan halaman/fungsi apa saja yang bisa diakses.",
     reference: "Tabel: user_roles",
   },
   {
     term: "Super Admin",
     description:
-      "Role tertinggi platform dengan akses lintas tenant, termasuk pengaturan global, billing, role, dan audit.",
-    reference: "Role ID: super_admin",
+      "Peran tertinggi platform dengan akses lintas tenant, termasuk pengaturan global, tagihan, peran, dan audit.",
+    reference: "ID Peran: super_admin",
   },
   {
     term: "Admin Instansi",
     description:
-      "Role pengelola tenant/organisasi. Dapat mengelola pegawai, master data, pengajuan, laporan, dan pengaturan tenant.",
-    reference: "Role ID: admin_instansi",
+      "Peran pengelola tenant/organisasi. Dapat mengelola pegawai, data master, pengajuan, laporan, dan pengaturan tenant.",
+    reference: "ID Peran: admin_instansi",
   },
   {
     term: "Atasan",
     description:
-      "Role supervisi untuk approval dan pemantauan tim pada tenant terkait, dengan akses terbatas sesuai kebijakan.",
-    reference: "Role ID: atasan",
+      "Peran supervisi untuk persetujuan dan pemantauan tim pada tenant terkait, dengan akses terbatas sesuai kebijakan.",
+    reference: "ID Peran: atasan",
   },
   {
     term: "Pegawai",
     description:
-      "Role pengguna akhir untuk absensi, pengajuan, riwayat, profil, dan notifikasi milik akun tersebut.",
-    reference: "Role ID: pegawai",
+      "Peran pengguna akhir untuk absensi, pengajuan, riwayat, profil, dan notifikasi milik akun tersebut.",
+    reference: "ID Peran: pegawai",
   },
   {
-    term: "Tenant Scope",
+    term: "Cakupan Tenant",
     description:
-      "Batas data per organisasi. Untuk role non-super-admin, tenant_id wajib diisi agar akses tidak lintas tenant.",
+      "Batas data per organisasi. Untuk peran selain super admin, `tenant_id` wajib diisi agar akses tidak lintas tenant.",
     reference: "Kolom: user_roles.tenant_id",
   },
   {
     term: "Tanpa Tenant",
     description:
-      "Kondisi assignment tanpa tenant. Umumnya hanya valid untuk Super Admin.",
+      "Kondisi penetapan tanpa tenant. Umumnya hanya valid untuk super admin.",
     reference: "UI: opsi \"Tanpa Tenant\"",
   },
   {
-    term: "Lookup Email",
+    term: "Pencarian Email",
     description:
-      "Fitur pencarian user_id dari tabel employees berdasarkan email agar assignment role lebih cepat dan akurat.",
+      "Fitur pencarian `user_id` dari tabel `employees` berdasarkan email agar penetapan peran lebih cepat dan akurat.",
     reference: "Aksi: Cari email -> isi User ID",
   },
   {
-    term: "RLS (Row Level Security)",
+    term: "RLS (Keamanan Tingkat Baris)",
     description:
-      "Kebijakan database yang memastikan data yang ditampilkan/diubah tetap sesuai role dan tenant pengguna.",
-    reference: "Supabase RLS Policies",
+      "Kebijakan database yang memastikan data yang ditampilkan/diubah tetap sesuai peran dan tenant pengguna.",
+    reference: "Kebijakan RLS Supabase",
   },
   {
-    term: "Permission Matrix",
+    term: "Matriks Izin",
     description:
-      "Ringkasan kemampuan per role (lihat, tambah, ubah, hapus, approval, konfigurasi) sebagai panduan otorisasi.",
-    reference: "Kartu role pada halaman ini",
+      "Ringkasan kemampuan per peran (lihat, tambah, ubah, hapus, persetujuan, konfigurasi) sebagai panduan otorisasi.",
+    reference: "Kartu peran pada halaman ini",
   },
 ];
 
@@ -278,7 +278,7 @@ export default function RoleManagement() {
                 .select("id,user_id,role,tenant_id,created_at")
                 .order("created_at", { ascending: false }),
               ADMIN_ROLE_READ_TIMEOUT_MS,
-              "Permintaan data role assignment timeout."
+              "Permintaan data penetapan peran melewati batas waktu."
             ),
           {
             maxRetries: ADMIN_ROLE_MAX_RETRIES,
@@ -494,7 +494,7 @@ export default function RoleManagement() {
 
     const tenantId = formTenantId === "none" ? null : formTenantId;
     if (formRole !== "super_admin" && !tenantId) {
-      toast.error("Role selain Super Admin wajib punya tenant");
+      toast.error("Peran selain Super Admin wajib punya tenant");
       return;
     }
 
@@ -511,10 +511,10 @@ export default function RoleManagement() {
             })
             .eq("id", editing.id),
           ADMIN_ROLE_WRITE_TIMEOUT_MS,
-          "Perbarui role assignment timeout."
+          "Pembaruan penetapan peran melewati batas waktu."
         );
         if (error) throw error;
-        toast.success("Role assignment berhasil diperbarui");
+      toast.success("Penetapan peran berhasil diperbarui");
       } else {
         const { error } = await withTimeout(
           supabase
@@ -525,10 +525,10 @@ export default function RoleManagement() {
               tenant_id: formRole === "super_admin" ? null : tenantId,
             }),
           ADMIN_ROLE_WRITE_TIMEOUT_MS,
-          "Tambah role assignment timeout."
+          "Penambahan penetapan peran melewati batas waktu."
         );
         if (error) throw error;
-        toast.success("Role assignment berhasil ditambahkan");
+        toast.success("Penetapan peran berhasil ditambahkan");
       }
 
       setDialogOpen(false);
@@ -541,7 +541,7 @@ export default function RoleManagement() {
         role: formRole,
         tenant_id: tenantId,
       });
-      toast.error(appendErrorReference("Gagal menyimpan role assignment", errorRef));
+      toast.error(appendErrorReference("Gagal menyimpan penetapan peran", errorRef));
     } finally {
       setIsSaving(false);
     }
@@ -554,11 +554,11 @@ export default function RoleManagement() {
       const { error } = await withTimeout(
         supabase.from("user_roles").delete().eq("id", deleting.id),
         ADMIN_ROLE_WRITE_TIMEOUT_MS,
-        "Hapus role assignment timeout."
+        "Penghapusan penetapan peran melewati batas waktu."
       );
       if (error) throw error;
 
-      toast.success("Role assignment berhasil dihapus");
+      toast.success("Penetapan peran berhasil dihapus");
       setDeleteOpen(false);
       setDeleting(null);
       await loadData();
@@ -567,14 +567,14 @@ export default function RoleManagement() {
         role_assignment_id: deleting.id,
         user_id: deleting.user_id,
       });
-      toast.error(appendErrorReference("Gagal menghapus role assignment", errorRef));
+      toast.error(appendErrorReference("Gagal menghapus penetapan peran", errorRef));
     } finally {
       setIsSaving(false);
     }
   };
 
   return (
-    <SuperAdminLayout title="Role & Permission" subtitle="Manajemen assignment role pengguna sistem">
+    <SuperAdminLayout title="Peran & Izin" subtitle="Manajemen penetapan peran pengguna sistem">
       <div className="space-y-6">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {ROLE_DEFS.map((def) => {
@@ -605,7 +605,7 @@ export default function RoleManagement() {
           <CardHeader>
             <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
               <div>
-                <CardTitle>Daftar Role Assignment</CardTitle>
+                <CardTitle>Daftar Penetapan Peran</CardTitle>
                 <CardDescription>CRUD assignment role per user berdasarkan tabel `user_roles`.</CardDescription>
               </div>
               <Button onClick={openAddDialog}>
@@ -632,17 +632,17 @@ export default function RoleManagement() {
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   className="pl-9"
-                  placeholder="Cari user/email/tenant..."
+                  placeholder="Cari pengguna/email/tenant..."
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                 />
               </div>
               <Select value={roleFilter} onValueChange={(value) => setRoleFilter(value as "all" | AppRole)}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Filter role" />
+                  <SelectValue placeholder="Filter peran" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">Semua Role</SelectItem>
+                  <SelectItem value="all">Semua Peran</SelectItem>
                   <SelectItem value="super_admin">Super Admin</SelectItem>
                   <SelectItem value="admin_instansi">Admin Instansi</SelectItem>
                   <SelectItem value="atasan">Atasan</SelectItem>
@@ -668,7 +668,7 @@ export default function RoleManagement() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>User</TableHead>
-                    <TableHead>Role</TableHead>
+                    <TableHead>Peran</TableHead>
                     <TableHead>Tenant</TableHead>
                     <TableHead>Dibuat</TableHead>
                     <TableHead className="w-[140px]">Aksi</TableHead>
@@ -686,7 +686,7 @@ export default function RoleManagement() {
                   ) : paginatedRows.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={5} className="text-center text-muted-foreground py-6">
-                        Tidak ada data role assignment.
+                        Tidak ada data penetapan peran.
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -773,7 +773,7 @@ export default function RoleManagement() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Glosarium Role & Permission</CardTitle>
+            <CardTitle>Glosarium Peran & Izin</CardTitle>
             <CardDescription>
               Penjelasan istilah penting untuk memastikan konfigurasi akses dilakukan secara konsisten.
             </CardDescription>
@@ -856,9 +856,9 @@ export default function RoleManagement() {
       }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editing ? "Edit Role Assignment" : "Tambah Role Assignment"}</DialogTitle>
+            <DialogTitle>{editing ? "Ubah Penetapan Peran" : "Tambah Penetapan Peran"}</DialogTitle>
             <DialogDescription>
-              Tetapkan role pengguna ke tenant tertentu. Role `super_admin` tidak memerlukan tenant.
+              Tetapkan peran pengguna ke tenant tertentu. Peran `super_admin` tidak memerlukan tenant.
             </DialogDescription>
           </DialogHeader>
 
@@ -888,7 +888,7 @@ export default function RoleManagement() {
             </div>
 
             <div className="space-y-2">
-              <Label>Role</Label>
+              <Label>Peran</Label>
               <Select value={formRole} onValueChange={(value) => setFormRole(value as AppRole)}>
                 <SelectTrigger>
                   <SelectValue />
@@ -919,7 +919,7 @@ export default function RoleManagement() {
           </div>
 
           <DialogFooter className={dialogActionBarClassName}>
-            <DialogActionHint>Assignment role akan langsung aktif setelah disimpan.</DialogActionHint>
+            <DialogActionHint>Penetapan peran akan langsung aktif setelah disimpan.</DialogActionHint>
             <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row sm:justify-end">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>Batal</Button>
               <Button onClick={handleSave} disabled={isSaving}>
@@ -934,9 +934,9 @@ export default function RoleManagement() {
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Hapus assignment role?</AlertDialogTitle>
+            <AlertDialogTitle>Hapus penetapan peran?</AlertDialogTitle>
             <AlertDialogDescription>
-              Role `{deleting ? ROLE_LABEL[deleting.role] : "-"}` untuk user `{deleting?.user_id || "-"}` akan dihapus permanen.
+              Peran `{deleting ? ROLE_LABEL[deleting.role] : "-"}` untuk user `{deleting?.user_id || "-"}` akan dihapus permanen.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

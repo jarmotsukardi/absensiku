@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { fetchTenantHrPayrollAccessState, getWorkspaceLockedReason } from "@/lib/hrPayrollAccessPolicy";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { fetchTenantOrgWorkspaceModules } from "@/lib/orgWorkspaceModules";
 import { reportError } from "@/lib/errorLogger";
@@ -126,6 +127,17 @@ const PAGE_POLICIES: Record<string, HrPagePolicy> = {
       edit: [],
       delete: [],
       export: [],
+      approve: [],
+    }),
+    redirectTo: "/org/hr",
+  },
+  "/org/hr/priority": {
+    label: "Workspace Prioritas HR",
+    capabilities: buildActionMap({
+      create: [],
+      delete: [],
+      export: [],
+      configure: [],
       approve: [],
     }),
     redirectTo: "/org/hr",
@@ -348,7 +360,7 @@ const PAGE_POLICIES: Record<string, HrPagePolicy> = {
     redirectTo: "/org/hr",
   },
   "/org/hr/ess/requests": {
-    label: "ESS Pengajuan",
+    label: "Pengajuan ESS",
     capabilities: buildActionMap({
       create: [],
       edit: [],
@@ -360,7 +372,7 @@ const PAGE_POLICIES: Record<string, HrPagePolicy> = {
     redirectTo: "/org/hr",
   },
   "/org/hr/ess/leave-requests": {
-    label: "ESS Cuti dan Izin",
+    label: "Cuti & Izin ESS",
     capabilities: buildActionMap({
       create: [],
       edit: [],
@@ -372,7 +384,7 @@ const PAGE_POLICIES: Record<string, HrPagePolicy> = {
     redirectTo: "/org/hr",
   },
   "/org/hr/ess/wfh-requests": {
-    label: "ESS Persetujuan WFH",
+    label: "Pengajuan WFH",
     capabilities: buildActionMap({
       create: [],
       edit: ["super_admin", "admin_instansi"],
@@ -384,7 +396,7 @@ const PAGE_POLICIES: Record<string, HrPagePolicy> = {
     redirectTo: "/org/hr",
   },
   "/org/hr/ess/flexible-attendance": {
-    label: "ESS Persetujuan Absensi Khusus",
+    label: "Absensi Khusus",
     capabilities: buildActionMap({
       create: [],
       edit: ["super_admin", "admin_instansi"],
@@ -396,7 +408,7 @@ const PAGE_POLICIES: Record<string, HrPagePolicy> = {
     redirectTo: "/org/hr",
   },
   "/org/hr/ess/overtime-requests": {
-    label: "ESS Persetujuan Lembur",
+    label: "Pengajuan Lembur",
     capabilities: buildActionMap({
       create: [],
       edit: ["super_admin", "admin_instansi"],
@@ -408,7 +420,7 @@ const PAGE_POLICIES: Record<string, HrPagePolicy> = {
     redirectTo: "/org/hr",
   },
   "/org/hr/ess/attendance": {
-    label: "ESS Kehadiran",
+    label: "Kehadiran ESS",
     capabilities: buildActionMap({
       create: [],
       edit: [],
@@ -420,7 +432,7 @@ const PAGE_POLICIES: Record<string, HrPagePolicy> = {
     redirectTo: "/org/hr",
   },
   "/org/hr/ess/documents": {
-    label: "ESS Dokumen",
+    label: "Dokumen ESS",
     capabilities: buildActionMap({
       create: [],
       edit: [],
@@ -432,7 +444,7 @@ const PAGE_POLICIES: Record<string, HrPagePolicy> = {
     redirectTo: "/org/hr",
   },
   "/org/hr/ess/profile": {
-    label: "ESS Profil",
+    label: "Profil ESS",
     capabilities: buildActionMap({
       create: [],
       edit: [],
@@ -468,6 +480,35 @@ const resolveRole = (roles: string[]): HrPageRole => {
 };
 
 const isRoleAllowed = (allowedRoles: HrPageRole[], role: HrPageRole) => allowedRoles.includes(role);
+
+const buildReadonlyResolution = ({
+  canView,
+  role,
+  ref,
+  pagePath,
+  label,
+}: {
+  canView: boolean;
+  role: HrPageRole;
+  ref: string;
+  pagePath: string;
+  label: string;
+}): HrPageAccessResolution => ({
+  allowed: canView,
+  role,
+  ref,
+  reason: canView ? null : "HR pada organisasi ini masih dalam mode lihat saja.",
+  redirectTo: canView ? null : "/org/hr",
+  pagePath,
+  label,
+  canView,
+  canCreate: false,
+  canEdit: false,
+  canDelete: false,
+  canExport: false,
+  canConfigure: false,
+  canApprove: false,
+});
 
 export function getHrPagePolicy(pagePath: string): HrPagePolicy {
   return PAGE_POLICIES[pagePath] || DEFAULT_POLICY;
@@ -548,6 +589,37 @@ export async function resolveHrPageAccess(pagePath: string): Promise<HrPageAcces
           canConfigure: false,
           canApprove: false,
         };
+      }
+
+      const accessState = await fetchTenantHrPayrollAccessState(tenantId);
+      const canViewReadonly = isRoleAllowed(policy.capabilities.view, role);
+      if (accessState.hrMode === "locked") {
+        return {
+          allowed: false,
+          role,
+          ref,
+          reason: getWorkspaceLockedReason("hr", accessState.readiness),
+          redirectTo: "/org/hr",
+          pagePath,
+          label: policy.label,
+          canView: false,
+          canCreate: false,
+          canEdit: false,
+          canDelete: false,
+          canExport: false,
+          canConfigure: false,
+          canApprove: false,
+        };
+      }
+
+      if (accessState.hrMode === "readonly") {
+        return buildReadonlyResolution({
+          canView: canViewReadonly,
+          role,
+          ref,
+          pagePath,
+          label: policy.label,
+        });
       }
     }
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -44,7 +45,7 @@ type FormState = {
 const ITEMS_PER_PAGE = 10;
 
 const STATUS_OPTIONS: Array<{ value: ReportStatus; label: string }> = [
-  { value: "draft", label: "Draft" },
+  { value: "draft", label: "Draf" },
   { value: "generated", label: "Dibuat" },
   { value: "published", label: "Dipublikasikan" },
   { value: "archived", label: "Arsip" },
@@ -84,7 +85,7 @@ const formatDateTime = (value: string | null) => {
 };
 
 const REPORT_STATUS_LABELS: Record<ReportStatus, string> = {
-  draft: "Draft",
+  draft: "Draf",
   generated: "Dibuat",
   published: "Dipublikasikan",
   archived: "Arsip",
@@ -97,6 +98,9 @@ const REPORT_TYPE_LABELS: Record<ReportType, string> = Object.fromEntries(
 
 export default function OrgPayrollReports() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target));
   const confirmDialog = useConfirmDialog();
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [periods, setPeriods] = useState<PayrollPeriod[]>([]);
@@ -186,7 +190,7 @@ export default function OrgPayrollReports() {
       ...initialFormState,
       period_id: periods[0]?.id || "all",
       run_id: runs[0]?.id || "all",
-      snapshot_name: `Payroll Report ${new Date().toISOString().slice(0, 10)}`,
+      snapshot_name: `Cuplikan Payroll ${new Date().toISOString().slice(0, 10)}`,
       trace_id: `RPT-${Date.now()}`,
       log_id: `LOG-${Date.now()}`,
     });
@@ -219,7 +223,7 @@ export default function OrgPayrollReports() {
       if (!tenantId) setTenantId(resolvedTenantId);
 
       if (!formState.snapshot_name.trim()) {
-        toast.error("Nama snapshot laporan wajib diisi");
+        toast.error("Nama cuplikan laporan wajib diisi");
         return;
       }
 
@@ -257,13 +261,13 @@ export default function OrgPayrollReports() {
         if (error) throw error;
       }
 
-      toast.success(`Snapshot laporan berhasil ${editingId ? "diperbarui" : "ditambahkan"}`);
+      toast.success(`Cuplikan laporan berhasil ${editingId ? "diperbarui" : "ditambahkan"}`);
       setIsDialogOpen(false);
       resetForm();
       await fetchData();
     } catch (error) {
       const ref = reportError(error, "org.payroll.reports.save");
-      toast.error(appendErrorReference("Gagal menyimpan snapshot laporan", ref));
+      toast.error(appendErrorReference("Gagal menyimpan cuplikan laporan", ref));
     } finally {
       setIsSubmitting(false);
     }
@@ -286,17 +290,17 @@ export default function OrgPayrollReports() {
   };
 
   const handleDelete = async (row: PayrollReportSnapshot) => {
-    if (!(await confirmDialog({ title: "Hapus Snapshot Laporan", description: `Yakin ingin menghapus ${row.snapshot_name}?`, confirmText: "Ya, hapus", variant: "destructive" }))) return;
+    if (!(await confirmDialog({ title: "Hapus Cuplikan Laporan", description: `Yakin ingin menghapus ${row.snapshot_name}?`, confirmText: "Ya, hapus", variant: "destructive" }))) return;
     try {
       const resolvedTenantId = tenantId || (await resolveOrgTenantId());
       if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan.");
       const { error } = await supabase.from("payroll_report_snapshots").delete().eq("id", row.id).eq("tenant_id", resolvedTenantId);
       if (error) throw error;
-      toast.success("Snapshot laporan berhasil dihapus");
+      toast.success("Cuplikan laporan berhasil dihapus");
       await fetchData();
     } catch (error) {
       const ref = reportError(error, "org.payroll.reports.delete");
-      toast.error(appendErrorReference("Gagal menghapus snapshot laporan", ref));
+      toast.error(appendErrorReference("Gagal menghapus cuplikan laporan", ref));
     }
   };
 
@@ -329,7 +333,7 @@ export default function OrgPayrollReports() {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    toast.success("Export CSV laporan berhasil");
+    toast.success("Ekspor CSV laporan berhasil");
   };
 
   const summary = useMemo(() => ({
@@ -344,7 +348,7 @@ export default function OrgPayrollReports() {
         <div className="space-y-2">
           <h1 className="text-2xl font-semibold tracking-tight">Laporan Payroll</h1>
           <p className="text-sm text-muted-foreground">
-            Kelola snapshot laporan payroll ringkas dengan referensi trace ID dan log ID untuk tindak lanjut operasional.
+            Kelola cuplikan laporan payroll ringkas dengan referensi ID trace dan ID log untuk tindak lanjut operasional.
           </p>
         </div>
 
@@ -354,7 +358,7 @@ export default function OrgPayrollReports() {
           <StatCard title="Gagal" value={summary.failed} />
         </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-4">
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>Fokus tahap ini</CardDescription>
@@ -373,7 +377,7 @@ export default function OrgPayrollReports() {
             </CardHeader>
             <CardContent>
               <p className="text-xs text-muted-foreground">
-                Pastikan setiap snapshot laporan memiliki referensi yang bisa dipakai saat ada kendala operasional.
+                Pastikan setiap cuplikan laporan memiliki referensi yang bisa dipakai saat ada kendala operasional. Jika butuh log error payroll lintas tenant, eskalasi ke super admin.
               </p>
             </CardContent>
           </Card>
@@ -388,6 +392,20 @@ export default function OrgPayrollReports() {
               </p>
             </CardContent>
           </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Referensi HR & Absensi</CardDescription>
+              <CardTitle className="text-lg">Cek sumber data</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/hr/employees")}>
+                Data Pegawai HR
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/reports/attendance")}>
+                Laporan Absensi
+              </Button>
+            </CardContent>
+          </Card>
         </div>
 
         <Card>
@@ -400,7 +418,7 @@ export default function OrgPayrollReports() {
               <Label htmlFor="search">Pencarian</Label>
               <div className="relative mt-1.5">
                 <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input id="search" className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Cari nama snapshot, trace_id, log_id..." />
+                <Input id="search" className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Cari nama cuplikan, ID trace, ID log..." />
               </div>
             </div>
             <div>
@@ -428,15 +446,15 @@ export default function OrgPayrollReports() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Snapshot Laporan</CardTitle>
-            <CardDescription>Setiap kegagalan/hasil publish harus memiliki log_id agar mudah dilacak.</CardDescription>
+            <CardTitle>Cuplikan Laporan</CardTitle>
+            <CardDescription>Setiap kegagalan/hasil publish harus memiliki ID log agar mudah dilacak.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => navigate("/org/payroll/approval")}><ArrowLeft className="mr-2 h-4 w-4" />Persetujuan Payroll</Button>
-              <Button variant="outline" onClick={() => navigate("/org/payroll/run-engine")}>Proses Payroll</Button>
-              <Button variant="secondary" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Export CSV</Button>
-              <Button onClick={openCreateDialog}><Plus className="mr-2 h-4 w-4" />Tambah Snapshot</Button>
+              <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll/approval")}><ArrowLeft className="mr-2 h-4 w-4" />Persetujuan Payroll</Button>
+              <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll/run-engine")}>Proses Payroll</Button>
+              <Button variant="secondary" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Ekspor CSV</Button>
+              <Button onClick={openCreateDialog}><Plus className="mr-2 h-4 w-4" />Tambah Cuplikan</Button>
             </div>
 
             {loadError ? <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">{loadError}</div> : null}
@@ -444,7 +462,7 @@ export default function OrgPayrollReports() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Snapshot</TableHead>
+              <TableHead>Cuplikan</TableHead>
                   <TableHead>Periode/Run</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Ref</TableHead>
@@ -456,7 +474,7 @@ export default function OrgPayrollReports() {
                 {isLoading ? (
                   <TableRow><TableCell colSpan={6} className="text-center text-sm text-muted-foreground">Memuat laporan...</TableCell></TableRow>
                 ) : rows.length === 0 ? (
-                  <TableRow><TableCell colSpan={6} className="text-center text-sm text-muted-foreground">Belum ada snapshot laporan</TableCell></TableRow>
+                  <TableRow><TableCell colSpan={6} className="text-center text-sm text-muted-foreground">Belum ada cuplikan laporan</TableCell></TableRow>
                 ) : rows.map((row) => {
                   const period = row.period_id ? periodMap.get(row.period_id) : null;
                   const run = row.run_id ? runMap.get(row.run_id) : null;
@@ -471,7 +489,7 @@ export default function OrgPayrollReports() {
                         <div className="text-xs text-muted-foreground">{run ? `Run #${run.run_sequence}` : "-"}</div>
                       </TableCell>
                       <TableCell><Badge variant="outline">{REPORT_STATUS_LABELS[row.status as ReportStatus]}</Badge></TableCell>
-                      <TableCell className="text-xs text-muted-foreground">trace:{row.trace_id || "-"}<br />log:{row.log_id || "-"}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">ID trace: {row.trace_id || "-"}<br />ID log: {row.log_id || "-"}</TableCell>
                       <TableCell>{formatDateTime(row.generated_at)}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
@@ -488,7 +506,7 @@ export default function OrgPayrollReports() {
             </Table>
 
             <div className="flex items-center justify-between text-sm text-muted-foreground">
-              <span>Total {totalRows} snapshot</span>
+              <span>Total {totalRows} cuplikan</span>
               <div className="flex items-center gap-2">
                 <Button variant="outline" size="sm" disabled={currentPage <= 1} onClick={() => setCurrentPage((v) => Math.max(1, v - 1))}>Sebelumnya</Button>
                 <span>Halaman {currentPage} / {totalPages}</span>
@@ -501,12 +519,12 @@ export default function OrgPayrollReports() {
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogContent className="sm:max-w-2xl">
             <DialogHeader>
-              <DialogTitle>{editingId ? "Edit Snapshot Laporan" : "Tambah Snapshot Laporan"}</DialogTitle>
-              <DialogDescription>Simpan snapshot laporan payroll beserta referensi trace dan log.</DialogDescription>
+              <DialogTitle>{editingId ? "Edit Cuplikan Laporan" : "Tambah Cuplikan Laporan"}</DialogTitle>
+              <DialogDescription>Simpan cuplikan laporan payroll beserta referensi ID trace dan ID log.</DialogDescription>
             </DialogHeader>
             <div className="grid gap-3 py-2 md:grid-cols-2">
               <div>
-                <Label>Nama Snapshot</Label>
+                <Label>Nama Cuplikan</Label>
                 <Input className="mt-1.5" value={formState.snapshot_name} onChange={(e) => setFormState((prev) => ({ ...prev, snapshot_name: e.target.value }))} />
               </div>
               <div>
@@ -542,7 +560,7 @@ export default function OrgPayrollReports() {
                 <Input className="mt-1.5" value={formState.file_url} onChange={(e) => setFormState((prev) => ({ ...prev, file_url: e.target.value }))} />
               </div>
               <div>
-                <Label>Trace ID</Label>
+                <Label>ID Trace</Label>
                 <Input className="mt-1.5" value={formState.trace_id} onChange={(e) => setFormState((prev) => ({ ...prev, trace_id: e.target.value }))} />
               </div>
               <div>

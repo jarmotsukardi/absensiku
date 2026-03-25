@@ -52,7 +52,7 @@ const tableLabels: Record<string, string> = {
   holidays: "Hari Libur",
   cron_job_logs: "Cron Job",
   invoices: "Invoice",
-  feedback_reports: "Feedback",
+  feedback_reports: "Masukan",
 };
 
 const actionLabels: Record<string, string> = {
@@ -190,7 +190,7 @@ export function RecentActivity() {
                     <div className="flex-1 min-w-0">
                       <p className="text-sm">
                         <span className="font-medium">
-                          {activity.employee?.name || "System"}
+                          {activity.employee?.name || "Sistem"}
                         </span>
                         {" "}
                         <span className="text-muted-foreground">
@@ -203,7 +203,7 @@ export function RecentActivity() {
                       </p>
                       <div className="mt-1 flex flex-wrap items-center gap-1.5">
                         <Badge variant={actionBadgeVariant} className="text-[10px]">
-                          {activity.action}
+                          {actionLabels[activity.action] || activity.action}
                         </Badge>
                         <Badge variant="outline" className="text-[10px]">
                           {tableLabels[activity.table_name] || activity.table_name}

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,6 +27,7 @@ import {
   normalizeAbsenceLimitTemplate,
 } from "@/lib/absenceLimitTemplates";
 import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import { resolveOrgTenantIdWithQueryOverride } from "@/lib/orgTenantContext";
 
 interface AbsenceLimit {
   id: string;
@@ -63,6 +65,8 @@ const parseNotificationSetting = (value: unknown, fallback: boolean): boolean =>
 
 export default function OrgAbsenceLimitsManagement() {
   const confirmDialog = useConfirmDialog();
+  const [searchParams] = useSearchParams();
+  const queryTenantId = searchParams.get("tenant_id");
   const [limits, setLimits] = useState<AbsenceLimit[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -92,12 +96,20 @@ export default function OrgAbsenceLimitsManagement() {
     try {
       setLoadError(null);
       setIsRetrying(false);
+      const resolvedTenantId = tenantId ?? (await getTenantId());
+      if (!resolvedTenantId) {
+        setLimits([]);
+        setLoadError("Tenant organisasi tidak ditemukan.");
+        setIsLoading(false);
+        return;
+      }
       const { data, error } = await withExponentialBackoff(
         () =>
           withTimeout(
             supabase
               .from("absence_limits")
               .select("*")
+              .eq("tenant_id", resolvedTenantId)
               .order("max_days", { ascending: true }),
             ABSENCE_LIMIT_READ_TIMEOUT_MS,
             "Permintaan data batas absen timeout."
@@ -121,15 +133,15 @@ export default function OrgAbsenceLimitsManagement() {
       setIsRetrying(false);
       setIsLoading(false);
     }
-  }, []);
+  }, [getTenantId, tenantId]);
 
   const getTenantId = useCallback(async (): Promise<string | null> => {
-    const { data: { user } } = await withExponentialBackoff(
+    return withExponentialBackoff(
       () =>
         withTimeout(
-          supabase.auth.getUser(),
+          () => resolveOrgTenantIdWithQueryOverride(queryTenantId),
           ABSENCE_LIMIT_READ_TIMEOUT_MS,
-          "Permintaan user auth timeout."
+          "Permintaan tenant organisasi timeout."
         ),
       {
         maxRetries: ABSENCE_LIMIT_READ_MAX_RETRIES,
@@ -137,30 +149,7 @@ export default function OrgAbsenceLimitsManagement() {
         onRetry: () => setIsRetrying(true),
       }
     );
-    if (!user) return null;
-
-    const { data: roleData, error: roleError } = await withExponentialBackoff(
-      () =>
-        withTimeout(
-          supabase
-            .from("user_roles")
-            .select("tenant_id")
-            .eq("user_id", user.id)
-            .eq("role", "admin_instansi")
-            .maybeSingle(),
-          ABSENCE_LIMIT_READ_TIMEOUT_MS,
-          "Permintaan tenant role timeout."
-        ),
-      {
-        maxRetries: ABSENCE_LIMIT_READ_MAX_RETRIES,
-        shouldRetry: isRetryableError,
-        onRetry: () => setIsRetrying(true),
-      }
-    );
-
-    if (roleError) throw roleError;
-    return roleData?.tenant_id || null;
-  }, []);
+  }, [queryTenantId]);
 
   const fetchNotificationSetting = useCallback(async () => {
     try {
@@ -390,24 +379,9 @@ export default function OrgAbsenceLimitsManagement() {
     }
 
     try {
-      const { data: { user } } = await withTimeout(
-        supabase.auth.getUser(),
-        ABSENCE_LIMIT_WRITE_TIMEOUT_MS,
-        "Permintaan user auth timeout."
-      );
-      if (!user) return;
       let savedRule: AbsenceLimit | null = null;
-
-      const { data: roleData, error: roleError } = await withTimeout(
-        supabase
-          .from("user_roles")
-          .select("tenant_id")
-          .eq("user_id", user.id)
-          .single(),
-        ABSENCE_LIMIT_WRITE_TIMEOUT_MS,
-        "Permintaan role tenant timeout."
-      );
-      if (roleError) throw roleError;
+      const resolvedTenantId = await resolveTenantId();
+      if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan");
 
       if (isEditing) {
         const { data, error } = await withTimeout(
@@ -433,7 +407,7 @@ export default function OrgAbsenceLimitsManagement() {
           supabase
             .from("absence_limits")
             .insert({
-              tenant_id: roleData?.tenant_id,
+              tenant_id: resolvedTenantId,
               max_days: formData.max_days,
               warning_type: formData.warning_type,
               description: formData.description || null,
@@ -679,8 +653,13 @@ export default function OrgAbsenceLimitsManagement() {
     }
 
     try {
+      const resolvedTenantId = tenantId ?? (await getTenantId());
+      if (!resolvedTenantId) {
+        toast.error("Tenant tidak ditemukan");
+        return;
+      }
       const { error } = await withTimeout(
-        supabase.from("absence_limits").delete().eq("id", id),
+        supabase.from("absence_limits").delete().eq("id", id).eq("tenant_id", resolvedTenantId),
         ABSENCE_LIMIT_WRITE_TIMEOUT_MS,
         "Hapus batas absen timeout."
       );
@@ -809,6 +788,12 @@ export default function OrgAbsenceLimitsManagement() {
             </Dialog>
           </div>
         </div>
+
+        {queryTenantId ? (
+          <div className="rounded-md border border-sky-300/40 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+            Mode tindak lanjut super admin aktif. Halaman ini sedang menampilkan aturan batas absen tenant yang dipilih dari panel admin.
+          </div>
+        ) : null}
 
         {loadError && (
           <div className="flex flex-col gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive sm:flex-row sm:items-center sm:justify-between">

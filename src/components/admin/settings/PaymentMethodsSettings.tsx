@@ -209,13 +209,13 @@ export function PaymentMethodsSettings() {
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <CreditCard className="h-4 w-4" />
-            Pengaturan Section
+            Pengaturan Bagian
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-1.5">
-              <Label className="text-xs">Judul Section</Label>
+              <Label className="text-xs">Judul Bagian</Label>
               <Input 
                 value={config.section_title} 
                 onChange={(e) => setConfig({ ...config, section_title: e.target.value })}
@@ -224,7 +224,7 @@ export function PaymentMethodsSettings() {
               />
             </div>
             <div className="space-y-1.5">
-              <Label className="text-xs">Subtitle</Label>
+              <Label className="text-xs">Subjudul</Label>
               <Input 
                 value={config.section_subtitle} 
                 onChange={(e) => setConfig({ ...config, section_subtitle: e.target.value })}
@@ -442,7 +442,7 @@ export function PaymentMethodsSettings() {
               />
               {newMethod.logo && (
                 <div className="mt-2 p-3 bg-muted rounded-md flex items-center justify-center">
-                  <img src={newMethod.logo} alt="Preview" className="h-8 w-auto object-contain" />
+                  <img src={newMethod.logo} alt="Pratinjau" className="h-8 w-auto object-contain" />
                 </div>
               )}
             </div>

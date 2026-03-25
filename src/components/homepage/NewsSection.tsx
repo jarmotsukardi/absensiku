@@ -1,13 +1,10 @@
+import { Link } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Calendar, Newspaper } from "lucide-react";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
-import { useState, useEffect } from "react";
-import DOMPurify from "dompurify";
-import { supabase } from "@/integrations/supabase/client";
 import type { Article, NewsSettings } from "@/hooks/useHomepageData";
 
 interface NewsSectionProps {
@@ -16,18 +13,6 @@ interface NewsSectionProps {
 }
 
 export function NewsSection({ articles, settings }: NewsSectionProps) {
-  const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
-  const [articleContent, setArticleContent] = useState<string>("");
-
-  useEffect(() => {
-    if (selectedArticle) {
-      supabase.from("articles").select("content").eq("id", selectedArticle.id).single()
-        .then(({ data }) => setArticleContent(data?.content || ""));
-    } else {
-      setArticleContent("");
-    }
-  }, [selectedArticle]);
-
   if (articles.length === 0) return null;
 
   return (
@@ -44,59 +29,44 @@ export function NewsSection({ articles, settings }: NewsSectionProps) {
 
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
           {articles.slice(0, settings.max_display).map((article) => (
-            <Card 
-              key={article.id} 
-              className="group overflow-hidden border-border/50 hover:shadow-lg transition-all duration-300 hover:-translate-y-1 cursor-pointer"
-              onClick={() => setSelectedArticle(article)}
+            <Link
+              key={article.id}
+              to={`/news/${article.slug || article.id}`}
+              className="group block"
             >
-              {article.image_url && (
-                <div className="h-48 overflow-hidden">
-                  <img src={article.image_url} alt={article.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
-                </div>
-              )}
-              <CardHeader className="pb-2">
-                <div className="flex items-center gap-2 mb-2">
-                  {settings.show_category && article.category && <Badge variant="secondary" className="text-xs">{article.category}</Badge>}
-                  {settings.show_date && article.published_at && (
-                    <span className="text-xs text-muted-foreground flex items-center gap-1">
-                      <Calendar className="w-3 h-3" />
-                      {format(new Date(article.published_at), "d MMM yyyy", { locale: id })}
-                    </span>
-                  )}
-                </div>
-                <CardTitle className="text-lg line-clamp-2 group-hover:text-primary transition-colors">{article.title}</CardTitle>
-              </CardHeader>
-              <CardContent>
-                {settings.show_excerpt && article.excerpt && <CardDescription className="line-clamp-2 mb-4">{article.excerpt}</CardDescription>}
-                <Button variant="link" className="p-0 h-auto text-primary">Baca selengkapnya</Button>
-              </CardContent>
-            </Card>
+              <Card className="overflow-hidden border-border/50 transition-all duration-300 hover:-translate-y-1 hover:shadow-lg">
+                {article.image_url && (
+                  <div className="h-48 overflow-hidden">
+                    <img src={article.image_url} alt={article.title} className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" />
+                  </div>
+                )}
+                <CardHeader className="pb-2">
+                  <div className="mb-2 flex items-center gap-2">
+                    {settings.show_category && article.category && <Badge variant="secondary" className="text-xs">{article.category}</Badge>}
+                    {settings.show_date && article.published_at && (
+                      <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                        <Calendar className="w-3 h-3" />
+                        {format(new Date(article.published_at), "d MMM yyyy", { locale: id })}
+                      </span>
+                    )}
+                  </div>
+                  <CardTitle className="line-clamp-2 text-lg transition-colors group-hover:text-primary">{article.title}</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {settings.show_excerpt && article.excerpt && <CardDescription className="mb-4 line-clamp-2">{article.excerpt}</CardDescription>}
+                  <span className="text-sm font-medium text-primary">Baca selengkapnya</span>
+                </CardContent>
+              </Card>
+            </Link>
           ))}
         </div>
-      </div>
 
-      <Dialog open={!!selectedArticle} onOpenChange={() => setSelectedArticle(null)}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <div className="flex items-center gap-2 mb-2">
-              {selectedArticle?.category && <Badge variant="secondary">{selectedArticle.category}</Badge>}
-              {selectedArticle?.published_at && (
-                <span className="text-xs text-muted-foreground flex items-center gap-1">
-                  <Calendar className="w-3 h-3" />
-                  {format(new Date(selectedArticle.published_at), "d MMMM yyyy", { locale: id })}
-                </span>
-              )}
-            </div>
-            <DialogTitle className="text-xl">{selectedArticle?.title}</DialogTitle>
-          </DialogHeader>
-          {selectedArticle?.image_url && (
-            <div className="rounded-lg overflow-hidden mb-4">
-              <img src={selectedArticle.image_url} alt={selectedArticle.title} className="w-full h-auto object-cover max-h-80" />
-            </div>
-          )}
-          <div className="prose prose-sm max-w-none text-foreground" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(articleContent) }} />
-        </DialogContent>
-      </Dialog>
+        <div className="mt-8 text-center">
+          <Button asChild variant="outline">
+            <Link to="/news">Lihat Semua Berita</Link>
+          </Button>
+        </div>
+      </div>
     </section>
   );
 }
