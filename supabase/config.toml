@@ -39,6 +39,9 @@ verify_jwt = false
 [functions.join-organization]
 verify_jwt = false
 
+[functions.complete-employee-invitation-registration]
+verify_jwt = false
+
 [functions.create-xendit-invoice]
 verify_jwt = false
 
@@ -70,4 +73,13 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.homepage-chat-agent]
+verify_jwt = false
+
+[functions.payroll-webhook-relay]
+verify_jwt = true
+
+[functions.register-device-push-token]
+verify_jwt = false
+
+[functions.dispatch-device-pushes]
 verify_jwt = false
