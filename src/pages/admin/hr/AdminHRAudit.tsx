@@ -131,7 +131,7 @@ const ROUTE_AUDIT_TARGETS = [
   { domain: "Pelatihan", label: "Data Pelatihan", path: "/org/hr/training-data" },
   { domain: "Pelatihan", label: "Matriks Keahlian", path: "/org/hr/skill-matrix" },
   { domain: "Rekrutmen", label: "Lowongan ATS", path: "/org/hr/recruitment/jobs" },
-  { domain: "ESS", label: "ESS Profil", path: "/org/hr/ess/profile" },
+  { domain: "ESS", label: "Profil ESS", path: "/org/hr/ess/profile" },
   { domain: "Pengaturan", label: "Hierarki Persetujuan", path: "/org/hr/approval-hierarchy" },
   { domain: "Pengaturan", label: "Log Error HR", path: "/org/hr/help/error-logs" },
 ] as const;
@@ -955,7 +955,7 @@ export default function AdminHRAudit() {
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Rute Aktif</CardTitle>
+              <CardTitle className="text-base">Route Aktif</CardTitle>
               <CardDescription>Target audit /org/hr yang sudah tampil final.</CardDescription>
             </CardHeader>
             <CardContent>
@@ -964,7 +964,7 @@ export default function AdminHRAudit() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Rute Alias</CardTitle>
+              <CardTitle className="text-base">Route Alias</CardTitle>
               <CardDescription>Masih teralihkan ke rute HR utama.</CardDescription>
             </CardHeader>
             <CardContent>
@@ -973,7 +973,7 @@ export default function AdminHRAudit() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Rute Internal</CardTitle>
+              <CardTitle className="text-base">Route Internal</CardTitle>
               <CardDescription>Disimpan untuk pemantauan atau kontrol admin.</CardDescription>
             </CardHeader>
             <CardContent>
@@ -982,7 +982,7 @@ export default function AdminHRAudit() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Rute Ditunda</CardTitle>
+              <CardTitle className="text-base">Route Ditunda</CardTitle>
               <CardDescription>Masih belum final bila ada yang tersisa.</CardDescription>
             </CardHeader>
             <CardContent>
@@ -993,7 +993,7 @@ export default function AdminHRAudit() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Audit Status Rute HR</CardTitle>
+            <CardTitle>Audit Status Route HR</CardTitle>
             <CardDescription>
               Snapshot rute `/org/hr` yang masih alias atau internal agar admin tidak membaca semuanya sebagai halaman final.
             </CardDescription>
@@ -1054,7 +1054,7 @@ export default function AdminHRAudit() {
 
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Global Tidak Selaras</CardTitle>
+              <CardTitle className="text-base">Global Tidak Konsisten</CardTitle>
               <CardDescription>`tenant_id` null namun bukan nasional/null.</CardDescription>
             </CardHeader>
             <CardContent>
@@ -1096,7 +1096,7 @@ export default function AdminHRAudit() {
 
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Kontrak Draf</CardTitle>
+              <CardTitle className="text-base">Kontrak Draft</CardTitle>
               <CardDescription>Kontrak yang belum difinalkan pada tenant aktif.</CardDescription>
             </CardHeader>
             <CardContent>
@@ -1127,7 +1127,7 @@ export default function AdminHRAudit() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Audit Acuan Bawaan Kontrak dan Cuti</CardTitle>
+            <CardTitle>Audit Baseline Kontrak dan Cuti</CardTitle>
             <CardDescription>
               Ringkasan indikator kualitas data yang paling relevan setelah domain HR inti aktif.
             </CardDescription>
@@ -1171,7 +1171,7 @@ export default function AdminHRAudit() {
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Lowongan Draf</CardTitle>
+              <CardTitle className="text-base">Lowongan Draft</CardTitle>
               <CardDescription>Lowongan ATS yang belum dipublikasikan.</CardDescription>
             </CardHeader>
             <CardContent>
@@ -1189,7 +1189,7 @@ export default function AdminHRAudit() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Wawancara Terlewat</CardTitle>
+              <CardTitle className="text-base">Interview Terlewat</CardTitle>
               <CardDescription>Wawancara terjadwal dengan jadwal yang sudah lewat.</CardDescription>
             </CardHeader>
             <CardContent>
@@ -1198,7 +1198,7 @@ export default function AdminHRAudit() {
           </Card>
           <Card>
             <CardHeader className="pb-2">
-              <CardTitle className="text-base">Penawaran Kedaluwarsa</CardTitle>
+              <CardTitle className="text-base">Offer Kedaluwarsa</CardTitle>
               <CardDescription>Penawaran kerja yang masa berlakunya lewat tetapi status belum final.</CardDescription>
             </CardHeader>
             <CardContent>
@@ -1210,7 +1210,7 @@ export default function AdminHRAudit() {
         <div className="grid gap-4 xl:grid-cols-2">
           <Card>
             <CardHeader>
-              <CardTitle>Rincian Kontrak Segera Berakhir</CardTitle>
+              <CardTitle>Drilldown Kontrak Segera Berakhir</CardTitle>
               <CardDescription>Kontrak aktif yang paling dekat tanggal berakhirnya pada halaman ini.</CardDescription>
             </CardHeader>
             <CardContent>
@@ -1239,7 +1239,13 @@ export default function AdminHRAudit() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {!isLoading && filteredExpiringContracts.length === 0 ? (
+                  {isLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-muted-foreground">
+                        Tidak ada kontrak aktif yang segera berakhir pada cakupan ini.
+                      </TableCell>
+                    </TableRow>
+                  ) : filteredExpiringContracts.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={5} className="text-center text-muted-foreground">
                         Tidak ada kontrak aktif yang segera berakhir pada cakupan ini.
@@ -1272,7 +1278,7 @@ export default function AdminHRAudit() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Rincian Kuota Cuti Kedaluwarsa</CardTitle>
+              <CardTitle>Drilldown Kuota Cuti Kedaluwarsa</CardTitle>
               <CardDescription>Kuota cuti yang masa berlakunya sudah lewat tetapi masih punya sisa.</CardDescription>
             </CardHeader>
             <CardContent>
@@ -1302,7 +1308,13 @@ export default function AdminHRAudit() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {!isLoading && filteredExpiredLeaveQuotas.length === 0 ? (
+                  {isLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={6} className="text-center text-muted-foreground">
+                        Tidak ada kuota cuti kedaluwarsa dengan sisa positif pada cakupan ini.
+                      </TableCell>
+                    </TableRow>
+                  ) : filteredExpiredLeaveQuotas.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={6} className="text-center text-muted-foreground">
                         Tidak ada kuota cuti kedaluwarsa dengan sisa positif pada cakupan ini.
@@ -1338,7 +1350,7 @@ export default function AdminHRAudit() {
         <div className="grid gap-4 xl:grid-cols-2">
           <Card>
             <CardHeader>
-              <CardTitle>Rincian Lowongan Draf ATS</CardTitle>
+              <CardTitle>Drilldown Lowongan Draft ATS</CardTitle>
               <CardDescription>Lowongan draf terbaru yang masih menunggu publikasi.</CardDescription>
             </CardHeader>
             <CardContent>
@@ -1366,10 +1378,16 @@ export default function AdminHRAudit() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {!isLoading && filteredDraftAtsJobs.length === 0 ? (
+                  {isLoading ? (
                     <TableRow>
                       <TableCell colSpan={4} className="text-center text-muted-foreground">
-                        Tidak ada lowongan draf pada cakupan ini.
+                        Tidak ada lowongan draft pada cakupan ini.
+                      </TableCell>
+                    </TableRow>
+                  ) : filteredDraftAtsJobs.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={4} className="text-center text-muted-foreground">
+                        Tidak ada lowongan draft pada cakupan ini.
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -1398,7 +1416,7 @@ export default function AdminHRAudit() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Rincian Penawaran ATS Kedaluwarsa</CardTitle>
+              <CardTitle>Drilldown Offer ATS Kedaluwarsa</CardTitle>
               <CardDescription>Penawaran kerja yang lewat masa berlaku namun belum selesai.</CardDescription>
             </CardHeader>
             <CardContent>
@@ -1427,7 +1445,13 @@ export default function AdminHRAudit() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {!isLoading && filteredExpiredAtsOffers.length === 0 ? (
+                  {isLoading ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-muted-foreground">
+                        Tidak ada penawaran ATS kedaluwarsa pada cakupan ini.
+                      </TableCell>
+                    </TableRow>
+                  ) : filteredExpiredAtsOffers.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={5} className="text-center text-muted-foreground">
                         Tidak ada penawaran ATS kedaluwarsa pada cakupan ini.
@@ -1483,7 +1507,7 @@ export default function AdminHRAudit() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Semua tipe</SelectItem>
-                  <SelectItem value="global_mismatch">Global tidak selaras</SelectItem>
+                  <SelectItem value="global_mismatch">Global mismatch</SelectItem>
                   <SelectItem value="tenant_marked_national">Tenant nasional</SelectItem>
                   <SelectItem value="duplicate_holiday">Duplikasi</SelectItem>
                 </SelectContent>
@@ -1493,10 +1517,10 @@ export default function AdminHRAudit() {
                 onValueChange={(value: "all" | AuditFinding["severity"]) => setFindingSeverityFilter(value)}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Semua tingkat keparahan" />
+                  <SelectValue placeholder="Semua severity" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">Semua tingkat keparahan</SelectItem>
+                  <SelectItem value="all">Semua severity</SelectItem>
                   <SelectItem value="critical">Kritis</SelectItem>
                   <SelectItem value="warning">Peringatan</SelectItem>
                 </SelectContent>
@@ -1516,7 +1540,13 @@ export default function AdminHRAudit() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {!isLoading && findings.length === 0 ? (
+                {isLoading ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center text-muted-foreground">
+                      Tidak ada temuan pada cakupan audit ini.
+                    </TableCell>
+                  </TableRow>
+                ) : findings.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={5} className="text-center text-muted-foreground">
                       Tidak ada temuan pada cakupan audit ini.

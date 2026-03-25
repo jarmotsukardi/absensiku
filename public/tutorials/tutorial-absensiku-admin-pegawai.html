@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tutorial AbsensiKu: Admin dan Pegawai</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #0f172a;
+        margin: 0;
+        padding: 24px;
+        line-height: 1.55;
+      }
+      h1, h2, h3 { margin: 0 0 10px; }
+      h1 { font-size: 28px; }
+      h2 { font-size: 22px; margin-top: 28px; }
+      h3 { font-size: 18px; margin-top: 22px; }
+      p, li { font-size: 14px; }
+      .note {
+        background: #eff6ff;
+        border: 1px solid #bfdbfe;
+        padding: 10px 12px;
+        border-radius: 8px;
+        margin: 10px 0 16px;
+      }
+      .shot {
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 8px;
+        margin: 10px 0 20px;
+        background: #f8fafc;
+      }
+      .shot img {
+        width: 100%;
+        height: auto;
+        border-radius: 8px;
+      }
+      .caption {
+        margin-top: 6px;
+        color: #475569;
+        font-size: 12px;
+      }
+      .section {
+        border-top: 1px solid #e2e8f0;
+        margin-top: 24px;
+        padding-top: 16px;
+      }
+      code {
+        background: #f1f5f9;
+        padding: 2px 6px;
+        border-radius: 5px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Tutorial AbsensiKu: Admin Organisasi dan Pegawai</h1>
+    <p>Dokumen ini memandu alur utama penggunaan AbsensiKu dari registrasi admin organisasi, setup absensi, operasional harian admin, hingga penggunaan oleh pegawai.</p>
+    <div class="note">
+      Absensi tetap menjadi fondasi utama produk. Modul HR dan Payroll berada di dalam aplikasi sebagai jalur lanjutan setelah organisasi stabil pada operasional absensi inti. Tutorial ini tetap fokus pada fondasi absensi agar onboarding awal lebih cepat dan jelas.
+    </div>
+
+    <h2>Prasyarat</h2>
+    <ol>
+      <li>URL aplikasi aktif, contoh: <code>http://127.0.0.1:5173</code>.</li>
+      <li>Admin organisasi memiliki email aktif.</li>
+      <li>Data master minimum sudah disiapkan (OPD/unit/lokasi kerja sesuai kebutuhan).</li>
+      <li>Pegawai menerima akun (via undangan/admin) untuk login.</li>
+    </ol>
+
+    <div class="section">
+      <h2>A. Tutorial Admin Organisasi</h2>
+
+      <h3>1) Buka Login Admin Organisasi</h3>
+      <p>Akses halaman <code>/org/login</code>. Tab <strong>Masuk</strong> digunakan untuk admin yang sudah memiliki akun.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/01-org-login.png" alt="Login Admin Organisasi" />
+        <div class="caption">Gambar 01 - Login Admin Organisasi</div>
+      </div>
+
+      <h3>2) Daftar Organisasi (Admin Baru)</h3>
+      <p>Pilih tab <strong>Daftar Organisasi</strong>, isi data organisasi, lalu submit. Setelah berhasil, lanjut login admin.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/02-org-register.png" alt="Daftar Organisasi" />
+        <div class="caption">Gambar 02 - Daftar Organisasi</div>
+      </div>
+
+      <h3>3) Masuk Dashboard Organisasi</h3>
+      <p>Login dengan email dan password admin organisasi, sistem akan mengarahkan ke dashboard organisasi.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/03-org-dashboard.png" alt="Dashboard Organisasi" />
+        <div class="caption">Gambar 03 - Dashboard Organisasi</div>
+      </div>
+
+      <h3>4) Setup Awal Absensi</h3>
+      <p>Buka <code>/org/onboarding</code>, lalu lengkapi konfigurasi tenant dan preferensi operasional.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/04-org-onboarding.png" alt="Onboarding Organisasi" />
+        <div class="caption">Gambar 04 - Onboarding Organisasi</div>
+      </div>
+
+      <h3>5) Atur Jam Kerja</h3>
+      <p>Buka <code>/org/schedule/work-hours</code>, atur jam masuk/pulang, toleransi terlambat, dan aturan shift.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/05-org-work-hours.png" alt="Pengaturan Jam Kerja" />
+        <div class="caption">Gambar 05 - Pengaturan Jam Kerja</div>
+      </div>
+
+      <h3>6) Kelola Data Pegawai Aktif</h3>
+      <p>Buka <code>/org/employees/active</code>, kelola data pegawai aktif dan pastikan data pokok valid.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/06-org-employees-active.png" alt="Pegawai Aktif" />
+        <div class="caption">Gambar 06 - Pegawai Aktif</div>
+      </div>
+
+      <h3>7) Kirim Undangan Pegawai</h3>
+      <p>Buka <code>/org/invitations</code>, buat undangan pegawai dan pantau status undangan.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/07-org-invitations.png" alt="Undangan Pegawai" />
+        <div class="caption">Gambar 07 - Undangan Pegawai</div>
+      </div>
+
+      <h3>8) Kelola Permohonan Kehadiran</h3>
+      <p>Buka <code>/org/leave/requests</code>, setujui/tolak pengajuan dengan catatan yang jelas.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/08-org-leave-requests.png" alt="Permohonan Kehadiran" />
+        <div class="caption">Gambar 08 - Permohonan Kehadiran</div>
+      </div>
+
+      <h3>9) Laporan Absensi</h3>
+      <p>Buka <code>/org/reports/attendance</code>, gunakan filter sesuai kebutuhan evaluasi periodik.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/09-org-report-attendance.png" alt="Laporan Absensi" />
+        <div class="caption">Gambar 09 - Laporan Absensi</div>
+      </div>
+
+      <h3>10) FAQ Organisasi</h3>
+      <p>Buka <code>/org/help/faq</code> untuk melihat jawaban operasional dan troubleshooting umum.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/10-org-help-faq.png" alt="FAQ Organisasi" />
+        <div class="caption">Gambar 10 - FAQ Organisasi</div>
+      </div>
+
+      <h3>11) Buat Tiket Bantuan</h3>
+      <p>Buka <code>/org/help/tickets</code>, isi subjek, kategori, prioritas, dan detail masalah.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/11-org-help-ticket.png" alt="Tiket Bantuan Organisasi" />
+        <div class="caption">Gambar 11 - Tiket Bantuan Organisasi</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>B. Tutorial Pegawai</h2>
+
+      <h3>1) Login Pegawai</h3>
+      <p>Buka <code>/employee/login</code>, lalu masuk dengan akun pegawai aktif.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/12-employee-login-mobile.png" alt="Login Pegawai" />
+        <div class="caption">Gambar 12 - Login Pegawai (Mobile)</div>
+      </div>
+
+      <h3>2) Registrasi Pegawai</h3>
+      <p>Pada tab daftar, gunakan mode <strong>Email</strong> atau <strong>Undangan</strong> sesuai kebijakan organisasi.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/13-employee-register-mobile.png" alt="Registrasi Pegawai" />
+        <div class="caption">Gambar 13 - Registrasi Pegawai (Mobile)</div>
+      </div>
+
+      <h3>3) Dashboard Pegawai</h3>
+      <p>Setelah login, pegawai masuk dashboard untuk absensi dan akses fitur utama.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/14-employee-dashboard-mobile.png" alt="Dashboard Pegawai" />
+        <div class="caption">Gambar 14 - Dashboard Pegawai (Mobile)</div>
+      </div>
+
+      <h3>4) Ajukan Permohonan</h3>
+      <p>Buka <code>/employee/dashboard?tab=requests</code>, isi dan kirim pengajuan sesuai kebutuhan.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/15-employee-requests-mobile.png" alt="Pengajuan Pegawai" />
+        <div class="caption">Gambar 15 - Pengajuan Pegawai (Mobile)</div>
+      </div>
+
+      <h3>5) Riwayat Absensi</h3>
+      <p>Buka <code>/employee/dashboard?tab=history</code> untuk memantau status absensi harian.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/16-employee-history-mobile.png" alt="Riwayat Pegawai" />
+        <div class="caption">Gambar 16 - Riwayat Pegawai (Mobile)</div>
+      </div>
+
+      <h3>6) Bantuan Pegawai</h3>
+      <p>Buka <code>/employee/dashboard?tab=help</code> untuk FAQ dan panduan penggunaan.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/17-employee-help-mobile.png" alt="Bantuan Pegawai" />
+        <div class="caption">Gambar 17 - Bantuan Pegawai (Mobile)</div>
+      </div>
+
+      <h3>7) Profil Pegawai</h3>
+      <p>Buka <code>/employee/profile</code> untuk melihat dan memperbarui data profil yang diizinkan.</p>
+      <div class="shot">
+        <img src="../public/tutorials/screenshots/18-employee-profile-mobile.png" alt="Profil Pegawai" />
+        <div class="caption">Gambar 18 - Profil Pegawai (Mobile)</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>C. Checklist Go-Live</h2>
+      <ol>
+        <li>Jam kerja dan aturan absensi sudah ditetapkan.</li>
+        <li>Lokasi kerja/radius sudah diverifikasi.</li>
+        <li>Data pegawai aktif bersih dari duplikasi.</li>
+        <li>Undangan pegawai terkirim dan teraktivasi.</li>
+        <li>Alur approval permohonan sudah berjalan.</li>
+        <li>Kanal bantuan (FAQ + tiket) sudah diinformasikan ke user.</li>
+      </ol>
+    </div>
+
+    <div class="section">
+      <h2>D. Lokasi File</h2>
+      <ul>
+        <li>DOCX editable: <code>/tutorials/tutorial-absensiku-admin-pegawai.docx</code></li>
+        <li>Versi web: <code>/tutorials/tutorial-absensiku-admin-pegawai.html</code></li>
+        <li>Folder screenshot: <code>/tutorials/screenshots/</code></li>
+      </ul>
+    </div>
+  </body>
+</html>

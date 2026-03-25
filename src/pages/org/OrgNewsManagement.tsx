@@ -131,6 +131,7 @@ export default function OrgNewsManagement() {
             supabase
               .from("announcements")
               .delete()
+              .eq("tenant_id", tid)
               .in("id", idsToDelete),
             ORG_NEWS_QUERY_TIMEOUT_MS,
             "org.news.enforce_limit.delete_overflow timeout",
@@ -282,7 +283,8 @@ export default function OrgNewsManagement() {
                   is_pinned: formData.is_pinned,
                   updated_at: new Date().toISOString(),
                 })
-                .eq("id", editingId),
+                .eq("id", editingId)
+                .eq("tenant_id", tenantId),
               ORG_NEWS_QUERY_TIMEOUT_MS,
               "org.news.submit.update timeout",
             ),
@@ -363,7 +365,8 @@ export default function OrgNewsManagement() {
             supabase
               .from("announcements")
               .delete()
-              .eq("id", deletingId),
+              .eq("id", deletingId)
+              .eq("tenant_id", tenantId),
             ORG_NEWS_QUERY_TIMEOUT_MS,
             "org.news.delete timeout",
           ),
@@ -396,7 +399,8 @@ export default function OrgNewsManagement() {
             supabase
               .from("announcements")
               .update({ is_published: !currentStatus })
-              .eq("id", id),
+              .eq("id", id)
+              .eq("tenant_id", tenantId),
             ORG_NEWS_QUERY_TIMEOUT_MS,
             "org.news.toggle_publish timeout",
           ),

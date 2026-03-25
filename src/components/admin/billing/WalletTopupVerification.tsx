@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { logCriticalAudit } from "@/lib/auditLoggingPolicy";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +21,14 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
@@ -57,6 +66,8 @@ const formatDate = (value: string | null) => {
   return format(parsed, "dd MMM yyyy HH:mm", { locale: id });
 };
 
+const TOPUP_PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
+
 const getStatusMeta = (status: string | null | undefined) => {
   switch ((status || "").toUpperCase()) {
     case "APPROVED":
@@ -90,6 +101,10 @@ export function WalletTopupVerification({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("PENDING");
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(20);
+  const [totalRows, setTotalRows] = useState(0);
 
   const [selectedRow, setSelectedRow] = useState<WalletTopupAdminRow | null>(null);
   const [reviewAction, setReviewAction] = useState<"APPROVE" | "REJECT">("APPROVE");
@@ -101,6 +116,13 @@ export function WalletTopupVerification({
   const [isResolvingSourceError, setIsResolvingSourceError] = useState(false);
   const [isResolveConfirmOpen, setIsResolveConfirmOpen] = useState(false);
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedQuery(query.trim());
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+
   const fetchRows = useCallback(async () => {
     setIsLoading(true);
     setIsRetrying(false);
@@ -111,8 +133,9 @@ export function WalletTopupVerification({
           withTimeout(
             supabase.rpc("get_wallet_topup_requests_admin" as never, {
               p_status: statusFilter === "ALL" ? null : statusFilter,
-              p_limit: 200,
-              p_offset: 0,
+              p_limit: pageSize,
+              p_offset: (currentPage - 1) * pageSize,
+              p_search: debouncedQuery || null,
             } as never),
             FETCH_TIMEOUT_MS,
             "Memuat data topup saldo terlalu lama",
@@ -126,23 +149,25 @@ export function WalletTopupVerification({
       );
       if (error) throw error;
 
-      const payload = data as { rows?: WalletTopupAdminRow[] } | null;
+      const payload = data as { rows?: WalletTopupAdminRow[]; total_count?: number } | null;
       const nextRows = (payload?.rows || []).map((row) => ({
         ...row,
         requested_amount: Number(row.requested_amount || 0),
         approved_amount: row.approved_amount === null ? null : Number(row.approved_amount || 0),
       }));
       setRows(nextRows);
+      setTotalRows(Number(payload?.total_count || 0));
     } catch (error) {
       const errorRef = reportError(error, "admin.billing.wallet_topup.fetch");
       toast.error(appendErrorReference("Gagal memuat data topup saldo.", errorRef));
       setLoadError(appendErrorReference("Gagal memuat data topup saldo.", errorRef));
       setRows([]);
+      setTotalRows(0);
     } finally {
       setIsRetrying(false);
       setIsLoading(false);
     }
-  }, [statusFilter]);
+  }, [currentPage, debouncedQuery, pageSize, statusFilter]);
 
   useEffect(() => {
     void fetchRows();
@@ -151,20 +176,33 @@ export function WalletTopupVerification({
   useEffect(() => {
     if (!focusRequestId) return;
     setStatusFilter("ALL");
+    setCurrentPage(1);
+    setQuery((previous) => previous.trim() || focusRequestId);
   }, [focusRequestId]);
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
+  const displayRangeFrom = totalRows === 0 ? 0 : (currentPage - 1) * pageSize + 1;
+  const displayRangeTo = totalRows === 0 ? 0 : Math.min((currentPage - 1) * pageSize + rows.length, totalRows);
 
-  const filteredRows = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter((row) => {
-      return (
-        (row.tenant_name || "").toLowerCase().includes(needle) ||
-        (row.tenant_code || "").toLowerCase().includes(needle) ||
-        (row.reference_number || "").toLowerCase().includes(needle) ||
-        row.id.toLowerCase().includes(needle)
-      );
-    });
-  }, [query, rows]);
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
+  const handleStatusFilterChange = (value: string) => {
+    setCurrentPage(1);
+    setStatusFilter(value);
+  };
+
+  const handleSearchChange = (value: string) => {
+    setCurrentPage(1);
+    setQuery(value);
+  };
+
+  const handlePageSizeChange = (value: string) => {
+    setCurrentPage(1);
+    setPageSize(Number(value));
+  };
 
   const openReviewDialog = (row: WalletTopupAdminRow) => {
     setSelectedRow(row);
@@ -210,6 +248,29 @@ export function WalletTopupVerification({
       );
       if (error) throw error;
 
+      const { data: { user } } = await supabase.auth.getUser();
+      await logCriticalAudit({
+        payload: {
+          tenant_id: selectedRow.tenant_id,
+          user_id: user?.id || null,
+          table_name: "wallet_topup_requests",
+          action: reviewAction === "APPROVE" ? "wallet_topup_approved" : "wallet_topup_rejected",
+          record_id: selectedRow.id,
+          old_values: {
+            status: selectedRow.status,
+            requested_amount: selectedRow.requested_amount,
+            approved_amount: selectedRow.approved_amount,
+            rejection_reason: selectedRow.rejection_reason,
+          },
+          new_values: {
+            status: reviewAction === "APPROVE" ? "APPROVED" : "REJECTED",
+            approved_amount: reviewAction === "APPROVE" ? approvedAmount : null,
+            rejection_reason: reviewAction === "REJECT" ? rejectionReason.trim() : null,
+            notes: reviewNotes.trim() || null,
+          },
+        },
+      });
+
       const dispatchRes = await withExponentialBackoff(
         () =>
           withTimeout(
@@ -246,8 +307,8 @@ export function WalletTopupVerification({
         toast.warning(
           appendErrorReference(
             dispatchRes.data?.trace_id
-              ? `Review berhasil, tetapi dispatch notifikasi WA/Email gagal (Ref: ${dispatchRes.data.trace_id})`
-              : "Review berhasil, tetapi dispatch notifikasi WA/Email gagal.",
+              ? `Tinjauan berhasil, tetapi dispatch notifikasi WA/Email gagal (Ref: ${dispatchRes.data.trace_id})`
+              : "Tinjauan berhasil, tetapi dispatch notifikasi WA/Email gagal.",
             errorRef,
           ),
         );
@@ -272,12 +333,12 @@ export function WalletTopupVerification({
             },
           );
           toast.warning(
-            appendErrorReference("Review berhasil, tetapi ada channel notifikasi yang gagal terkirim.", partialRef),
+            appendErrorReference("Tinjauan berhasil, tetapi ada channel notifikasi yang gagal terkirim.", partialRef),
           );
         }
       }
 
-      toast.success(reviewAction === "APPROVE" ? "Topup disetujui dan saldo dikreditkan." : "Request topup ditolak.");
+      toast.success(reviewAction === "APPROVE" ? "Topup disetujui dan saldo dikreditkan." : "Permintaan topup ditolak.");
       setIsDialogOpen(false);
       setSelectedRow(null);
       await fetchRows();
@@ -439,7 +500,7 @@ export function WalletTopupVerification({
       <CardContent className="space-y-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <Select value={statusFilter} onValueChange={handleStatusFilterChange}>
               <SelectTrigger className="w-[180px]">
                 <SelectValue placeholder="Filter status" />
               </SelectTrigger>
@@ -451,14 +512,14 @@ export function WalletTopupVerification({
               </SelectContent>
             </Select>
             <Button variant="outline" onClick={() => void fetchRows()} disabled={isLoading || isRetrying}>
-              {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Refresh"}
+              {isLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Muat Ulang"}
             </Button>
           </div>
           <div className="relative w-full md:w-80">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => handleSearchChange(event.target.value)}
               placeholder="Cari tenant / referensi..."
               className="pl-9"
             />
@@ -501,21 +562,21 @@ export function WalletTopupVerification({
                       <div className="rounded-full bg-slate-100 p-3">
                         <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
                       </div>
-                      <p className="text-base font-medium text-slate-800">Memuat request topup</p>
+                      <p className="text-base font-medium text-slate-800">Memuat permintaan topup</p>
                       <p className="text-sm text-muted-foreground">
                         Data pengajuan topup sedang disiapkan. Mohon tunggu sebentar.
                       </p>
                     </div>
                   </TableCell>
                 </TableRow>
-              ) : filteredRows.length === 0 ? (
+              ) : totalRows === 0 ? (
                 <TableRow>
                   <TableCell colSpan={6} className="py-8">
                     <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
                       <div className="rounded-full bg-slate-100 p-3">
                         <Search className="h-5 w-5 text-slate-500" />
                       </div>
-                      <p className="text-base font-medium text-slate-800">Tidak ada request topup</p>
+                      <p className="text-base font-medium text-slate-800">Tidak ada permintaan topup</p>
                       <p className="text-sm text-muted-foreground">
                         Ubah filter status atau kata kunci jika Anda mencari pengajuan tertentu.
                       </p>
@@ -523,7 +584,7 @@ export function WalletTopupVerification({
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredRows.map((row) => {
+                rows.map((row) => {
                   const statusMeta = getStatusMeta(row.status);
                   const isFocused = Boolean(focusRequestId) && row.id === focusRequestId;
                   return (
@@ -549,7 +610,7 @@ export function WalletTopupVerification({
                       <TableCell className="text-right">
                         {row.status === "PENDING" ? (
                           <Button size="sm" onClick={() => openReviewDialog(row)}>
-                            Review
+                            Tinjau
                           </Button>
                         ) : (
                           <span className="text-xs text-muted-foreground">{formatDate(row.reviewed_at)}</span>
@@ -562,12 +623,56 @@ export function WalletTopupVerification({
             </TableBody>
           </Table>
         </div>
+        {totalRows > 0 ? (
+          <div className="flex flex-col gap-3 border-t pt-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+              <span>
+                Menampilkan {displayRangeFrom} - {displayRangeTo} dari {totalRows} data
+              </span>
+              <span>•</span>
+              <span>Halaman {currentPage} dari {totalPages}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Select value={String(pageSize)} onValueChange={handlePageSizeChange}>
+                <SelectTrigger className="h-9 w-[130px]">
+                  <SelectValue placeholder="Baris/halaman" />
+                </SelectTrigger>
+                <SelectContent>
+                  {TOPUP_PAGE_SIZE_OPTIONS.map((size) => (
+                    <SelectItem key={size} value={String(size)}>
+                      {size} / halaman
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Pagination>
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationPrevious
+                      onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                      className={currentPage === 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                    />
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationLink isActive>{currentPage}</PaginationLink>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationNext
+                      onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                      className={currentPage === totalPages ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                    />
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            </div>
+          </div>
+        ) : null}
       </CardContent>
 
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Review Request Topup</DialogTitle>
+            <DialogTitle>Tinjau Permintaan Topup</DialogTitle>
           </DialogHeader>
 
           {selectedRow ? (
@@ -575,7 +680,7 @@ export function WalletTopupVerification({
               <div className="rounded-md border p-3">
                 <div className="font-medium">{selectedRow.tenant_name || "-"}</div>
                 <div className="text-xs text-muted-foreground">{selectedRow.tenant_code || selectedRow.tenant_id}</div>
-                <div className="mt-2 text-sm">Nominal request: <strong>{formatCurrency(selectedRow.requested_amount)}</strong></div>
+                <div className="mt-2 text-sm">Nominal permintaan: <strong>{formatCurrency(selectedRow.requested_amount)}</strong></div>
                 <div className="text-xs text-muted-foreground">Ref: {selectedRow.reference_number || "-"}</div>
               </div>
 
@@ -632,7 +737,7 @@ export function WalletTopupVerification({
             </Button>
             <Button onClick={() => void submitReview()} disabled={isSubmitting}>
               {isSubmitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-              Simpan Review
+              Simpan Tinjauan
             </Button>
           </DialogFooter>
         </DialogContent>

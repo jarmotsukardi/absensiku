@@ -12,6 +12,7 @@ import { Progress } from "@/components/ui/progress";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
+import { supabaseUrl } from "@/integrations/supabase/env";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { withTimeout } from "@/lib/attendanceResilience";
 import {
@@ -48,8 +49,8 @@ interface MigrationStep {
 const MIGRATION_STEPS: MigrationStep[] = [
   { id: "prepare", title: "Persiapan", description: "Backup data dan siapkan kredensial", status: "pending" },
   { id: "connect", title: "Koneksi Target", description: "Test koneksi ke project baru", status: "pending" },
-  { id: "schema", title: "Migrasi Schema", description: "Jalankan SQL schema & RLS", status: "pending" },
-  { id: "data", title: "Migrasi Data", description: "Import semua data", status: "pending" },
+  { id: "schema", title: "Migrasi Skema", description: "Jalankan SQL skema & RLS", status: "pending" },
+  { id: "data", title: "Migrasi Data", description: "Impor semua data", status: "pending" },
   { id: "storage", title: "Storage & Functions", description: "Setup buckets & edge functions", status: "pending" },
   { id: "verify", title: "Verifikasi", description: "Testing dan cutover", status: "pending" }
 ];
@@ -150,7 +151,7 @@ export function MigrationWizard() {
   const [steps, setSteps] = useState<MigrationStep[]>(MIGRATION_STEPS);
   
   // Credentials
-  const [sourceUrl, setSourceUrl] = useState(import.meta.env.VITE_SUPABASE_URL || "");
+  const [sourceUrl, setSourceUrl] = useState(supabaseUrl);
   const [sourceKey, setSourceKey] = useState("");
   const [targetUrl, setTargetUrl] = useState("");
   const [targetAnonKey, setTargetAnonKey] = useState("");
@@ -490,7 +491,7 @@ export function MigrationWizard() {
               <Button variant="outline" size="sm" className="gap-2" asChild>
                 <a href="https://supabase.com/dashboard" target="_blank" rel="noopener noreferrer">
                   <ExternalLink className="h-4 w-4" />
-                  Buka Supabase Dashboard
+                  Buka Dasbor Supabase
                 </a>
               </Button>
             </div>
@@ -503,16 +504,16 @@ export function MigrationWizard() {
           <div className="space-y-4">
             <Alert>
               <Upload className="h-4 w-4" />
-              <AlertTitle>Import Data</AlertTitle>
+              <AlertTitle>Impor Data</AlertTitle>
               <AlertDescription>
-                Gunakan fitur Import di tab "Import" untuk mengunggah file backup JSON.
+                Gunakan fitur Impor di tab "Impor" untuk mengunggah file backup JSON.
               </AlertDescription>
             </Alert>
 
             <div className="space-y-3">
-              <h4 className="font-medium">Urutan Import (PENTING!):</h4>
+              <h4 className="font-medium">Urutan Impor (PENTING!):</h4>
               <p className="text-sm text-muted-foreground">
-                Data harus diimport sesuai urutan foreign key dependency.
+                Data harus diimpor sesuai urutan foreign key dependency.
               </p>
               
               <div className="grid grid-cols-2 gap-2 text-sm">

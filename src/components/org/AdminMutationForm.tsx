@@ -51,6 +51,9 @@ export function AdminMutationForm({ open, onOpenChange, employee, onSuccess }: A
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [reason, setReason] = useState("");
+  const [documentReferenceNumber, setDocumentReferenceNumber] = useState("");
+  const [documentReferenceDate, setDocumentReferenceDate] = useState("");
+  const [documentReferenceIssuer, setDocumentReferenceIssuer] = useState("");
   const [selectedOpdId, setSelectedOpdId] = useState<string>("");
   const [selectedWorkUnitId, setSelectedWorkUnitId] = useState<string>("");
   const [selectedOfficeId, setSelectedOfficeId] = useState<string>("");
@@ -163,7 +166,12 @@ export function AdminMutationForm({ open, onOpenChange, employee, onSuccess }: A
 
       // Directly update employee (admin-initiated mutation)
       const { error: updateError } = await withTimeout(
-        () => supabase.from("employees").update(requestedChanges).eq("id", employee.id),
+        () =>
+          supabase
+            .from("employees")
+            .update(requestedChanges)
+            .eq("id", employee.id)
+            .eq("tenant_id", employee.tenant_id),
         12000,
       );
 
@@ -179,6 +187,9 @@ export function AdminMutationForm({ open, onOpenChange, employee, onSuccess }: A
             requested_changes: requestedChanges,
             original_data: originalData,
             reason: `[Admin] ${reason}`,
+            document_reference_number: documentReferenceNumber.trim() || null,
+            document_reference_date: documentReferenceDate || null,
+            document_reference_issuer: documentReferenceIssuer.trim() || null,
             status: "disetujui",
             approved_at: new Date().toISOString(),
           }),
@@ -189,7 +200,13 @@ export function AdminMutationForm({ open, onOpenChange, employee, onSuccess }: A
 
       // Create notification for employee
       const { data: empUser, error: empUserError } = await withTimeout(
-        () => supabase.from("employees").select("user_id").eq("id", employee.id).single(),
+        () =>
+          supabase
+            .from("employees")
+            .select("user_id")
+            .eq("id", employee.id)
+            .eq("tenant_id", employee.tenant_id)
+            .single(),
         12000,
       );
       if (empUserError) throw empUserError;
@@ -213,6 +230,9 @@ export function AdminMutationForm({ open, onOpenChange, employee, onSuccess }: A
       toast.success("Mutasi berhasil dilakukan");
       onOpenChange(false);
       setReason("");
+      setDocumentReferenceNumber("");
+      setDocumentReferenceDate("");
+      setDocumentReferenceIssuer("");
       onSuccess?.();
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.admin_mutation.process", {
@@ -319,6 +339,41 @@ export function AdminMutationForm({ open, onOpenChange, employee, onSuccess }: A
                 onChange={(e) => setReason(e.target.value)}
                 rows={3}
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Nomor Dokumen Rujukan</Label>
+              <Textarea
+                placeholder="Contoh: 800/123/SDM/2026"
+                value={documentReferenceNumber}
+                onChange={(e) => setDocumentReferenceNumber(e.target.value)}
+                rows={2}
+              />
+              <p className="text-xs text-muted-foreground">
+                Tanpa unggah file. Catat nomor surat atau nota dinas jika mutasi memakai dasar administratif.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Tanggal Dokumen</Label>
+                <input
+                  type="date"
+                  value={documentReferenceDate}
+                  onChange={(e) => setDocumentReferenceDate(e.target.value)}
+                  className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Penerbit Dokumen</Label>
+                <Textarea
+                  placeholder="Contoh: BKPSDM"
+                  value={documentReferenceIssuer}
+                  onChange={(e) => setDocumentReferenceIssuer(e.target.value)}
+                  rows={2}
+                />
+              </div>
             </div>
           </div>
         )}

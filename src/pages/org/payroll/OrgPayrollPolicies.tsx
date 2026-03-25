@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,6 +22,16 @@ import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { buildPostgrestOrClause, sanitizeOrKeyword } from "@/lib/postgrestSearch";
 import { fetchSupabaseRest } from "@/lib/supabaseRestClient";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import {
+  DEFAULT_PAYROLL_COMPLIANCE_PROFILE,
+  PAYROLL_COMPLIANCE_RULES,
+  buildDefaultComplianceRules,
+  getComplianceSummary,
+  resolvePayrollComplianceSettings,
+  updatePayrollPolicyMetadata,
+  type PayrollComplianceProfile,
+  type PayrollComplianceRuleId,
+} from "@/lib/payrollComplianceRules";
 
 type PayrollPolicy = Database["public"]["Tables"]["payroll_policies"]["Row"];
 type PayrollPolicyInsert = Database["public"]["Tables"]["payroll_policies"]["Insert"];
@@ -36,10 +47,13 @@ type PolicyFormState = {
   effective_date: string;
   is_active: boolean;
   notes: string;
+  compliance_profile: PayrollComplianceProfile;
+  compliance_rules: Record<PayrollComplianceRuleId, boolean>;
+  compliance_notes: string;
 };
 type PolicySortKey = "effective_date" | "cutoff_day" | "rounding_mode" | "status";
 
-const initialFormState: PolicyFormState = {
+const buildInitialFormState = (): PolicyFormState => ({
   cutoff_day: "25",
   prorate_enabled: true,
   rounding_mode: "nearest_100",
@@ -49,7 +63,10 @@ const initialFormState: PolicyFormState = {
   effective_date: new Date().toISOString().slice(0, 10),
   is_active: true,
   notes: "",
-};
+  compliance_profile: DEFAULT_PAYROLL_COMPLIANCE_PROFILE,
+  compliance_rules: buildDefaultComplianceRules(),
+  compliance_notes: "",
+});
 
 const ROUNDING_OPTIONS = [
   { value: "none", label: "Tanpa Pembulatan" },
@@ -64,7 +81,7 @@ const ROUNDING_OPTIONS = [
 const OVERTIME_OPTIONS = [
   { value: "attendance", label: "Absensi" },
   { value: "manual", label: "Input Manual" },
-  { value: "hybrid", label: "Hybrid" },
+  { value: "hybrid", label: "Hibrida" },
 ];
 const ITEMS_PER_PAGE = 10;
 
@@ -78,6 +95,9 @@ const OVERTIME_LABELS: Record<string, string> = Object.fromEntries(
 
 export default function OrgPayrollPolicies() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target));
   const confirmDialog = useConfirmDialog();
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [policies, setPolicies] = useState<PayrollPolicy[]>([]);
@@ -88,7 +108,7 @@ export default function OrgPayrollPolicies() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null);
-  const [formState, setFormState] = useState<PolicyFormState>(initialFormState);
+  const [formState, setFormState] = useState<PolicyFormState>(buildInitialFormState());
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all");
   const [dateFrom, setDateFrom] = useState("");
@@ -165,7 +185,7 @@ export default function OrgPayrollPolicies() {
   const totalPages = Math.max(1, Math.ceil(totalPolicies / ITEMS_PER_PAGE));
 
   const resetForm = () => {
-    setFormState(initialFormState);
+    setFormState(buildInitialFormState());
     setEditingPolicyId(null);
   };
 
@@ -175,6 +195,7 @@ export default function OrgPayrollPolicies() {
   };
 
   const openEditDialog = (item: PayrollPolicy) => {
+    const compliance = resolvePayrollComplianceSettings(item.metadata);
     setEditingPolicyId(item.id);
     setFormState({
       cutoff_day: String(item.cutoff_day),
@@ -186,9 +207,26 @@ export default function OrgPayrollPolicies() {
       effective_date: item.effective_date,
       is_active: item.is_active,
       notes: item.notes || "",
+      compliance_profile: compliance.profile,
+      compliance_rules: compliance.rules,
+      compliance_notes: compliance.notes || "",
     });
     setIsDialogOpen(true);
   };
+
+  const resolvedComplianceRules = useMemo(
+    () => (formState.compliance_profile === DEFAULT_PAYROLL_COMPLIANCE_PROFILE ? buildDefaultComplianceRules() : formState.compliance_rules),
+    [formState.compliance_profile, formState.compliance_rules],
+  );
+
+  const complianceSummary = useMemo(
+    () => getComplianceSummary(resolvedComplianceRules),
+    [resolvedComplianceRules],
+  );
+
+  const complianceStatusLabel = complianceSummary.isCompliant
+    ? "Patuh"
+    : `Custom (${complianceSummary.disabledCount} nonaktif)`;
 
   const handleSave = async () => {
     try {
@@ -213,9 +251,28 @@ export default function OrgPayrollPolicies() {
         toast.error("Tanggal efektif wajib diisi");
         return;
       }
+
+      if (formState.compliance_profile === "custom") {
+        const customSummary = getComplianceSummary(formState.compliance_rules);
+        if (!customSummary.isCompliant && !formState.compliance_notes.trim()) {
+          toast.error("Alasan pengecualian wajib diisi jika ada aturan kepatuhan yang dimatikan.");
+          return;
+        }
+      }
       const {
         data: { user },
       } = await supabase.auth.getUser();
+
+      const complianceRules =
+        formState.compliance_profile === DEFAULT_PAYROLL_COMPLIANCE_PROFILE
+          ? buildDefaultComplianceRules()
+          : formState.compliance_rules;
+      const compliancePayload = {
+        profile: formState.compliance_profile,
+        rules: complianceRules,
+        notes: formState.compliance_notes.trim(),
+      };
+      const editingPolicy = editingPolicyId ? policies.find((item) => item.id === editingPolicyId) : undefined;
 
       const payload: PayrollPolicyInsert = {
         tenant_id: resolvedTenantId,
@@ -228,6 +285,7 @@ export default function OrgPayrollPolicies() {
         effective_date: formState.effective_date,
         is_active: formState.is_active,
         notes: formState.notes.trim() || null,
+        metadata: updatePayrollPolicyMetadata(editingPolicy?.metadata ?? null, compliancePayload),
         created_by: user?.id || null,
         updated_by: user?.id || null,
       };
@@ -356,7 +414,7 @@ export default function OrgPayrollPolicies() {
     anchor.click();
     document.body.removeChild(anchor);
     URL.revokeObjectURL(url);
-    toast.success("Export CSV kebijakan payroll berhasil.");
+    toast.success("Ekspor CSV kebijakan payroll berhasil.");
   };
 
   return (
@@ -370,13 +428,13 @@ export default function OrgPayrollPolicies() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => navigate("/org/payroll")}> 
+            <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll")}> 
               <ArrowLeft className="mr-2 h-4 w-4" />
               Kembali ke Beranda
             </Button>
             <Button variant="outline" onClick={() => void handleExportCsv()}>
               <Download className="mr-2 h-4 w-4" />
-              Export CSV
+              Ekspor CSV
             </Button>
             <Button onClick={openCreateDialog}>
               <Plus className="mr-2 h-4 w-4" />
@@ -414,7 +472,7 @@ export default function OrgPayrollPolicies() {
               <CardTitle className="text-lg">Periode Payroll</CardTitle>
             </CardHeader>
             <CardContent>
-              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/periods")}>
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/payroll/periods")}>
                 Buka Periode Payroll
               </Button>
             </CardContent>
@@ -490,32 +548,46 @@ export default function OrgPayrollPolicies() {
                       <TableHead>Cutoff</TableHead>
                       <TableHead>Pembulatan</TableHead>
                       <TableHead>Sumber Lembur</TableHead>
+                      <TableHead>Kepatuhan</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead className="text-right">Aksi</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {policies.map((item) => (
-                      <TableRow key={item.id}>
-                        <TableCell>{item.effective_date}</TableCell>
-                        <TableCell>Tanggal {item.cutoff_day}</TableCell>
-                        <TableCell>{ROUNDING_LABELS[item.rounding_mode] || item.rounding_mode}</TableCell>
-                        <TableCell>{OVERTIME_LABELS[item.overtime_source] || item.overtime_source}</TableCell>
-                        <TableCell>
-                          <Badge variant={item.is_active ? "default" : "secondary"}>{item.is_active ? "Aktif" : "Nonaktif"}</Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-1">
-                            <Button size="icon" variant="ghost" onClick={() => openEditDialog(item)}>
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                            <Button size="icon" variant="ghost" onClick={() => void handleDelete(item)}>
-                              <Trash2 className="h-4 w-4 text-destructive" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {policies.map((item) => {
+                      const compliance = resolvePayrollComplianceSettings(item.metadata);
+                      const summary = getComplianceSummary(compliance.rules);
+                      const complianceLabel = summary.isCompliant
+                        ? compliance.profile === "custom"
+                          ? "Custom (Patuh)"
+                          : "Patuh"
+                        : `Custom (${summary.disabledCount} nonaktif)`;
+                      const complianceVariant = summary.isCompliant ? "default" : "secondary";
+                      return (
+                        <TableRow key={item.id}>
+                          <TableCell>{item.effective_date}</TableCell>
+                          <TableCell>Tanggal {item.cutoff_day}</TableCell>
+                          <TableCell>{ROUNDING_LABELS[item.rounding_mode] || item.rounding_mode}</TableCell>
+                          <TableCell>{OVERTIME_LABELS[item.overtime_source] || item.overtime_source}</TableCell>
+                          <TableCell>
+                            <Badge variant={complianceVariant}>{complianceLabel}</Badge>
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={item.is_active ? "default" : "secondary"}>{item.is_active ? "Aktif" : "Nonaktif"}</Badge>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <Button size="icon" variant="ghost" onClick={() => openEditDialog(item)}>
+                                <Pencil className="h-4 w-4" />
+                              </Button>
+                              <Button size="icon" variant="ghost" onClick={() => void handleDelete(item)}>
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
                 <div className="flex items-center justify-between">
@@ -609,6 +681,86 @@ export default function OrgPayrollPolicies() {
                 <Label htmlFor="late_penalty_per_minute">Nominal Denda per Menit</Label>
                 <Input id="late_penalty_per_minute" type="number" min={0} step="1" value={formState.late_penalty_per_minute} onChange={(event) => setFormState((prev) => ({ ...prev, late_penalty_per_minute: event.target.value }))} disabled={!formState.late_penalty_enabled} />
               </div>
+            </div>
+
+            <div className="space-y-4 rounded-md border p-4">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="space-y-1">
+                  <Label>Profil Kepatuhan Payroll</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Default swasta umum mengunci aturan wajib. Gunakan profil custom jika ada pengecualian.
+                  </p>
+                </div>
+                <Badge variant={complianceSummary.isCompliant ? "default" : "secondary"}>
+                  {complianceStatusLabel}
+                </Badge>
+              </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label>Profil Kepatuhan</Label>
+                  <Select
+                    value={formState.compliance_profile}
+                    onValueChange={(value) =>
+                      setFormState((prev) => ({
+                        ...prev,
+                        compliance_profile: value as PayrollComplianceProfile,
+                      }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Pilih profil" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="swasta_umum">Swasta Umum (Patuh)</SelectItem>
+                      <SelectItem value="custom">Custom (Pilih aturan)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Ringkasan</Label>
+                  <p className="text-xs text-muted-foreground">
+                    {complianceSummary.enabledCount} aktif dari {complianceSummary.total} aturan kepatuhan.
+                  </p>
+                </div>
+              </div>
+              <div className="grid gap-3">
+                {PAYROLL_COMPLIANCE_RULES.map((rule) => (
+                  <div key={rule.id} className="flex flex-wrap items-start justify-between gap-3 rounded-md border bg-background/80 p-3">
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">{rule.label}</p>
+                      <p className="text-xs text-muted-foreground">{rule.summary}</p>
+                      <p className="text-[11px] text-muted-foreground">Dasar: {rule.legalBasis}</p>
+                    </div>
+                    <Switch
+                      checked={resolvedComplianceRules[rule.id]}
+                      disabled={formState.compliance_profile === DEFAULT_PAYROLL_COMPLIANCE_PROFILE}
+                      onCheckedChange={(checked) =>
+                        setFormState((prev) => ({
+                          ...prev,
+                          compliance_rules: { ...prev.compliance_rules, [rule.id]: checked },
+                        }))
+                      }
+                    />
+                  </div>
+                ))}
+              </div>
+              {formState.compliance_profile === "custom" ? (
+                <div className="space-y-2">
+                  <Label htmlFor="compliance_notes">Catatan Pengecualian</Label>
+                  <Textarea
+                    id="compliance_notes"
+                    value={formState.compliance_notes}
+                    onChange={(event) => setFormState((prev) => ({ ...prev, compliance_notes: event.target.value }))}
+                    placeholder="Jelaskan alasan aturan tertentu dimatikan."
+                    rows={3}
+                  />
+                </div>
+              ) : null}
+              {!complianceSummary.isCompliant ? (
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+                  Aturan nonaktif: {complianceSummary.disabledRules.map((rule) => rule.label).join(", ")}. Status payroll akan ditandai non-compliant.
+                </div>
+              ) : null}
             </div>
 
             <div className="space-y-2">

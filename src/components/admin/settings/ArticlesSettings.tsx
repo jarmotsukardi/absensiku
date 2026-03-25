@@ -284,15 +284,15 @@ export function ArticlesSettings() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <FileText className="h-5 w-5" />
-            Pengaturan Section Artikel
+            Pengaturan Bagian Artikel
           </CardTitle>
-          <CardDescription>Atur tampilan section artikel di halaman depan</CardDescription>
+          <CardDescription>Atur tampilan bagian artikel di halaman depan</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <Label>Tampilkan Section</Label>
-              <p className="text-sm text-muted-foreground">Aktifkan section artikel di halaman depan</p>
+              <Label>Tampilkan Bagian</Label>
+              <p className="text-sm text-muted-foreground">Aktifkan bagian artikel di halaman depan</p>
             </div>
             <Switch 
               checked={settings.show_section} 
@@ -302,7 +302,7 @@ export function ArticlesSettings() {
 
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
-              <Label>Judul Section</Label>
+              <Label>Judul Bagian</Label>
               <Input 
                 value={settings.section_title} 
                 onChange={(e) => setSettings({ ...settings, section_title: e.target.value })} 
@@ -383,7 +383,7 @@ export function ArticlesSettings() {
                     </TableCell>
                     <TableCell>
                       <Badge variant={article.is_published ? "default" : "secondary"}>
-                        {article.is_published ? "Published" : "Draft"}
+                        {article.is_published ? "Dipublikasikan" : "Draf"}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-muted-foreground">

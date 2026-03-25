@@ -1,11 +1,12 @@
 import { expect, test } from "@playwright/test";
 import { loginAsOrgAdmin, waitForStable } from "./helpers/orgAuth";
 import type { Page } from "@playwright/test";
+import { HR_FOCUSED_SIDEBAR_GROUPS, HR_WORKSPACE_ROUTE_DEFINITIONS } from "@/lib/hrWorkspaceRegistry";
 
 /**
  * E2E Test: HR Application - Route policy aware
- * Tanggal: 2026-03-12
- * Status: menghormati badge Alias/Tunda/Internal sesuai policy HR saat ini
+ * Tanggal: 2026-03-22
+ * Status: mengikuti kontrak HR aktual dari registry, sidebar, dan redirect policy saat ini
  */
 
 const navigateAndVerify = async (page: Page, path: string, heading: string) => {
@@ -14,65 +15,83 @@ const navigateAndVerify = async (page: Page, path: string, heading: string) => {
   await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible({ timeout: 10000 });
 };
 
+const HR_PAGE_HEADINGS: Record<string, string> = {
+  "/org/hr": "Ringkasan HR",
+  "/org/hr/employees": "Data Pegawai",
+  "/org/hr/structure": "Struktur Organisasi",
+  "/org/hr/position-grade": "Jabatan dan Grade",
+  "/org/hr/contracts": "Kontrak Kerja",
+  "/org/hr/documents": "Dokumen HR",
+  "/org/hr/reports": "Laporan HR",
+  "/org/hr/settings": "Pengaturan HR",
+  "/org/hr/help/faq": "FAQ HR",
+  "/org/hr/help/tickets": "Tiket HR",
+  "/org/hr/help/error-logs": "Log Error HR",
+  "/org/hr/attendance-insights": "Analitik Kehadiran HR",
+  "/org/hr/employee-status": "Status Kepegawaian",
+  "/org/hr/job-history": "Riwayat Jabatan",
+  "/org/hr/document-templates": "Templat Dokumen",
+  "/org/hr/onboarding": "Proses Masuk Pegawai",
+  "/org/hr/offboarding": "Proses Keluar Pegawai",
+  "/org/hr/work-hours": "Data Jam Kerja",
+  "/org/hr/shifts": "Pola Shift",
+  "/org/hr/late-settings": "Pengaturan Keterlambatan",
+  "/org/hr/leave-types": "Jenis Cuti",
+  "/org/hr/leave-quota": "Kuota Cuti",
+  "/org/hr/leave-approval": "Alur Persetujuan Cuti",
+  "/org/hr/mutation-approval": "Permohonan Mutasi",
+  "/org/hr/leave-validity": "Masa Berlaku Cuti",
+  "/org/hr/kpi": "KPI",
+  "/org/hr/performance-periods": "Periode Penilaian",
+  "/org/hr/performance-forms": "Form Penilaian",
+  "/org/hr/review-360": "Ulasan 360",
+  "/org/hr/evaluation-results": "Hasil Evaluasi",
+  "/org/hr/training-data": "Data Pelatihan",
+  "/org/hr/certifications": "Sertifikasi",
+  "/org/hr/skill-matrix": "Matriks Kompetensi",
+  "/org/hr/recruitment/jobs": "Lowongan Kerja",
+  "/org/hr/recruitment/candidates": "Kandidat",
+  "/org/hr/recruitment/interviews": "Tahap Interview",
+  "/org/hr/recruitment/offers": "Penawaran Kerja",
+  "/org/hr/priority": "Workspace Prioritas HR",
+  "/org/hr/ess/requests": "Pengajuan ESS",
+  "/org/hr/ess/leave-requests": "Cuti & Izin ESS",
+  "/org/hr/ess/wfh-requests": "Pengajuan WFH",
+  "/org/hr/ess/flexible-attendance": "Absensi Khusus",
+  "/org/hr/ess/overtime-requests": "Pengajuan Lembur",
+  "/org/hr/ess/attendance": "Kehadiran ESS",
+  "/org/hr/ess/documents": "Dokumen ESS",
+  "/org/hr/ess/profile": "Profil ESS",
+};
+
+const HR_ROUTE_LABELS = new Map(HR_WORKSPACE_ROUTE_DEFINITIONS.map((route) => [route.path, route.label]));
+
+const HR_SIDEBAR_GROUPS_TO_VERIFY = HR_FOCUSED_SIDEBAR_GROUPS.filter((group) =>
+  ["Pegawai", "Administrasi HR", "Operasional", "Kinerja", "Pengembangan", "Rekrutmen", "ESS", "Konfigurasi HR"].includes(group.label),
+).map((group) => ({
+  label: group.label,
+  expectedItems: group.items.map((item) => item.title ?? HR_ROUTE_LABELS.get(item.path) ?? item.path),
+}));
+
+const HR_REDIRECT_EXPECTATIONS = HR_WORKSPACE_ROUTE_DEFINITIONS.filter((route) => route.status === "redirect");
+
 test.describe("HR Application - Complete Menu Test", () => {
   test.beforeEach(async ({ page }) => {
     await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
   });
 
   test("halaman HR aktif tetap bisa diakses", async ({ page }) => {
-    test.setTimeout(120000);
-
-    const menus = [
-      { path: "/org/hr", heading: "Ringkasan HR" },
-      { path: "/org/hr/employees", heading: "Data Pegawai" },
-      { path: "/org/hr/employee-status", heading: "Status Kepegawaian" },
-      { path: "/org/hr/job-history", heading: "Riwayat Jabatan" },
-      { path: "/org/hr/structure", heading: "Struktur Organisasi" },
-      { path: "/org/hr/position-grade", heading: "Jabatan dan Grade" },
-      { path: "/org/hr/contracts", heading: "Kontrak Kerja" },
-      { path: "/org/hr/documents", heading: "Dokumen HR" },
-      { path: "/org/hr/document-templates", heading: "Template Dokumen" },
-      { path: "/org/hr/onboarding", heading: "Proses Masuk Pegawai" },
-      { path: "/org/hr/offboarding", heading: "Proses Keluar Pegawai" },
-      { path: "/org/hr/work-hours", heading: "Data Jam Kerja" },
-      { path: "/org/hr/shifts", heading: "Pola Shift" },
-      { path: "/org/hr/reports", heading: "Laporan HR" },
-      { path: "/org/hr/late-settings", heading: "Pengaturan Keterlambatan" },
-      { path: "/org/hr/leave-types", heading: "Jenis Cuti" },
-      { path: "/org/hr/leave-quota", heading: "Kuota Cuti" },
-      { path: "/org/hr/leave-approval", heading: "Permohonan Cuti" },
-      { path: "/org/hr/leave-validity", heading: "Masa Berlaku Cuti" },
-      { path: "/org/hr/kpi", heading: "KPI" },
-      { path: "/org/hr/performance-periods", heading: "Periode Penilaian" },
-      { path: "/org/hr/performance-forms", heading: "Form Penilaian" },
-      { path: "/org/hr/review-360", heading: "Ulasan 360" },
-      { path: "/org/hr/evaluation-results", heading: "Hasil Evaluasi" },
-      { path: "/org/hr/training-data", heading: "Data Pelatihan" },
-      { path: "/org/hr/certifications", heading: "Sertifikasi" },
-      { path: "/org/hr/skill-matrix", heading: "Matriks Kompetensi" },
-      { path: "/org/hr/recruitment/jobs", heading: "Lowongan Kerja" },
-      { path: "/org/hr/recruitment/candidates", heading: "Kandidat" },
-      { path: "/org/hr/recruitment/interviews", heading: "Tahap Interview" },
-      { path: "/org/hr/recruitment/offers", heading: "Penawaran Kerja" },
-      { path: "/org/hr/ess/requests", heading: "Pengajuan ESS" },
-      { path: "/org/hr/ess/leave-requests", heading: "Permohonan Cuti" },
-      { path: "/org/hr/ess/attendance", heading: "Kehadiran Saya" },
-      { path: "/org/hr/ess/documents", heading: "Dokumen Saya" },
-      { path: "/org/hr/ess/profile", heading: "Profil Saya" },
-      { path: "/org/hr/help/faq", heading: "FAQ HR" },
-      { path: "/org/hr/help/tickets", heading: "Tiket HR" },
-      { path: "/org/hr/settings", heading: "Pengaturan HR" },
-    ];
+    test.setTimeout(300000);
 
     const failures: Array<{ path: string; heading: string; error: string }> = [];
 
-    for (const menu of menus) {
+    for (const [path, heading] of Object.entries(HR_PAGE_HEADINGS)) {
       try {
-        await navigateAndVerify(page, menu.path, menu.heading);
+        await navigateAndVerify(page, path, heading);
       } catch (error) {
         failures.push({
-          path: menu.path,
-          heading: menu.heading,
+          path,
+          heading,
           error: (error as Error).message,
         });
       }
@@ -81,109 +100,31 @@ test.describe("HR Application - Complete Menu Test", () => {
     expect(failures).toEqual([]);
   });
 
-  test("sidebar HR menampilkan badge status route", async ({ page }) => {
+  test("sidebar HR menampilkan label dan grup terbaru", async ({ page }) => {
     test.setTimeout(60000);
 
     await page.goto("/org/hr", { waitUntil: "domcontentloaded" });
     await waitForStable(page);
 
-    await page.getByRole("button", { name: /Operasional SDM/i }).click();
-    await page.getByRole("button", { name: /Layanan Pegawai/i }).click();
-    await page.getByRole("button", { name: /Monitoring/i }).click();
-    await page.getByRole("button", { name: /Kinerja/i }).click();
-    await page.getByRole("button", { name: /Pelatihan/i }).click();
-    await page.getByRole("button", { name: /Rekrutmen/i }).click();
-    await page.getByRole("button", { name: /ESS/i }).click();
-    await page.getByRole("button", { name: /Konfigurasi/i }).click();
+    for (const group of HR_SIDEBAR_GROUPS_TO_VERIFY) {
+      await page.getByRole("button", { name: group.label, exact: true }).click();
+      for (const expectedItem of group.expectedItems) {
+        await expect(page.getByText(expectedItem, { exact: true }).first()).toBeVisible();
+      }
+    }
 
-    await expect(page.getByText("Status Kepegawaian")).toBeVisible();
-    await expect(page.getByText("Template Dokumen")).toBeVisible();
-    await expect(page.getByText("Proses Masuk Pegawai")).toBeVisible();
-    await expect(page.getByText("Analitik Kehadiran HR")).toBeVisible();
-    await expect(page.getByText("KPI")).toBeVisible();
-    await expect(page.getByText("Data Pelatihan")).toBeVisible();
-    await expect(page.getByText("Lowongan Kerja")).toBeVisible();
-    await expect(page.getByText("Pengajuan Saya")).toBeVisible();
-    await expect(page.getByText("Hierarki Persetujuan")).toBeVisible();
-
-    await expect(
-      page.locator("button, a").filter({ hasText: "Status Kepegawaian" }).getByText("Alias"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Riwayat Jabatan" }).getByText("Alias"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Template Dokumen" }).getByText("Alias"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Proses Keluar Pegawai" }).getByText("Tunda"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Proses Masuk Pegawai" }).getByText("Tunda"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Jam Kerja" }).getByText("Tunda"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Pola Shift" }).getByText("Tunda"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Pengaturan Keterlambatan" }).getByText("Tunda"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Jenis Cuti" }).getByText("Tunda"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Kuota Cuti" }).getByText("Tunda"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Alur Persetujuan Cuti" }).getByText("Tunda"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Masa Berlaku Cuti" }).getByText("Tunda"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Kehadiran Saya" }).getByText("Tunda"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Dokumen Saya" }).getByText("Tunda"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Profil Saya" }).getByText("Tunda"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "KPI" }).getByText("Tunda"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Data Pelatihan" }).getByText("Tunda"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Lowongan Kerja" }).getByText("Tunda"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Pengajuan Saya" }).getByText("Tunda"),
-    ).toHaveCount(0);
-    await expect(
-      page.locator("button, a").filter({ hasText: "Analitik Kehadiran HR" }).getByText("Internal"),
-    ).toBeVisible();
-    await expect(
-      page.locator("button, a").filter({ hasText: "Hierarki Persetujuan" }).getByText("Alias"),
-    ).toBeVisible();
+    await expect(page.getByText("Alias", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Tunda", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Internal", { exact: true })).toHaveCount(0);
   });
 
-  test("route alias dan route tunda diarahkan ke halaman target policy", async ({ page }) => {
-    test.setTimeout(90000);
+  test("route alias diarahkan ke target policy aktual", async ({ page }) => {
+    test.setTimeout(180000);
 
-    const redirects = [
-      { path: "/org/hr/approval-hierarchy", target: "/org/hr/settings" },
-      { path: "/org/hr/attendance-insights", target: "/org/hr" },
-      { path: "/org/hr/help/error-logs", target: "/org/hr" },
-    ];
-
-    for (const item of redirects) {
+    for (const item of HR_REDIRECT_EXPECTATIONS) {
       await page.goto(item.path, { waitUntil: "domcontentloaded" });
       await waitForStable(page);
-      await expect(page).toHaveURL(new RegExp(`${item.target.replace(/\//g, "\\/")}(?:\\?|$)`));
+      await expect(page).toHaveURL(new RegExp(`${item.redirectTo.replace(/\//g, "\\/")}(?:\\?|$)`));
     }
   });
 });

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -98,6 +99,9 @@ const getActionLabel = (value: string) => ACTION_LABELS[value] || value;
 
 export default function OrgPayrollAuditLog() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target));
   const [searchParams, setSearchParams] = useSearchParams();
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [periods, setPeriods] = useState<PayrollPeriod[]>([]);
@@ -279,7 +283,7 @@ export default function OrgPayrollAuditLog() {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    toast.success("Export CSV audit log berhasil");
+    toast.success("Ekspor CSV audit log berhasil");
   };
 
   const summary = useMemo(() => ({
@@ -318,20 +322,17 @@ export default function OrgPayrollAuditLog() {
           <Card className="border-dashed">
             <CardHeader className="pb-3">
               <CardDescription>Langkah terkait</CardDescription>
-              <CardTitle className="text-base">Cek log error saat ada kegagalan aktif</CardTitle>
+              <CardTitle className="text-base">Eskalasi saat butuh log error</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3 text-sm text-muted-foreground">
-              <p>Jika masalah masih aktif, lanjutkan ke log error untuk melihat konteks runtime dan nomor referensi yang lebih cepat ditindaklanjuti.</p>
-              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/error-log")}>
-                Buka Log Error
-              </Button>
+            <CardContent className="text-sm text-muted-foreground">
+              Jika masalah masih aktif dan butuh log error lintas tenant, eskalasi ke admin payroll agar investigasi dilakukan dari dashboard admin.
             </CardContent>
           </Card>
         </div>
 
         <div className="grid gap-4 md:grid-cols-3">
           <StatCard title="Total Log" value={summary.total} />
-          <StatCard title="Dengan Trace ID" value={summary.withTrace} />
+          <StatCard title="Dengan ID Trace" value={summary.withTrace} />
           <StatCard title="Dengan Log ID" value={summary.withLogId} />
         </div>
 
@@ -345,7 +346,7 @@ export default function OrgPayrollAuditLog() {
               <Label htmlFor="search">Pencarian</Label>
               <div className="relative mt-1.5">
                 <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input id="search" className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Cari entity, action, trace_id, log_id..." />
+                <Input id="search" className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Cari entitas, aksi, ID trace, ID log..." />
               </div>
             </div>
             <div>
@@ -413,9 +414,9 @@ export default function OrgPayrollAuditLog() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => navigate("/org/payroll/reports")}><ArrowLeft className="mr-2 h-4 w-4" />Laporan Payroll</Button>
-              <Button variant="outline" onClick={() => navigate("/org/payroll/integrations")}>Integrasi Payroll</Button>
-              <Button variant="secondary" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+              <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll/reports")}><ArrowLeft className="mr-2 h-4 w-4" />Laporan Payroll</Button>
+              <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll/integrations")}>Integrasi Payroll</Button>
+              <Button variant="secondary" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Ekspor CSV</Button>
               <Button onClick={openCreateDialog}><Plus className="mr-2 h-4 w-4" />Tambah Audit Log</Button>
             </div>
 
@@ -455,7 +456,7 @@ export default function OrgPayrollAuditLog() {
                       <TableCell className="text-sm">
                         {row.entity_type === "payroll_webhook" ? (attemptCount ?? "-") : "-"}
                       </TableCell>
-                      <TableCell className="text-xs text-muted-foreground">trace_id: {row.trace_id || "-"}<br />log_id: {row.log_id || "-"}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">ID trace: {row.trace_id || "-"}<br />ID log: {row.log_id || "-"}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{row.notes || "-"}</TableCell>
                     </TableRow>
                   );
@@ -478,7 +479,7 @@ export default function OrgPayrollAuditLog() {
           <DialogContent className="sm:max-w-2xl">
             <DialogHeader>
               <DialogTitle>Tambah Audit Log Payroll</DialogTitle>
-              <DialogDescription>Isi log_id dan trace_id agar incident bisa ditelusuri secara deterministik.</DialogDescription>
+              <DialogDescription>Isi ID log dan ID trace agar insiden bisa ditelusuri secara deterministik.</DialogDescription>
             </DialogHeader>
             <div className="grid gap-3 py-2 md:grid-cols-2">
               <div>
@@ -516,7 +517,7 @@ export default function OrgPayrollAuditLog() {
                 <Input className="mt-1.5" value={formState.actor_role} onChange={(e) => setFormState((prev) => ({ ...prev, actor_role: e.target.value }))} />
               </div>
               <div>
-                <Label>Trace ID</Label>
+                <Label>ID Trace</Label>
                 <Input className="mt-1.5" value={formState.trace_id} onChange={(e) => setFormState((prev) => ({ ...prev, trace_id: e.target.value }))} />
               </div>
               <div>

@@ -17,6 +17,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
 import { id } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { useAdminOrgContextNavigate } from "@/hooks/useAdminOrgContextNavigate";
 import { toast } from "sonner";
 import {
   isRetryableError,
@@ -52,6 +53,7 @@ const RECENT_ORG_MAX_RETRIES = 2;
 
 export function RecentOrganizations() {
   const navigate = useNavigate();
+  const navigateWithOverlay = useAdminOrgContextNavigate();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -125,9 +127,9 @@ export function RecentOrganizations() {
       <CardHeader className="flex flex-row items-center justify-between">
         <div>
           <CardTitle className="text-base">Organisasi Terbaru</CardTitle>
-          <CardDescription>Organisasi yang baru mendaftar</CardDescription>
+          <CardDescription>Organisasi yang baru terdaftar</CardDescription>
         </div>
-        <Button variant="outline" size="sm" onClick={() => navigate("/admin/organizations/new")}>
+        <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/admin/organizations/new")}>
           <Plus className="h-4 w-4 mr-1" />
           Tambah
         </Button>
@@ -165,7 +167,7 @@ export function RecentOrganizations() {
                 <div
                   key={org.id}
                   className="flex items-center gap-4 rounded-lg border bg-card p-3 hover:bg-muted/50 cursor-pointer transition-colors"
-                  onClick={() => navigate(`/admin/organizations/${org.id}`)}
+                  onClick={() => navigateWithOverlay(`/admin/organizations/${org.id}`)}
                 >
                   <Avatar className="h-10 w-10">
                     <AvatarFallback className="bg-primary/10 text-primary">
@@ -196,9 +198,9 @@ export function RecentOrganizations() {
         <Button 
           variant="ghost" 
           className="w-full mt-4 text-muted-foreground" 
-          onClick={() => navigate("/admin/organizations")}
+          onClick={() => navigateWithOverlay("/admin/organizations")}
         >
-          Lihat Semua
+          Lihat Semua Organisasi
           <ArrowRight className="h-4 w-4 ml-2" />
         </Button>
       </CardContent>

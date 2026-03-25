@@ -146,16 +146,16 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
   const handleResetToDefault = () => {
     setTemplate(DEFAULT_ORG_ONBOARDING_TEMPLATE);
     setForm(defaultFormFromTemplate(DEFAULT_ORG_ONBOARDING_TEMPLATE));
-    toast.info("Form template dikembalikan ke nilai default. Klik Simpan untuk menerapkan.");
+    toast.info("Form templat dikembalikan ke nilai bawaan. Klik Simpan untuk menerapkan.");
   };
 
   const handleSave = async () => {
     if (!form.opdName.trim() || !form.opdCode.trim()) {
-      toast.error("Nama dan kode OPD default wajib diisi.");
+      toast.error("Nama dan kode OPD bawaan wajib diisi.");
       return;
     }
     if (!form.workUnitName.trim() || !form.workUnitCode.trim()) {
-      toast.error("Nama dan kode satuan kerja default wajib diisi.");
+      toast.error("Nama dan kode satuan kerja bawaan wajib diisi.");
       return;
     }
     if (parsedActiveDays.length === 0) {
@@ -183,7 +183,7 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
         })
         .filter((item): item is NonNullable<typeof item> => Boolean(item));
       if (announcementDefaults.length === 0) {
-        throw new Error("Minimal 1 pengumuman default valid.");
+        throw new Error("Minimal 1 pengumuman bawaan yang valid.");
       }
     } catch (error: unknown) {
       const reason = error instanceof Error ? error.message : "JSON tidak valid.";
@@ -256,10 +256,10 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
       await saveOrgOnboardingTemplate(nextTemplate);
       setTemplate(nextTemplate);
       setUpdatedAt(new Date().toISOString());
-      toast.success("Template onboarding organisasi berhasil disimpan.");
+      toast.success("Templat onboarding organisasi berhasil disimpan.");
     } catch (error: unknown) {
       const errorRef = reportError(error, "admin.org_onboarding_template.save");
-      toast.error(appendErrorReference("Gagal menyimpan template onboarding organisasi", errorRef));
+      toast.error(appendErrorReference("Gagal menyimpan templat onboarding organisasi", errorRef));
     } finally {
       setIsSaving(false);
     }
@@ -272,16 +272,16 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Wand2 className="h-5 w-5" />
-              Konfigurasi Template Setup Awal
+              Konfigurasi Templat Setup Awal
             </CardTitle>
             <CardDescription>
-              Template ini dipakai oleh wizard onboarding organisasi dan bisa diterapkan otomatis saat tenant baru dibuat.
+              Templat ini dipakai oleh wizard onboarding organisasi dan bisa diterapkan otomatis saat tenant baru dibuat.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline">Versi Template: v{template.version}</Badge>
-              <Badge variant="outline">Hari Kerja Default: {parsedActiveDays.join(", ") || "-"}</Badge>
+              <Badge variant="outline">Versi Templat: v{template.version}</Badge>
+              <Badge variant="outline">Hari Kerja Bawaan: {parsedActiveDays.join(", ") || "-"}</Badge>
               <Badge variant={form.seedAnnouncements ? "default" : "secondary"}>
                 Seed Pengumuman: {form.seedAnnouncements ? "Aktif" : "Nonaktif"}
               </Badge>
@@ -298,14 +298,14 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
                 ) : (
                   <RefreshCcw className="mr-2 h-4 w-4" />
                 )}
-                Refresh
+                Muat Ulang
               </Button>
               <Button variant="outline" onClick={handleResetToDefault} disabled={isLoading || isSaving}>
-                Reset ke Default
+                Reset ke Bawaan
               </Button>
               <Button onClick={() => void handleSave()} disabled={isLoading || isSaving}>
                 {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                Simpan Template
+                Simpan Templat
               </Button>
             </div>
           </CardContent>
@@ -313,16 +313,16 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
 
         <Card>
           <CardHeader>
-            <CardTitle>Informasi Umum Template</CardTitle>
+            <CardTitle>Informasi Umum Templat</CardTitle>
             <CardDescription>Metadata yang ditampilkan di wizard onboarding /org.</CardDescription>
           </CardHeader>
           <CardContent className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
-              <Label>Nama Template</Label>
+              <Label>Nama Templat</Label>
               <Input value={form.label} onChange={(e) => handleChange("label", e.target.value)} />
             </div>
             <div className="space-y-2 md:col-span-2">
-              <Label>Deskripsi Template</Label>
+              <Label>Deskripsi Templat</Label>
               <Textarea
                 value={form.description}
                 onChange={(e) => handleChange("description", e.target.value)}
@@ -334,23 +334,23 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
 
         <Card>
           <CardHeader>
-            <CardTitle>Master Data Default</CardTitle>
+            <CardTitle>Master Data Bawaan</CardTitle>
             <CardDescription>Data awal struktur organisasi yang disiapkan untuk tenant baru.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <Label>Nama OPD Default</Label>
+                <Label>Nama OPD Bawaan</Label>
                 <Input value={form.opdName} onChange={(e) => handleChange("opdName", e.target.value)} />
               </div>
               <div className="space-y-2">
-                <Label>Kode OPD Default</Label>
+                <Label>Kode OPD Bawaan</Label>
                 <Input value={form.opdCode} onChange={(e) => handleChange("opdCode", e.target.value)} />
               </div>
             </div>
             <div className="grid gap-4 md:grid-cols-3">
               <div className="space-y-2">
-                <Label>Nama Satuan Kerja Default</Label>
+                <Label>Nama Satuan Kerja Bawaan</Label>
                 <Input value={form.workUnitName} onChange={(e) => handleChange("workUnitName", e.target.value)} />
               </div>
               <div className="space-y-2">
@@ -358,7 +358,7 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
                 <Input value={form.workUnitCode} onChange={(e) => handleChange("workUnitCode", e.target.value)} />
               </div>
               <div className="space-y-2">
-                <Label>Institution Type</Label>
+                <Label>Jenis Instansi</Label>
                 <Input
                   value={form.institutionType}
                   onChange={(e) => handleChange("institutionType", e.target.value)}
@@ -367,7 +367,7 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
               </div>
             </div>
             <div className="space-y-2">
-              <Label>Daftar Jabatan Default (pisahkan dengan koma)</Label>
+              <Label>Daftar Jabatan Bawaan (pisahkan dengan koma)</Label>
               <Input
                 value={form.positionCsv}
                 onChange={(e) => handleChange("positionCsv", e.target.value)}
@@ -380,11 +380,11 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
             <Separator />
             <div className="grid gap-4 md:grid-cols-2">
               <div className="space-y-2">
-                <Label>Nama Kantor Default</Label>
+                <Label>Nama Kantor Bawaan</Label>
                 <Input value={form.officeName} onChange={(e) => handleChange("officeName", e.target.value)} />
               </div>
               <div className="space-y-2">
-                <Label>Alamat Kantor Default</Label>
+                <Label>Alamat Kantor Bawaan</Label>
                 <Input value={form.officeAddress} onChange={(e) => handleChange("officeAddress", e.target.value)} />
               </div>
             </div>
@@ -441,9 +441,9 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
 
         <Card>
           <CardHeader>
-            <CardTitle>Schedule & Feature Flags</CardTitle>
+            <CardTitle>Jadwal & Pengaturan Fitur</CardTitle>
             <CardDescription>
-              Aturan kerja default dan toggle fitur yang dipakai saat setup awal tenant.
+              Aturan kerja bawaan dan toggle fitur yang dipakai saat setup awal tenant.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -457,7 +457,7 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
                 />
               </div>
               <div className="space-y-2">
-                <Label>Jam Masuk Default</Label>
+                <Label>Jam Masuk Bawaan</Label>
                 <Input
                   value={form.scheduleTimeIn}
                   onChange={(e) => handleChange("scheduleTimeIn", e.target.value)}
@@ -465,7 +465,7 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
                 />
               </div>
               <div className="space-y-2">
-                <Label>Jam Pulang Default</Label>
+                <Label>Jam Pulang Bawaan</Label>
                 <Input
                   value={form.scheduleTimeOut}
                   onChange={(e) => handleChange("scheduleTimeOut", e.target.value)}
@@ -474,7 +474,7 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
               </div>
             </div>
             <div className="space-y-2 md:max-w-xs">
-              <Label>Toleransi Terlambat Default (menit)</Label>
+              <Label>Toleransi Terlambat Bawaan (menit)</Label>
               <Input
                 value={form.scheduleLateTolerance}
                 onChange={(e) => handleChange("scheduleLateTolerance", e.target.value)}
@@ -487,14 +487,14 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
               <div className="flex items-center justify-between rounded-md border p-3">
                 <div>
                   <p className="text-sm font-medium">Aktifkan WFH</p>
-                  <p className="text-xs text-muted-foreground">Default setting allow_wfh untuk tenant baru</p>
+                  <p className="text-xs text-muted-foreground">Pengaturan bawaan `allow_wfh` untuk tenant baru</p>
                 </div>
                 <Switch checked={form.allowWfh} onCheckedChange={(v) => handleChange("allowWfh", v)} />
               </div>
               <div className="flex items-center justify-between rounded-md border p-3">
                 <div>
                   <p className="text-sm font-medium">WFH Wajib Approval</p>
-                  <p className="text-xs text-muted-foreground">Default setting wfh_requires_approval</p>
+                  <p className="text-xs text-muted-foreground">Pengaturan bawaan `wfh_requires_approval`</p>
                 </div>
                 <Switch
                   checked={form.wfhRequiresApproval}
@@ -504,7 +504,7 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
               <div className="flex items-center justify-between rounded-md border p-3">
                 <div>
                   <p className="text-sm font-medium">Notifikasi Batas Absen</p>
-                  <p className="text-xs text-muted-foreground">Default notifikasi batas absen ke pegawai</p>
+                  <p className="text-xs text-muted-foreground">Notifikasi batas absen bawaan ke pegawai</p>
                 </div>
                 <Switch
                   checked={form.absenceLimitNotifications}
@@ -514,7 +514,7 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
               <div className="flex items-center justify-between rounded-md border p-3">
                 <div>
                   <p className="text-sm font-medium">Auto Apply Batas Absen</p>
-                  <p className="text-xs text-muted-foreground">Ambil dari template /admin/schedule/absence-limits</p>
+                  <p className="text-xs text-muted-foreground">Ambil dari templat /admin/schedule/absence-limits</p>
                 </div>
                 <Switch
                   checked={form.autoApplyAbsenceLimits}
@@ -523,8 +523,8 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
               </div>
               <div className="flex items-center justify-between rounded-md border p-3 md:col-span-2">
                 <div>
-                  <p className="text-sm font-medium">Seed Pengumuman Awal</p>
-                  <p className="text-xs text-muted-foreground">Tambahkan pengumuman default jika tenant masih kosong</p>
+                  <p className="text-sm font-medium">Pengisian Pengumuman Awal</p>
+                  <p className="text-xs text-muted-foreground">Tambahkan pengumuman bawaan jika tenant masih kosong</p>
                 </div>
                 <Switch
                   checked={form.seedAnnouncements}
@@ -537,9 +537,9 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
 
         <Card>
           <CardHeader>
-            <CardTitle>Template Pengumuman Awal (JSON)</CardTitle>
+            <CardTitle>Templat Pengumuman Awal (JSON)</CardTitle>
             <CardDescription>
-              Format array objek: title, content, is_published, is_pinned. Dipakai untuk /org/news saat setup awal.
+              Format array objek: title, content, is_published, is_pinned. Dipakai untuk /org/news saat penyiapan awal.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -559,8 +559,8 @@ export default function OrgOnboardingTemplates({ embedded = false }: { embedded?
   if (embedded) return pageContent;
   return (
     <SuperAdminLayout
-      title="Template Onboarding Organisasi"
-      subtitle="Template setup awal untuk membantu member/tenant baru /org."
+      title="Templat Onboarding Organisasi"
+      subtitle="Templat penyiapan awal untuk membantu member/tenant baru /org."
     >
       {pageContent}
     </SuperAdminLayout>

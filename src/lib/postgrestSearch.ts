@@ -1,7 +1,7 @@
 export const sanitizeOrKeyword = (value: string) =>
   value
     .trim()
-    .replace(/[^a-zA-Z0-9\s]/g, " ")
+    .replace(/[^a-zA-Z0-9\s@._-]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 

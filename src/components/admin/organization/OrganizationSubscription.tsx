@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -25,6 +26,14 @@ import { toast } from "sonner";
 import { format, addMonths, addYears } from "date-fns";
 import { id } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  fetchTenantHrPayrollAccessState,
+  getAccessStageLabel,
+  getWorkspaceModeLabel,
+  saveTenantHrPayrollAccessSetting,
+  type TenantHrPayrollAccessState,
+} from "@/lib/hrPayrollAccessPolicy";
+import { getTenantTrialSignal } from "@/lib/tenantTrialStatus";
 import {
   isRetryableError,
   withExponentialBackoff,
@@ -57,6 +66,13 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
     status: "trial",
     duration: "1_month",
   });
+  const [accessState, setAccessState] = useState<TenantHrPayrollAccessState | null>(null);
+  const [isSavingCommitment, setIsSavingCommitment] = useState(false);
+
+  const trialSignal = useMemo(
+    () => getTenantTrialSignal(accessState, subscription?.status),
+    [accessState, subscription?.status],
+  );
 
   const fetchSubscription = useCallback(async () => {
     try {
@@ -89,6 +105,9 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
           duration: "1_month",
         });
       }
+
+      const nextAccessState = await fetchTenantHrPayrollAccessState(tenantId);
+      setAccessState(nextAccessState);
     } catch (error) {
       const errorRef = reportError(error, "admin.components.organization_subscription.fetch", {
         tenant_id: tenantId,
@@ -181,6 +200,33 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
     }
   };
 
+  const handleCommitmentToggle = async (checked: boolean) => {
+    setIsSavingCommitment(true);
+    try {
+      await saveTenantHrPayrollAccessSetting(tenantId, {
+        paymentCommitted: checked,
+        committedAt: checked ? new Date().toISOString() : null,
+        note: checked
+          ? "Komitmen pembayaran dicatat dari panel langganan organisasi."
+          : null,
+      });
+      const nextAccessState = await fetchTenantHrPayrollAccessState(tenantId);
+      setAccessState(nextAccessState);
+      toast.success(
+        checked
+          ? "Komitmen pembayaran dicatat. HR sekarang bisa diedit, sedangkan Payroll masih mode lihat saja sampai langganan aktif."
+          : "Komitmen pembayaran dilepas. HR dan Payroll kembali mengikuti tahap kesiapan organisasi.",
+      );
+    } catch (error) {
+      const errorRef = reportError(error, "admin.components.organization_subscription.save_commitment", {
+        tenant_id: tenantId,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan status komitmen pembayaran", errorRef));
+    } finally {
+      setIsSavingCommitment(false);
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
@@ -219,14 +265,14 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
               {getStatusIcon(subscription?.status || "trial")}
               <div>
                 <p className="text-sm text-muted-foreground">Status</p>
-                <p className="font-semibold capitalize">{subscription?.status || "Trial"}</p>
+                <p className="font-semibold capitalize">{subscription?.status || "Masa Coba"}</p>
               </div>
             </div>
             <div className="flex items-center gap-3 p-4 rounded-lg border">
               <TrendingUp className="h-5 w-5 text-blue-500" />
               <div>
                 <p className="text-sm text-muted-foreground">Kebijakan Akses</p>
-                <p className="font-semibold">Streak Monitoring</p>
+                <p className="font-semibold">{accessState?.stage ? getAccessStageLabel(accessState.stage) : "Readiness + Pembayaran"}</p>
               </div>
             </div>
             <div className="flex items-center gap-3 p-4 rounded-lg border">
@@ -255,6 +301,146 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <TrendingUp className="h-5 w-5 text-primary" />
+            Status Trial Organisasi
+          </CardTitle>
+          <CardDescription>
+            Ringkasan ini membaca kesiapan operasional tenant, rekam absensi awal, dan komitmen pembayaran.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className={`rounded-lg border p-4 ${trialSignal.cardClassName}`}>
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div className="space-y-2">
+                <Badge variant="outline" className={trialSignal.badgeClassName}>
+                  {trialSignal.label}
+                </Badge>
+                <p className="text-sm font-medium">{trialSignal.description}</p>
+                <p className="text-sm text-muted-foreground">{trialSignal.summary}</p>
+              </div>
+              <div className="rounded-lg border bg-background/80 px-4 py-3 text-center">
+                <p className="text-xs uppercase tracking-wide text-muted-foreground">Skor Indikator</p>
+                <p className="text-3xl font-bold">{trialSignal.score}</p>
+                <p className="text-xs text-muted-foreground">dari 100</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-lg border p-4">
+              <p className="text-sm font-medium">Yang sudah terlihat</p>
+              {trialSignal.completedIndicators.length === 0 ? (
+                <p className="mt-2 text-sm text-muted-foreground">Belum ada indikator kuat yang terbaca.</p>
+              ) : (
+                <div className="mt-2 space-y-2">
+                  {trialSignal.completedIndicators.map((item) => (
+                    <div key={item} className="flex items-start gap-2 text-sm">
+                      <CheckCircle2 className="mt-0.5 h-4 w-4 text-green-600" />
+                      <span>{item}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="rounded-lg border p-4">
+              <p className="text-sm font-medium">Yang masih perlu didorong</p>
+              {trialSignal.pendingIndicators.length === 0 ? (
+                <p className="mt-2 text-sm text-muted-foreground">Tidak ada blocker utama yang tersisa pada tahap ini.</p>
+              ) : (
+                <div className="mt-2 space-y-2">
+                  {trialSignal.pendingIndicators.map((item) => (
+                    <div key={item} className="flex items-start gap-2 text-sm">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 text-amber-600" />
+                      <span>{item}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
+            <span className="font-medium text-foreground">Langkah berikutnya:</span> {trialSignal.nextStep}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <TrendingUp className="h-5 w-5 text-primary" />
+            Aktivasi HR dan Payroll
+          </CardTitle>
+          <CardDescription>
+            HR dan Payroll dibuka bertahap berdasarkan kesiapan absensi dan status pembayaran organisasi.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-lg border p-4">
+              <p className="text-sm text-muted-foreground">Fondasi Absensi</p>
+              <p className="mt-1 font-semibold">{accessState?.readiness.onboardingReady ? "Siap" : "Belum siap"}</p>
+            </div>
+            <div className="rounded-lg border p-4">
+              <p className="text-sm text-muted-foreground">Admin Aktif</p>
+              <p className="mt-1 font-semibold">{accessState?.readiness.adminCount ?? 0} admin</p>
+            </div>
+            <div className="rounded-lg border p-4">
+              <p className="text-sm text-muted-foreground">Pegawai Terdaftar</p>
+              <p className="mt-1 font-semibold">{accessState?.readiness.employeeCount ?? 0} pegawai</p>
+            </div>
+            <div className="rounded-lg border p-4">
+              <p className="text-sm text-muted-foreground">Absensi Tercatat</p>
+              <p className="mt-1 font-semibold">{accessState?.readiness.attendanceCount ?? 0} record</p>
+            </div>
+          </div>
+
+          <div className="rounded-lg border p-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1">
+                <p className="font-medium">Komitmen pembayaran</p>
+                <p className="text-sm text-muted-foreground">
+                  Saat aktif, HR bisa diedit. Payroll tetap dalam mode lihat saja sampai langganan aktif.
+                </p>
+              </div>
+              <Switch
+                checked={accessState?.accessSetting.paymentCommitted ?? false}
+                onCheckedChange={handleCommitmentToggle}
+                disabled={isSavingCommitment}
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-lg border p-4">
+              <div className="flex items-center gap-2">
+                <Badge variant="outline">HR</Badge>
+                <span className="text-sm font-medium">Mode akses saat ini</span>
+              </div>
+              <p className="mt-2 text-sm font-semibold">{accessState?.hrMode ? getWorkspaceModeLabel(accessState.hrMode) : "-"}</p>
+            </div>
+            <div className="rounded-lg border p-4">
+              <div className="flex items-center gap-2">
+                <Badge variant="outline">Payroll</Badge>
+                <span className="text-sm font-medium">Mode akses saat ini</span>
+              </div>
+              <p className="mt-2 text-sm font-semibold">{accessState?.payrollMode ? getWorkspaceModeLabel(accessState.payrollMode) : "-"}</p>
+            </div>
+          </div>
+
+          <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
+            Checklist kesiapan yang dipakai saat ini:
+            <div className="mt-2">1. Fondasi absensi sudah diisi: satuan kerja, lokasi kerja, jam kerja, dan batas absen.</div>
+            <div>2. Minimal satu admin organisasi aktif.</div>
+            <div>3. Minimal satu pegawai sudah terdaftar.</div>
+            <div>4. Sudah ada rekam absensi awal di tenant.</div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Update Subscription */}
       <Card>
         <CardHeader>
@@ -273,9 +459,9 @@ export function OrganizationSubscription({ tenantId, organizationName }: Organiz
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="trial">Trial</SelectItem>
+                  <SelectItem value="trial">Masa Coba</SelectItem>
                   <SelectItem value="active">Aktif</SelectItem>
-                  <SelectItem value="expired">Expired</SelectItem>
+                  <SelectItem value="expired">Berakhir</SelectItem>
                   <SelectItem value="cancelled">Dibatalkan</SelectItem>
                 </SelectContent>
               </Select>

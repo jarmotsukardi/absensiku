@@ -36,6 +36,12 @@ export interface EnsureIndividualEmployeeInvitationResult {
   reused: boolean;
 }
 
+export interface SendEmployeeInvitationEmailResult {
+  email?: string | null;
+  message: string;
+  traceId?: string | null;
+}
+
 export type EmployeeInvitationFlowAuditEvent =
   | "INVITATION_CREATE_NEW"
   | "INVITATION_REUSE_EXISTING";
@@ -199,4 +205,26 @@ export async function logEmployeeInvitationFlowAudit(
   }
   clearRpcUnavailableMark(rpcName);
   return data ?? null;
+}
+
+export async function sendEmployeeInvitationEmail(
+  invitationId: string
+): Promise<SendEmployeeInvitationEmailResult> {
+  const { data, error } = await supabase.functions.invoke("send-employee-invitation-email", {
+    body: { invitation_id: invitationId },
+  });
+
+  if (error) throw error;
+
+  const payload = (data ?? {}) as Record<string, unknown>;
+  return {
+    email: typeof payload.email === "string" ? payload.email : null,
+    message: typeof payload.message === "string" ? payload.message : "Email undangan berhasil dikirim",
+    traceId:
+      typeof payload.trace_id === "string"
+        ? payload.trace_id
+        : typeof payload.traceId === "string"
+          ? payload.traceId
+          : null,
+  };
 }

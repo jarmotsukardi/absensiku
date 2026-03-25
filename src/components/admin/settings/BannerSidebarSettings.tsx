@@ -19,8 +19,8 @@ import type { SidebarBannerItem } from "@/lib/sidebarBanners";
 const MAX_VISIBLE_BANNERS = 2;
 
 const positionOptions = [
-  { value: "homepage", label: "Homepage" },
-  { value: "dashboard", label: "Dashboard" },
+  { value: "homepage", label: "Halaman Utama" },
+  { value: "dashboard", label: "Dasbor" },
   { value: "all", label: "Semua Halaman" },
 ];
 
@@ -70,7 +70,7 @@ export function BannerSidebarSettings() {
 
 
   const handleSave = async () => {
-    await saveSetting("banners_sidebar", normalizeSidebarBanners(banners), "Banner Sidebar Dashboard");
+    await saveSetting("banners_sidebar", normalizeSidebarBanners(banners), "Banner Sidebar Dasbor");
   };
 
   const getBannerVisibility = (banner: SidebarBannerItem): "visible" | "hidden" | "inactive" => {
@@ -335,15 +335,15 @@ export function BannerSidebarSettings() {
                     </div>
                   </div>
 
-                  {/* Preview */}
+                  {/* Pratinjau */}
                   {banner.imageUrl && (
                     <div className="space-y-2">
-                      <Label>Preview</Label>
+                      <Label>Pratinjau</Label>
                       <div className="rounded-lg border bg-muted/30 p-4">
                         <div className="max-w-[200px] mx-auto">
                           <img 
                             src={banner.imageUrl} 
-                            alt={banner.title || "Preview"} 
+                            alt={banner.title || "Pratinjau"} 
                             className="w-full h-auto rounded-md shadow-sm"
                             referrerPolicy="no-referrer"
                             onError={(e) => { (e.target as HTMLImageElement).src = '/placeholder.svg'; }}

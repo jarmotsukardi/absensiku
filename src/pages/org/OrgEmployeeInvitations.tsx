@@ -52,6 +52,7 @@ import {
   buildInvitationLink,
   ensureIndividualEmployeeInvitation,
   logEmployeeInvitationFlowAudit,
+  sendEmployeeInvitationEmail,
 } from "@/lib/employeeInvitations";
 
 interface Invitation {
@@ -94,7 +95,8 @@ interface EmployeeCandidate {
 
 type InvitationType = "individual" | "opd" | "office";
 
-const ITEMS_PER_PAGE = 15;
+const DEFAULT_ITEMS_PER_PAGE = 15;
+const INVITATION_PAGE_SIZE_OPTIONS = [10, 15, 25, 50] as const;
 const ORG_INVITATIONS_QUERY_TIMEOUT_MS = 12000;
 const ORG_INVITATIONS_QUERY_RETRY_MAX = 2;
 
@@ -108,6 +110,7 @@ export default function OrgEmployeeInvitations() {
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [filterOpdId, setFilterOpdId] = useState<string>("all");
   const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState<number>(DEFAULT_ITEMS_PER_PAGE);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [invitationType, setInvitationType] = useState<InvitationType>("individual");
   const [expiryDays, setExpiryDays] = useState("7");
@@ -121,6 +124,9 @@ export default function OrgEmployeeInvitations() {
   });
   const [generatedCode, setGeneratedCode] = useState<string | null>(null);
   const [generatedExpiresAt, setGeneratedExpiresAt] = useState<string | null>(null);
+  const [generatedInvitationId, setGeneratedInvitationId] = useState<string | null>(null);
+  const [invitationEmailStatus, setInvitationEmailStatus] = useState<string | null>(null);
+  const [isSendingInvitationEmail, setIsSendingInvitationEmail] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [editingInvitationId, setEditingInvitationId] = useState<string | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
@@ -260,8 +266,8 @@ export default function OrgEmployeeInvitations() {
     try {
       setLoadError(null);
       setIsRetrying(false);
-      const from = (currentPage - 1) * ITEMS_PER_PAGE;
-      const to = from + ITEMS_PER_PAGE - 1;
+      const from = (currentPage - 1) * itemsPerPage;
+      const to = from + itemsPerPage - 1;
 
       let query = supabase
         .from("employee_invitations")
@@ -270,10 +276,18 @@ export default function OrgEmployeeInvitations() {
           opd:opd_id(id, name),
           office:office_id(id, name)
         `, { count: "exact" })
-        .eq("tenant_id", tenantId);
+        .eq("tenant_id", tenantId)
+        .is("archived_at", null);
 
       if (filterStatus !== "all") {
-        query = query.eq("status", filterStatus);
+        if (filterStatus === "pending") {
+          const nowIso = new Date().toISOString();
+          query = query
+            .eq("status", "pending")
+            .or(`expires_at.is.null,expires_at.gte.${nowIso}`);
+        } else {
+          query = query.eq("status", filterStatus);
+        }
       }
 
       if (filterOpdId !== "all") {
@@ -323,7 +337,7 @@ export default function OrgEmployeeInvitations() {
     } finally {
       setIsLoading(false);
     }
-  }, [tenantId, currentPage, filterStatus, filterOpdId, debouncedSearchTerm]);
+  }, [tenantId, currentPage, itemsPerPage, filterStatus, filterOpdId, debouncedSearchTerm]);
 
   useEffect(() => {
     if (!tenantId) return;
@@ -472,10 +486,36 @@ export default function OrgEmployeeInvitations() {
 
         setGeneratedCode(invitationResult.invitation.invitation_code);
         setGeneratedExpiresAt(invitationResult.invitation.expires_at ?? null);
+        setGeneratedInvitationId(invitationResult.invitation.id);
         if (invitationResult.reused) {
           toast.info("Undangan aktif untuk pegawai ini sudah ada. Gunakan kode/link yang sama.");
         } else {
           toast.success("Undangan berhasil dibuat!");
+        }
+
+        setInvitationEmailStatus("Mengirim email undangan...");
+        setIsSendingInvitationEmail(true);
+        try {
+          const emailResult = await sendEmployeeInvitationEmail(invitationResult.invitation.id);
+          setInvitationEmailStatus(
+            emailResult.email
+              ? `Email undangan terkirim ke ${emailResult.email}.`
+              : emailResult.message
+          );
+          toast.success(emailResult.message);
+        } catch (emailError) {
+          const emailErrorRef = reportError(emailError, "org.invitations.send_email", {
+            invitation_id: invitationResult.invitation.id,
+            tenant_id: tenantId,
+          });
+          const errorMessage = appendErrorReference(
+            "Undangan dibuat, tetapi email gagal dikirim. Anda masih bisa membagikan kode atau link secara manual.",
+            emailErrorRef
+          );
+          setInvitationEmailStatus(errorMessage);
+          toast.error(errorMessage);
+        } finally {
+          setIsSendingInvitationEmail(false);
         }
       } else {
         const insertData: TablesInsert<"employee_invitations"> = {
@@ -515,6 +555,8 @@ export default function OrgEmployeeInvitations() {
 
         setGeneratedCode(code);
         setGeneratedExpiresAt(expiresAt.toISOString());
+        setGeneratedInvitationId(null);
+        setInvitationEmailStatus(null);
         toast.success("Undangan berhasil dibuat!");
       }
 
@@ -659,6 +701,35 @@ export default function OrgEmployeeInvitations() {
     toast.success("Link undangan disalin!");
   };
 
+  const handleSendInvitationEmail = useCallback(async () => {
+    if (!generatedInvitationId) return;
+
+    setIsSendingInvitationEmail(true);
+    setInvitationEmailStatus("Mengirim email undangan...");
+    try {
+      const emailResult = await sendEmployeeInvitationEmail(generatedInvitationId);
+      setInvitationEmailStatus(
+        emailResult.email
+          ? `Email undangan terkirim ke ${emailResult.email}.`
+          : emailResult.message
+      );
+      toast.success(emailResult.message);
+    } catch (error) {
+      const errorRef = reportError(error, "org.invitations.resend_email", {
+        invitation_id: generatedInvitationId,
+        tenant_id: tenantId,
+      });
+      const message = appendErrorReference(
+        "Gagal mengirim email undangan. Anda masih bisa membagikan kode atau link secara manual.",
+        errorRef
+      );
+      setInvitationEmailStatus(message);
+      toast.error(message);
+    } finally {
+      setIsSendingInvitationEmail(false);
+    }
+  }, [generatedInvitationId, tenantId]);
+
   const sendViaWhatsApp = (phone: string, code: string, name: string) => {
     const link = buildInvitationLink(code);
     const message = `Halo ${name},\n\nAnda diundang untuk bergabung dengan sistem absensi.\n\nKode Undangan: ${code}\nLink Daftar: ${link}\n\nSilakan klik link di atas untuk mendaftar.`;
@@ -666,15 +737,17 @@ export default function OrgEmployeeInvitations() {
     window.open(waUrl, "_blank");
   };
 
-  const totalPages = Math.ceil(totalInvitations / ITEMS_PER_PAGE);
+  const totalPages = Math.max(1, Math.ceil(totalInvitations / itemsPerPage));
   const pageNumbers = Array.from({ length: totalPages }, (_, i) => i + 1);
   const visiblePageNumbers = pageNumbers.filter((page) =>
     page === 1 || page === totalPages || Math.abs(page - currentPage) <= 1
   );
+  const displayRangeFrom = totalInvitations === 0 ? 0 : (currentPage - 1) * itemsPerPage + 1;
+  const displayRangeTo = Math.min(currentPage * itemsPerPage, totalInvitations);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, filterStatus, filterOpdId]);
+  }, [searchTerm, filterStatus, filterOpdId, itemsPerPage]);
 
   useEffect(() => {
     if (totalPages > 0 && currentPage > totalPages) {
@@ -708,6 +781,9 @@ export default function OrgEmployeeInvitations() {
     setFormData({ name: "", email: "", phone: "", nik: "", opd_id: "", office_id: "" });
     setGeneratedCode(null);
     setGeneratedExpiresAt(null);
+    setGeneratedInvitationId(null);
+    setInvitationEmailStatus(null);
+    setIsSendingInvitationEmail(false);
     setInvitationType("individual");
     setExpiryDays("7");
   };
@@ -909,6 +985,17 @@ export default function OrgEmployeeInvitations() {
                   </div>
 
                   <div className="flex gap-2">
+                    {invitationType === "individual" && generatedInvitationId && (
+                      <Button
+                        variant="outline"
+                        className="flex-1"
+                        onClick={() => void handleSendInvitationEmail()}
+                        disabled={isSendingInvitationEmail}
+                      >
+                        <User className="w-4 h-4 mr-2" />
+                        {isSendingInvitationEmail ? "Mengirim Email..." : "Kirim via Email"}
+                      </Button>
+                    )}
                     {formData.phone && invitationType === "individual" && (
                       <Button 
                         variant="outline" 
@@ -928,6 +1015,12 @@ export default function OrgEmployeeInvitations() {
                       Salin Link
                     </Button>
                   </div>
+
+                  {invitationEmailStatus && invitationType === "individual" && (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      {invitationEmailStatus}
+                    </div>
+                  )}
 
                   <DialogFooter className={dialogActionBarClassName}>
                     <DialogActionHint>Simpan kode/link sebelum menutup dialog.</DialogActionHint>
@@ -1070,49 +1163,63 @@ export default function OrgEmployeeInvitations() {
               </TableBody>
             </Table>
 
-            {totalPages > 1 && (
+            {totalInvitations > 0 && (
               <div className="flex items-center justify-between mt-4 pt-4 border-t">
                 <p className="text-sm text-muted-foreground">
-                  Halaman {currentPage} dari {totalPages} • Menampilkan {invitations.length} dari {totalInvitations} data
+                  Halaman {currentPage} dari {totalPages} • Menampilkan {displayRangeFrom} - {displayRangeTo} dari {totalInvitations} data
                 </p>
-                <Pagination>
-                  <PaginationContent>
-                    <PaginationItem>
-                      <PaginationPrevious
-                        onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                        className={currentPage === 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
-                      />
-                    </PaginationItem>
-                    {visiblePageNumbers.map((page, idx) => {
-                      const prevPage = visiblePageNumbers[idx - 1];
-                      const showEllipsis = prevPage && page - prevPage > 1;
-                      return (
-                        <Fragment key={page}>
-                          {showEllipsis && (
+                <div className="flex items-center gap-2">
+                  <Select value={String(itemsPerPage)} onValueChange={(value) => setItemsPerPage(Number(value))}>
+                    <SelectTrigger className="w-[130px]">
+                      <SelectValue placeholder="Baris/halaman" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {INVITATION_PAGE_SIZE_OPTIONS.map((size) => (
+                        <SelectItem key={size} value={String(size)}>
+                          {size} / halaman
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Pagination>
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious
+                          onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                          className={currentPage === 1 ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                        />
+                      </PaginationItem>
+                      {visiblePageNumbers.map((page, idx) => {
+                        const prevPage = visiblePageNumbers[idx - 1];
+                        const showEllipsis = prevPage && page - prevPage > 1;
+                        return (
+                          <Fragment key={page}>
+                            {showEllipsis && (
+                              <PaginationItem>
+                                <PaginationEllipsis />
+                              </PaginationItem>
+                            )}
                             <PaginationItem>
-                              <PaginationEllipsis />
+                              <PaginationLink
+                                isActive={page === currentPage}
+                                onClick={() => setCurrentPage(page)}
+                                className="cursor-pointer"
+                              >
+                                {page}
+                              </PaginationLink>
                             </PaginationItem>
-                          )}
-                          <PaginationItem>
-                            <PaginationLink
-                              isActive={page === currentPage}
-                              onClick={() => setCurrentPage(page)}
-                              className="cursor-pointer"
-                            >
-                              {page}
-                            </PaginationLink>
-                          </PaginationItem>
-                        </Fragment>
-                      );
-                    })}
-                    <PaginationItem>
-                      <PaginationNext
-                        onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                        className={currentPage === totalPages ? "pointer-events-none opacity-50" : "cursor-pointer"}
-                      />
-                    </PaginationItem>
-                  </PaginationContent>
-                </Pagination>
+                          </Fragment>
+                        );
+                      })}
+                      <PaginationItem>
+                        <PaginationNext
+                          onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                          className={currentPage === totalPages ? "pointer-events-none opacity-50" : "cursor-pointer"}
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
+                </div>
               </div>
             )}
           </CardContent>

@@ -1,4 +1,5 @@
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Badge } from "@/components/ui/badge";
@@ -16,15 +17,13 @@ const SETTING_SHORTCUTS = [
     desc: "Atur webhook, koneksi absensi, payout, dan accounting.",
     path: "/org/payroll/integrations",
   },
-  {
-    title: "Log Error Payroll",
-    desc: "Monitoring error kritis dan pengaturan alert realtime.",
-    path: "/org/payroll/error-log",
-  },
 ];
 
 export default function OrgPayrollSettings() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target));
 
   return (
     <OrganizationLayout>
@@ -48,7 +47,7 @@ export default function OrgPayrollSettings() {
               <button
                 key={item.title}
                 type="button"
-                onClick={() => navigate(item.path)}
+                onClick={() => navigateWithOverlay(item.path)}
                 className="rounded-lg border bg-card p-4 text-left transition-colors hover:bg-muted/40"
               >
                 <p className="mb-1 text-sm font-medium">{item.title}</p>
@@ -59,8 +58,8 @@ export default function OrgPayrollSettings() {
         </Card>
 
         <div className="flex gap-2">
-          <Button onClick={() => navigate("/org/payroll")}>Beranda Payroll</Button>
-          <Button variant="outline" onClick={() => navigate("/org/payroll/help")}>
+          <Button onClick={() => navigateWithOverlay("/org/payroll")}>Beranda Payroll</Button>
+          <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll/help")}>
             Bantuan Payroll
           </Button>
         </div>

@@ -27,7 +27,17 @@ export function useHrPageAccess(pagePath: string) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    if (!pagePath) {
+      setAccess({
+        ...FALLBACK_ACCESS,
+        pagePath: "",
+      });
+      setIsLoading(false);
+      return;
+    }
+
     let mounted = true;
+    setIsLoading(true);
 
     const run = async () => {
       try {

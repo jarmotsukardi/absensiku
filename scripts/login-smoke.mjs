@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { chromium } from "playwright";
-import { ensureRoleCredentials, readTestAccounts } from "./lib/test-accounts.mjs";
+import { ensureRoleAccount, readTestAccounts } from "./lib/test-accounts.mjs";
 
 const BASE_URL = process.env.DASHBOARD_BASE_URL || "http://127.0.0.1:5173";
 const RECORD_FILE = path.join(process.cwd(), "ops", "test-runs.local.jsonl");
@@ -26,6 +26,22 @@ const ROLE_CONFIG = {
     successUrlPrefix: "/org",
     captchaType: "simple",
   },
+  org_admin_centralized: {
+    loginPath: "/org/login",
+    emailSelector: "#email",
+    passwordSelector: "#password",
+    submitLabel: "Masuk",
+    successUrlPrefix: "/org",
+    captchaType: "simple",
+  },
+  employee_centralized: {
+    loginPath: "/employee/login",
+    emailSelector: "#email",
+    passwordSelector: "#password",
+    submitLabel: "Masuk",
+    successUrlPrefix: "/dashboard",
+    captchaType: "simple",
+  },
   superadmin: {
     loginPath: "/admin/login",
     emailSelector: "#email",
@@ -39,7 +55,7 @@ const ROLE_CONFIG = {
 function parseRolesArg() {
   const roleArg = process.argv.find((arg) => arg.startsWith("--role="));
   const raw = roleArg ? roleArg.split("=")[1] : "all";
-  if (!raw || raw === "all") return ["employee", "org_admin", "superadmin"];
+  if (!raw || raw === "all") return ["employee", "org_admin", "org_admin_centralized", "superadmin"];
   return raw.split(",").map((item) => item.trim()).filter(Boolean);
 }
 
@@ -89,7 +105,7 @@ async function ensureCaptcha(page, captchaType) {
 async function runRoleLogin(page, role, accounts) {
   const config = ROLE_CONFIG[role];
   if (!config) throw new Error(`Role tidak didukung: ${role}`);
-  const creds = ensureRoleCredentials(accounts, role);
+  const account = ensureRoleAccount(accounts, role);
   const url = `${BASE_URL}${config.loginPath}`;
 
   await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -99,8 +115,8 @@ async function runRoleLogin(page, role, accounts) {
     // Ignore long-running network connections.
   }
 
-  await page.fill(config.emailSelector, creds.email);
-  await page.fill(config.passwordSelector, creds.password);
+  await page.fill(config.emailSelector, account.email);
+  await page.fill(config.passwordSelector, account.password);
   await ensureCaptcha(page, config.captchaType);
 
   await page.evaluate(() => {
@@ -127,6 +143,12 @@ async function runRoleLogin(page, role, accounts) {
   const isSuccess =
     ((!stillOnLoginPath && normalizedCurrentPath.startsWith(config.successUrlPrefix)) || has2FAView);
 
+  let tenantMatch = null;
+  if (isSuccess && account.tenant_name && role.startsWith("org_admin")) {
+    const tenantLabelVisible = await page.getByText(account.tenant_name, { exact: false }).first().isVisible().catch(() => false);
+    tenantMatch = tenantLabelVisible;
+  }
+
   const appLogs = await page.evaluate(() => {
     const logs = typeof window.absensikuErrorLogs === "function" ? window.absensikuErrorLogs() : [];
     return logs.slice(-10);
@@ -138,6 +160,8 @@ async function runRoleLogin(page, role, accounts) {
     loginUrl: url,
     finalUrl: page.url(),
     success: isSuccess,
+    tenantMatch,
+    expectedTenantName: account.tenant_name || undefined,
     twoFactorPending: has2FAView,
     appLogRefs: logRefs,
   };
@@ -194,6 +218,8 @@ async function main() {
     console.log(`  success: ${result.success ? "YES" : "NO"}`);
     if (result.loginUrl) console.log(`  login_url: ${result.loginUrl}`);
     if (result.finalUrl) console.log(`  final_url: ${result.finalUrl}`);
+    if (result.expectedTenantName) console.log(`  expected_tenant: ${result.expectedTenantName}`);
+    if (typeof result.tenantMatch === "boolean") console.log(`  tenant_match: ${result.tenantMatch ? "YES" : "NO"}`);
     if (result.twoFactorPending) console.log("  note: 2FA view detected (credentials accepted, waiting OTP)");
     if (result.error) console.log(`  error: ${result.error}`);
     if (Array.isArray(result.appLogRefs) && result.appLogRefs.length > 0) {
@@ -201,7 +227,7 @@ async function main() {
     }
   }
 
-  const failed = results.filter((r) => !r.success);
+  const failed = results.filter((r) => !r.success || r.tenantMatch === false);
   const record = {
     run_id: runId,
     suite: "login_smoke",

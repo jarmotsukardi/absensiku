@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
+import { supabasePublishableKey, supabaseUrl } from "@/integrations/supabase/env";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,6 +12,7 @@ import { Shield, Mail, Lock, ArrowLeft, Loader2, MapPin, RefreshCw, KeyRound, Ke
 import { ForgotPasswordDialog } from "@/components/auth/ForgotPasswordDialog";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import { Helmet } from "react-helmet-async";
 import { z } from "zod";
 
 const loginSchema = z.object({
@@ -241,11 +243,11 @@ export default function SuperAdminLogin() {
         () =>
           withTimeout(
             () =>
-              fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-password-otp`, {
+              fetch(`${supabaseUrl}/functions/v1/send-password-otp`, {
                 method: "POST",
                 headers: {
                   "Content-Type": "application/json",
-                  apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+                  apikey: supabasePublishableKey,
                 },
                 body: JSON.stringify({ email: userEmail, purpose: "2fa_login" }),
               }),
@@ -522,7 +524,13 @@ export default function SuperAdminLogin() {
 
   if (show2FA) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4 relative overflow-hidden">
+      <>
+        <Helmet>
+          <title>Admin Login 2FA | AbsensiKu</title>
+          <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+          <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet" />
+        </Helmet>
+        <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4 relative overflow-hidden">
         <div className="absolute inset-0 opacity-20">
           <div className="absolute top-20 left-10 w-72 h-72 bg-primary rounded-full blur-3xl" />
           <div className="absolute bottom-20 right-10 w-96 h-96 bg-blue-500 rounded-full blur-3xl" />
@@ -600,12 +608,19 @@ export default function SuperAdminLogin() {
             </CardContent>
           </Card>
         </div>
-      </div>
+        </div>
+      </>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4 relative overflow-hidden">
+    <>
+      <Helmet>
+        <title>Admin Login | AbsensiKu</title>
+        <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+        <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet" />
+      </Helmet>
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 flex items-center justify-center p-4 relative overflow-hidden">
       {/* Background Elements */}
       <div className="absolute inset-0 opacity-20">
         <div className="absolute top-20 left-10 w-72 h-72 bg-primary rounded-full blur-3xl" />
@@ -653,6 +668,7 @@ export default function SuperAdminLogin() {
                     id="email"
                     type="email"
                     placeholder="admin@absensiku.id"
+                    autoComplete="username"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     className="pl-10 bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500 focus:border-primary focus:ring-primary/20"
@@ -673,6 +689,7 @@ export default function SuperAdminLogin() {
                     id="password"
                     type={showPassword ? "text" : "password"}
                     placeholder="••••••••"
+                    autoComplete="current-password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="pl-10 pr-10 bg-slate-800/50 border-slate-700 text-white placeholder:text-slate-500 focus:border-primary focus:ring-primary/20"
@@ -770,6 +787,7 @@ export default function SuperAdminLogin() {
           © 2026 AbsensiKu. All rights reserved.
         </p>
       </div>
-    </div>
+      </div>
+    </>
   );
 }

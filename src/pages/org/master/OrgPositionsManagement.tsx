@@ -183,7 +183,8 @@ export default function OrgPositionsManagement() {
               opd_id: null,
               is_active: formData.is_active,
             })
-            .eq('id', editingPosition.id),
+            .eq('id', editingPosition.id)
+            .eq('tenant_id', employee.tenant_id),
           POSITIONS_WRITE_TIMEOUT_MS,
           "Update jabatan timeout."
         );
@@ -254,7 +255,8 @@ export default function OrgPositionsManagement() {
         supabase
           .from('positions')
           .delete()
-          .eq('id', deletingPosition.id),
+          .eq('id', deletingPosition.id)
+          .eq('tenant_id', deletingPosition.tenant_id),
         POSITIONS_WRITE_TIMEOUT_MS,
         "Hapus jabatan timeout."
       );

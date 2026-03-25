@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { getHrRoutePolicy, resolveHrRouteAccess } from "@/lib/hrRouteAccess";
+import { getAccessStageLabel } from "@/lib/hrPayrollAccessPolicy";
 import { reportError } from "@/lib/errorLogger";
 
 type OrgHRRouteGuardProps = {
@@ -18,6 +19,7 @@ export function OrgHRRouteGuard({ routePath, children }: OrgHRRouteGuardProps) {
   const [reason, setReason] = useState<string | null>(null);
   const [ref, setRef] = useState<string | null>(null);
   const [redirectTo, setRedirectTo] = useState<string | null>(null);
+  const [stageLabel, setStageLabel] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -30,6 +32,7 @@ export function OrgHRRouteGuard({ routePath, children }: OrgHRRouteGuardProps) {
         setReason(access.reason);
         setRef(access.ref);
         setRedirectTo(access.redirectTo);
+        setStageLabel(access.stage ? getAccessStageLabel(access.stage) : null);
       } catch (error) {
         const errorRef = reportError(error, "hr.route_guard.effect", { route_path: routePath });
         if (!mounted) return;
@@ -37,6 +40,7 @@ export function OrgHRRouteGuard({ routePath, children }: OrgHRRouteGuardProps) {
         setReason("Terjadi error saat validasi akses HR.");
         setRef(errorRef || null);
         setRedirectTo("/org");
+        setStageLabel(null);
       } finally {
         if (mounted) setIsLoading(false);
       }
@@ -77,11 +81,12 @@ export function OrgHRRouteGuard({ routePath, children }: OrgHRRouteGuardProps) {
               <div>route: {routePath}</div>
               <div>minimum_role: {policy.minimumRole}</div>
               <div>status: {policy.status}</div>
+              <div>stage: {stageLabel || "-"}</div>
               <div>ref: {ref || "HR-UNKNOWN"}</div>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => navigate("/org/hr", { replace: true })}>Workspace HR</Button>
-              <Button onClick={() => navigate("/org/hr/help/tickets", { replace: true })}>Tiket HR</Button>
+              <Button variant="outline" onClick={() => navigate("/org", { replace: true })}>Kembali ke Absensi</Button>
+              <Button onClick={() => navigate("/org/billing", { replace: true })}>Buka Billing</Button>
             </div>
           </CardContent>
         </Card>

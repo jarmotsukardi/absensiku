@@ -133,7 +133,8 @@ export default function OrgOPDManagement() {
           supabase
             .from("opd")
             .update({ code: normalizedCode, name: normalizedName, is_active: formData.is_active })
-            .eq("id", formData.id),
+            .eq("id", formData.id)
+            .eq("tenant_id", roleData.tenant_id),
           OPD_WRITE_TIMEOUT_MS,
           "Update OPD timeout."
         );
@@ -177,11 +178,33 @@ export default function OrgOPDManagement() {
 
   const handleToggleStatus = async (opd: OPD) => {
     try {
+      const {
+        data: { user },
+      } = await withTimeout(
+        supabase.auth.getUser(),
+        OPD_WRITE_TIMEOUT_MS,
+        "Permintaan user OPD timeout."
+      );
+      if (!user) {
+        toast.error("Sesi tidak ditemukan");
+        return;
+      }
+      const { data: roleData, error: roleError } = await withTimeout(
+        supabase.from("user_roles").select("tenant_id").eq("user_id", user.id).maybeSingle(),
+        OPD_WRITE_TIMEOUT_MS,
+        "Permintaan tenant role timeout."
+      );
+      if (roleError) throw roleError;
+      if (!roleData?.tenant_id) {
+        toast.error("Tenant tidak ditemukan");
+        return;
+      }
       const { error } = await withTimeout(
         supabase
           .from("opd")
           .update({ is_active: !opd.is_active })
-          .eq("id", opd.id),
+          .eq("id", opd.id)
+          .eq("tenant_id", roleData.tenant_id),
         OPD_WRITE_TIMEOUT_MS,
         "Ubah status OPD timeout."
       );
@@ -207,8 +230,29 @@ export default function OrgOPDManagement() {
     }
 
     try {
+      const {
+        data: { user },
+      } = await withTimeout(
+        supabase.auth.getUser(),
+        OPD_WRITE_TIMEOUT_MS,
+        "Permintaan user OPD timeout."
+      );
+      if (!user) {
+        toast.error("Sesi tidak ditemukan");
+        return;
+      }
+      const { data: roleData, error: roleError } = await withTimeout(
+        supabase.from("user_roles").select("tenant_id").eq("user_id", user.id).maybeSingle(),
+        OPD_WRITE_TIMEOUT_MS,
+        "Permintaan tenant role timeout."
+      );
+      if (roleError) throw roleError;
+      if (!roleData?.tenant_id) {
+        toast.error("Tenant tidak ditemukan");
+        return;
+      }
       const { error } = await withTimeout(
-        supabase.from("opd").delete().eq("id", id),
+        supabase.from("opd").delete().eq("id", id).eq("tenant_id", roleData.tenant_id),
         OPD_WRITE_TIMEOUT_MS,
         "Hapus OPD timeout."
       );

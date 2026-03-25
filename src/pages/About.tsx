@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
+import { Helmet } from "react-helmet-async";
 import { supabase } from "@/integrations/supabase/client";
 import { NavigationBar } from "@/components/homepage/NavigationBar";
 import { FooterSection } from "@/components/homepage/FooterSection";
@@ -16,11 +17,14 @@ import {
 } from "lucide-react";
 import DOMPurify from "dompurify";
 import type { FooterSettings } from "@/hooks/useHomepageData";
+import { PUBLIC_BASE_URL, usePublicSeoSettings } from "@/hooks/usePublicSeoSettings";
 
 const defaultFooterSettings: FooterSettings = {
   company_name: "AbsensiKu",
   company_description: "Sistem absensi GPS modern untuk pemerintah dan perusahaan.",
   copyright_text: "© 2024 AbsensiKu. Hak cipta dilindungi.",
+  enable_contact: true,
+  enable_social_media: true,
   address: "",
   email: "",
   phone: "",
@@ -49,6 +53,11 @@ const journeyMilestones = [
     title: "Otomasi Operasional",
     description: "Integrasi billing, notifikasi, dan otomasi edge function untuk reliabilitas layanan.",
   },
+  {
+    year: "2026",
+    title: "Ekspansi Bertahap",
+    description: "Memperluas fondasi absensi ke workflow HR dan Payroll tanpa memutus alur data organisasi.",
+  },
 ];
 
 const trustStats = [
@@ -68,6 +77,11 @@ const testimonials = [
       "Dashboard pelaporan membantu pimpinan mengambil keputusan lebih cepat karena data hadir real-time.",
     source: "Manajemen Organisasi",
   },
+  {
+    quote:
+      "Setelah fondasi absensi kami stabil, tim lebih siap menata alur HR dan proses payroll tanpa memulai dari sistem baru.",
+    source: "Operator Organisasi",
+  },
 ];
 
 const withFallbackImageAlt = (html: string) =>
@@ -84,6 +98,12 @@ const asSafeString = (value: unknown): string => {
 };
 
 const About = () => {
+  const seoSettings = usePublicSeoSettings({
+    metaTitle: "Tentang AbsensiKu | Platform Absensi GPS untuk Organisasi Modern",
+    metaDescription:
+      "Pelajari arah produk AbsensiKu, fondasi absensi GPS, serta ekspansi bertahap ke workflow HR dan Payroll untuk organisasi modern.",
+    metaKeywords: "tentang absensiku, platform absensi gps, hr payroll, organisasi modern",
+  });
   const [content, setContent] = useState<string>("");
   const [isLoading, setIsLoading] = useState(true);
   const [footerSettings, setFooterSettings] = useState<FooterSettings>(defaultFooterSettings);
@@ -139,6 +159,21 @@ const About = () => {
 
   return (
     <div className="min-h-screen bg-background">
+      <Helmet>
+        <title>{seoSettings.metaTitle}</title>
+        <meta name="description" content={seoSettings.metaDescription} />
+        <meta name="keywords" content={seoSettings.metaKeywords} />
+        <link rel="canonical" href={`${PUBLIC_BASE_URL}/about`} />
+        <meta property="og:type" content="website" />
+        <meta property="og:title" content={seoSettings.ogTitle} />
+        <meta property="og:description" content={seoSettings.ogDescription} />
+        <meta property="og:url" content={`${PUBLIC_BASE_URL}/about`} />
+        {seoSettings.ogImage ? <meta property="og:image" content={seoSettings.ogImage} /> : null}
+        <meta name="twitter:card" content="summary_large_image" />
+        <meta name="twitter:title" content={seoSettings.twitterTitle} />
+        <meta name="twitter:description" content={seoSettings.twitterDescription} />
+        {seoSettings.ogImage ? <meta name="twitter:image" content={seoSettings.ogImage} /> : null}
+      </Helmet>
       <NavigationBar />
 
       <main className="pt-24 pb-16 px-4 relative overflow-hidden">
@@ -161,7 +196,7 @@ const About = () => {
                 </h1>
                 <p className="mt-5 text-lg text-muted-foreground max-w-xl">
                   Kami membantu instansi pemerintah dan organisasi modern mengelola kehadiran pegawai
-                  dengan lebih akurat, aman, dan mudah dipantau secara real-time.
+                  dengan lebih akurat, aman, dan mudah dipantau secara real-time, lalu berkembang ke workflow HR dan Payroll saat organisasi sudah siap.
                 </p>
                 <div className="mt-6 flex flex-wrap gap-3">
                   <Link to="/org/login?mode=register">
@@ -174,6 +209,9 @@ const About = () => {
                     <Button variant="outline">Lihat FAQ</Button>
                   </Link>
                 </div>
+                <p className="mt-4 text-sm text-muted-foreground max-w-2xl">
+                  Posisi produk kami tetap jelas: Absensi adalah fondasi utama. HR dan Payroll hadir sebagai perluasan bertahap agar organisasi tidak perlu pindah ekosistem ketika kebutuhan operasional bertambah.
+                </p>
               </div>
 
               <div className="grid sm:grid-cols-2 gap-4">
@@ -243,6 +281,33 @@ const About = () => {
               </div>
             </section>
           )}
+
+          <section className="rounded-2xl border bg-card p-6 md:p-10 animate-slide-up">
+            <h2 className="text-2xl md:text-3xl font-bold text-foreground mb-6">Arah Produk Saat Ini</h2>
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="rounded-xl border bg-background/70 p-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">Tahap 1</p>
+                <h3 className="mt-2 text-lg font-semibold text-foreground">Absensi</h3>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  Fondasi utama untuk kehadiran harian, validasi lokasi, sinkronisasi, dan kontrol operasional organisasi.
+                </p>
+              </div>
+              <div className="rounded-xl border bg-background/70 p-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-info">Tahap 2</p>
+                <h3 className="mt-2 text-lg font-semibold text-foreground">HR</h3>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  Perluasan untuk data pegawai, cuti, approval, onboarding, offboarding, dan dokumen yang bertumpu pada fondasi absensi.
+                </p>
+              </div>
+              <div className="rounded-xl border bg-background/70 p-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-foreground">Tahap 3</p>
+                <h3 className="mt-2 text-lg font-semibold text-foreground">Payroll</h3>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  Penutup alur saat organisasi siap mengelola periode gaji, validasi, approval, slip, pembayaran, dan audit dalam ekosistem yang sama.
+                </p>
+              </div>
+            </div>
+          </section>
 
           <section className="grid lg:grid-cols-3 gap-6">
             {trustStats.map((stat, index) => (

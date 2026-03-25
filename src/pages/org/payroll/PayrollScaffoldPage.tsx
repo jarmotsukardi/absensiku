@@ -1,4 +1,5 @@
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Badge } from "@/components/ui/badge";
@@ -20,12 +21,15 @@ type PayrollScaffoldPageProps = {
   flowStatuses?: string[];
   guidanceTitle?: string;
   guidanceDescription?: string;
+  referenceTitle?: string;
+  referenceDescription?: string;
+  referenceLinks?: Array<{ label: string; path: string }>;
   homeLabel?: string;
   nextLabel?: string;
   guidePath?: string;
 };
 
-const DEFAULT_STATUS_FLOW = ["Draft", "Tinjau", "Disetujui", "Dibayar", "Arsip"];
+const DEFAULT_STATUS_FLOW = ["Draf", "Tinjau", "Disetujui", "Dibayar", "Arsip"];
 
 export function PayrollScaffoldPage({
   title,
@@ -41,11 +45,18 @@ export function PayrollScaffoldPage({
   flowStatuses = DEFAULT_STATUS_FLOW,
   guidanceTitle = "Langkah Lanjut",
   guidanceDescription = "Halaman ini sudah aktif dalam workspace payroll dan siap dilanjutkan sesuai tahap pengembangan yang sudah ditetapkan.",
+  referenceTitle = "Referensi Data",
+  referenceDescription = "Buka data sumber HR/absensi tanpa keluar dari konteks payroll. Jika akses terbatas, minta admin HR.",
+  referenceLinks,
   homeLabel = "Beranda Payroll",
   nextLabel = "Menu Berikutnya",
   guidePath,
 }: PayrollScaffoldPageProps) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target));
+  const hasReferences = Boolean(referenceLinks?.length);
 
   return (
     <OrganizationLayout>
@@ -56,7 +67,7 @@ export function PayrollScaffoldPage({
           <p className="text-sm text-muted-foreground">{description}</p>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className={`grid gap-4 ${hasReferences ? "md:grid-cols-4" : "md:grid-cols-3"}`}>
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>{phaseLabel}</CardDescription>
@@ -88,6 +99,22 @@ export function PayrollScaffoldPage({
               ))}
             </CardContent>
           </Card>
+          {hasReferences ? (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardDescription>{referenceTitle}</CardDescription>
+                <CardTitle className="text-lg">Buka sumber data</CardTitle>
+              </CardHeader>
+              <CardContent className="flex flex-wrap gap-2">
+                <p className="w-full text-xs text-muted-foreground">{referenceDescription}</p>
+                {referenceLinks?.map((item) => (
+                  <Button key={item.path} variant="outline" size="sm" onClick={() => navigateWithOverlay(item.path)}>
+                    {item.label}
+                  </Button>
+                ))}
+              </CardContent>
+            </Card>
+          ) : null}
         </div>
 
         <Card>
@@ -96,13 +123,13 @@ export function PayrollScaffoldPage({
             <CardDescription>{guidanceDescription}</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={() => navigate(backPath || "/org/payroll") }>
+            <Button variant="outline" onClick={() => navigateWithOverlay(backPath || "/org/payroll") }>
               <ArrowLeft className="mr-2 h-4 w-4" />
               Kembali
             </Button>
-            <Button onClick={() => navigate("/org/payroll")}>{homeLabel}</Button>
+            <Button onClick={() => navigateWithOverlay("/org/payroll")}>{homeLabel}</Button>
             {nextPath ? (
-              <Button variant="secondary" onClick={() => navigate(nextPath)}>
+              <Button variant="secondary" onClick={() => navigateWithOverlay(nextPath)}>
                 {nextLabel}
                 <ArrowRight className="ml-2 h-4 w-4" />
               </Button>

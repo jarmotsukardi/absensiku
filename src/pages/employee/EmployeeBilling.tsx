@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
+import { AttendanceAccessRestrictionMessage } from "@/components/employee/AttendanceAccessRestrictionMessage";
+import { useAttendanceResourceRestriction } from "@/hooks/useAttendanceResourceRestriction";
 
 interface EmployeeScopeRow {
   id: string;
@@ -32,6 +34,13 @@ export default function EmployeeBilling() {
   const [isLoading, setIsLoading] = useState(true);
   const [scopes, setScopes] = useState<EmployeeScopeOption[]>([]);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>("");
+  const selectedScope = useMemo(
+    () => scopes.find((item) => item.employeeId === selectedEmployeeId) || null,
+    [scopes, selectedEmployeeId],
+  );
+  const attendanceResourceRestriction = useAttendanceResourceRestriction({
+    tenantId: selectedScope?.tenantId || null,
+  });
 
   const fetchScopes = useCallback(async (userId: string) => {
     try {
@@ -90,12 +99,7 @@ export default function EmployeeBilling() {
     };
   }, [fetchScopes, navigate]);
 
-  const selectedScope = useMemo(
-    () => scopes.find((item) => item.employeeId === selectedEmployeeId) || null,
-    [scopes, selectedEmployeeId],
-  );
-
-  if (isLoading) {
+  if (isLoading || (selectedScope?.tenantId && attendanceResourceRestriction.isLoading)) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -105,6 +109,17 @@ export default function EmployeeBilling() {
 
   if (!session) {
     return null;
+  }
+
+  if (attendanceResourceRestriction.isRestrictedNow) {
+    return (
+      <AttendanceAccessRestrictionMessage
+        reason={attendanceResourceRestriction.restrictionReason}
+        scheduleLabel={attendanceResourceRestriction.scheduleLabel}
+        reopensAtLabel={attendanceResourceRestriction.reopensAtLabel}
+        onBack={() => navigate("/employee/dashboard", { replace: true })}
+      />
+    );
   }
 
   if (scopes.length === 0) {
@@ -187,4 +202,3 @@ export default function EmployeeBilling() {
     </div>
   );
 }
-

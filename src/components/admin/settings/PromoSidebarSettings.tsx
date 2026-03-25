@@ -142,7 +142,7 @@ export function PromoSidebarSettings() {
           {/* Enable/Disable */}
           <div className="flex items-center justify-between rounded-lg border p-4">
             <div>
-              <Label className="font-medium">Aktifkan Section</Label>
+              <Label className="font-medium">Aktifkan Bagian</Label>
               <p className="text-sm text-muted-foreground">Tampilkan section promosi di halaman depan</p>
             </div>
             <Switch
@@ -154,7 +154,7 @@ export function PromoSidebarSettings() {
           {/* Title & Subtitle */}
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label>Judul Section</Label>
+              <Label>Judul Bagian</Label>
               <Input
                 value={settings.title}
                 onChange={(e) => setSettings({ ...settings, title: e.target.value })}

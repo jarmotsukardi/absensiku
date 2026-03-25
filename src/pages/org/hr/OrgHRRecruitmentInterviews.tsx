@@ -325,7 +325,7 @@ export default function OrgHRRecruitmentInterviews() {
       <div className="space-y-6">
         <div className="space-y-2">
           <Badge variant="outline">Rekrutmen (ATS)</Badge>
-          <h1 className="text-2xl font-semibold tracking-tight">Tahap Wawancara</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Tahap Interview</h1>
           <p className="text-sm text-muted-foreground">Kelola jadwal dan hasil wawancara kandidat.</p>
           <p className="text-xs text-muted-foreground">
             Kemampuan halaman: {isLoadingAccess ? "memverifikasi..." : access.canEdit ? "mode kelola" : "mode baca saja"}

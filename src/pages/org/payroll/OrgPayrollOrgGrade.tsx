@@ -12,6 +12,9 @@ export default function OrgPayrollOrgGrade() {
       routeKeyLabel="Kunci Referensi"
       flowTitle="Fokus Referensi"
       flowStatuses={["Struktur HR", "Jabatan", "Grade", "Konteks Payroll"]}
+      referenceTitle="Referensi Struktur HR"
+      referenceDescription="Akses struktur jabatan dan grade HR sebagai acuan payroll."
+      referenceLinks={[{ label: "Struktur Jabatan & Grade HR", path: "/org/hr/position-grade" }]}
       guidanceTitle="Peran Halaman Ini"
       guidanceDescription="Payroll memakai struktur organisasi dan grade dari HR sebagai konteks kerja. Pada tahap lanjut, halaman ini sebaiknya membantu membaca dampak struktur dan grade terhadap payroll tanpa membuat master terpisah."
       backPath="/org/payroll/employees"

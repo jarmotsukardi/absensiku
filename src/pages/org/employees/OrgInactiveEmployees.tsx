@@ -14,6 +14,7 @@ import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/att
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { EmployeeDataTabs } from "@/components/org/employees/EmployeeDataTabs";
 import { useConfirmDialog } from "@/hooks/useConfirmDialog";
+import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 
 type Employee = Tables<"employees">;
 type OPD = Tables<"opd">;
@@ -32,8 +33,37 @@ export default function OrgInactiveEmployees() {
   const [currentPage, setCurrentPage] = useState(1);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [tenantId, setTenantId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadTenantId = async () => {
+      try {
+        const resolvedTenantId = await resolveOrgTenantId();
+        if (cancelled) return;
+        setTenantId(resolvedTenantId);
+        if (!resolvedTenantId) {
+          setLoadError("Tenant organisasi tidak ditemukan. Muat ulang sesi lalu coba lagi.");
+          setIsLoading(false);
+        }
+      } catch (error) {
+        if (cancelled) return;
+        const errorRef = reportError(error, "org.employees.inactive.resolve_tenant");
+        setLoadError(appendErrorReference("Gagal menentukan tenant organisasi", errorRef));
+        setIsLoading(false);
+      }
+    };
+
+    void loadTenantId();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const fetchData = useCallback(async () => {
+    if (!tenantId) return;
     setIsLoading(true);
     setLoadError(null);
     try {
@@ -41,6 +71,7 @@ export default function OrgInactiveEmployees() {
       let query = supabase
         .from("employees")
         .select("*, opd(*), position_rel:position_id(*)", { count: "exact" })
+        .eq("tenant_id", tenantId)
         .eq("is_active", false);
 
       if (searchTerm.trim()) {
@@ -77,11 +108,12 @@ export default function OrgInactiveEmployees() {
     } finally {
       setIsLoading(false);
     }
-  }, [currentPage, searchTerm]);
+  }, [currentPage, searchTerm, tenantId]);
 
   useEffect(() => {
+    if (!tenantId) return;
     void fetchData();
-  }, [fetchData]);
+  }, [fetchData, tenantId]);
 
   const handleReactivate = async (id: string) => {
     if (
@@ -94,11 +126,15 @@ export default function OrgInactiveEmployees() {
       return;
     }
     try {
+      if (!tenantId) {
+        toast.error("Tenant organisasi tidak ditemukan.");
+        return;
+      }
       setIsRetrying(false);
       const { error } = await withExponentialBackoff(
         () =>
           withTimeout(
-            supabase.from("employees").update({ is_active: true }).eq("id", id),
+            supabase.from("employees").update({ is_active: true }).eq("id", id).eq("tenant_id", tenantId),
             ORG_INACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS,
             "org.employees.inactive.reactivate timeout"
           ),
@@ -112,7 +148,7 @@ export default function OrgInactiveEmployees() {
       toast.success("Pegawai berhasil diaktifkan kembali");
       void fetchData();
     } catch (error) {
-      const errorRef = reportError(error, "org.employees.inactive.reactivate", { employee_id: id });
+      const errorRef = reportError(error, "org.employees.inactive.reactivate", { employee_id: id, tenant_id: tenantId });
       toast.error(appendErrorReference("Gagal mengaktifkan pegawai", errorRef));
     }
   };

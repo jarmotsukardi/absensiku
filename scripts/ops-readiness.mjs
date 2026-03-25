@@ -148,8 +148,17 @@ async function main() {
   pushMissing(missingAccounts, "employee.email", getByPath(accounts, "employee.email"));
   pushMissing(missingAccounts, "employee.password", getByPath(accounts, "employee.password"));
   pushMissing(missingAccounts, "org_admin.tenant_id", getByPath(accounts, "org_admin.tenant_id"));
+  pushMissing(missingAccounts, "org_admin.tenant_name", getByPath(accounts, "org_admin.tenant_name"));
+  pushMissing(missingAccounts, "org_admin_centralized.email", getByPath(accounts, "org_admin_centralized.email"));
+  pushMissing(missingAccounts, "org_admin_centralized.password", getByPath(accounts, "org_admin_centralized.password"));
+  pushMissing(missingAccounts, "org_admin_centralized.tenant_id", getByPath(accounts, "org_admin_centralized.tenant_id"));
+  pushMissing(missingAccounts, "org_admin_centralized.tenant_name", getByPath(accounts, "org_admin_centralized.tenant_name"));
   pushMissing(missingAccounts, "employee.tenant_id", getByPath(accounts, "employee.tenant_id"));
   pushMissing(missingAccounts, "employee.employee_id", getByPath(accounts, "employee.employee_id"));
+  pushMissing(missingAccounts, "employee_centralized.email", getByPath(accounts, "employee_centralized.email"));
+  pushMissing(missingAccounts, "employee_centralized.password", getByPath(accounts, "employee_centralized.password"));
+  pushMissing(missingAccounts, "employee_centralized.tenant_id", getByPath(accounts, "employee_centralized.tenant_id"));
+  pushMissing(missingAccounts, "employee_centralized.employee_id", getByPath(accounts, "employee_centralized.employee_id"));
 
   const missingDataset = [];
   pushMissing(missingDataset, "tenant_primary.id", getByPath(dataset, "tenant_primary.id"));

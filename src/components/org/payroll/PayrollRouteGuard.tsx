@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { resolvePayrollRouteAccess, type PayrollPermission } from "@/lib/payrollAccess";
+import { getAccessStageLabel } from "@/lib/hrPayrollAccessPolicy";
 import { reportError } from "@/lib/errorLogger";
 
 type PayrollRouteGuardProps = {
@@ -13,11 +15,15 @@ type PayrollRouteGuardProps = {
 
 export function PayrollRouteGuard({ permission, children }: PayrollRouteGuardProps) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string, replace?: boolean) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target), { replace });
   const [isLoading, setIsLoading] = useState(true);
   const [allowed, setAllowed] = useState(false);
   const [reason, setReason] = useState<string | null>(null);
   const [ref, setRef] = useState<string | null>(null);
   const [redirectTo, setRedirectTo] = useState<string | null>(null);
+  const [stageLabel, setStageLabel] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -30,6 +36,7 @@ export function PayrollRouteGuard({ permission, children }: PayrollRouteGuardPro
         setReason(access.reason);
         setRef(access.ref);
         setRedirectTo(access.redirectTo);
+        setStageLabel(access.stage ? getAccessStageLabel(access.stage) : null);
       } catch (error) {
         const errorRef = reportError(error, "payroll.route_guard.effect", { permission });
         if (!mounted) return;
@@ -37,6 +44,7 @@ export function PayrollRouteGuard({ permission, children }: PayrollRouteGuardPro
         setReason("Terjadi error saat validasi akses payroll.");
         setRef(errorRef || null);
         setRedirectTo("/org");
+        setStageLabel(null);
       } finally {
         if (mounted) setIsLoading(false);
       }
@@ -76,11 +84,12 @@ export function PayrollRouteGuard({ permission, children }: PayrollRouteGuardPro
             <p className="text-muted-foreground">{reason || "Izin payroll tidak memenuhi syarat menu."}</p>
             <div className="rounded border p-3 text-xs text-muted-foreground">
               <div>required_permission: {permission}</div>
+              <div>stage: {stageLabel || "-"}</div>
               <div>ref: {ref || "PAY-UNKNOWN"}</div>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" onClick={() => navigate("/org/payroll")}>Kembali ke Workspace Payroll</Button>
-              <Button onClick={() => navigate("/org/payroll/roles")}>Buka Role Payroll</Button>
+              <Button variant="outline" onClick={() => navigate("/org", { replace: true })}>Kembali ke Absensi</Button>
+              <Button onClick={() => navigate("/org/billing", { replace: true })}>Buka Billing</Button>
             </div>
           </CardContent>
         </Card>

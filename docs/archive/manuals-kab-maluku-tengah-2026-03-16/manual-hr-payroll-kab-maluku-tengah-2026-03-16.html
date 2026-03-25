@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Manual Uji Coba HR + Payroll - Kab. Maluku Tengah (2026-03-16)</title>
+  <style>
+    :root {
+      color-scheme: light;
+    }
+    body {
+      font-family: "Times New Roman", Times, serif;
+      line-height: 1.5;
+      margin: 40px;
+      color: #111;
+    }
+    h1, h2, h3 {
+      margin: 0 0 12px;
+    }
+    h1 {
+      font-size: 22px;
+    }
+    h2 {
+      font-size: 16px;
+      margin-top: 22px;
+    }
+    h3 {
+      font-size: 14px;
+      margin-top: 16px;
+    }
+    p {
+      margin: 0 0 10px;
+    }
+    ul {
+      padding-left: 18px;
+      margin: 6px 0 12px;
+    }
+    code, pre {
+      font-family: "Courier New", Courier, monospace;
+    }
+    pre {
+      background: #f6f6f6;
+      padding: 10px;
+      border: 1px solid #ddd;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .muted {
+      color: #555;
+    }
+    .section {
+      margin-bottom: 18px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Manual Uji Coba HR + Payroll (Kab. Maluku Tengah)</h1>
+  <p class="muted">Tanggal: 16 Maret 2026</p>
+
+  <div class="section">
+    <h2>Tujuan</h2>
+    <ul>
+      <li>Menyiapkan data absensi untuk 5 pegawai Kab. Maluku Tengah (uji coba payroll).</li>
+      <li>Menjalankan Playwright suite HR + Payroll (smoke).</li>
+      <li>Mendokumentasikan hasil uji coba.</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>Prasyarat</h2>
+    <ul>
+      <li>Repo berjalan pada <code>http://127.0.0.1:5173</code>.</li>
+      <li>Kredensial <code>org_admin_centralized</code> valid di <code>ops/test-accounts.local.json</code>.</li>
+      <li>Gunakan <code>.env.online</code> (Supabase remote).</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>Ringkasan Data Test</h2>
+    <p><strong>Tenant:</strong></p>
+    <ul>
+      <li>Kab. Maluku Tengah</li>
+      <li>Tenant ID: <code>ba7603b1-6827-4370-ae86-2e70dc5b09d5</code></li>
+    </ul>
+
+    <p><strong>Pegawai dengan absensi (5):</strong></p>
+    <ul>
+      <li>bail — <code>bailkharisma18@gmail.com</code> (2026-03-15)</li>
+      <li>HIDAYAT KILIAN — <code>kilianhidayat@gmail.com</code> (2026-03-15)</li>
+      <li>Lisal Faisal — <code>lisalfaisal@gmail.com</code> (2026-03-15)</li>
+      <li>M. AMIN TUANAYA — <code>amintuanaya@gmail.com</code> (2026-03-15)</li>
+      <li>Susi — <code>susibangka78@gmail.com</code> (2026-03-09)</li>
+    </ul>
+
+    <p><strong>Catatan:</strong></p>
+    <ul>
+      <li>Empat absensi dibuat sebagai data uji coba dengan status <code>hadir</code> dan waktu 08:10–16:45.</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>Langkah Uji Coba</h2>
+
+    <h3>1. Backup Supabase (wajib sebelum perubahan data)</h3>
+    <pre><code>npm run db:backup:supabase</code></pre>
+    <p class="muted">Contoh output: <code>/Users/user/Documents/ANTI_GRAVITY_PROJECT/ABSENSIKU/artifacts/db-backups/sql/supabase_backup_20260316_150955_manual.sql</code></p>
+
+    <h3>2. Sisipkan data absensi untuk 4 pegawai tambahan</h3>
+    <p class="muted">Catatan: data disimpan di <code>attendance_records_partitioned</code> (sumber <code>v_attendance_records</code>).</p>
+    <pre><code>set -a; source .env.online; psql "$SUPABASE_DB_URL" -c "with candidates as (
+  select id, office_id
+  from employees
+  where tenant_id = 'ba7603b1-6827-4370-ae86-2e70dc5b09d5'
+    and is_active = true
+    and id <> 'b26b1414-618e-43cf-b084-7fd781019281'
+    and office_id is not null
+  order by created_at desc
+  limit 4
+), rows as (
+  select
+    id as employee_id,
+    office_id,
+    (current_date - 1) as date,
+    (current_date - 1)::timestamp + time '08:10' as check_in_time,
+    (current_date - 1)::timestamp + time '16:45' as check_out_time,
+    'hadir'::attendance_status as status,
+    'seed uji coba payroll'::text as notes
+  from candidates
+), ins as (
+  insert into attendance_records_partitioned (
+    employee_id,
+    office_id,
+    date,
+    check_in_time,
+    check_out_time,
+    status,
+    notes
+  )
+  select r.employee_id, r.office_id, r.date, r.check_in_time, r.check_out_time, r.status, r.notes
+  from rows r
+  where not exists (
+    select 1
+    from attendance_records_partitioned ar
+    where ar.employee_id = r.employee_id and ar.date = r.date
+  )
+  returning employee_id
+)
+select count(*) as inserted_rows from ins;"</code></pre>
+
+    <h3>3. Verifikasi 5 pegawai muncul di view absensi</h3>
+    <pre><code>set -a; source .env.online; psql "$SUPABASE_DB_URL" -c "
+select e.id, e.name, e.email, max(ar.date) as last_attendance_date
+from v_attendance_records ar
+join employees e on e.id = ar.employee_id
+where e.tenant_id = 'ba7603b1-6827-4370-ae86-2e70dc5b09d5'
+group by e.id, e.name, e.email
+order by last_attendance_date desc, e.name asc
+limit 5;"</code></pre>
+
+    <h3>4. Preflight sandbox localhost</h3>
+    <pre><code>npm run ops:sandbox:doctor:strict</code></pre>
+
+    <h3>5. Jalankan Playwright HR + Payroll (smoke)</h3>
+    <pre><code>npm run e2e:hr:payroll:smoke</code></pre>
+
+    <h3>6. Jalankan Playwright HR + Payroll (crud)</h3>
+    <pre><code>npm run e2e:hr:payroll:crud</code></pre>
+  </div>
+
+  <div class="section">
+    <h2>Hasil Uji Coba</h2>
+    <ul>
+      <li><code>ops:sandbox:doctor:strict</code>: OK.</li>
+      <li>Playwright <code>payroll-smoke</code>: 11 tests passed.</li>
+      <li>Playwright <code>payroll-crud</code>: 7 passed, 2 skipped.</li>
+      <li>Skip terjadi karena belum ada periode payroll untuk menjalankan run + approval.</li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>Perubahan Kode Selama Uji Coba</h2>
+    <ul>
+      <li>Update placeholder agar test sinkron dengan UI:</li>
+      <li><code>tests/e2e/org-hr-payroll-smoke.e2e.ts</code></li>
+      <li><code>tests/e2e/org-hr-payroll-crud.e2e.ts</code></li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>Artefak</h2>
+    <ul>
+      <li>Playwright report: <code>artifacts/playwright-report-hr-payroll-smoke</code></li>
+      <li>Test results: <code>test-results/</code></li>
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>Catatan Risiko</h2>
+    <ul>
+      <li>Absensi test disisipkan langsung ke Supabase remote (data uji).</li>
+      <li>Jika ingin membersihkan data test, lakukan cleanup terkontrol sesuai kebijakan data.</li>
+    </ul>
+  </div>
+</body>
+</html>

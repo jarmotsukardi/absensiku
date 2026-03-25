@@ -533,7 +533,7 @@ export function DashboardWidgets() {
           disabled={isRefreshing}
           onClick={() => fetchStats({ silent: true, forceRefresh: true })}
         >
-          {isRefreshing ? "Menyegarkan..." : "Refresh Data"}
+          {isRefreshing ? "Menyegarkan..." : "Muat Ulang Data"}
         </Button>
       </div>
       <div className="space-y-1">
@@ -606,7 +606,7 @@ export function DashboardWidgets() {
               <div className="flex items-center justify-between text-sm">
                 <span className="flex items-center gap-2">
                   <Clock className="h-4 w-4 text-amber-500" />
-                  Trial
+                  Masa Coba
                 </span>
                 <span className="font-medium">{stats.trialSubscriptions}</span>
               </div>
@@ -622,7 +622,7 @@ export function DashboardWidgets() {
               <div className="flex items-center justify-between text-sm">
                 <span className="flex items-center gap-2">
                   <AlertTriangle className="h-4 w-4 text-red-500" />
-                  Expired
+                  Berakhir
                 </span>
                 <span className="font-medium">{stats.expiredSubscriptions}</span>
               </div>
@@ -691,7 +691,7 @@ export function DashboardWidgets() {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Streak & Billing</CardTitle>
-            <CardDescription>Status billing berbasis streak</CardDescription>
+            <CardDescription>Status tagihan berbasis streak</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div
@@ -700,7 +700,7 @@ export function DashboardWidgets() {
             >
               <span className="text-sm flex items-center gap-2">
                 <Flame className="h-4 w-4 text-orange-500" />
-                Ready for invoicing
+                Siap Ditagih
               </span>
               <Badge variant="outline">{stats.readyForInvoicing}</Badge>
             </div>
@@ -710,7 +710,7 @@ export function DashboardWidgets() {
             >
               <span className="text-sm flex items-center gap-2">
                 <CreditCard className="h-4 w-4 text-blue-500" />
-                Invoice pending
+                Tagihan tertunda
               </span>
               <Badge variant="outline">{stats.pendingInvoices}</Badge>
             </div>
@@ -720,7 +720,7 @@ export function DashboardWidgets() {
             >
               <span className="text-sm flex items-center gap-2">
                 <AlertTriangle className="h-4 w-4 text-red-500" />
-                Invoice overdue
+                Tagihan lewat jatuh tempo
               </span>
               <Badge variant={stats.overdueInvoices > 0 ? "destructive" : "outline"}>{stats.overdueInvoices}</Badge>
             </div>
@@ -730,7 +730,7 @@ export function DashboardWidgets() {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Operasional & Security</CardTitle>
-            <CardDescription>Monitoring cron, feedback, dan lock login</CardDescription>
+            <CardDescription>Pemantauan cron, feedback, dan kunci login</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             <div
@@ -749,9 +749,9 @@ export function DashboardWidgets() {
             >
               <span className="text-sm flex items-center gap-2">
                 <MessageSquare className="h-4 w-4 text-indigo-500" />
-                Feedback terbuka
+                Masukan terbuka
               </span>
-              <Badge variant="outline">{stats.openFeedbacks} ({stats.openBugs} bug)</Badge>
+              <Badge variant="outline">{stats.openFeedbacks} ({stats.openBugs} Bug)</Badge>
             </div>
             <div
               className="flex cursor-pointer items-center justify-between rounded-lg bg-muted/50 p-3 transition-colors hover:bg-muted"
@@ -776,11 +776,11 @@ export function DashboardWidgets() {
           <div className="grid gap-2 sm:grid-cols-2">
             <Button variant="outline" className="justify-start" onClick={() => navigate("/admin/streak-monitoring")}>
               <Flame className="h-4 w-4 mr-2" />
-              Buka Streak Monitoring
+              Buka Pemantauan Streak
             </Button>
             <Button variant="outline" className="justify-start" onClick={() => navigate("/admin/billing")}>
               <CreditCard className="h-4 w-4 mr-2" />
-              Review Billing
+              Tinjau Tagihan
             </Button>
             <Button variant="outline" className="justify-start" onClick={() => navigate("/admin/cron-jobs")}>
               <Wrench className="h-4 w-4 mr-2" />
@@ -788,7 +788,7 @@ export function DashboardWidgets() {
             </Button>
             <Button variant="outline" className="justify-start" onClick={() => navigate("/admin/feedback")}>
               <MessageSquare className="h-4 w-4 mr-2" />
-              Kelola Feedback & Bug
+              Kelola Masukan & Bug
             </Button>
             <Button variant="outline" className="justify-start sm:col-span-2" onClick={() => navigate("/admin/attendance-security")}>
               <ShieldAlert className="h-4 w-4 mr-2" />
@@ -798,15 +798,15 @@ export function DashboardWidgets() {
           <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
             <div className="flex items-center justify-between rounded-md bg-background p-2">
               <span className="text-sm">Database</span>
-              <Badge variant="default" className="bg-green-500">Online</Badge>
+              <Badge variant="default" className="bg-green-500">Aktif</Badge>
             </div>
             <div className="flex items-center justify-between rounded-md bg-background p-2">
               <span className="text-sm">API Server</span>
-              <Badge variant="default" className="bg-green-500">Online</Badge>
+              <Badge variant="default" className="bg-green-500">Aktif</Badge>
             </div>
             <div className="flex items-center justify-between rounded-md bg-background p-2">
               <span className="text-sm">Storage</span>
-              <Badge variant="default" className="bg-green-500">Online</Badge>
+              <Badge variant="default" className="bg-green-500">Aktif</Badge>
             </div>
           </div>
         </CardContent>

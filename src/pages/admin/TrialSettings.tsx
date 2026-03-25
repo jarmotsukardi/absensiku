@@ -114,55 +114,55 @@ type LifecycleActionResult = {
 
 const GLOSSARY_ITEMS: Array<{ term: string; description: string }> = [
   {
-    term: "Streak Threshold",
+    term: "Ambang Streak",
     description: "Batas minimal streak penggunaan pada hari kerja sebelum tenant masuk fase penagihan.",
   },
   {
-    term: "Grace Period",
-    description: "Masa tenggang setelah invoice diterbitkan. Selama fase ini tenant masih bisa melanjutkan pembayaran.",
+    term: "Masa Tenggang",
+    description: "Masa tenggang setelah tagihan diterbitkan. Selama fase ini tenant masih bisa melanjutkan pembayaran.",
   },
   {
-    term: "Unpaid Cleanup Lifecycle",
-    description: "Mekanisme otomatis penjadwalan reminder dan cleanup untuk tenant yang tetap tidak membayar.",
+    term: "Siklus Pembersihan Non-Bayar",
+    description: "Mekanisme otomatis penjadwalan pengingat dan pembersihan untuk tenant yang tetap tidak membayar.",
   },
   {
-    term: "Retention Days",
-    description: "Jumlah hari dari status expired sampai tanggal purge final dijalankan.",
+    term: "Hari Retensi",
+    description: "Jumlah hari dari status kedaluwarsa sampai tanggal hapus final dijalankan.",
   },
   {
-    term: "Reminder Days",
-    description: "Hari pengingat sebelum purge (contoh: H-14, H-7, H-3, H-1) untuk admin organisasi dan super admin.",
+    term: "Hari Pengingat",
+    description: "Hari pengingat sebelum penghapusan (contoh: H-14, H-7, H-3, H-1) untuk admin organisasi dan super admin.",
   },
   {
-    term: "Hard Delete Auth",
-    description: "Jika aktif, akun auth tenant ikut dihapus saat purge. Rekomendasi: tetap nonaktif untuk safety.",
+    term: "Hapus Permanen Auth",
+    description: "Jika aktif, akun autentikasi tenant ikut dihapus saat penghapusan final. Rekomendasi: tetap nonaktif untuk keamanan.",
   },
   {
-    term: "Protected Tenant Codes",
-    description: "Daftar kode tenant yang dikecualikan dari cleanup/purge otomatis untuk kebutuhan uji coba.",
+    term: "Kode Tenant Terlindungi",
+    description: "Daftar kode tenant yang dikecualikan dari pembersihan/penghapusan otomatis untuk kebutuhan uji coba.",
   },
   {
-    term: "Sync Schedules",
-    description: "Menyelaraskan jadwal lifecycle dengan kondisi real subscription + invoice terbaru.",
+    term: "Sinkronkan Jadwal",
+    description: "Menyelaraskan jadwal siklus dengan kondisi langganan + tagihan terbaru.",
   },
   {
-    term: "Dry-Run",
+    term: "Simulasi Uji",
     description: "Simulasi tanpa mengubah data untuk memvalidasi tenant mana yang akan diproses.",
   },
   {
-    term: "Run Now",
-    description: "Eksekusi lifecycle saat ini sesuai konfigurasi; gunakan hanya setelah validasi hasil dry-run.",
+    term: "Jalankan Sekarang",
+    description: "Eksekusi siklus saat ini sesuai konfigurasi; gunakan hanya setelah validasi hasil simulasi uji.",
   },
 ];
 
 const WORKFLOW_STEPS = [
-  "Atur streak threshold + grace period sesuai kebijakan billing instansi.",
-  "Aktifkan unpaid cleanup lifecycle dan set retention/reminder days.",
-  "Pastikan kode tenant uji coba tetap masuk protected codes (wajib: KAB2512015).",
-  "Jalankan tombol Sinkron Jadwal untuk memperbarui antrian lifecycle.",
-  "Jalankan Simulasi Dry-Run dan review hasil sebelum eksekusi real.",
+  "Atur ambang streak + masa tenggang sesuai kebijakan tagihan instansi.",
+  "Aktifkan siklus pembersihan non-bayar dan set hari retensi/hari pengingat.",
+  "Pastikan kode tenant uji coba tetap masuk kode terlindungi (wajib: KAB2512015).",
+  "Jalankan tombol Sinkron Jadwal untuk memperbarui antrian siklus.",
+  "Jalankan Simulasi Uji dan tinjau hasil sebelum eksekusi nyata.",
   "Jika valid, jalankan Eksekusi Sekarang untuk menerapkan mekanisme.",
-  "Monitoring reminder dan status tenant dilakukan dari /admin/streak-monitoring.",
+  "Pemantauan pengingat dan status tenant dilakukan dari `/admin/streak-monitoring`.",
 ];
 
 export default function TrialSettings({ embedded = false }: { embedded?: boolean }) {
@@ -508,7 +508,7 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Flame className="h-6 w-6 text-orange-500" />
-            Konfigurasi Streak Monitoring
+            Konfigurasi Pemantauan Streak
           </h1>
           <p className="text-muted-foreground">Parameter ini menentukan kapan tenant dianggap aktif dan siap ditagih</p>
         </div>
@@ -523,7 +523,7 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Flame className="h-5 w-5 text-orange-500" />
-              Streak Threshold
+              Ambang Streak
             </CardTitle>
             <CardDescription>Jumlah hari berturut-turut penggunaan absensi pada hari kerja</CardDescription>
           </CardHeader>
@@ -538,7 +538,7 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
                 max={90}
               />
               <p className="text-xs text-muted-foreground">
-                Setelah mencapai {streakThreshold} hari berturut-turut, status tenant berubah menjadi "Ready for Invoicing"
+                Setelah mencapai {streakThreshold} hari berturut-turut, status tenant berubah menjadi "Siap Ditagih"
               </p>
             </div>
           </CardContent>
@@ -554,7 +554,7 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label>Grace Period (hari)</Label>
+              <Label>Masa Tenggang (hari)</Label>
               <Input
                 type="number"
                 value={gracePeriodDays}
@@ -675,7 +675,7 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
                     Lindungi semua tenant aktif
                   </Button>
                   <Button type="button" variant="ghost" size="sm" onClick={resetProtectedToDefault}>
-                    Reset ke default
+                    Reset ke bawaan
                   </Button>
                 </div>
               </PopoverContent>
@@ -706,7 +706,7 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
               Proteksi Database Uji Coba Aktif
             </p>
             <p className="text-xs mt-1">
-              Mekanisme ini disiapkan agar tenant uji coba Maluku Tengah tetap aman. Gunakan <strong>Dry-Run</strong> sebelum eksekusi real.
+              Mekanisme ini disiapkan agar tenant uji coba Maluku Tengah tetap aman. Gunakan <strong>simulasi</strong> sebelum eksekusi nyata.
             </p>
           </div>
         </CardContent>
@@ -727,7 +727,7 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
             </Button>
             <Button variant="secondary" onClick={() => void executeLifecycleRun(true)} disabled={isSyncing || isDryRunning || isRunningNow}>
               {isDryRunning ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Play className="h-4 w-4 mr-2" />}
-              Simulasi Dry-Run
+              Simulasi Uji
             </Button>
             <Button onClick={() => void executeLifecycleRun(false)} disabled={isSyncing || isDryRunning || isRunningNow || !cleanupEnabled}>
               {isRunningNow ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <Play className="h-4 w-4 mr-2" />}
@@ -765,10 +765,10 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
                 <li>Hari Sabtu, Minggu, dan libur nasional dikecualikan</li>
                 <li>Hari libur khusus yang ditetapkan admin organisasi juga dikecualikan</li>
                 <li>Streak di-reset ke 1 jika terputus pada hari kerja aktif</li>
-                <li>Setelah target tercapai → status "Ready for Invoicing" + masa tenggang dimulai</li>
-                <li>Jika pembayaran tidak dilakukan → status "Suspended" (fitur dikunci, data tetap aman)</li>
-                <li>Setelah grace berakhir → lifecycle reminder berjalan sesuai reminder days</li>
-                <li>Saat melewati retention → cleanup dijalankan sesuai pengaturan lifecycle</li>
+                <li>Setelah target tercapai -&gt; status "Siap Ditagihkan" + masa tenggang dimulai</li>
+                <li>Jika pembayaran tidak dilakukan -&gt; status "Ditangguhkan" (fitur dikunci, data tetap aman)</li>
+                <li>Setelah masa tenggang berakhir -&gt; pengingat siklus berjalan sesuai hari pengingat</li>
+                <li>Saat melewati retensi -&gt; pembersihan dijalankan sesuai pengaturan siklus</li>
                 <li>Tenant berkode {MALUKU_TENGAH_CODE} dilindungi agar tidak ikut terhapus</li>
               </ul>
             </div>
@@ -778,9 +778,9 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
 
       <Card className="border-dashed">
         <CardHeader>
-          <CardTitle className="text-base">Glosary & Penjelasan Lengkap</CardTitle>
+          <CardTitle className="text-base">Glosarium & Penjelasan Lengkap</CardTitle>
           <CardDescription>
-            Referensi istilah dan workflow mekanisme streak sampai unpaid cleanup lifecycle
+            Referensi istilah dan alur mekanisme streak sampai siklus pembersihan non-bayar
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -794,7 +794,7 @@ export default function TrialSettings({ embedded = false }: { embedded?: boolean
           </div>
 
           <div className="rounded-md border bg-muted/40 p-3">
-            <p className="text-sm font-semibold">Workflow Mekanisme</p>
+            <p className="text-sm font-semibold">Alur Mekanisme</p>
             <ol className="mt-2 space-y-1 text-xs text-muted-foreground list-decimal list-inside">
               {WORKFLOW_STEPS.map((step) => (
                 <li key={step}>{step}</li>

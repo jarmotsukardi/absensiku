@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { differenceInCalendarDays, format } from "date-fns";
+import { differenceInCalendarDays, format, parseISO } from "date-fns";
 import { id as localeId } from "date-fns/locale";
-import { CalendarDays, Download, Printer, Search } from "lucide-react";
+import { CalendarDays, Download, FileText, Search } from "lucide-react";
 import { toast } from "sonner";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Badge } from "@/components/ui/badge";
@@ -14,10 +14,24 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { supabase } from "@/integrations/supabase/client";
 import type { Database, Tables } from "@/integrations/supabase/types";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  LEAVE_REQUEST_CATEGORY_OPTIONS,
+  type LeaveRequestCategory,
+  getLeaveRequestPresentation,
+  matchesLeaveRequestCategory,
+} from "@/lib/leaveRequestPresentation";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { RequestReportsTabs } from "@/components/org/reports/RequestReportsTabs";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import {
+  buildReportCsv,
+  createReportTraceId,
+  downloadCsvFile,
+  downloadReportPdf,
+  recordReportOutputAudit,
+  type ReportOutputColumn,
+} from "@/lib/reportOutput";
 
 type LeaveRequestRow = Tables<"leave_requests">;
 type OPD = Tables<"opd">;
@@ -33,9 +47,7 @@ interface LeaveEmployee {
   work_unit_id: string | null;
 }
 
-interface LeaveQueryRow extends LeaveRequestRow {
-  employees: LeaveEmployee | null;
-}
+type LeaveQueryRow = LeaveRequestRow;
 
 interface LeaveRecord extends LeaveRequestRow {
   employees: LeaveEmployee | null;
@@ -61,17 +73,6 @@ const REQUEST_STATUS_OPTIONS: Array<{ value: RequestStatus; label: string }> = [
   { value: "ditolak", label: "Ditolak" },
 ];
 
-const escapeHtml = (value: string): string =>
-  value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-
-const getLeaveTypeLabel = (type: string): string =>
-  LEAVE_TYPE_OPTIONS.find((option) => option.value === type)?.label || type;
-
 const getStatusLabel = (status: string): string =>
   REQUEST_STATUS_OPTIONS.find((option) => option.value === status)?.label || status;
 
@@ -84,10 +85,65 @@ const getStatusBadge = (status: string) => {
 
 const getDurationLabel = (record: LeaveRecord): string => {
   if (record.is_half_day) return "0.5 hari";
-  const durationDays = differenceInCalendarDays(new Date(record.end_date), new Date(record.start_date)) + 1;
+  const durationDays = differenceInCalendarDays(parseISO(record.end_date), parseISO(record.start_date)) + 1;
   const safeDays = Number.isFinite(durationDays) && durationDays > 0 ? durationDays : 1;
   return `${safeDays} hari`;
 };
+
+const getLeaveCreatedAtLabel = (record: LeaveRecord, pattern: string) =>
+  record.created_at ? format(new Date(record.created_at), pattern, { locale: localeId }) : "-";
+
+const getLeavePeriodLabel = (record: LeaveRecord) => `${record.start_date} s/d ${record.end_date}`;
+
+const getLeaveOpdLabel = (record: LeaveRecord, opdMap: Map<string, OPD>) =>
+  record.employees?.opd_id ? opdMap.get(record.employees.opd_id)?.code || "-" : "-";
+
+const getLeaveWorkUnitLabel = (record: LeaveRecord, workUnitMap: Map<string, WorkUnit>) =>
+  record.employees?.work_unit_id ? workUnitMap.get(record.employees.work_unit_id)?.name || "-" : "-";
+
+const getLeaveDetailTimeLabel = (record: LeaveRecord) => {
+  const presentation = getLeaveRequestPresentation(record);
+  return presentation.detailLabel ? `${presentation.detailLabel}: ${presentation.detailText || "-"}` : "-";
+};
+
+const buildLeaveCsvColumns = (
+  opdMap: Map<string, OPD>,
+  workUnitMap: Map<string, WorkUnit>,
+) =>
+  [
+    { header: "No", value: (_row, index) => index + 1, align: "right", width: 28 },
+    { header: "Tanggal Pengajuan", value: (row) => (row.created_at ? format(new Date(row.created_at), "yyyy-MM-dd HH:mm") : "-"), width: 82 },
+    { header: "Nama Pegawai", value: (row) => row.employees?.name || "-" },
+    { header: "NIP", value: (row) => row.employees?.nip || "-", width: 68 },
+    { header: "OPD", value: (row) => getLeaveOpdLabel(row, opdMap) },
+    { header: "Satuan Kerja", value: (row) => getLeaveWorkUnitLabel(row, workUnitMap) },
+    { header: "Jenis", value: (row) => getLeaveRequestPresentation(row).leaveTypeLabel },
+    { header: "Periode", value: (row) => getLeavePeriodLabel(row) },
+    { header: "Durasi", value: (row) => getDurationLabel(row), align: "right", width: 44 },
+    { header: "Status", value: (row) => getStatusLabel(row.status || ""), width: 54 },
+    { header: "Detail Waktu", value: (row) => getLeaveDetailTimeLabel(row) },
+    { header: "Alasan", value: (row) => getLeaveRequestPresentation(row).reasonText },
+    { header: "Catatan Penolakan", value: (row) => row.rejection_reason || "-" },
+  ] satisfies ReportOutputColumn<LeaveRecord>[];
+
+const buildLeavePdfColumns = (
+  opdMap: Map<string, OPD>,
+  workUnitMap: Map<string, WorkUnit>,
+) =>
+  [
+    { header: "No", value: (_row, index) => index + 1, align: "right", width: 28 },
+    { header: "Tanggal Pengajuan", value: (row) => getLeaveCreatedAtLabel(row, "d MMM yyyy HH:mm"), width: 82 },
+    { header: "Nama Pegawai", value: (row) => row.employees?.name || "-" },
+    { header: "NIP", value: (row) => row.employees?.nip || "-", width: 68 },
+    { header: "OPD", value: (row) => getLeaveOpdLabel(row, opdMap) },
+    { header: "Satuan Kerja", value: (row) => getLeaveWorkUnitLabel(row, workUnitMap) },
+    { header: "Jenis", value: (row) => getLeaveRequestPresentation(row).leaveTypeLabel },
+    { header: "Periode", value: (row) => getLeavePeriodLabel(row) },
+    { header: "Durasi", value: (row) => getDurationLabel(row), align: "right", width: 44 },
+    { header: "Status", value: (row) => getStatusLabel(row.status || ""), width: 54 },
+    { header: "Detail Waktu", value: (row) => getLeaveDetailTimeLabel(row) },
+    { header: "Alasan", value: (row) => getLeaveRequestPresentation(row).reasonText },
+  ] satisfies ReportOutputColumn<LeaveRecord>[];
 
 export default function OrgLeaveReport() {
   const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
@@ -105,6 +161,7 @@ export default function OrgLeaveReport() {
   const [endDate, setEndDate] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | RequestStatus>("all");
   const [leaveTypeFilter, setLeaveTypeFilter] = useState<"all" | LeaveType>("all");
+  const [requestCategoryFilter, setRequestCategoryFilter] = useState<LeaveRequestCategory>("all");
   const [opdFilter, setOpdFilter] = useState("all");
   const [workUnitFilter, setWorkUnitFilter] = useState("all");
 
@@ -164,6 +221,9 @@ export default function OrgLeaveReport() {
     return map;
   }, [workUnits]);
 
+  const leaveCsvColumns = useMemo(() => buildLeaveCsvColumns(opdMap, workUnitMap), [opdMap, workUnitMap]);
+  const leavePdfColumns = useMemo(() => buildLeavePdfColumns(opdMap, workUnitMap), [opdMap, workUnitMap]);
+
   const fetchReport = useCallback(async () => {
     if (!tenantId) {
       setRecords([]);
@@ -190,13 +250,13 @@ export default function OrgLeaveReport() {
         return;
       }
 
-      const allRows: LeaveRecord[] = [];
+      const allRows: LeaveQueryRow[] = [];
       let offset = 0;
 
       while (true) {
         let query = supabase
           .from("leave_requests")
-          .select("id, employee_id, start_date, end_date, leave_type, reason, status, rejection_reason, approved_by, approved_at, is_half_day, attachment_url, created_at, updated_at, employees!leave_requests_employee_id_fkey(id, name, nip, opd_id, work_unit_id)")
+          .select("id, employee_id, start_date, end_date, leave_type, reason, status, rejection_reason, approved_by, approved_at, is_half_day, document_reference_number, document_reference_date, document_reference_issuer, document_reference_notes, created_at, updated_at")
           .in("employee_id", employeeIds)
           .order("created_at", { ascending: false })
           .range(offset, offset + FETCH_CHUNK - 1);
@@ -228,17 +288,88 @@ export default function OrgLeaveReport() {
         );
         if (error) throw error;
 
-        const chunk = ((data || []) as LeaveQueryRow[]).map((row) => ({
-          ...row,
-          employees: row.employees || null,
-        }));
+        const chunk = (data || []) as LeaveQueryRow[];
         allRows.push(...chunk);
 
         if (chunk.length < FETCH_CHUNK) break;
         offset += FETCH_CHUNK;
       }
 
-      setRecords(allRows);
+      const leaveEmployeeIds = Array.from(
+        new Set(allRows.map((row) => row.employee_id).filter((employeeId): employeeId is string => Boolean(employeeId))),
+      );
+      let employeeMap = new Map<string, LeaveEmployee>();
+
+      if (leaveEmployeeIds.length > 0) {
+        const { data: employeesData, error: employeesError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("employees")
+                .select("id, name, nip, opd_id, work_unit_id")
+                .in("id", leaveEmployeeIds),
+              LEAVE_REPORT_QUERY_TIMEOUT_MS,
+              "org.reports.leave.fetch.employee_detail timeout",
+            ),
+          {
+            maxRetries: LEAVE_REPORT_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
+        );
+
+        if (employeesError) {
+          const { data: employeesFallback, error: employeesFallbackError } = await withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase
+                  .from("employees")
+                  .select("id, name, nip")
+                  .in("id", leaveEmployeeIds),
+                LEAVE_REPORT_QUERY_TIMEOUT_MS,
+                "org.reports.leave.fetch.employee_fallback timeout",
+              ),
+            {
+              maxRetries: LEAVE_REPORT_QUERY_RETRY_MAX,
+              shouldRetry: isRetryableError,
+            },
+          );
+
+          if (employeesFallbackError) throw employeesFallbackError;
+
+          employeeMap = new Map(
+            (employeesFallback || []).map((employee) => [
+              employee.id,
+              {
+                id: employee.id,
+                name: employee.name,
+                nip: employee.nip,
+                opd_id: null,
+                work_unit_id: null,
+              },
+            ]),
+          );
+        } else {
+          employeeMap = new Map(
+            (employeesData || []).map((employee) => [
+              employee.id,
+              {
+                id: employee.id,
+                name: employee.name,
+                nip: employee.nip,
+                opd_id: employee.opd_id,
+                work_unit_id: employee.work_unit_id,
+              },
+            ]),
+          );
+        }
+      }
+
+      setRecords(
+        allRows.map((row) => ({
+          ...row,
+          employees: employeeMap.get(row.employee_id) || null,
+        })),
+      );
     } catch (error) {
       const errorRef = reportError(error, "org.reports.leave.fetch", {
         tenant_id: tenantId,
@@ -261,27 +392,30 @@ export default function OrgLeaveReport() {
     return records.filter((record) => {
       if (opdFilter !== "all" && record.employees?.opd_id !== opdFilter) return false;
       if (workUnitFilter !== "all" && record.employees?.work_unit_id !== workUnitFilter) return false;
+      if (!matchesLeaveRequestCategory(record, requestCategoryFilter)) return false;
 
       if (!needle) return true;
+      const presentation = getLeaveRequestPresentation(record);
       const searchable = [
         record.employees?.name || "",
         record.employees?.nip || "",
-        record.reason || "",
-        getLeaveTypeLabel(record.leave_type),
+        presentation.reasonText,
+        presentation.leaveTypeLabel,
+        presentation.detailText || "",
         getStatusLabel(record.status || ""),
       ]
         .join(" ")
         .toLowerCase();
       return searchable.includes(needle);
     });
-  }, [opdFilter, records, searchTerm, workUnitFilter]);
+  }, [opdFilter, records, requestCategoryFilter, searchTerm, workUnitFilter]);
 
   const totalRows = filteredRecords.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / ITEMS_PER_PAGE));
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, opdFilter, workUnitFilter]);
+  }, [searchTerm, opdFilter, workUnitFilter, requestCategoryFilter]);
 
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
@@ -318,56 +452,48 @@ export default function OrgLeaveReport() {
     }
 
     try {
-      const csv = [
-        [
-          "No",
-          "Tanggal Pengajuan",
-          "Nama Pegawai",
-          "NIP",
-          "OPD",
-          "Satuan Kerja",
-          "Jenis",
-          "Periode",
-          "Durasi",
-          "Status",
-          "Alasan",
-          "Catatan Penolakan",
-        ].join(","),
-        ...filteredRecords.map((record, index) => {
-          const opdLabel = record.employees?.opd_id ? opdMap.get(record.employees.opd_id)?.code || "-" : "-";
-          const unitLabel = record.employees?.work_unit_id ? workUnitMap.get(record.employees.work_unit_id)?.name || "-" : "-";
-          return [
-            index + 1,
-            record.created_at ? format(new Date(record.created_at), "yyyy-MM-dd HH:mm") : "-",
-            `"${(record.employees?.name || "-").replace(/"/g, '""')}"`,
-            record.employees?.nip || "-",
-            `"${opdLabel.replace(/"/g, '""')}"`,
-            `"${unitLabel.replace(/"/g, '""')}"`,
-            getLeaveTypeLabel(record.leave_type),
-            `${record.start_date} s/d ${record.end_date}`,
-            getDurationLabel(record),
-            getStatusLabel(record.status || ""),
-            `"${(record.reason || "-").replace(/"/g, '""')}"`,
-            `"${(record.rejection_reason || "-").replace(/"/g, '""')}"`,
-          ].join(",");
-        }),
-      ].join("\n");
+      const traceId = createReportTraceId("LEAVE-CSV");
+      const csv = buildReportCsv({
+        columns: leaveCsvColumns,
+        rows: filteredRecords,
+      });
 
-      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `laporan-izin-cuti-${startDate || "all"}-${endDate || "all"}.csv`;
-      link.click();
-      window.URL.revokeObjectURL(url);
-      toast.success("Export berhasil");
+      downloadCsvFile(`laporan-izin-cuti-${startDate || "all"}-${endDate || "all"}.csv`, csv);
+
+      const auditResult = await recordReportOutputAudit({
+        action: "leave_report_export_csv",
+        filters: {
+          end_date: endDate || null,
+          leave_type: leaveTypeFilter === "all" ? null : leaveTypeFilter,
+          opd_id: opdFilter === "all" ? null : opdFilter,
+          request_category: requestCategoryFilter === "all" ? null : requestCategoryFilter,
+          search: searchTerm.trim() || null,
+          start_date: startDate || null,
+          status: statusFilter === "all" ? null : statusFilter,
+          work_unit_id: workUnitFilter === "all" ? null : workUnitFilter,
+        },
+        outputType: "csv",
+        reportName: "Laporan Izin/Cuti Organisasi",
+        rowCount: filteredRecords.length,
+        tenantId,
+        traceId,
+      });
+
+      if (!auditResult.ok) {
+        toast.warning(
+          appendErrorReference(`CSV berhasil diunduh, tetapi audit log gagal dicatat. Ref dokumen: ${traceId}`, auditResult.errorRef),
+        );
+        return;
+      }
+
+      toast.success(`CSV berhasil diunduh (Ref: ${traceId})`);
     } catch (error) {
       const errorRef = reportError(error, "org.reports.leave.export");
       toast.error(appendErrorReference("Gagal export laporan izin/cuti", errorRef));
     }
   };
 
-  const handlePrintPdf = async () => {
+  const handleDownloadPdf = async () => {
     if (!hasQueried) {
       toast.error("Klik Tampilkan terlebih dahulu");
       return;
@@ -378,83 +504,81 @@ export default function OrgLeaveReport() {
     }
 
     try {
-      const periodLabel = startDate && endDate ? `${startDate} s/d ${endDate}` : "Semua periode";
-      const printedAt = format(new Date(), "d MMMM yyyy HH:mm", { locale: localeId });
-      const rowsHtml = filteredRecords
-        .map((record, index) => {
-          const opdLabel = record.employees?.opd_id ? opdMap.get(record.employees.opd_id)?.code || "-" : "-";
-          const unitLabel = record.employees?.work_unit_id ? workUnitMap.get(record.employees.work_unit_id)?.name || "-" : "-";
-          return `
-            <tr>
-              <td>${index + 1}</td>
-              <td>${escapeHtml(record.created_at ? format(new Date(record.created_at), "d MMM yyyy HH:mm", { locale: localeId }) : "-")}</td>
-              <td>${escapeHtml(record.employees?.name || "-")}</td>
-              <td>${escapeHtml(record.employees?.nip || "-")}</td>
-              <td>${escapeHtml(opdLabel)}</td>
-              <td>${escapeHtml(unitLabel)}</td>
-              <td>${escapeHtml(getLeaveTypeLabel(record.leave_type))}</td>
-              <td>${escapeHtml(`${record.start_date} s/d ${record.end_date}`)}</td>
-              <td>${escapeHtml(getDurationLabel(record))}</td>
-              <td>${escapeHtml(getStatusLabel(record.status || ""))}</td>
-            </tr>
-          `;
-        })
-        .join("");
+      const traceId = createReportTraceId("LEAVE-PDF");
+      const periodLabel =
+        startDate && endDate
+          ? `${startDate} s/d ${endDate}`
+          : startDate
+            ? `Mulai ${startDate}`
+            : endDate
+              ? `Sampai ${endDate}`
+              : "Semua periode";
+      const leaveTypeLabel =
+        leaveTypeFilter === "all"
+          ? "Semua jenis"
+          : LEAVE_TYPE_OPTIONS.find((option) => option.value === leaveTypeFilter)?.label || leaveTypeFilter;
+      const requestCategoryLabel =
+        LEAVE_REQUEST_CATEGORY_OPTIONS.find((option) => option.value === requestCategoryFilter)?.label || requestCategoryFilter;
+      const opdLabel =
+        opdFilter === "all"
+          ? "Semua OPD"
+          : (() => {
+              const opd = opds.find((item) => item.id === opdFilter);
+              return opd ? `${opd.code} - ${opd.name}` : opdFilter;
+            })();
+      const workUnitLabel =
+        workUnitFilter === "all" ? "Semua satuan kerja" : workUnits.find((item) => item.id === workUnitFilter)?.name || workUnitFilter;
 
-      const printWindow = window.open("", "_blank", "width=1200,height=800");
-      if (!printWindow) {
-        toast.error("Popup diblokir browser. Izinkan popup untuk cetak PDF.");
+      downloadReportPdf({
+        columns: leavePdfColumns,
+        filename: `laporan-izin-cuti-${startDate || "all"}-${endDate || "all"}.pdf`,
+        metadataLines: [
+          `Periode: ${periodLabel}`,
+          `Filter status: ${statusFilter === "all" ? "Semua status" : getStatusLabel(statusFilter)}`,
+          `Jenis izin/cuti: ${leaveTypeLabel}`,
+          `Kategori permohonan: ${requestCategoryLabel}`,
+          `Filter OPD: ${opdLabel}`,
+          `Filter satuan kerja: ${workUnitLabel}`,
+          `Pencarian: ${searchTerm.trim() || "-"}`,
+          `Total data: ${filteredRecords.length}`,
+        ],
+        orientation: "landscape",
+        rows: filteredRecords,
+        sourceLabel: "AbsensiKu /org/reports/leave",
+        title: "Laporan Izin/Cuti Pegawai",
+        traceId,
+      });
+
+      const auditResult = await recordReportOutputAudit({
+        action: "leave_report_download_pdf",
+        filters: {
+          end_date: endDate || null,
+          leave_type: leaveTypeFilter === "all" ? null : leaveTypeFilter,
+          opd_id: opdFilter === "all" ? null : opdFilter,
+          request_category: requestCategoryFilter === "all" ? null : requestCategoryFilter,
+          search: searchTerm.trim() || null,
+          start_date: startDate || null,
+          status: statusFilter === "all" ? null : statusFilter,
+          work_unit_id: workUnitFilter === "all" ? null : workUnitFilter,
+        },
+        outputType: "pdf",
+        reportName: "Laporan Izin/Cuti Organisasi",
+        rowCount: filteredRecords.length,
+        tenantId,
+        traceId,
+      });
+
+      if (!auditResult.ok) {
+        toast.warning(
+          appendErrorReference(`PDF berhasil diunduh, tetapi audit log gagal dicatat. Ref dokumen: ${traceId}`, auditResult.errorRef),
+        );
         return;
       }
 
-      printWindow.document.write(`
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta charset="UTF-8" />
-            <title>Laporan Izin/Cuti</title>
-            <style>
-              body { font-family: Arial, sans-serif; margin: 24px; color: #111; }
-              h1 { margin: 0 0 8px; font-size: 20px; }
-              .meta { margin: 0 0 16px; font-size: 12px; color: #444; }
-              table { width: 100%; border-collapse: collapse; font-size: 11px; }
-              th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
-              th { background: #f3f4f6; }
-              .footer { margin-top: 12px; font-size: 11px; color: #666; }
-            </style>
-          </head>
-          <body>
-            <h1>Laporan Izin/Cuti Pegawai</h1>
-            <p class="meta">Periode: ${escapeHtml(periodLabel)} | Total: ${filteredRecords.length} data | Dicetak: ${escapeHtml(printedAt)}</p>
-            <table>
-              <thead>
-                <tr>
-                  <th>No</th>
-                  <th>Tgl Pengajuan</th>
-                  <th>Nama</th>
-                  <th>NIP</th>
-                  <th>OPD</th>
-                  <th>Satuan Kerja</th>
-                  <th>Jenis</th>
-                  <th>Periode</th>
-                  <th>Durasi</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>${rowsHtml}</tbody>
-            </table>
-            <p class="footer">Sumber: AbsensiKu /org/reports/leave</p>
-          </body>
-        </html>
-      `);
-      printWindow.document.close();
-      printWindow.onload = () => {
-        printWindow.focus();
-        printWindow.print();
-      };
+      toast.success(`PDF berhasil diunduh (Ref: ${traceId})`);
     } catch (error) {
-      const errorRef = reportError(error, "org.reports.leave.print");
-      toast.error(appendErrorReference("Gagal menyiapkan print PDF", errorRef));
+      const errorRef = reportError(error, "org.reports.leave.pdf_download");
+      toast.error(appendErrorReference("Gagal menyiapkan PDF laporan izin/cuti", errorRef));
     }
   };
 
@@ -470,8 +594,8 @@ export default function OrgLeaveReport() {
             <p className="text-muted-foreground">Laporan pengajuan izin, cuti, sakit, dan tugas luar</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={handlePrintPdf} disabled={filteredRecords.length === 0 || isLoading}>
-              <Printer className="mr-2 h-4 w-4" /> Print PDF
+            <Button variant="outline" onClick={handleDownloadPdf} disabled={filteredRecords.length === 0 || isLoading}>
+              <FileText className="mr-2 h-4 w-4" /> Unduh PDF
             </Button>
             <Button variant="outline" onClick={handleExport} disabled={filteredRecords.length === 0 || isLoading}>
               <Download className="mr-2 h-4 w-4" /> Export CSV
@@ -522,6 +646,22 @@ export default function OrgLeaveReport() {
                     <SelectItem value="all">Semua jenis</SelectItem>
                     {LEAVE_TYPE_OPTIONS.map((option) => (
                       <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-2">
+                <Label>Kategori Permohonan</Label>
+                <Select
+                  value={requestCategoryFilter}
+                  onValueChange={(value) => setRequestCategoryFilter(value as LeaveRequestCategory)}
+                >
+                  <SelectTrigger><SelectValue placeholder="Semua permohonan" /></SelectTrigger>
+                  <SelectContent>
+                    {LEAVE_REQUEST_CATEGORY_OPTIONS.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -619,15 +759,29 @@ export default function OrgLeaveReport() {
                   ) : (
                     pagedRecords.map((record, index) => (
                       <TableRow key={record.id}>
+                        {(() => {
+                          const presentation = getLeaveRequestPresentation(record);
+                          return (
+                            <>
                         <TableCell>{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</TableCell>
                         <TableCell>{record.created_at ? format(new Date(record.created_at), "d MMM yyyy HH:mm", { locale: localeId }) : "-"}</TableCell>
                         <TableCell>{record.employees?.name || "-"}</TableCell>
                         <TableCell className="font-mono text-sm">{record.employees?.nip || "-"}</TableCell>
-                        <TableCell><Badge variant="outline">{getLeaveTypeLabel(record.leave_type)}</Badge></TableCell>
+                        <TableCell><Badge variant="outline">{presentation.leaveTypeLabel}</Badge></TableCell>
                         <TableCell>{record.start_date} s/d {record.end_date}</TableCell>
                         <TableCell>{getDurationLabel(record)}</TableCell>
                         <TableCell>{getStatusBadge(record.status || "")}</TableCell>
-                        <TableCell className="max-w-[260px] truncate" title={record.reason}>{record.reason}</TableCell>
+                        <TableCell className="max-w-[320px]">
+                          <p className="truncate text-sm" title={presentation.reasonText}>{presentation.reasonText}</p>
+                          {(presentation.isLatePermission || presentation.isEarlyLeavePermission) && (
+                            <p className="text-xs text-muted-foreground">
+                              {presentation.detailLabel}: {presentation.detailText || "-"}
+                            </p>
+                          )}
+                        </TableCell>
+                            </>
+                          );
+                        })()}
                       </TableRow>
                     ))
                   )}

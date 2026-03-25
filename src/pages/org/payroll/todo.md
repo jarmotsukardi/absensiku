@@ -10,7 +10,7 @@
 - Tidak ada unggah dokumen pada tahap awal.
 - Tidak ada glosarium dan penjelasan panjang pada tahap awal.
 - Playwright ditunda sampai progres mendekati 95%.
-- Log Error Payroll mulai diprioritaskan saat progres mendekati 75%.
+- Log Error Payroll (Admin) mulai diprioritaskan saat progres mendekati 75%.
 - Log Audit Payroll mulai diprioritaskan setelah 75%.
 
 ## Struktur Sidebar Final
@@ -35,7 +35,7 @@
 - Pembayaran Payroll
 - Pajak dan Kepatuhan
 - Log Audit Payroll
-- Log Error Payroll
+- Log Error Payroll (Admin)
 - Integrasi Payroll
 
 ### Pengaturan
@@ -75,7 +75,7 @@
 - logika proses payroll
 - validasi payroll mendalam
 - overlay referensi HR dan absensi
-- log error payroll
+- log error payroll (admin)
 - log audit payroll
 - glosarium payroll
 - Playwright
@@ -103,8 +103,8 @@
 - Gunakan overlay, drawer, dialog besar, atau context page.
 
 ### Batch F: Observability
-- Aktifkan Log Error Payroll saat progres mendekati 75%.
-- Aktifkan Log Audit Payroll setelah atau bersamaan dengan Log Error Payroll.
+- Aktifkan Log Error Payroll (Admin) saat progres mendekati 75%.
+- Aktifkan Log Audit Payroll setelah atau bersamaan dengan Log Error Payroll (Admin).
 
 ### Batch G: Finalisasi
 - Tambahkan penjelasan halaman.
@@ -122,7 +122,7 @@
 ## Risiko
 - Tenant lama bisa tetap tidak melihat payroll jika setting tersimpan masih nonaktif.
 - Payroll bisa melebar jika referensi HR atau absensi berubah menjadi duplikasi master.
-- Observability bisa terlambat jika ref atau trace_id di halaman inti tidak dijaga.
+- Observability bisa terlambat jika ref atau ID trace (`trace_id`) di halaman inti tidak dijaga.
 - Sidebar bisa kembali melebar jika menu sekunder diperlakukan seperti menu utama.
 
 ## Definition of Done Minimum

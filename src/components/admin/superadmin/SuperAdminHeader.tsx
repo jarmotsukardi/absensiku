@@ -47,21 +47,21 @@ export function SuperAdminHeader({
   const workspaceLinks = [
     {
       key: "absensi",
-      label: "Superadmin Absensi",
+      label: "Super Admin Absensi",
       path: "/admin",
       icon: Clock,
       active: location.pathname.startsWith("/admin") && !location.pathname.startsWith("/admin/hr") && !location.pathname.startsWith("/admin/payroll"),
     },
     {
       key: "hr",
-      label: "Superadmin HR",
+      label: "Super Admin HR",
       path: "/admin/hr",
       icon: BriefcaseBusiness,
       active: location.pathname.startsWith("/admin/hr"),
     },
     {
       key: "payroll",
-      label: "Superadmin Payroll",
+      label: "Super Admin Payroll",
       path: "/admin/payroll",
       icon: Receipt,
       active: location.pathname.startsWith("/admin/payroll"),
@@ -91,7 +91,7 @@ export function SuperAdminHeader({
             {title ? (
               <h1 className="text-lg font-semibold">{title}</h1>
             ) : (
-              <span className="text-sm font-medium text-muted-foreground">Workspace</span>
+              <span className="text-sm font-medium text-muted-foreground">Area Kerja</span>
             )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -101,7 +101,7 @@ export function SuperAdminHeader({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-60">
-                <DropdownMenuLabel>Pindah Workspace Superadmin</DropdownMenuLabel>
+                <DropdownMenuLabel>Ganti Area Kerja Super Admin</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 {workspaceLinks.map((item) => {
                   const ItemIcon = item.icon;
@@ -119,7 +119,7 @@ export function SuperAdminHeader({
         </div>
       </div>
 
-      {/* Search */}
+      {/* Pencarian */}
       <div className="hidden md:flex relative w-64">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input 
@@ -128,10 +128,10 @@ export function SuperAdminHeader({
         />
       </div>
 
-      {/* Notifications */}
+      {/* Notifikasi */}
       <NotificationDropdown />
 
-      {/* User Menu */}
+      {/* Menu Pengguna */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" className="relative h-9 w-9 rounded-full">

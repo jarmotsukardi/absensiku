@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -45,6 +46,10 @@ import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/att
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { DialogActionHint, dialogActionBarClassName } from "@/components/ui/dialog-action-bar";
+import { OrgHRContextLink } from "@/components/org/hr/OrgHRContextLink";
+import { OrgHRPageGuide } from "@/components/org/hr/OrgHRPageGuide";
+import { useHrPageAccess } from "@/hooks/useHrPageAccess";
+import { getOrgLeavePageContext } from "@/lib/orgLeavePageContext";
 
 type RequestStatus = Enums<"request_status">;
 type DisplayRequestStatus = RequestStatus | "kedaluwarsa" | "unknown";
@@ -83,10 +88,14 @@ const getDisplayRequestStatus = (request: Pick<LeaveRequest, "status" | "start_d
 };
 
 export default function OrgLeaveRequests() {
+  const location = useLocation();
   const PAGE_SIZE = 20;
   const FETCH_CHUNK = 500;
   const LEAVE_REQUEST_QUERY_TIMEOUT_MS = 15000;
   const LEAVE_REQUEST_QUERY_RETRY_MAX = 1;
+  const pageContext = getOrgLeavePageContext(location.pathname);
+  const isHrContext = pageContext.hrCapabilityPath !== null;
+  const { access: hrAccess, isLoading: isLoadingHrAccess } = useHrPageAccess(pageContext.hrCapabilityPath || "");
   const [requests, setRequests] = useState<LeaveRequest[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRetrying, setIsRetrying] = useState(false);
@@ -244,6 +253,11 @@ export default function OrgLeaveRequests() {
   }, [searchTerm, statusFilter, requestCategoryFilter]);
 
   const handleApprove = async (id: string) => {
+    if (isHrContext && !hrAccess.canApprove) {
+      toast.error("Tenant HR sedang dalam mode monitoring hanya-baca. Persetujuan cuti dinonaktifkan.");
+      return;
+    }
+
     const targetRequest = requests.find((item) => item.id === id);
     if (!targetRequest) {
       toast.warning("Data permohonan tidak ditemukan. Muat ulang halaman.");
@@ -300,6 +314,11 @@ export default function OrgLeaveRequests() {
   };
 
   const handleOpenRejectDialog = (id: string) => {
+    if (isHrContext && !hrAccess.canApprove) {
+      toast.error("Tenant HR sedang dalam mode monitoring hanya-baca. Penolakan cuti dinonaktifkan.");
+      return;
+    }
+
     const targetRequest = requests.find((item) => item.id === id);
     if (!targetRequest) {
       toast.warning("Data permohonan tidak ditemukan. Muat ulang halaman.");
@@ -320,6 +339,11 @@ export default function OrgLeaveRequests() {
   };
 
   const handleConfirmReject = async () => {
+    if (isHrContext && !hrAccess.canApprove) {
+      toast.error("Tenant HR sedang dalam mode monitoring hanya-baca. Penolakan cuti dinonaktifkan.");
+      return;
+    }
+
     if (!rejectTargetRequestId) return;
     const targetRequest = requests.find((item) => item.id === rejectTargetRequestId);
     if (!targetRequest) {
@@ -452,18 +476,48 @@ export default function OrgLeaveRequests() {
     (currentPage - 1) * PAGE_SIZE,
     currentPage * PAGE_SIZE
   );
+  const isHrReadonly = isHrContext && !isLoadingHrAccess && !hrAccess.canApprove;
 
   return (
     <OrganizationLayout>
       <div className="space-y-6">
-        <div>
+        <div className="space-y-2">
+          {pageContext.badgeLabel ? <Badge variant="outline">{pageContext.badgeLabel}</Badge> : null}
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <ClipboardList className="h-6 w-6" />
-            Permohonan Cuti
+            {pageContext.title}
           </h1>
-          <p className="text-muted-foreground">Kelola data permohonan izin/cuti pegawai</p>
+          <p className="text-muted-foreground">{pageContext.description}</p>
+          {isHrContext ? (
+            <p className="text-xs text-muted-foreground">
+              Capability halaman:{" "}
+              {isLoadingHrAccess
+                ? "memverifikasi..."
+                : hrAccess.canApprove
+                  ? "admin dapat memproses persetujuan"
+                  : "monitoring hanya-baca"}
+            </p>
+          ) : null}
         </div>
-        <LeaveRequestTabs />
+        {isHrContext ? (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Route Terkait HR</CardTitle>
+              <CardDescription>
+                Gunakan jalur HR ini untuk tetap berada di konteks tenant HR tanpa meloncat kembali ke tab permohonan absensi umum.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              {pageContext.hrContextLinks.map((item) => (
+                <Button key={item.path} asChild variant="outline" size="sm">
+                  <OrgHRContextLink to={item.path}>{item.label}</OrgHRContextLink>
+                </Button>
+              ))}
+            </CardContent>
+          </Card>
+        ) : (
+          <LeaveRequestTabs />
+        )}
 
         {loadError && (
           <div className="flex items-center justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
@@ -478,10 +532,15 @@ export default function OrgLeaveRequests() {
             Sedang mencoba ulang koneksi data...
           </div>
         )}
+        {isHrReadonly ? (
+          <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Tenant HR sedang berada pada mode `Read Only`. Tombol persetujuan dan penolakan dinonaktifkan sampai akses HR kembali editable.
+          </div>
+        ) : null}
 
         <Card>
           <CardHeader>
-            <CardTitle>Daftar Permohonan Cuti</CardTitle>
+            <CardTitle>{pageContext.cardTitle}</CardTitle>
             <CardDescription>Total {totalCount} permohonan</CardDescription>
           </CardHeader>
           <CardContent>
@@ -490,7 +549,7 @@ export default function OrgLeaveRequests() {
                 <div className="relative flex-1 min-w-[200px] sm:max-w-sm">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
-                  placeholder="Cari permohonan..."
+                  placeholder={pageContext.searchPlaceholder}
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10"
@@ -620,10 +679,20 @@ export default function OrgLeaveRequests() {
                         <TableCell className="text-right">
                           {displayStatus === "menunggu" && (
                             <div className="flex justify-end gap-1">
-                              <Button variant="ghost" size="icon" onClick={() => handleApprove(req.id)}>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleApprove(req.id)}
+                                disabled={isHrContext && (isLoadingHrAccess || !hrAccess.canApprove)}
+                              >
                                 <Check className="h-4 w-4 text-green-600" />
                               </Button>
-                              <Button variant="ghost" size="icon" onClick={() => handleOpenRejectDialog(req.id)}>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => handleOpenRejectDialog(req.id)}
+                                disabled={isHrContext && (isLoadingHrAccess || !hrAccess.canApprove)}
+                              >
                                 <X className="h-4 w-4 text-destructive" />
                               </Button>
                             </div>
@@ -682,7 +751,11 @@ export default function OrgLeaveRequests() {
           </CardContent>
         </Card>
 
-        <PageGlossarySection preset="org_leave_requests" />
+        {isHrContext ? (
+          <OrgHRPageGuide pathname={location.pathname} />
+        ) : (
+          <PageGlossarySection preset="org_leave_requests" />
+        )}
       </div>
 
       <Dialog

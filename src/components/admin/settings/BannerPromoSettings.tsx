@@ -83,7 +83,7 @@ export function BannerPromoSettings() {
   };
 
   const handleSave = async () => {
-    await saveSetting("banners_promo", banners, "Banner Promo Homepage");
+    await saveSetting("banners_promo", banners, "Banner Promo Halaman Utama");
     await saveGlobalSetting("banners_promo_config", globalSettings, "Konfigurasi Banner Promo");
   };
 
@@ -114,13 +114,13 @@ export function BannerPromoSettings() {
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
             <Settings2 className="h-4 w-4" />
-            Pengaturan Ukuran Default
+            Pengaturan Ukuran Bawaan
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="space-y-2">
-              <Label>Lebar Default (px)</Label>
+              <Label>Lebar Bawaan (px)</Label>
               <Input
                 type="number"
                 value={globalSettings.defaultWidth}
@@ -131,7 +131,7 @@ export function BannerPromoSettings() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Tinggi Default (px)</Label>
+              <Label>Tinggi Bawaan (px)</Label>
               <Input
                 type="number"
                 value={globalSettings.defaultHeight}
@@ -252,7 +252,7 @@ export function BannerPromoSettings() {
                         type="number"
                         value={banner.width || ""}
                         onChange={(e) => updateBanner(banner.id, "width", parseInt(e.target.value) || 0)}
-                        placeholder={`Default: ${globalSettings.defaultWidth}`}
+                        placeholder={`Bawaan: ${globalSettings.defaultWidth}`}
                         min={200}
                         max={2000}
                       />
@@ -263,7 +263,7 @@ export function BannerPromoSettings() {
                         type="number"
                         value={banner.height || ""}
                         onChange={(e) => updateBanner(banner.id, "height", parseInt(e.target.value) || 0)}
-                        placeholder={`Default: ${globalSettings.defaultHeight}`}
+                        placeholder={`Bawaan: ${globalSettings.defaultHeight}`}
                         min={100}
                         max={800}
                       />

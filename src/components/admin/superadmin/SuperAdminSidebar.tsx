@@ -80,27 +80,28 @@ const absensiMenuGroups: MenuGroup[] = [
   {
     label: "Utama Absensi",
     items: [
-      { title: "Dashboard", icon: LayoutDashboard, path: "/admin" },
+      { title: "Dasbor", icon: LayoutDashboard, path: "/admin" },
       { title: "Organisasi", icon: Building2, path: "/admin/organizations" },
       { title: "Langganan", icon: CreditCard, path: "/admin/subscriptions" },
-      { title: "Billing & Payment", icon: Wallet, path: "/admin/billing" },
+      { title: "Tagihan & Pembayaran", icon: Wallet, path: "/admin/billing" },
     ],
   },
   {
     label: "Pengguna Absensi",
     items: [
       { title: "Semua User", icon: Users, path: "/admin/users" },
-      { title: "Role & Permission", icon: Shield, path: "/admin/roles" },
+      { title: "Peran & Izin", icon: Shield, path: "/admin/roles" },
     ],
   },
   {
     label: "Laporan Absensi",
     items: [
-      { title: "Audit Log", icon: FileText, path: "/admin/reports/audit" },
+      { title: "Log Audit", icon: FileText, path: "/admin/reports/audit" },
       { title: "Log Error", icon: AlertTriangle, path: "/admin/log-errors" },
-      { title: "Feedback & Bug", icon: Bug, path: "/admin/feedback" },
+      { title: "Monitoring UAT Absensi", icon: ClipboardList, path: "/admin/uat" },
+      { title: "Masukan & Bug", icon: Bug, path: "/admin/feedback" },
       { title: "Tiket Bantuan Org", icon: Ticket, path: "/admin/help/tickets" },
-      { title: "Streak Monitoring", icon: Clock, path: "/admin/streak-monitoring" },
+      { title: "Pemantauan Streak", icon: Clock, path: "/admin/streak-monitoring" },
     ],
   },
   {
@@ -117,106 +118,84 @@ const absensiMenuGroups: MenuGroup[] = [
       },
       { title: "Cron Jobs", icon: Calendar, path: "/admin/cron-jobs" },
       { title: "Notifikasi", icon: Bell, path: "/admin/notifications" },
-      { title: "Stress Test Absensi", icon: Activity, path: "/admin/stress-test" },
+      { title: "Uji Beban Absensi", icon: Activity, path: "/admin/stress-test" },
     ],
   },
 ];
 
 const hrMenuGroups: MenuGroup[] = [
   {
-    label: "1. Ringkasan Platform",
+    label: "Ringkasan Sistem",
     items: [
       {
-        title: "Pusat Kendali HR",
+        title: "Ringkasan Sistem",
         icon: LayoutDashboard,
         subItems: [
-          { title: "Dashboard HR", icon: LayoutDashboard, path: "/admin/hr" },
-          { title: "Monitoring Tenant", icon: Building2, path: "/admin/hr/tenants" },
-          { title: "Aktivitas & Audit", icon: FileText, path: "/admin/hr/audit" },
-          { title: "Log Error HR", icon: AlertTriangle, path: "/admin/hr/error-logs" },
-          { title: "Helpdesk HR", icon: Ticket, path: "/admin/hr/help/tickets" },
+          { title: "Ringkasan Sistem HR", icon: LayoutDashboard, path: "/admin/hr" },
         ],
       },
     ],
   },
   {
-    label: "2. Tata Kelola Tenant",
+    label: "Tenant HR",
     items: [
       {
-        title: "Kontrol Tenant",
+        title: "Tenant HR",
         icon: Building2,
         subItems: [
-          { title: "Data Perusahaan", icon: Building2, path: "/admin/hr/tenants" },
-          { title: "Struktur & Unit Organisasi", icon: FolderTree, path: "/admin/hr/sections/struktur-unit-organisasi" },
-          { title: "Jabatan & Grade", icon: BriefcaseBusiness, path: "/admin/hr/sections/jabatan-grade" },
-          { title: "Lokasi & Kalender Kerja", icon: MapPin, path: "/admin/hr/sections/lokasi-kalender-kerja" },
+          { title: "Daftar Tenant HR", icon: Building2, path: "/admin/hr/tenants" },
+          { title: "Profil HR Tenant", icon: UserCog, path: "/admin/hr/profile" },
         ],
       },
     ],
   },
   {
-    label: "3. Kebijakan & Baseline",
+    label: "Kebijakan dan Acuan Bawaan",
     items: [
       {
-        title: "Kebijakan Inti",
+        title: "Kebijakan dan Acuan Bawaan",
         icon: ListChecks,
         subItems: [
           { title: "Kebijakan HR", icon: Shield, path: "/admin/hr/policies" },
-          { title: "Status Absensi Harian", icon: Clock, path: "/admin/hr/sections/status-absensi-hari-ini" },
-          { title: "Hari Libur Nasional", icon: Calendar, path: "/admin/hr/sections/hari-libur-nasional" },
-          { title: "Aturan Keterlambatan", icon: AlertTriangle, path: "/admin/hr/sections/pengaturan-keterlambatan" },
-          { title: "Cuti & Izin Baseline", icon: Calendar, path: "/admin/hr/sections/cuti-izin-baseline" },
-          { title: "Kontrak Kerja Baseline", icon: FileText, path: "/admin/hr/sections/kontrak-kerja-baseline" },
-          { title: "KPI & Performance Baseline", icon: Activity, path: "/admin/hr/sections/kpi-performance-baseline" },
         ],
       },
     ],
   },
   {
-    label: "4. Monitoring & Kepatuhan",
+    label: "Pemantauan dan Audit",
     items: [
       {
-        title: "Monitoring HR",
+        title: "Pemantauan dan Audit",
         icon: BarChart3,
         subItems: [
-          { title: "Rekap Absensi", icon: FileText, path: "/admin/hr/sections/rekap-absensi" },
-          { title: "Analitik Cuti", icon: Calendar, path: "/admin/hr/sections/analitik-cuti" },
-          { title: "Manajemen Pengguna", icon: Users, path: "/admin/hr/sections/user-management" },
-          { title: "Manajemen Peran", icon: Shield, path: "/admin/hr/sections/role-management" },
-          { title: "Pengaturan Izin", icon: Settings, path: "/admin/hr/sections/permission-setting" },
-          { title: "Kepatuhan Dokumen", icon: FileText, path: "/admin/hr/sections/compliance-dokumen" },
+          { title: "Audit HR", icon: FileText, path: "/admin/hr/audit" },
+          { title: "Log Error HR", icon: AlertTriangle, path: "/admin/hr/error-logs" },
+          { title: "Monitoring UAT HR", icon: ClipboardList, path: "/admin/hr/uat" },
         ],
       },
     ],
   },
   {
-    label: "5. Operasional Dukungan",
+    label: "Bantuan Sistem",
     items: [
       {
-        title: "Operasional Dukungan",
+        title: "Bantuan Sistem",
         icon: HelpCircle,
         subItems: [
-          { title: "FAQ HR Superadmin", icon: MessageCircleQuestion, path: "/admin/hr/help/faq" },
-          { title: "Bantuan HR Superadmin", icon: HelpCircle, path: "/admin/hr/help/support" },
-          { title: "Tiket HR Superadmin", icon: Ticket, path: "/admin/hr/help/tickets" },
-          { title: "SLA Monitoring", icon: Clock, path: "/admin/hr/sections/sla-monitoring" },
-          { title: "Playbook Eskalasi", icon: ClipboardList, path: "/admin/hr/sections/playbook-eskalasi" },
+          { title: "FAQ HR Global", icon: MessageCircleQuestion, path: "/admin/hr/help/faq" },
+          { title: "Dukungan HR Global", icon: HelpCircle, path: "/admin/hr/help/support" },
+          { title: "Tiket HR Lintas Tenant", icon: Ticket, path: "/admin/hr/help/tickets" },
         ],
       },
     ],
   },
   {
-    label: "6. Integrasi & Keandalan",
+    label: "Pengaturan Sistem",
     items: [
       {
-        title: "Keandalan Sistem",
-        icon: Database,
+        title: "Pengaturan Sistem",
+        icon: Settings,
         subItems: [
-          { title: "Integrasi API HR", icon: Database, path: "/admin/hr/sections/integrasi-api" },
-          { title: "Integrasi Absensi", icon: Shield, path: "/admin/hr/sections/integrasi-fingerprint-gps" },
-          { title: "Notifikasi Sistem", icon: Bell, path: "/admin/hr/sections/notifikasi-sistem" },
-          { title: "Backup & Restore", icon: Database, path: "/admin/hr/sections/backup-restore" },
-          { title: "Import / Export Data", icon: Upload, path: "/admin/hr/sections/import-export-data" },
           { title: "Pengaturan HR", icon: Settings, path: "/admin/hr/settings" },
         ],
       },
@@ -226,11 +205,12 @@ const hrMenuGroups: MenuGroup[] = [
 
 const payrollMenuGroups: MenuGroup[] = [
   {
-    label: "Payroll Workspace",
+    label: "Area Kerja Payroll",
     items: [
-      { title: "Dashboard Payroll", icon: BarChart3, path: "/admin/payroll" },
+      { title: "Dasbor Payroll", icon: BarChart3, path: "/admin/payroll" },
       { title: "Tenant Payroll", icon: Building2, path: "/admin/payroll/tenants" },
-      { title: "Monitoring Payroll", icon: Activity, path: "/admin/payroll/monitoring" },
+      { title: "Pemantauan Payroll", icon: Activity, path: "/admin/payroll/monitoring" },
+      { title: "Monitoring UAT Payroll", icon: ClipboardList, path: "/admin/payroll/uat" },
       { title: "Log Error Payroll", icon: AlertTriangle, path: "/admin/payroll/error-logs" },
       { title: "Audit Payroll", icon: FileText, path: "/admin/payroll/audit" },
       { title: "Integrasi Payroll", icon: Database, path: "/admin/payroll/integrations" },

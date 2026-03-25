@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
-import { Loader2, Plus, RefreshCcw, Search, Ticket } from "lucide-react";
+import { ExternalLink, FileText, Loader2, Plus, RefreshCcw, Search, Ticket } from "lucide-react";
 import { toast } from "sonner";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
@@ -23,7 +23,7 @@ import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 type FeedbackReportRow = Tables<"feedback_reports">;
-type TicketStatus = "all" | "open" | "resolved";
+type TicketStatus = "all" | "open" | "in_progress" | "resolved" | "closed";
 type TicketPriority = "rendah" | "normal" | "tinggi" | "urgent";
 type TicketCategory = "teknis" | "akses" | "aplikasi" | "integrasi" | "tagihan" | "lainnya";
 
@@ -69,6 +69,8 @@ const CATEGORY_LABEL: Record<TicketCategory, string> = {
   tagihan: "Tagihan",
   lainnya: "Lainnya",
 };
+const TUTORIAL_DOCX_URL = "/tutorials/tutorial-absensiku-admin-pegawai.docx";
+const TUTORIAL_WEB_URL = "/tutorials/tutorial-absensiku-admin-pegawai.html";
 
 const parseTicketMeta = (value: string | null, fallbackMessage: string): TicketMeta => {
   if (!value) return {};
@@ -114,6 +116,8 @@ const formatTicketCode = (id: string) => `TIK-${id.slice(0, 8).toUpperCase()}`;
 
 const getStatusBadge = (status: string) => {
   if (status === "open") return <Badge variant="outline" className="border-amber-500 text-amber-700">Open</Badge>;
+  if (status === "in_progress") return <Badge className="bg-blue-600 hover:bg-blue-600">Menunggu Balasan Org</Badge>;
+  if (status === "closed") return <Badge variant="secondary">Closed Otomatis</Badge>;
   if (status === "resolved") return <Badge className="bg-emerald-600 hover:bg-emerald-600">Resolved</Badge>;
   return <Badge variant="secondary">{status}</Badge>;
 };
@@ -154,6 +158,7 @@ export default function OrgSupportTickets() {
               .select("*")
               .eq("tenant_id", resolvedTenantId)
               .eq("feedback_type", "ticket")
+              .eq("is_archived", false)
               .eq("reporter_role", "admin_organisasi")
               .order("created_at", { ascending: false }),
             SUPPORT_TICKETS_QUERY_TIMEOUT_MS,
@@ -402,6 +407,31 @@ export default function OrgSupportTickets() {
 
         <Card>
           <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <FileText className="h-4 w-4 text-primary" />
+              Panduan Operasional
+            </CardTitle>
+            <CardDescription>
+              Jika perlu referensi sebelum membuat tiket, gunakan tutorial lengkap admin dan pegawai.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="pt-0 flex flex-wrap gap-2">
+            <Button asChild size="sm" variant="outline">
+              <a href={TUTORIAL_DOCX_URL} target="_blank" rel="noreferrer">
+                Unduh DOCX
+              </a>
+            </Button>
+            <Button asChild size="sm" variant="outline">
+              <a href={TUTORIAL_WEB_URL} target="_blank" rel="noreferrer">
+                <ExternalLink className="mr-1 h-3.5 w-3.5" />
+                Lihat Versi Web
+              </a>
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Plus className="h-5 w-5 text-primary" />
               Form Tiket
@@ -477,14 +507,16 @@ export default function OrgSupportTickets() {
                   onChange={(event) => setSearchQuery(event.target.value)}
                 />
               </div>
-              <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as TicketStatus)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Semua Status</SelectItem>
-                  <SelectItem value="open">Open</SelectItem>
-                  <SelectItem value="resolved">Resolved</SelectItem>
-                </SelectContent>
-              </Select>
+                <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as TicketStatus)}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Status</SelectItem>
+                    <SelectItem value="open">Open</SelectItem>
+                    <SelectItem value="in_progress">Menunggu Balasan Org</SelectItem>
+                    <SelectItem value="resolved">Resolved</SelectItem>
+                    <SelectItem value="closed">Closed Otomatis</SelectItem>
+                  </SelectContent>
+                </Select>
             </div>
 
             <div className="rounded-md border overflow-x-auto">
@@ -562,14 +594,15 @@ export default function OrgSupportTickets() {
                 <p className="whitespace-pre-wrap text-muted-foreground">{selectedTicket.message}</p>
               </div>
               <div className="rounded-md border p-3">
-                <p className="font-medium mb-1">Catatan Penyelesaian</p>
+                <p className="font-medium mb-1">Jawaban Superadmin</p>
                 <p className="whitespace-pre-wrap text-muted-foreground">
-                  {selectedTicket.resolutionNotes || "Belum ada catatan penyelesaian."}
+                  {selectedTicket.resolutionNotes || "Belum ada jawaban superadmin."}
                 </p>
               </div>
               {selectedTicket.resolvedAt && (
                 <p className="text-xs text-muted-foreground">
-                  Diselesaikan: {format(new Date(selectedTicket.resolvedAt), "d MMM yyyy HH:mm", { locale: localeId })}
+                  {selectedTicket.status === "closed" ? "Ditutup otomatis" : "Diselesaikan"}:{" "}
+                  {format(new Date(selectedTicket.resolvedAt), "d MMM yyyy HH:mm", { locale: localeId })}
                 </p>
               )}
             </div>

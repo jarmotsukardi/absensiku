@@ -3,7 +3,8 @@ import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuid
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ArrowRight, Briefcase, CheckCircle2, FolderOpen, Settings } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 
 type PayrollHomeItem = {
   title: string;
@@ -72,9 +73,9 @@ const PAYROLL_HOME_SECTIONS: PayrollHomeSection[] = [
     icon: FolderOpen,
     items: [
       {
-        title: "Data Pegawai Payroll",
+        title: "Kompensasi Pegawai",
         path: "/org/payroll/employees",
-        description: "Lihat kesiapan data pegawai untuk proses payroll.",
+        description: "Isi gaji pokok dan parameter kepatuhan per pegawai.",
       },
       {
         title: "Struktur Organisasi dan Grade",
@@ -119,11 +120,6 @@ const PAYROLL_HOME_SECTIONS: PayrollHomeSection[] = [
         description: "Diprioritaskan setelah progres payroll melewati 75%.",
       },
       {
-        title: "Log Error Payroll",
-        path: "/org/payroll/error-log",
-        description: "Diaktifkan mendekati 75% untuk mempercepat triase error aktif.",
-      },
-      {
         title: "Integrasi Payroll",
         path: "/org/payroll/integrations",
         description: "Belum menjadi target aktif pada fase awal.",
@@ -135,6 +131,11 @@ const PAYROLL_HOME_SECTIONS: PayrollHomeSection[] = [
     description: "Kontrol akses dan bantuan kerja payroll.",
     icon: Settings,
     items: [
+      {
+        title: "Master Kepatuhan Payroll",
+        path: "/org/payroll/compliance-master",
+        description: "Kelola tarif TER, BPJS, dan UMP/UMK.",
+      },
       {
         title: "Hak Akses Payroll",
         path: "/org/payroll/roles",
@@ -160,6 +161,9 @@ const QUICK_ACTIONS = [
 
 export default function OrgPayrollHome() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target));
 
   return (
     <OrganizationLayout>
@@ -187,7 +191,7 @@ export default function OrgPayrollHome() {
               <button
                 key={item.path}
                 type="button"
-                onClick={() => navigate(item.path)}
+                onClick={() => navigateWithOverlay(item.path)}
                 className="rounded-lg border bg-card p-4 text-left transition-colors hover:bg-muted/40"
               >
                 <div className="mb-3 flex items-center justify-between gap-3">
@@ -221,7 +225,7 @@ export default function OrgPayrollHome() {
                   <button
                     key={item.path}
                     type="button"
-                    onClick={() => navigate(item.path)}
+                    onClick={() => navigateWithOverlay(item.path)}
                     className="flex w-full items-start justify-between gap-4 rounded-lg border px-4 py-3 text-left transition-colors hover:bg-muted/40"
                   >
                     <div className="space-y-1">
@@ -239,11 +243,11 @@ export default function OrgPayrollHome() {
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <Button onClick={() => navigate("/org/payroll/policies")}>Mulai dari Kebijakan Payroll</Button>
-          <Button variant="outline" onClick={() => navigate("/org/payroll/roles")}>
+          <Button onClick={() => navigateWithOverlay("/org/payroll/policies")}>Mulai dari Kebijakan Payroll</Button>
+          <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll/roles")}>
             Buka Hak Akses Payroll
           </Button>
-          <Button variant="ghost" onClick={() => navigate("/org/payroll/help")}>
+          <Button variant="ghost" onClick={() => navigateWithOverlay("/org/payroll/help")}>
             Bantuan Payroll
           </Button>
         </div>

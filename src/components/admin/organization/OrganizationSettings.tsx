@@ -101,12 +101,12 @@ export function OrganizationSettings({ tenantId }: OrganizationSettingsProps) {
             <Clock className="h-5 w-5 text-primary" />
             Pengaturan Jam Kerja
           </CardTitle>
-          <CardDescription>Konfigurasi jam kerja default untuk organisasi</CardDescription>
+          <CardDescription>Konfigurasi jam kerja bawaan untuk organisasi</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-4">
             <div className="space-y-2">
-              <Label>Jam Masuk Default</Label>
+              <Label>Jam Masuk Bawaan</Label>
               <Input
                 type="time"
                 value={settings.defaultWorkStart}
@@ -114,7 +114,7 @@ export function OrganizationSettings({ tenantId }: OrganizationSettingsProps) {
               />
             </div>
             <div className="space-y-2">
-              <Label>Jam Pulang Default</Label>
+              <Label>Jam Pulang Bawaan</Label>
               <Input
                 type="time"
                 value={settings.defaultWorkEnd}
@@ -217,7 +217,7 @@ export function OrganizationSettings({ tenantId }: OrganizationSettingsProps) {
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
-            <Label>Radius Default (meter)</Label>
+            <Label>Radius Bawaan (meter)</Label>
             <Input
               type="number"
               value={settings.defaultRadiusMeters}

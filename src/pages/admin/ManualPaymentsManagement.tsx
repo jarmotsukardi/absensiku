@@ -442,7 +442,7 @@ export default function ManualPaymentsManagement() {
                           <TableCell className="text-right">
                             <Button variant="ghost" size="sm" onClick={() => openDetail(payment)}>
                               <Eye className="h-4 w-4 mr-1" />
-                              Detail
+                              Rincian
                             </Button>
                           </TableCell>
                         </TableRow>
@@ -505,11 +505,11 @@ export default function ManualPaymentsManagement() {
           </CardContent>
         </Card>
 
-        {/* Detail Dialog */}
+        {/* Dialog Rincian */}
         <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
           <DialogContent className="max-w-lg">
             <DialogHeader>
-              <DialogTitle>Detail Pembayaran</DialogTitle>
+              <DialogTitle>Rincian Pembayaran</DialogTitle>
               <DialogDescription>Informasi lengkap pembayaran</DialogDescription>
             </DialogHeader>
             {selectedPayment && (

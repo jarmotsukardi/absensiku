@@ -11,11 +11,11 @@ test.describe.serial("Admin HR Domain Coverage", () => {
 
     await expect(page.locator("h1").filter({ hasText: "Kebijakan HR" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Kontrol Domain Tenant", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Baseline Ulasan 360", exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Readiness Pelatihan", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Acuan Bawaan Ulasan 360", exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Kesiapan Pelatihan", exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Kontrol ESS", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Simpan Baseline Ulasan 360" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Simpan Baseline ESS" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Simpan Acuan Bawaan Ulasan 360" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Simpan Acuan Bawaan ESS" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Tambah Program" }).first()).toBeVisible();
     await expect(page.getByRole("button", { name: "Tambah Sertifikasi" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Tambah Skill" })).toBeVisible();
@@ -34,10 +34,10 @@ test.describe.serial("Admin HR Domain Coverage", () => {
     await expect(page.getByText("Data Pelatihan", { exact: true })).toBeVisible();
     await expect(page.getByText("Sertifikasi", { exact: true }).first()).toBeVisible();
     await expect(page.getByText("Matriks Keahlian", { exact: true })).toBeVisible();
-    await expect(page.getByText("ESS Pengajuan", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("ESS Kehadiran", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("ESS Dokumen", { exact: true }).first()).toBeVisible();
-    await expect(page.getByText("ESS Profil", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Pengajuan ESS", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Kehadiran ESS", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Dokumen ESS", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Profil ESS", { exact: true }).first()).toBeVisible();
 
     await expect(page.getByText("/org/hr/kpi", { exact: true })).toBeVisible();
     await expect(page.getByText("/org/hr/training-data", { exact: true })).toBeVisible();
@@ -50,8 +50,8 @@ test.describe.serial("Admin HR Domain Coverage", () => {
     await page.goto("/admin/hr/sections/kpi-performance-baseline", { waitUntil: "domcontentloaded" });
     await waitForStable(page);
 
-    await expect(page.locator("h1").filter({ hasText: "KPI & Kinerja Baseline" })).toBeVisible();
-    await expect(page.getByText("Template KPI default", { exact: true })).toBeVisible();
+    await expect(page.locator("h1").filter({ hasText: "KPI & Kinerja Acuan Bawaan" })).toBeVisible();
+    await expect(page.getByText("Templat KPI bawaan", { exact: true })).toBeVisible();
     await expect(page.getByText("/org/hr/kpi", { exact: true })).toBeVisible();
     await expect(page.getByText("/org/hr/performance-periods", { exact: true })).toBeVisible();
     await expect(page.getByText("/org/hr/review-360", { exact: true })).toBeVisible();
@@ -67,7 +67,7 @@ test.describe.serial("Admin HR Domain Coverage", () => {
     await waitForStable(page);
 
     await expect(page.locator("h1").filter({ hasText: "Layanan Mandiri Karyawan (ESS)" })).toBeVisible();
-    await expect(page.getByText("Kontrol baseline superadmin untuk pengalaman self service karyawan.").first()).toBeVisible();
+    await expect(page.getByText("Kontrol acuan bawaan super admin untuk pengalaman layanan mandiri karyawan.").first()).toBeVisible();
     await expect(page.getByText("/org/hr/ess/requests", { exact: true })).toBeVisible();
     await expect(page.getByText("/org/hr/ess/leave-requests", { exact: true })).toBeVisible();
     await expect(page.getByText("/org/hr/ess/attendance", { exact: true })).toBeVisible();

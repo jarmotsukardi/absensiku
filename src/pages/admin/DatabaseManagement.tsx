@@ -151,14 +151,14 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
       if (firstError) throw firstError;
 
       setTableStats([
-        { name: 'Organisasi (Tenants)', icon: Building2, count: tenantsRes.count || 0, description: 'Daftar organisasi terdaftar' },
-        { name: 'Pegawai (Employees)', icon: Users, count: employeesRes.count || 0, description: 'Data pegawai semua organisasi' },
-        { name: 'Kantor (Offices)', icon: MapPin, count: officesRes.count || 0, description: 'Lokasi kantor untuk absensi' },
-        { name: 'Absensi (Attendance)', icon: Activity, count: attendanceRes.count || 0, description: 'Rekaman absensi pegawai' },
-        { name: 'Pengajuan Cuti (Leave)', icon: Calendar, count: leaveRequestsRes.count || 0, description: 'Pengajuan izin dan cuti' },
-        { name: 'Role Pengguna', icon: Users, count: userRolesRes.count || 0, description: 'Role dan permission' },
+        { name: 'Organisasi', icon: Building2, count: tenantsRes.count || 0, description: 'Daftar organisasi terdaftar' },
+        { name: 'Pegawai', icon: Users, count: employeesRes.count || 0, description: 'Data pegawai semua organisasi' },
+        { name: 'Kantor', icon: MapPin, count: officesRes.count || 0, description: 'Lokasi kantor untuk absensi' },
+        { name: 'Absensi', icon: Activity, count: attendanceRes.count || 0, description: 'Rekaman absensi pegawai' },
+        { name: 'Pengajuan Cuti', icon: Calendar, count: leaveRequestsRes.count || 0, description: 'Pengajuan izin dan cuti' },
+        { name: 'Role Pengguna', icon: Users, count: userRolesRes.count || 0, description: 'Peran dan izin' },
         { name: 'Hari Libur', icon: Calendar, count: holidaysRes.count || 0, description: 'Kalender hari libur' },
-        { name: 'Audit Log', icon: FileText, count: auditLogsRes.count || 0, description: 'Catatan aktivitas sistem' },
+        { name: 'Log Audit', icon: FileText, count: auditLogsRes.count || 0, description: 'Catatan aktivitas sistem' },
         { name: 'Notifikasi', icon: Activity, count: notificationsRes.count || 0, description: 'Notifikasi pengguna' },
       ]);
     } catch (error: unknown) {
@@ -266,7 +266,7 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
 
   const markAutoFixResolved = async (office: AutoFixOffice) => {
     if (isDefaultCoordinate(office.latitude, office.longitude)) {
-      toast.error("Koordinat masih default 0,0. Lengkapi dulu di Master Kantor sebelum tandai selesai.");
+      toast.error("Koordinat masih bawaan 0,0. Lengkapi dulu di Master Kantor sebelum tandai selesai.");
       return;
     }
 
@@ -423,7 +423,7 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
-    toast.success(`Export Auto-Fix berhasil (${rows.length} baris)`);
+    toast.success(`Ekspor Auto-Fix berhasil (${rows.length} baris)`);
   };
 
   const autoFixSummary = useMemo(() => {
@@ -530,7 +530,7 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
     'Pengajuan Cuti (Leave)': 'leave_requests',
     'Role Pengguna': 'user_roles',
     'Hari Libur': 'holidays',
-    'Audit Log': 'audit_logs',
+    'Log Audit': 'audit_logs',
     'Notifikasi': 'notifications',
   };
   const tableTotalPages = Math.max(1, Math.ceil(tableStats.length / TABLES_PER_PAGE));
@@ -591,7 +591,7 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
           <TabsList className="min-w-max h-auto gap-1.5 rounded-2xl border border-slate-200/80 bg-white/90 p-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/70">
             <TabsTrigger value="overview" className="whitespace-nowrap">
               <Database className="h-4 w-4 mr-2" />
-              Overview
+              Ringkasan
             </TabsTrigger>
             <TabsTrigger value="tables" className="whitespace-nowrap">
               <Table2 className="h-4 w-4 mr-2" />
@@ -624,7 +624,7 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
                 <div className="flex gap-2">
                   <Button variant="outline" size="sm" onClick={exportAutoFixCsv}>
                     <Download className="h-4 w-4 mr-2" />
-                    Export Auto-Fix CSV
+                    Ekspor Auto-Fix CSV
                   </Button>
                   <Button
                     variant={showReadyOnly ? "default" : "outline"}
@@ -645,7 +645,7 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
                   </Button>
                   <Button variant="outline" size="sm" onClick={fetchAutoFixOffices}>
                     <RefreshCw className="h-4 w-4 mr-2" />
-                    Refresh
+                    Muat Ulang
                   </Button>
                   <Button size="sm" onClick={() => window.location.assign("/admin/master/offices")}>
                     Buka Master Kantor
@@ -768,7 +768,7 @@ export default function DatabaseManagement({ embedded = false }: { embedded?: bo
               </div>
               <Button variant="outline" size="sm" onClick={fetchTableStats}>
                 <RefreshCw className="h-4 w-4 mr-2" />
-                Refresh
+                Muat Ulang
               </Button>
             </CardHeader>
             <CardContent>

@@ -167,7 +167,7 @@ export default function AdminHRDashboard() {
 
   return (
     <SuperAdminLayout
-      title="Ringkasan Dukungan HR"
+      title="Ringkasan Platform HR"
       subtitle="Ringkasan governance modul /org/hr lintas tenant"
       workspaceMode="hr"
     >

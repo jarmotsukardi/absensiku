@@ -411,7 +411,7 @@ export default function UserManagement() {
                     <TableHead>User</TableHead>
                     <TableHead>Organisasi</TableHead>
                     <TableHead>Jenis</TableHead>
-                    <TableHead>Role</TableHead>
+                    <TableHead>Peran</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Bergabung</TableHead>
                     <TableHead className="text-right">Aksi</TableHead>

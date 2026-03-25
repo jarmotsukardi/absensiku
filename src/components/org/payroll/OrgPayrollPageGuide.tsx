@@ -1,7 +1,8 @@
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { getOrgPayrollPageGuide } from "@/lib/orgPayrollPageGuide";
 
 type OrgPayrollPageGuideProps = {
@@ -9,6 +10,7 @@ type OrgPayrollPageGuideProps = {
 };
 
 export function OrgPayrollPageGuide({ pathname }: OrgPayrollPageGuideProps) {
+  const location = useLocation();
   const guide = getOrgPayrollPageGuide(pathname);
 
   if (!guide) return null;
@@ -39,7 +41,7 @@ export function OrgPayrollPageGuide({ pathname }: OrgPayrollPageGuideProps) {
               {guide.relatedRoutes.map((item) => (
                 <Link
                   key={item.path}
-                  to={item.path}
+                  to={buildOrgPayrollOverlayHref(location.pathname, location.search, item.path)}
                   className="rounded-md border bg-card p-3 text-sm transition-colors hover:bg-muted/40"
                 >
                   <p className="font-medium text-foreground">{item.label}</p>

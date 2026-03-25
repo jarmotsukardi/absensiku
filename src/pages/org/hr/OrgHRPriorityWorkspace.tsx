@@ -15,7 +15,7 @@ import { getHrRouteStatusBadgeLabel, getHrRouteStatusDescription } from "@/lib/h
 import { Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
-type PriorityGroup = "lifecycle" | "attendance_policy" | "leave_policy" | "performance_training" | "ess";
+type PriorityGroup = "workspace" | "lifecycle" | "attendance_policy" | "leave_policy" | "performance_training" | "ess";
 
 type PriorityConfig = {
   title: string;
@@ -100,6 +100,23 @@ const AUTO_REFRESH_STORAGE_KEY = "org_hr_priority_auto_refresh_v1";
 const AUTO_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
 
 const ROUTE_CONFIG: Record<string, PriorityConfig> = {
+  "/org/hr/priority": {
+    title: "Workspace Prioritas HR",
+    domain: "Cockpit Prioritas HR",
+    group: "workspace",
+    description: "Gunakan cockpit ini untuk membaca urutan aktivasi dan tindak lanjut layanan HR yang masih perlu dirapikan tanpa mencampur halaman monitoring dengan halaman eksekusi utama.",
+    checklist: [
+      "Rute HR yang masih monitoring-only sudah dipetakan",
+      "Bridge ke modul operasional utama sudah dipahami",
+      "Urutan aktivasi tenant sudah disepakati lintas tim",
+    ],
+    links: [
+      { label: "Proses Masuk Pegawai", path: "/org/hr/onboarding" },
+      { label: "Alur Persetujuan Cuti", path: "/org/hr/leave-approval" },
+      { label: "Pengajuan ESS", path: "/org/hr/ess/requests" },
+      { label: "Tiket HR", path: "/org/hr/help/tickets" },
+    ],
+  },
   "/org/hr/employee-status": {
     title: "Status Kepegawaian",
     domain: "Manajemen Karyawan",
@@ -437,41 +454,41 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
     ],
   },
   "/org/hr/ess/requests": {
-    title: "Pengajuan Saya",
+    title: "Pengajuan ESS",
     domain: "ESS",
     group: "ess",
-    description: "Portal pengajuan mandiri karyawan untuk kebutuhan HR harian.",
+    description: "Ringkasan pengajuan layanan mandiri pegawai yang perlu dipantau dari perspektif admin HR.",
     checklist: [
       "Daftar pengajuan aktif tersedia",
       "Status persetujuan real-time",
       "Riwayat pengajuan terdokumentasi",
     ],
     links: [
-      { label: "Cuti & Izin Saya", path: "/org/hr/ess/leave-requests" },
-      { label: "WFH Pegawai", path: "/org/hr/ess/wfh-requests" },
-      { label: "Lembur Pegawai", path: "/org/hr/ess/overtime-requests" },
-      { label: "Kehadiran Saya", path: "/org/hr/ess/attendance" },
-      { label: "Profil Saya", path: "/org/hr/ess/profile" },
+      { label: "Cuti & Izin ESS", path: "/org/hr/ess/leave-requests" },
+      { label: "Pengajuan WFH", path: "/org/hr/ess/wfh-requests" },
+      { label: "Pengajuan Lembur", path: "/org/hr/ess/overtime-requests" },
+      { label: "Kehadiran ESS", path: "/org/hr/ess/attendance" },
+      { label: "Profil ESS", path: "/org/hr/ess/profile" },
     ],
   },
   "/org/hr/ess/leave-requests": {
-    title: "Cuti dan Izin Saya",
+    title: "Cuti & Izin ESS",
     domain: "ESS",
     group: "ess",
-    description: "Pengajuan cuti/izin mandiri pegawai dengan pelacakan status.",
+    description: "Pemantauan pengajuan cuti/izin yang datang dari kanal layanan mandiri pegawai dalam konteks admin HR.",
     checklist: [
-      "Pengajuan cuti/izin tersubmit dari ESS",
+      "Pengajuan cuti/izin dari ESS terlihat di backlog HR",
       "Status persetujuan terlihat jelas",
-      "Saldo cuti pribadi terupdate",
+      "Konteks kuota dan jenis cuti mudah diverifikasi",
     ],
     links: [
-      { label: "Pengajuan Saya", path: "/org/hr/ess/requests" },
+      { label: "Pengajuan ESS", path: "/org/hr/ess/requests" },
       { label: "Jenis Cuti", path: "/org/hr/leave-types" },
       { label: "Kuota Cuti", path: "/org/hr/leave-quota" },
     ],
   },
   "/org/hr/ess/wfh-requests": {
-    title: "WFH Pegawai",
+    title: "Pengajuan WFH",
     domain: "ESS",
     group: "ess",
     description: "Persetujuan pengajuan kerja dari rumah dari kanal pegawai dalam konteks HR.",
@@ -481,7 +498,7 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
       "Alasan dan tanggal pengajuan mudah ditinjau",
     ],
     links: [
-      { label: "Pengajuan Saya", path: "/org/hr/ess/requests" },
+      { label: "Pengajuan ESS", path: "/org/hr/ess/requests" },
       { label: "Jam Kerja", path: "/org/hr/work-hours" },
       { label: "Analitik Kehadiran HR", path: "/org/hr/attendance-insights" },
     ],
@@ -497,13 +514,13 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
       "Kebijakan kehadiran tetap menjadi rujukan utama",
     ],
     links: [
-      { label: "Pengajuan Saya", path: "/org/hr/ess/requests" },
+      { label: "Pengajuan ESS", path: "/org/hr/ess/requests" },
       { label: "Jam Kerja", path: "/org/hr/work-hours" },
       { label: "Pengaturan Keterlambatan", path: "/org/hr/late-settings" },
     ],
   },
   "/org/hr/ess/overtime-requests": {
-    title: "Lembur Pegawai",
+    title: "Pengajuan Lembur",
     domain: "ESS",
     group: "ess",
     description: "Persetujuan pengajuan lembur pegawai dari kanal self-service.",
@@ -513,56 +530,56 @@ const ROUTE_CONFIG: Record<string, PriorityConfig> = {
       "Riwayat lembur tenant tetap tercatat di engine yang sama",
     ],
     links: [
-      { label: "Pengajuan Saya", path: "/org/hr/ess/requests" },
+      { label: "Pengajuan ESS", path: "/org/hr/ess/requests" },
       { label: "Pengaturan Lembur", path: "/org/schedule/overtime" },
       { label: "Laporan HR", path: "/org/hr/reports" },
     ],
   },
   "/org/hr/ess/attendance": {
-    title: "Kehadiran Saya",
+    title: "Kehadiran ESS",
     domain: "ESS",
     group: "ess",
-    description: "Ringkasan kehadiran personal dan pengajuan koreksi absensi.",
+    description: "Ringkasan kehadiran dari perspektif kanal ESS yang perlu dipantau admin HR.",
     checklist: [
       "Riwayat hadir harian tampil",
       "Anomali absensi dapat diajukan koreksi",
       "Keterlambatan/lembur terlihat per periode",
     ],
     links: [
-      { label: "Pengajuan Saya", path: "/org/hr/ess/requests" },
+      { label: "Pengajuan ESS", path: "/org/hr/ess/requests" },
       { label: "Jam Kerja", path: "/org/hr/work-hours" },
       { label: "Laporan HR", path: "/org/hr/reports" },
     ],
   },
   "/org/hr/ess/documents": {
-    title: "Dokumen Saya",
+    title: "Dokumen ESS",
     domain: "ESS",
     group: "ess",
-    description: "Akses dokumen personal karyawan dalam satu tempat.",
+    description: "Ringkasan dokumen yang tampil di kanal ESS untuk kebutuhan monitoring admin HR.",
     checklist: [
       "Dokumen personal tersedia aman",
       "Status tanda tangan termonitor",
       "Riwayat unduh/akses terdokumentasi",
     ],
     links: [
-      { label: "Pengajuan Saya", path: "/org/hr/ess/requests" },
+      { label: "Pengajuan ESS", path: "/org/hr/ess/requests" },
       { label: "Dokumen HR", path: "/org/hr/documents" },
       { label: "Pengaturan HR", path: "/org/hr/settings" },
     ],
   },
   "/org/hr/ess/profile": {
-    title: "Profil Saya",
+    title: "Profil ESS",
     domain: "ESS",
     group: "ess",
-    description: "Kelola data profil pribadi dan informasi kontak darurat.",
+    description: "Ringkasan profil yang dilihat pegawai dari kanal ESS untuk kebutuhan monitoring admin HR.",
     checklist: [
       "Data personal tervalidasi",
       "Kontak darurat terisi",
       "Riwayat perubahan profil tersimpan",
     ],
     links: [
-      { label: "Pengajuan Saya", path: "/org/hr/ess/requests" },
-      { label: "Dokumen Saya", path: "/org/hr/ess/documents" },
+      { label: "Pengajuan ESS", path: "/org/hr/ess/requests" },
+      { label: "Dokumen ESS", path: "/org/hr/ess/documents" },
       { label: "Tiket HR", path: "/org/hr/help/tickets" },
     ],
   },
@@ -578,6 +595,7 @@ const initialSummaryCounters: SummaryCounters = {
 };
 
 function groupBadgeLabel(group: PriorityGroup): string {
+  if (group === "workspace") return "Cockpit Prioritas • Lintas Domain";
   if (group === "lifecycle") return "Prioritas 1 • Siklus Kerja Pegawai";
   if (group === "attendance_policy") return "Prioritas 2 • Kehadiran";
   if (group === "leave_policy") return "Prioritas 3 • Cuti";
@@ -852,6 +870,34 @@ function buildDecisionGuideBlock(pathname: string, summary: SummaryCounters): De
 }
 
 function buildRecommendedAction(pathname: string, summary: SummaryCounters): RecommendedAction | null {
+  if (pathname === "/org/hr/priority") {
+    if (summary.invitationsPending > 0) {
+      return {
+        label: "Rapikan undangan onboarding lebih dulu",
+        note: `${summary.invitationsPending} undangan masih menunggu. Tutup backlog ini sebelum mengejar area monitoring lain.`,
+        path: "/org/invitations",
+        urgency: "tinggi",
+        summary: "Fokus hari ini: backlog onboarding masih menjadi prioritas tenant.",
+      };
+    }
+    if (summary.leavePending > 0) {
+      return {
+        label: "Tutup antrean cuti yang masih menunggu",
+        note: `${summary.leavePending} pengajuan cuti masih menunggu. Gunakan approval utama agar monitoring ESS tidak menggantung.`,
+        path: "/org/hr/leave-approval",
+        urgency: "sedang",
+        summary: "Fokus hari ini: antrean cuti masih perlu ditutup dari approval utama.",
+      };
+    }
+    return {
+      label: "Periksa pengaturan dan tiket HR",
+      note: "Backlog utama tidak menonjol. Gunakan area pengaturan dan tiket untuk memastikan workspace HR tetap konsisten.",
+      path: "/org/hr/settings",
+      urgency: "rendah",
+      summary: "Fokus hari ini: tenant relatif stabil, lanjutkan perapian governance HR.",
+    };
+  }
+
   if (pathname === "/org/hr/onboarding") {
     const inactiveEmployees = Math.max(summary.employees - summary.activeEmployees, 0);
     if (summary.invitationsPending > 0) {
@@ -1186,6 +1232,13 @@ export default function OrgHRPriorityWorkspace() {
   }
 
   const summaryCards = (() => {
+    if (config.group === "workspace") {
+      return [
+        { label: "Pegawai Aktif", value: summary.activeEmployees, note: "Populasi aktif tenant saat ini" },
+        { label: "Undangan Menunggu", value: summary.invitationsPending, note: "Backlog onboarding yang masih terbuka" },
+        { label: "Cuti Menunggu", value: summary.leavePending, note: "Antrean approval yang masih perlu ditutup" },
+      ];
+    }
     if (location.pathname === "/org/hr/onboarding") {
       const inactiveEmployees = Math.max(summary.employees - summary.activeEmployees, 0);
       return [

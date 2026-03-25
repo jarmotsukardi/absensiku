@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  getHomepagePinnedPlacement,
   getHomepageSectionOrder,
   isHomepageSectionEnabled,
   resolveHomepageSection,
   sortHomepageSectionDefinitions,
+  stabilizeHomepageSectionDefinitions,
+  stabilizeHomepageSectionRecords,
   type HomepageSectionLike,
 } from "@/lib/homepageLayout";
 
@@ -45,5 +48,47 @@ describe("homepageLayout", () => {
       .map((item) => item.key);
 
     expect(sortedEnabledKeys).toEqual(["faq", "clients", "target_segment"]);
+  });
+
+  it("detects pinned placement for homepage sections", () => {
+    expect(getHomepagePinnedPlacement("hero")).toBe("top");
+    expect(getHomepagePinnedPlacement("footer")).toBe("bottom");
+    expect(getHomepagePinnedPlacement("features")).toBeNull();
+  });
+
+  it("stabilizes rendered definitions with pinned sections at top and bottom", () => {
+    const definitions = [
+      { key: "faq" },
+      { key: "features" },
+      { key: "hero" },
+      { key: "cta" },
+      { key: "solutions" },
+      { key: "footer" },
+    ];
+
+    expect(stabilizeHomepageSectionDefinitions(definitions).map((item) => item.key)).toEqual([
+      "hero",
+      "solutions",
+      "features",
+      "faq",
+      "cta",
+      "footer",
+    ]);
+  });
+
+  it("stabilizes admin records and reassigns sort_order", () => {
+    const sections = [
+      { section_key: "faq", is_enabled: true, sort_order: 1 },
+      { section_key: "features", is_enabled: true, sort_order: 2 },
+      { section_key: "hero", is_enabled: true, sort_order: 3 },
+      { section_key: "footer", is_enabled: true, sort_order: 4 },
+    ];
+
+    expect(stabilizeHomepageSectionRecords(sections)).toEqual([
+      { section_key: "hero", is_enabled: true, sort_order: 1 },
+      { section_key: "features", is_enabled: true, sort_order: 2 },
+      { section_key: "faq", is_enabled: true, sort_order: 3 },
+      { section_key: "footer", is_enabled: true, sort_order: 4 },
+    ]);
   });
 });

@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { Loader2, Save, Plus, Trash2, Edit, MapPin, Clock, Shield, Smartphone, Users, Building2, FileText, BarChart3, Lock, Zap, Calendar, Bell, Timer, Fingerprint, Globe, ClipboardList, UserCheck, PieChart, Eye } from "lucide-react";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { withTimeout } from "@/lib/attendanceResilience";
+import { DEFAULT_HOMEPAGE_FEATURES, normalizeHomepageFeatures } from "@/lib/homepageFeatures";
 
 interface Feature {
   id: string;
@@ -25,12 +26,7 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
 
 const iconOptions = Object.keys(iconMap);
 
-const defaultFeatures: Feature[] = [
-  { id: "1", icon: "MapPin", title: "Absensi GPS", description: "Validasi lokasi real-time dengan teknologi GPS canggih yang akurat hingga beberapa meter. Sistem secara otomatis memverifikasi apakah pegawai berada dalam radius yang ditentukan saat melakukan check-in dan check-out." },
-  { id: "2", icon: "Shield", title: "Anti Fake GPS", description: "Keamanan tingkat tinggi dengan deteksi otomatis terhadap aplikasi fake GPS, mock location, dan upaya manipulasi lokasi lainnya. Sistem menolak absensi jika terdeteksi aktivitas mencurigakan." },
-  { id: "3", icon: "Clock", title: "Multi Shift", description: "Kelola berbagai shift kerja fleksibel seperti shift pagi, siang, malam, atau custom. Setiap pegawai dapat memilih shift yang sesuai saat absen jika diaktifkan oleh admin." },
-  { id: "4", icon: "Building2", title: "Multi Kantor", description: "Satu akun organisasi dapat mengelola banyak lokasi kantor atau cabang. Setiap lokasi memiliki titik koordinat dan radius toleransi masing-masing." },
-];
+const defaultFeatures: Feature[] = DEFAULT_HOMEPAGE_FEATURES.map((feature) => ({ ...feature }));
 
 export function FeaturesSettings() {
   const REQUEST_TIMEOUT_MS = 12000;
@@ -54,8 +50,9 @@ export function FeaturesSettings() {
         REQUEST_TIMEOUT_MS,
         "Memuat pengaturan fitur terlalu lama",
       );
-      if (data?.value && Array.isArray(data.value)) {
-        setFeatures(data.value as unknown as Feature[]);
+      const normalizedFeatures = normalizeHomepageFeatures(data?.value);
+      if (normalizedFeatures) {
+        setFeatures(normalizedFeatures);
       }
     } catch (error) {
       const errorRef = reportError(error, "admin.settings.features.fetch");
@@ -68,25 +65,22 @@ export function FeaturesSettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      const { data: existing } = await withTimeout(
-        supabase.from("system_settings").select("id").eq("key", "features_settings").maybeSingle(),
-        REQUEST_TIMEOUT_MS,
-        "Membaca konfigurasi fitur terlalu lama",
-      );
       const jsonValue = JSON.parse(JSON.stringify(features));
-      if (existing) {
-        await withTimeout(
-          supabase.from("system_settings").update({ value: jsonValue, updated_at: new Date().toISOString() }).eq("key", "features_settings"),
-          REQUEST_TIMEOUT_MS,
-          "Menyimpan konfigurasi fitur terlalu lama",
-        );
-      } else {
-        await withTimeout(
-          supabase.from("system_settings").insert({ key: "features_settings", value: jsonValue }),
-          REQUEST_TIMEOUT_MS,
-          "Menyimpan konfigurasi fitur terlalu lama",
-        );
-      }
+      const { error } = await withTimeout(
+        supabase
+          .from("system_settings")
+          .upsert(
+            {
+              key: "features_settings",
+              value: jsonValue,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "key" }
+          ),
+        REQUEST_TIMEOUT_MS,
+        "Menyimpan konfigurasi fitur terlalu lama",
+      );
+      if (error) throw error;
       toast.success("Fitur berhasil disimpan");
     } catch (error) {
       const errorRef = reportError(error, "admin.settings.features.save");

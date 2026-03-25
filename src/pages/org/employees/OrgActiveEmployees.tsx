@@ -508,7 +508,7 @@ export default function OrgActiveEmployees() {
         const { error } = await withExponentialBackoff(
           () =>
             withTimeout(
-              supabase.from("employees").update(payload).eq("id", formData.id),
+              supabase.from("employees").update(payload).eq("id", formData.id).eq("tenant_id", roleData.tenant_id),
               ORG_ACTIVE_EMPLOYEES_QUERY_TIMEOUT_MS,
               "org.employees.active.update timeout"
             ),
@@ -595,7 +595,11 @@ export default function OrgActiveEmployees() {
       return;
     }
     try {
-      const { error } = await supabase.from("employees").update({ is_active: false }).eq("id", id);
+      if (!tenantId) {
+        toast.error("Tenant tidak ditemukan");
+        return;
+      }
+      const { error } = await supabase.from("employees").update({ is_active: false }).eq("id", id).eq("tenant_id", tenantId);
       if (error) throw error;
       toast.success("Pegawai berhasil dinonaktifkan");
       fetchData();

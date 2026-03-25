@@ -94,9 +94,9 @@ export default function OrgHRESSDocuments() {
       <div className="space-y-6">
         <div className="space-y-2">
           <Badge variant="outline">ESS</Badge>
-          <h1 className="text-2xl font-semibold tracking-tight">Dokumen Saya</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Dokumen ESS</h1>
           <p className="text-sm text-muted-foreground">
-            Arsip dokumen personal dari sumber ESS tenant yang terhubung ke akun aktif.
+            Arsip dokumen dari perspektif ESS tenant yang terhubung ke akun aktif.
           </p>
           <p className="text-xs text-muted-foreground">
             Capability halaman: {isLoadingAccess ? "memverifikasi..." : access.canEdit ? "mode kelola" : "monitoring hanya-baca"}

@@ -21,6 +21,7 @@ export interface CircuitBreakerState {
 // ==================== DYNAMIC CONFIG ====================
 
 import { loadScalabilityConfig } from './scalabilityConfig';
+import { DEFAULT_TIMEZONE, getCurrentTimeInTimezone } from './timezone';
 
 function getConfig() {
   const profile = loadScalabilityConfig();
@@ -42,6 +43,7 @@ function getConfig() {
 }
 
 const CB_STORAGE_KEY = 'attendance_circuit_breaker';
+const CONFIGURED_PEAK_STORAGE_KEY = 'attendance_configured_peak_windows_v1';
 const DYNAMIC_PEAK_STORAGE_KEY = 'attendance_dynamic_peak_windows_v1';
 
 interface DynamicPeakWindow {
@@ -97,6 +99,58 @@ function loadDynamicPeakWindows(): DynamicPeakWindow[] {
   }
 }
 
+function loadConfiguredPeakWindows(): DynamicPeakWindow[] {
+  try {
+    const raw = localStorage.getItem(CONFIGURED_PEAK_STORAGE_KEY);
+    if (!raw) return [];
+    const payload = JSON.parse(raw) as DynamicPeakPayload;
+    if (!payload?.updatedAt || !Array.isArray(payload.windows)) return [];
+
+    return payload.windows.filter((w) => (
+      Number.isFinite(w.startMinute) && Number.isFinite(w.endMinute)
+    ));
+  } catch {
+    return [];
+  }
+}
+
+export function setConfiguredPeakWindows(
+  windows: Array<{ start?: string | null; end?: string | null }> = [],
+  enabled: boolean = true,
+): void {
+  try {
+    if (!enabled || windows.length === 0) {
+      localStorage.removeItem(CONFIGURED_PEAK_STORAGE_KEY);
+      return;
+    }
+
+    const normalized: DynamicPeakWindow[] = windows
+      .map((window) => {
+        const startMinute = parseTimeToMinute(window.start);
+        const endMinute = parseTimeToMinute(window.end);
+        if (startMinute === null || endMinute === null) return null;
+        return {
+          startMinute: normalizeMinute(startMinute),
+          endMinute: normalizeMinute(endMinute),
+        };
+      })
+      .filter((window): window is DynamicPeakWindow => Boolean(window));
+
+    if (normalized.length === 0) {
+      localStorage.removeItem(CONFIGURED_PEAK_STORAGE_KEY);
+      return;
+    }
+
+    const payload: DynamicPeakPayload = {
+      windows: normalized,
+      updatedAt: new Date().toISOString(),
+    };
+    localStorage.setItem(CONFIGURED_PEAK_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    return;
+  }
+}
+
 /**
  * Set dynamic peak windows based on work hours schedule.
  * Each shift contributes 2 windows:
@@ -145,19 +199,27 @@ export function setDynamicPeakWindowsFromWorkHours(
 
 /**
  * Deteksi apakah sekarang peak hours (jam absensi)
- * Peak: 06:00-09:00 (check-in) dan 15:00-18:00 (check-out)
+ * Peak default: 06:30-09:00 (check-in) dan 16:00-18:30 (check-out)
  */
 export function isPeakHours(): boolean {
-  const now = new Date();
+  const now = getCurrentTimeInTimezone(DEFAULT_TIMEZONE);
   const currentMinute = (now.getHours() * 60) + now.getMinutes();
+  const configuredWindows = loadConfiguredPeakWindows();
   const dynamicWindows = loadDynamicPeakWindows();
+
+  if (configuredWindows.length > 0) {
+    return configuredWindows.some((window) => isInWindow(currentMinute, window));
+  }
 
   if (dynamicWindows.length > 0) {
     return dynamicWindows.some((window) => isInWindow(currentMinute, window));
   }
 
-  const hour = now.getHours();
-  return (hour >= 6 && hour <= 9) || (hour >= 15 && hour <= 18);
+  const defaultWindows: DynamicPeakWindow[] = [
+    { startMinute: 6 * 60 + 30, endMinute: 9 * 60 },
+    { startMinute: 16 * 60, endMinute: 18 * 60 + 30 },
+  ];
+  return defaultWindows.some((window) => isInWindow(currentMinute, window));
 }
 
 /**

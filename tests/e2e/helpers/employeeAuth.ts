@@ -7,6 +7,16 @@ export const loginAsEmployee = async (page: Page, roles: RoleKey[] = ["employee"
   const creds = await getRoleCredsWithFallback(roles);
   test.skip(!creds, `Kredensial ${roles.join(" / ")} belum diisi di ops/test-accounts.local.json`);
 
+  // Employee login is guarded against desktop browsers. Mimic the approved Safari iPhone path for E2E.
+  await page.addInitScript(() => {
+    const safariIphoneUa =
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+    Object.defineProperty(window.navigator, "userAgent", {
+      configurable: true,
+      get: () => safariIphoneUa,
+    });
+  });
+
   await page.goto("/employee/login", { waitUntil: "domcontentloaded" });
   await waitForStable(page);
 

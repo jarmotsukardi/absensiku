@@ -73,6 +73,8 @@ export default function OrgAuditLog() {
   const [totalCount, setTotalCount] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [currentTenantId, setCurrentTenantId] = useState<string | null>(null);
+  const [isRunningCleanup, setIsRunningCleanup] = useState(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -103,7 +105,10 @@ export default function OrgAuditLog() {
           onRetry: () => setIsRetrying(true),
         }
       );
-      if (!user) return;
+      if (!user) {
+        setCurrentTenantId(null);
+        return;
+      }
 
       // Get tenant_id from role (lebih konsisten untuk akun admin organisasi)
       const { data: roleData, error: roleError } = await withExponentialBackoff(
@@ -127,6 +132,7 @@ export default function OrgAuditLog() {
 
       if (roleError) throw roleError;
       if (!roleData?.tenant_id) {
+        setCurrentTenantId(null);
         const errorRef = reportError(new Error("Tenant organisasi tidak ditemukan untuk admin"), "org.audit_log.missing_tenant", {
           user_id: user.id,
         });
@@ -137,6 +143,7 @@ export default function OrgAuditLog() {
         setTotalCount(0);
         return;
       }
+      setCurrentTenantId(roleData.tenant_id);
 
       const escapedSearch = debouncedSearchQuery.replace(/[%_]/g, "");
 
@@ -229,10 +236,64 @@ export default function OrgAuditLog() {
       setLoadError(message);
       setLogs([]);
       setTotalCount(0);
+      setCurrentTenantId(null);
     } finally {
       setIsLoading(false);
     }
   }, [currentPage, actionFilter, tableFilter, debouncedSearchQuery]);
+
+  const runManualCleanup = useCallback(async () => {
+    if (!currentTenantId) {
+      toast.error("Tenant organisasi belum terbaca. Silakan refresh halaman terlebih dahulu.");
+      return;
+    }
+
+    const shouldContinue = window.confirm(
+      "Jalankan clean manual log aktivitas sekarang? Hanya log organisasi ini yang sudah melewati retensi akan dihapus.",
+    );
+    if (!shouldContinue) return;
+
+    setIsRunningCleanup(true);
+    try {
+      setIsRetrying(false);
+      const { data, error } = (await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.rpc("cleanup_org_audit_logs" as never, { p_tenant_id: currentTenantId } as never),
+            ORG_AUDIT_LOG_QUERY_TIMEOUT_MS,
+            "org.audit_log.cleanup.run timeout"
+          ),
+        {
+          maxRetries: ORG_AUDIT_LOG_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      )) as {
+        data: Record<string, unknown> | null;
+        error: { message?: string } | null;
+      };
+      if (error) throw error;
+
+      const deletedCount = Number(data?.deleted_count || 0);
+      const rawRetentionDays = Number(data?.retention_days);
+      const retentionDays =
+        Number.isFinite(rawRetentionDays) && rawRetentionDays > 0 ? Math.floor(rawRetentionDays) : null;
+      toast.success(
+        retentionDays
+          ? `Clean manual selesai. ${deletedCount} log dihapus (retensi ${retentionDays} hari).`
+          : `Clean manual selesai. ${deletedCount} log dihapus.`,
+      );
+      await fetchLogs();
+    } catch (error) {
+      const errorRef = reportError(error, "org.audit_log.cleanup.run", {
+        tenant_id: currentTenantId,
+      });
+      toast.error(appendErrorReference("Gagal menjalankan clean manual log aktivitas", errorRef));
+    } finally {
+      setIsRunningCleanup(false);
+      setIsRetrying(false);
+    }
+  }, [currentTenantId, fetchLogs]);
 
   useEffect(() => {
     void fetchLogs();
@@ -291,10 +352,25 @@ export default function OrgAuditLog() {
             </h1>
             <p className="text-muted-foreground">Riwayat perubahan data di organisasi Anda</p>
           </div>
-          <Button variant="outline" size="sm" onClick={() => void fetchLogs()} disabled={isLoading}>
-            <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void runManualCleanup()}
+              disabled={isLoading || isRunningCleanup || !currentTenantId}
+            >
+              {isRunningCleanup ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4 mr-2" />
+              )}
+              Clean Manual
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => void fetchLogs()} disabled={isLoading}>
+              <RefreshCw className={`h-4 w-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
+              Refresh
+            </Button>
+          </div>
         </div>
 
         {isRetrying && (
@@ -310,6 +386,10 @@ export default function OrgAuditLog() {
             </Button>
           </div>
         )}
+        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+          Auto-clean log aktivitas berjalan dari cron harian Superadmin. Jika data lama belum terhapus karena jadwal
+          belum jalan, gunakan tombol <span className="font-medium">Clean Manual</span> untuk organisasi ini.
+        </div>
 
         {/* Filters */}
         <Card>

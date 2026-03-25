@@ -203,13 +203,13 @@ export default function OrgHRESSRequests() {
                   <OrgHRContextLink to="/org/hr/ess/leave-requests">Buka Cuti & Izin ESS</OrgHRContextLink>
                 </Button>
                 <Button asChild variant="outline" size="sm">
-                  <OrgHRContextLink to="/org/hr/ess/wfh-requests">Buka Persetujuan WFH</OrgHRContextLink>
+                  <OrgHRContextLink to="/org/hr/ess/wfh-requests">Buka Pengajuan WFH</OrgHRContextLink>
                 </Button>
                 <Button asChild variant="outline" size="sm">
                   <OrgHRContextLink to="/org/hr/ess/flexible-attendance">Buka Absensi Khusus</OrgHRContextLink>
                 </Button>
                 <Button asChild variant="outline" size="sm">
-                  <OrgHRContextLink to="/org/hr/ess/overtime-requests">Buka Persetujuan Lembur</OrgHRContextLink>
+                  <OrgHRContextLink to="/org/hr/ess/overtime-requests">Buka Pengajuan Lembur</OrgHRContextLink>
                 </Button>
                 <Button asChild size="sm">
                   <OrgHRContextLink to="/org/hr/mutation-approval">Buka Persetujuan Mutasi</OrgHRContextLink>
@@ -276,7 +276,7 @@ export default function OrgHRESSRequests() {
           </CardHeader>
           <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <ApprovalSurfaceCard
-              title="WFH Pegawai"
+              title="Pengajuan WFH"
               note="Masuk ke antrian WFH organisasi lewat pintu HR yang sama."
               path="/org/hr/ess/wfh-requests"
               icon={Home}
@@ -288,7 +288,7 @@ export default function OrgHRESSRequests() {
               icon={House}
             />
             <ApprovalSurfaceCard
-              title="Lembur Pegawai"
+              title="Pengajuan Lembur"
               note="Tinjau dan putuskan pengajuan lembur dari jalur HR."
               path="/org/hr/ess/overtime-requests"
               icon={Timer}

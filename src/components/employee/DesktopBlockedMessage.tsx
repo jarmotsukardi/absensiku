@@ -1,14 +1,19 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Smartphone, AlertTriangle, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { APK_DOWNLOAD_PAGE_PATH } from "@/lib/apkDownload";
 
 interface DesktopBlockedMessageProps {
   organizationName?: string;
-  apkUrl?: string | null;
+  downloadPagePath?: string | null;
   reason?: string | null;
 }
 
-export function DesktopBlockedMessage({ organizationName, apkUrl, reason }: DesktopBlockedMessageProps) {
+export function DesktopBlockedMessage({
+  organizationName,
+  downloadPagePath = APK_DOWNLOAD_PAGE_PATH,
+  reason,
+}: DesktopBlockedMessageProps) {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-muted/50 to-background p-4">
       <Card className="w-full max-w-md">
@@ -45,13 +50,13 @@ export function DesktopBlockedMessage({ organizationName, apkUrl, reason }: Desk
             </ol>
           </div>
 
-          {apkUrl && (
+          {downloadPagePath && (
             <Button 
               className="w-full" 
-              onClick={() => window.open(apkUrl, "_blank")}
+              onClick={() => window.open(downloadPagePath, "_blank")}
             >
               <Download className="h-4 w-4 mr-2" />
-              Unduh Aplikasi
+              Buka Halaman Download
             </Button>
           )}
 

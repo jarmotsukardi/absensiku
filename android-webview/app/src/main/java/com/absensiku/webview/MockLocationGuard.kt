@@ -14,6 +14,7 @@ import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationResult
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MockLocationGuard(
     private val context: Context,
@@ -25,6 +26,7 @@ class MockLocationGuard(
 
     private var blocked = false
     private var started = false
+    private val staticCheckStarted = AtomicBoolean(false)
 
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
@@ -40,10 +42,13 @@ class MockLocationGuard(
         if (started || blocked) return
         started = true
 
-        val staticReason = staticBlockReason()
-        if (staticReason != null) {
-            block(staticReason)
-            return
+        // Hindari binder call PackageManager/Settings di main thread (rawan jank/ANR di device lambat).
+        if (staticCheckStarted.compareAndSet(false, true)) {
+            Thread {
+                runCatching { staticBlockReason() }
+                    .getOrNull()
+                    ?.let { reason -> block(reason) }
+            }.start()
         }
 
         if (!hasLocationPermission()) {

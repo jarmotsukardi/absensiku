@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -18,11 +19,37 @@ import type { Database, Json } from "@/integrations/supabase/types";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { buildPostgrestOrClause, sanitizeOrKeyword } from "@/lib/postgrestSearch";
+import {
+  calculatePayrollAuto,
+  type PayrollBpjsRate,
+  type PayrollComplianceFlags,
+  type PayrollComponent,
+  type PayrollEmployeeCompensation,
+  type PayrollEmployeeLite,
+  type PayrollMinimumWage,
+  type PayrollPeriodLite,
+  type PayrollTerRate,
+  type PayrollVariableInput,
+} from "@/lib/payrollAutoCalculator";
+import { buildDefaultComplianceRules, resolvePayrollComplianceSettings } from "@/lib/payrollComplianceRules";
 
 type PayrollRun = Database["public"]["Tables"]["payroll_runs"]["Row"];
 type PayrollRunInsert = Database["public"]["Tables"]["payroll_runs"]["Insert"];
 type PayrollRunUpdate = Database["public"]["Tables"]["payroll_runs"]["Update"];
+type PayrollSlipInsert = Database["public"]["Tables"]["payroll_slips"]["Insert"];
 type PayrollPeriod = Database["public"]["Tables"]["payroll_periods"]["Row"];
+type PayrollPolicy = Database["public"]["Tables"]["payroll_policies"]["Row"];
+type EmployeeRow = Pick<
+  Database["public"]["Tables"]["employees"]["Row"],
+  "id" | "name" | "nik" | "email" | "is_active"
+>;
+type CompensationRow = Database["public"]["Tables"]["payroll_employee_compensations"]["Row"];
+type IncomeComponentRow = Database["public"]["Tables"]["payroll_income_components"]["Row"];
+type DeductionComponentRow = Database["public"]["Tables"]["payroll_deduction_components"]["Row"];
+type VariableInputRow = Database["public"]["Tables"]["payroll_variable_inputs"]["Row"];
+type TerRateRow = Database["public"]["Tables"]["payroll_tax_ter_rates"]["Row"];
+type BpjsRateRow = Database["public"]["Tables"]["payroll_bpjs_rates"]["Row"];
+type MinimumWageRow = Database["public"]["Tables"]["payroll_minimum_wages"]["Row"];
 
 type RunStatus = "draft" | "processing" | "review" | "approved" | "paid" | "archived" | "failed";
 
@@ -37,7 +64,7 @@ type RunFormState = {
 const ITEMS_PER_PAGE = 10;
 
 const STATUS_OPTIONS: Array<{ value: RunStatus; label: string }> = [
-  { value: "draft", label: "Draft" },
+  { value: "draft", label: "Draf" },
   { value: "processing", label: "Diproses" },
   { value: "review", label: "Tinjau" },
   { value: "approved", label: "Disetujui" },
@@ -60,7 +87,7 @@ const formatDateTime = (value: string | null) => {
 };
 
 const RUN_STATUS_LABELS: Record<RunStatus, string> = {
-  draft: "Draft",
+  draft: "Draf",
   processing: "Diproses",
   review: "Tinjau",
   approved: "Disetujui",
@@ -74,14 +101,48 @@ const RUN_TYPE_LABELS: Record<"simulation" | "final", string> = {
   final: "Final",
 };
 
+const toEpoch = (value: string) => new Date(value).getTime();
+
+const isEffectiveRange = (row: { effective_from: string; effective_to: string | null; is_active: boolean }, dateKey: string) => {
+  if (!row.is_active) return false;
+  const target = toEpoch(dateKey);
+  if (toEpoch(row.effective_from) > target) return false;
+  if (row.effective_to && toEpoch(row.effective_to) < target) return false;
+  return true;
+};
+
+const buildAutoTraceId = (periodKey: string) => {
+  const safeKey = periodKey.replace(/[^0-9A-Z]/gi, "");
+  return `AUTO-${safeKey}-${Date.now().toString().slice(-6)}`;
+};
+
+const buildSlipNumber = (periodKey: string, runSequence: number, employee?: EmployeeRow | null) => {
+  const safeKey = periodKey.replace(/[^0-9A-Z]/gi, "");
+  const rawEmployee = employee?.nik || employee?.id || "UNKNOWN";
+  const employeeCode = rawEmployee.replace(/[^0-9A-Z]/gi, "").slice(-6).toUpperCase();
+  return `SLIP-${safeKey}-${employeeCode}-R${runSequence}`;
+};
+
+const chunkArray = <T,>(items: T[], size: number) => {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+};
+
 export default function OrgPayrollRunEngine() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target));
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [periods, setPeriods] = useState<PayrollPeriod[]>([]);
   const [runs, setRuns] = useState<PayrollRun[]>([]);
   const [totalRuns, setTotalRuns] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isAutoRunning, setIsAutoRunning] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingRunId, setEditingRunId] = useState<string | null>(null);
@@ -204,6 +265,30 @@ export default function OrgPayrollRunEngine() {
     if (error) throw error;
   }, []);
 
+  const resolvePeriod = useCallback(async (resolvedTenantId: string, periodId: string) => {
+    const cached = periodMap.get(periodId);
+    if (cached) return cached;
+    const { data, error } = await supabase
+      .from("payroll_periods")
+      .select("*")
+      .eq("tenant_id", resolvedTenantId)
+      .eq("id", periodId)
+      .maybeSingle();
+    if (error) throw error;
+    return data || null;
+  }, [periodMap]);
+
+  const selectEffectiveCompensations = (rows: CompensationRow[], periodEnd: string) => {
+    const sorted = rows
+      .filter((row) => isEffectiveRange(row, periodEnd))
+      .sort((a, b) => toEpoch(b.effective_from) - toEpoch(a.effective_from));
+    const map = new Map<string, CompensationRow>();
+    for (const row of sorted) {
+      if (!map.has(row.employee_id)) map.set(row.employee_id, row);
+    }
+    return Array.from(map.values());
+  };
+
   const handleSave = async () => {
     try {
       setIsSubmitting(true);
@@ -288,6 +373,331 @@ export default function OrgPayrollRunEngine() {
     }
   };
 
+  const handleAutoRun = async () => {
+    let resolvedTenantId: string | null = null;
+    let runId: string | null = null;
+    try {
+      setIsAutoRunning(true);
+      resolvedTenantId = tenantId || (await resolveOrgTenantId());
+      if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan.");
+      if (!tenantId) setTenantId(resolvedTenantId);
+
+      const selectedPeriodId = formState.period_id || periods[0]?.id;
+      if (!selectedPeriodId) {
+        toast.error("Periode payroll wajib dipilih");
+        return;
+      }
+
+      const period = await resolvePeriod(resolvedTenantId, selectedPeriodId);
+      if (!period) {
+        toast.error("Periode payroll tidak ditemukan");
+        return;
+      }
+
+      const [
+        employeeRes,
+        compensationRes,
+        incomeComponentRes,
+        deductionComponentRes,
+        variableInputRes,
+        terRateRes,
+        bpjsRateRes,
+        minimumWageRes,
+        policyRes,
+      ] = await Promise.all([
+        supabase
+          .from("employees")
+          .select("id, name, nik, email, is_active")
+          .eq("tenant_id", resolvedTenantId)
+          .eq("is_active", true)
+          .order("name", { ascending: true }),
+        supabase
+          .from("payroll_employee_compensations")
+          .select("*")
+          .eq("tenant_id", resolvedTenantId)
+          .order("effective_from", { ascending: false }),
+        supabase
+          .from("payroll_income_components")
+          .select("*")
+          .eq("tenant_id", resolvedTenantId)
+          .order("sort_order", { ascending: true }),
+        supabase
+          .from("payroll_deduction_components")
+          .select("*")
+          .eq("tenant_id", resolvedTenantId)
+          .order("sort_order", { ascending: true }),
+        supabase
+          .from("payroll_variable_inputs")
+          .select("*")
+          .eq("tenant_id", resolvedTenantId)
+          .eq("period_id", period.id)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("payroll_tax_ter_rates")
+          .select("*")
+          .eq("tenant_id", resolvedTenantId)
+          .order("effective_from", { ascending: false }),
+        supabase
+          .from("payroll_bpjs_rates")
+          .select("*")
+          .eq("tenant_id", resolvedTenantId)
+          .order("effective_from", { ascending: false }),
+        supabase
+          .from("payroll_minimum_wages")
+          .select("*")
+          .eq("tenant_id", resolvedTenantId)
+          .order("effective_from", { ascending: false }),
+        supabase
+          .from("payroll_policies")
+          .select("*")
+          .eq("tenant_id", resolvedTenantId)
+          .eq("is_active", true)
+          .order("effective_date", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ]);
+
+      if (employeeRes.error) throw employeeRes.error;
+      if (compensationRes.error) throw compensationRes.error;
+      if (incomeComponentRes.error) throw incomeComponentRes.error;
+      if (deductionComponentRes.error) throw deductionComponentRes.error;
+      if (variableInputRes.error) throw variableInputRes.error;
+      if (terRateRes.error) throw terRateRes.error;
+      if (bpjsRateRes.error) throw bpjsRateRes.error;
+      if (minimumWageRes.error) throw minimumWageRes.error;
+      if (policyRes.error) throw policyRes.error;
+
+      const employees = (employeeRes.data || []) as EmployeeRow[];
+      if (employees.length === 0) {
+        toast.error("Belum ada pegawai aktif untuk dihitung payroll.");
+        return;
+      }
+
+      const compensations = selectEffectiveCompensations(
+        (compensationRes.data || []) as CompensationRow[],
+        period.period_end,
+      );
+
+      const compensationPayload: PayrollEmployeeCompensation[] = compensations.map((row) => ({
+        employee_id: row.employee_id,
+        base_salary: row.base_salary || 0,
+        ter_category: row.ter_category || "A",
+        jkk_risk_level: row.jkk_risk_level,
+        region_level: row.region_level,
+        region_code: row.region_code,
+        region_name: row.region_name,
+      }));
+
+      const incomeComponents: PayrollComponent[] = (incomeComponentRes.data || []).map((row: IncomeComponentRow) => ({
+        code: row.code,
+        name: row.name,
+        calculation_mode: row.calculation_mode,
+        default_amount: row.default_amount,
+        is_taxable: row.is_taxable,
+        is_active: row.is_active,
+      }));
+
+      const deductionComponents: PayrollComponent[] = (deductionComponentRes.data || []).map((row: DeductionComponentRow) => ({
+        code: row.code,
+        name: row.name,
+        calculation_mode: row.calculation_mode,
+        default_amount: row.default_amount,
+        is_taxable: row.is_taxable,
+        is_active: row.is_active,
+      }));
+
+      const variableInputs: PayrollVariableInput[] = (variableInputRes.data || []).map((row: VariableInputRow) => ({
+        employee_id: row.employee_id,
+        component_scope: row.component_scope === "deduction" ? "deduction" : "income",
+        component_code: row.component_code,
+        component_name: row.component_name,
+        input_type: row.input_type,
+        amount: row.amount,
+      }));
+
+      const terRates = (terRateRes.data || []) as TerRateRow[];
+      const bpjsRates = (bpjsRateRes.data || []) as BpjsRateRow[];
+      const minimumWages = (minimumWageRes.data || []) as MinimumWageRow[];
+
+      const compliance = policyRes.data
+        ? resolvePayrollComplianceSettings((policyRes.data as PayrollPolicy).metadata)
+        : { profile: "swasta_umum", rules: buildDefaultComplianceRules(), notes: "" };
+
+      const complianceFlags: PayrollComplianceFlags = {
+        pph21_ter: compliance.rules.pph21_ter,
+        bpjs_kesehatan: compliance.rules.bpjs_kesehatan,
+        bpjs_ketenagakerjaan: compliance.rules.bpjs_ketenagakerjaan,
+        upah_minimum: compliance.rules.upah_minimum,
+      };
+
+      const calculation = calculatePayrollAuto({
+        period: {
+          id: period.id,
+          period_key: period.period_key,
+          period_start: period.period_start,
+          period_end: period.period_end,
+        } satisfies PayrollPeriodLite,
+        employees: employees.map((row) => ({
+          id: row.id,
+          name: row.name,
+          nik: row.nik,
+          email: row.email,
+        })) satisfies PayrollEmployeeLite[],
+        compensations: compensationPayload,
+        incomeComponents,
+        deductionComponents,
+        variableInputs,
+        terRates: terRates as PayrollTerRate[],
+        bpjsRates: bpjsRates as PayrollBpjsRate[],
+        minimumWages: minimumWages as PayrollMinimumWage[],
+        complianceFlags,
+      });
+
+      if (calculation.results.length === 0) {
+        toast.error("Tidak ada slip payroll yang berhasil dihitung.");
+        return;
+      }
+
+      const { data: latestRun, error: latestRunError } = await supabase
+        .from("payroll_runs")
+        .select("run_sequence")
+        .eq("tenant_id", resolvedTenantId)
+        .eq("period_id", period.id)
+        .order("run_sequence", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (latestRunError) throw latestRunError;
+      const runSequence = (latestRun?.run_sequence || 0) + 1;
+
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      const traceId = (formState.trace_id.trim() || buildAutoTraceId(period.period_key)).slice(0, 120);
+
+      const runPayload: PayrollRunInsert = {
+        tenant_id: resolvedTenantId,
+        period_id: period.id,
+        run_sequence: runSequence,
+        run_type: formState.run_type,
+        status: "processing",
+        trace_id: traceId,
+        notes: formState.notes.trim() || null,
+        summary: {} as Json,
+        created_by: user?.id || null,
+        started_at: new Date().toISOString(),
+      };
+
+      const { data: runData, error: runError } = await supabase
+        .from("payroll_runs")
+        .insert(runPayload)
+        .select("id")
+        .single();
+      if (runError) throw runError;
+      runId = runData?.id ?? null;
+      if (!runId) throw new Error("Run payroll tidak berhasil dibuat.");
+
+      const employeeMap = new Map(employees.map((item) => [item.id, item]));
+      const slipPayloads: PayrollSlipInsert[] = calculation.results.map((result) => {
+        const employee = employeeMap.get(result.employee_id);
+        const slipNumber = buildSlipNumber(period.period_key, runSequence, employee || null);
+        const employeeCode = (employee?.nik || employee?.id || result.employee_id).replace(/[^0-9A-Z]/gi, "").slice(-4).toUpperCase();
+        return {
+          tenant_id: resolvedTenantId,
+          run_id: runId,
+          employee_id: result.employee_id,
+          slip_number: slipNumber,
+          status: "generated",
+          distribution_channel: "portal",
+          trace_id: `SLP-${traceId}-${employeeCode}`,
+          notes: null,
+          metadata: {
+            ...result.metadata,
+            run: {
+              id: runId,
+              sequence: runSequence,
+              type: formState.run_type,
+              trace_id: traceId,
+            },
+            compliance: {
+              profile: compliance.profile,
+              rules: compliance.rules,
+              notes: compliance.notes || "",
+            },
+          } as Json,
+          created_by: user?.id || null,
+          updated_by: user?.id || null,
+        };
+      });
+
+      for (const chunk of chunkArray(slipPayloads, 200)) {
+        const { error } = await supabase.from("payroll_slips").insert(chunk);
+        if (error) throw error;
+      }
+
+      const issueNames = {
+        missing_compensations: calculation.summary.issues.missing_compensations.map(
+          (id) => employeeMap.get(id)?.name || id,
+        ),
+        missing_ter_rate: calculation.summary.issues.missing_ter_rate.map(
+          (id) => employeeMap.get(id)?.name || id,
+        ),
+        below_minimum_wage: calculation.summary.issues.below_minimum_wage.map(
+          (id) => employeeMap.get(id)?.name || id,
+        ),
+        formula_components: calculation.summary.issues.formula_components,
+      };
+
+      const summaryPayload: Json = {
+        ...calculation.summary,
+        issues_detail: issueNames,
+        generated_at: new Date().toISOString(),
+        period_key: period.period_key,
+        run_sequence: runSequence,
+        run_type: formState.run_type,
+        slip_count: calculation.results.length,
+        compliance: {
+          profile: compliance.profile,
+          rules: compliance.rules,
+        },
+      };
+
+      const { error: updateError } = await supabase
+        .from("payroll_runs")
+        .update({
+          status: "review",
+          finished_at: new Date().toISOString(),
+          summary: summaryPayload,
+        })
+        .eq("id", runId)
+        .eq("tenant_id", resolvedTenantId);
+      if (updateError) throw updateError;
+
+      await ensureApprovalStages(resolvedTenantId, runId);
+
+      toast.success(`Payroll otomatis selesai. ${calculation.results.length} slip berhasil dibuat.`);
+      setIsDialogOpen(false);
+      resetForm();
+      await fetchData();
+    } catch (error) {
+      const ref = reportError(error, "org.payroll.run_engine.auto_run", { run_id: runId, tenant_id: resolvedTenantId ?? undefined });
+      if (runId && resolvedTenantId) {
+        await supabase
+          .from("payroll_runs")
+          .update({
+            status: "failed",
+            finished_at: new Date().toISOString(),
+            summary: { error_ref: ref, message: "Payroll otomatis gagal diproses." } as Json,
+          })
+          .eq("id", runId)
+          .eq("tenant_id", resolvedTenantId);
+      }
+      toast.error(appendErrorReference("Gagal menjalankan payroll otomatis", ref));
+    } finally {
+      setIsAutoRunning(false);
+    }
+  };
+
   const quickSetStatus = async (row: PayrollRun, nextStatus: RunStatus) => {
     try {
       const resolvedTenantId = tenantId || (await resolveOrgTenantId());
@@ -356,14 +766,14 @@ export default function OrgPayrollRunEngine() {
         </div>
 
         <div className="grid gap-4 md:grid-cols-5">
-          <StatCard title="Draft" value={summary.draft} />
+          <StatCard title="Draf" value={summary.draft} />
           <StatCard title="Diproses" value={summary.processing} />
           <StatCard title="Tinjau" value={summary.review} />
           <StatCard title="Disetujui" value={summary.approved} />
           <StatCard title="Gagal" value={summary.failed} />
         </div>
 
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-4">
           <Card>
             <CardHeader className="pb-2">
               <CardDescription>Fokus tahap ini</CardDescription>
@@ -382,7 +792,7 @@ export default function OrgPayrollRunEngine() {
             </CardHeader>
             <CardContent>
               <p className="text-xs text-muted-foreground">
-                Pastikan setiap run memiliki status yang tepat dan trace ID yang bisa dipakai untuk triase.
+                Pastikan setiap run memiliki status yang tepat dan ID trace yang bisa dipakai untuk triase. Jika butuh log error payroll lintas tenant, eskalasi ke super admin.
               </p>
             </CardContent>
           </Card>
@@ -392,8 +802,22 @@ export default function OrgPayrollRunEngine() {
               <CardTitle className="text-lg">Persetujuan Payroll</CardTitle>
             </CardHeader>
             <CardContent>
-              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/approval")}>
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/payroll/approval")}>
                 Buka Persetujuan Payroll
+              </Button>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardDescription>Referensi HR & Absensi</CardDescription>
+              <CardTitle className="text-lg">Cek sumber data</CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/hr/employees")}>
+                Data Pegawai HR
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/reports/attendance")}>
+                Laporan Absensi
               </Button>
             </CardContent>
           </Card>
@@ -414,7 +838,7 @@ export default function OrgPayrollRunEngine() {
                   className="pl-9"
                   value={searchTerm}
                   onChange={(event) => setSearchTerm(event.target.value)}
-                  placeholder="Cari trace id, period key, atau catatan..."
+                  placeholder="Cari ID trace, period key, atau catatan..."
                 />
               </div>
             </div>
@@ -452,11 +876,14 @@ export default function OrgPayrollRunEngine() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => navigate("/org/payroll/validation")}>
+              <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll/validation")}>
                 <ArrowLeft className="mr-2 h-4 w-4" />Validasi
               </Button>
               <Button onClick={openCreateDialog}>
                 <PlayCircle className="mr-2 h-4 w-4" />Buat Proses
+              </Button>
+              <Button variant="secondary" onClick={openCreateDialog} disabled={isAutoRunning}>
+                <PlayCircle className="mr-2 h-4 w-4" />Hitung Otomatis
               </Button>
             </div>
 
@@ -587,8 +1014,8 @@ export default function OrgPayrollRunEngine() {
               </div>
 
               <div className="grid gap-1.5">
-                <Label htmlFor="trace_id">Trace ID</Label>
-                <Input id="trace_id" value={formState.trace_id} onChange={(event) => setFormState((prev) => ({ ...prev, trace_id: event.target.value }))} placeholder="Opsional, auto-generate jika kosong" />
+                <Label htmlFor="trace_id">ID Trace</Label>
+                <Input id="trace_id" value={formState.trace_id} onChange={(event) => setFormState((prev) => ({ ...prev, trace_id: event.target.value }))} placeholder="Opsional, dibuat otomatis jika kosong" />
               </div>
 
               <div className="grid gap-1.5">
@@ -597,9 +1024,20 @@ export default function OrgPayrollRunEngine() {
               </div>
             </div>
 
+            {!editingRunId ? (
+              <div className="rounded-md border border-dashed border-muted-foreground/40 bg-muted/30 p-3 text-xs text-muted-foreground">
+                Hitung otomatis akan membuat slip gaji, menyalin aturan kepatuhan aktif, dan mengubah status run ke Tinjau.
+              </div>
+            ) : null}
+
             <DialogFooter>
               <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Batal</Button>
-              <Button onClick={handleSave} disabled={isSubmitting}>{isSubmitting ? "Menyimpan..." : "Simpan"}</Button>
+              {!editingRunId ? (
+                <Button variant="secondary" onClick={handleAutoRun} disabled={isAutoRunning || isSubmitting}>
+                  {isAutoRunning ? "Menghitung..." : "Hitung Otomatis"}
+                </Button>
+              ) : null}
+              <Button onClick={handleSave} disabled={isSubmitting || isAutoRunning}>{isSubmitting ? "Menyimpan..." : "Simpan"}</Button>
             </DialogFooter>
           </DialogContent>
         </Dialog>

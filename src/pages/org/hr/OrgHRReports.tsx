@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { BarChart3, FileText, Users, Download, Printer, RefreshCw, Search } from "lucide-react";
+import { BarChart3, FileText, Users, Download, RefreshCw, Search } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { TablePaginationFooter } from "@/components/common/TablePaginationFooter";
 import { supabase } from "@/integrations/supabase/client";
@@ -15,6 +15,15 @@ import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { useHrPageAccess } from "@/hooks/useHrPageAccess";
 import { toast } from "sonner";
+import {
+  buildReportCsv,
+  createReportTraceId,
+  downloadCsvFile,
+  downloadReportPdf,
+  recordReportOutputAudit,
+  type ReportOutputColumn,
+  type ReportSummaryItem,
+} from "@/lib/reportOutput";
 
 type EmployeeLite = {
   id: string;
@@ -74,6 +83,7 @@ export default function OrgHRReports() {
   const [contracts, setContracts] = useState<ContractLite[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogLite[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [tenantId, setTenantId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("headcount");
   const [employeeStatusFilter, setEmployeeStatusFilter] = useState<"all" | "active" | "inactive" | "unknown">("all");
   const [employeeCategoryFilter, setEmployeeCategoryFilter] = useState<string>("all");
@@ -91,15 +101,16 @@ export default function OrgHRReports() {
   const fetchData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const tenantId = await resolveOrgTenantId();
-      if (!tenantId) throw new Error("Tenant organisasi tidak ditemukan.");
+      const resolvedTenantId = await resolveOrgTenantId();
+      if (!resolvedTenantId) throw new Error("Tenant organisasi tidak ditemukan.");
+      setTenantId(resolvedTenantId);
 
       const [employeeRes, contractRes] = await Promise.all([
         supabase
           .from("employees")
           .select("id, name, email, nip, is_active, employee_category, golongan, joined_date:created_at, opd:opd_id(name), work_unit:work_unit_id(name)")
-          .eq("tenant_id", tenantId),
-        supabase.from("hr_contracts").select("id, employee_id, contract_number, status, start_date, end_date").eq("tenant_id", tenantId),
+          .eq("tenant_id", resolvedTenantId),
+        supabase.from("hr_contracts").select("id, employee_id, contract_number, status, start_date, end_date").eq("tenant_id", resolvedTenantId),
       ]);
       if (employeeRes.error) throw employeeRes.error;
       if (contractRes.error) throw contractRes.error;
@@ -107,7 +118,7 @@ export default function OrgHRReports() {
       const { data: auditData, error: auditError } = await supabase
         .from("audit_logs")
         .select("id, action, table_name, record_id, created_at, old_values, new_values, employee:employee_id(name)")
-        .eq("tenant_id", tenantId)
+        .eq("tenant_id", resolvedTenantId)
         .in("table_name", [
           "employees",
           "hr_contracts",
@@ -167,6 +178,7 @@ export default function OrgHRReports() {
       setEmployees([]);
       setContracts([]);
       setAuditLogs([]);
+      setTenantId(null);
     } finally {
       setIsLoading(false);
     }
@@ -487,52 +499,199 @@ export default function OrgHRReports() {
     setAuditPage((page) => Math.min(page, auditTotalPages));
   }, [auditTotalPages]);
 
-  const handleExport = () => {
+  const getActiveOutputConfig = () => {
+    const todayLabel = new Date().toISOString().slice(0, 10);
+    const periodLabel = periodFrom || periodTo ? `${periodFrom || "-"} s/d ${periodTo || "-"}` : "Semua periode";
+    const commonMetadata = [
+      `Status pegawai: ${employeeStatusFilter === "all" ? "Semua" : employeeStatusFilter}`,
+      `Kategori pegawai: ${employeeCategoryFilter === "all" ? "Semua" : employeeCategoryFilter}`,
+      `OPD: ${opdFilter === "all" ? "Semua" : opdFilter}`,
+      `Unit kerja: ${workUnitFilter === "all" ? "Semua" : workUnitFilter}`,
+      `Periode: ${periodLabel}`,
+    ];
+
+    if (activeTab === "headcount") {
+      return {
+        auditActionBase: "hr_reports_headcount",
+        columns: [
+          { header: "No", value: (_row: unknown, index: number) => index + 1, align: "right", width: 28 },
+          { header: "Kategori", value: (row: unknown) => (row as { label: string }).label },
+          { header: "Jumlah Pegawai", value: (row: unknown) => (row as { total: number }).total, align: "right", width: 56 },
+        ] satisfies ReportOutputColumn<unknown>[],
+        filenameBase: `hr-report-headcount-${todayLabel}`,
+        filters: {
+          employee_category: employeeCategoryFilter === "all" ? null : employeeCategoryFilter,
+          employee_status: employeeStatusFilter === "all" ? null : employeeStatusFilter,
+          opd: opdFilter === "all" ? null : opdFilter,
+          period_from: periodFrom || null,
+          period_to: periodTo || null,
+          search: reportSearchTerm.trim() || null,
+          work_unit: workUnitFilter === "all" ? null : workUnitFilter,
+        },
+        metadataLines: [...commonMetadata, `Pencarian laporan: ${reportSearchTerm.trim() || "-"}`],
+        rows: employeeCategorySummary as unknown[],
+        summary: [
+          { label: "Headcount", value: filteredHeadcount },
+          { label: "Pegawai aktif", value: filteredActiveCount },
+          { label: "Pegawai nonaktif", value: filteredInactiveCount },
+          { label: "Status aktif belum diisi", value: filteredUnknownActiveFlagCount },
+        ] satisfies ReportSummaryItem[],
+        title: "Laporan HR - Headcount",
+      };
+    }
+
+    if (activeTab === "kontrak") {
+      return {
+        auditActionBase: "hr_reports_kontrak",
+        columns: [
+          { header: "No", value: (_row: unknown, index: number) => index + 1, align: "right", width: 28 },
+          { header: "Status Kontrak", value: (row: unknown) => (row as { status: string }).status },
+          { header: "Jumlah Kontrak", value: (row: unknown) => (row as { total: number }).total, align: "right", width: 56 },
+        ] satisfies ReportOutputColumn<unknown>[],
+        filenameBase: `hr-report-kontrak-${todayLabel}`,
+        filters: {
+          contract_status: contractStatusFilter === "all" ? null : contractStatusFilter,
+          employee_category: employeeCategoryFilter === "all" ? null : employeeCategoryFilter,
+          employee_status: employeeStatusFilter === "all" ? null : employeeStatusFilter,
+          opd: opdFilter === "all" ? null : opdFilter,
+          period_from: periodFrom || null,
+          period_to: periodTo || null,
+          search: reportSearchTerm.trim() || null,
+          work_unit: workUnitFilter === "all" ? null : workUnitFilter,
+        },
+        metadataLines: [
+          ...commonMetadata,
+          `Status kontrak: ${contractStatusFilter === "all" ? "Semua" : contractStatusFilter}`,
+          `Pencarian laporan: ${reportSearchTerm.trim() || "-"}`,
+        ],
+        rows: contractStatusSummary as unknown[],
+        summary: [
+          { label: "Kontrak aktif", value: filteredActiveContracts },
+          { label: "Kontrak berakhir <= 30 hari", value: endingSoonContracts },
+          { label: "Kontrak lewat jatuh tempo", value: overdueContracts },
+        ] satisfies ReportSummaryItem[],
+        title: "Laporan HR - Kontrak",
+      };
+    }
+
+    return {
+      auditActionBase: "hr_reports_operasional",
+      columns: [
+        { header: "No", value: (_row: unknown, index: number) => index + 1, align: "right", width: 28 },
+        { header: "Waktu", value: (row: unknown) => (row as { at: string }).at, width: 104 },
+        { header: "Domain", value: (row: unknown) => (row as { domain: string }).domain, width: 72 },
+        { header: "Aksi", value: (row: unknown) => (row as { actionLabel: string }).actionLabel },
+        { header: "Aktor", value: (row: unknown) => (row as { actor: string }).actor },
+        { header: "Ringkasan", value: (row: unknown) => (row as { summary: string }).summary },
+      ] satisfies ReportOutputColumn<unknown>[],
+      filenameBase: `hr-report-operasional-${todayLabel}`,
+      filters: {
+        audit_domain: auditDomainFilter === "all" ? null : auditDomainFilter,
+        audit_search: auditSearchTerm.trim() || null,
+        employee_category: employeeCategoryFilter === "all" ? null : employeeCategoryFilter,
+        employee_status: employeeStatusFilter === "all" ? null : employeeStatusFilter,
+        opd: opdFilter === "all" ? null : opdFilter,
+        period_from: periodFrom || null,
+        period_to: periodTo || null,
+        work_unit: workUnitFilter === "all" ? null : workUnitFilter,
+      },
+      metadataLines: [
+        ...commonMetadata,
+        `Domain audit: ${auditDomainFilter === "all" ? "Semua" : auditDomainFilter}`,
+        `Pencarian audit: ${auditSearchTerm.trim() || "-"}`,
+      ],
+      rows: filteredAuditRows as unknown[],
+      summary: [
+        { label: "Audit terfilter", value: filteredAuditRows.length },
+        { label: "Audit payroll-impact", value: payrollImpactAuditCount },
+      ] satisfies ReportSummaryItem[],
+      title: "Laporan HR - Operasional",
+    };
+  };
+
+  const handleExport = async () => {
     if (!access.canExport) {
       toast.error("Aksi export laporan hanya tersedia untuk admin organisasi.");
       return;
     }
 
-    let lines: string[] = [];
-    if (activeTab === "headcount") {
-      lines = [
-        ["kategori", "jumlah_pegawai"].join(","),
-        ...employeeCategorySummary.map((row) => [`"${row.label.replace(/"/g, '""')}"`, String(row.total)].join(",")),
-      ];
-    } else if (activeTab === "kontrak") {
-      lines = [
-        ["status_kontrak", "jumlah_kontrak"].join(","),
-        ...contractStatusSummary.map((row) => [row.status, String(row.total)].join(",")),
-      ];
-    } else {
-      lines = [
-        ["waktu", "domain", "aksi", "aktor", "ringkasan"].join(","),
-        ...filteredAuditRows.map((row) =>
-          [
-            row.at,
-            row.domain,
-            row.actionLabel,
-            `"${row.actor.replace(/"/g, '""')}"`,
-            `"${row.summary.replace(/"/g, '""')}"`,
-          ].join(","),
-        ),
-      ];
-    }
+    try {
+      const outputConfig = getActiveOutputConfig();
+      const traceId = createReportTraceId(`HR-${activeTab.toUpperCase()}-CSV`);
+      const csv = buildReportCsv({
+        columns: outputConfig.columns,
+        rows: outputConfig.rows,
+      });
 
-    const blob = new Blob(["\uFEFF" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `hr-report-${activeTab}-${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-    URL.revokeObjectURL(url);
-    toast.success("Ekspor laporan HR berhasil.");
+      downloadCsvFile(`${outputConfig.filenameBase}.csv`, csv);
+
+      const auditResult = await recordReportOutputAudit({
+        action: `${outputConfig.auditActionBase}_export_csv`,
+        filters: outputConfig.filters,
+        outputType: "csv",
+        reportName: outputConfig.title,
+        rowCount: outputConfig.rows.length,
+        tenantId,
+        traceId,
+      });
+
+      if (!auditResult.ok) {
+        toast.warning(
+          appendErrorReference(`CSV berhasil diunduh, tetapi audit log gagal dicatat. Ref dokumen: ${traceId}`, auditResult.errorRef),
+        );
+        return;
+      }
+
+      toast.success(`Ekspor laporan HR berhasil (Ref: ${traceId})`);
+    } catch (error) {
+      const ref = reportError(error, "org.hr.reports.export");
+      toast.error(appendErrorReference("Gagal export laporan HR", ref));
+    }
   };
 
-  const handlePrint = () => {
-    window.print();
+  const handleDownloadPdf = async () => {
+    if (!access.canExport) {
+      toast.error("Aksi unduh PDF laporan hanya tersedia untuk admin organisasi.");
+      return;
+    }
+
+    try {
+      const outputConfig = getActiveOutputConfig();
+      const traceId = createReportTraceId(`HR-${activeTab.toUpperCase()}-PDF`);
+
+      downloadReportPdf({
+        columns: outputConfig.columns,
+        filename: `${outputConfig.filenameBase}.pdf`,
+        metadataLines: outputConfig.metadataLines,
+        rows: outputConfig.rows,
+        sourceLabel: "AbsensiKu /org/hr/reports",
+        summary: outputConfig.summary,
+        title: outputConfig.title,
+        traceId,
+      });
+
+      const auditResult = await recordReportOutputAudit({
+        action: `${outputConfig.auditActionBase}_download_pdf`,
+        filters: outputConfig.filters,
+        outputType: "pdf",
+        reportName: outputConfig.title,
+        rowCount: outputConfig.rows.length,
+        tenantId,
+        traceId,
+      });
+
+      if (!auditResult.ok) {
+        toast.warning(
+          appendErrorReference(`PDF berhasil diunduh, tetapi audit log gagal dicatat. Ref dokumen: ${traceId}`, auditResult.errorRef),
+        );
+        return;
+      }
+
+      toast.success(`PDF laporan HR berhasil diunduh (Ref: ${traceId})`);
+    } catch (error) {
+      const ref = reportError(error, "org.hr.reports.pdf_download");
+      toast.error(appendErrorReference("Gagal menyiapkan PDF laporan HR", ref));
+    }
   };
 
   return (
@@ -569,9 +728,9 @@ export default function OrgHRReports() {
                   <RefreshCw className="mr-2 h-4 w-4" />
                   Muat Ulang
                 </Button>
-                <Button variant="outline" size="sm" onClick={handlePrint}>
-                  <Printer className="mr-2 h-4 w-4" />
-                  Cetak Ringkas
+                <Button variant="outline" size="sm" onClick={handleDownloadPdf} disabled={isLoadingAccess || !access.canExport}>
+                  <FileText className="mr-2 h-4 w-4" />
+                  Unduh PDF
                 </Button>
                 <Button variant="outline" size="sm" onClick={handleExport} disabled={isLoadingAccess || !access.canExport}>
                   <Download className="mr-2 h-4 w-4" />

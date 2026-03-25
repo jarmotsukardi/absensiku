@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { EmployeeFloatingWhatsApp } from "@/components/employee/EmployeeFloatingWhatsApp";
+import { GlossaryPanel } from "@/components/common/GlossaryPanel";
 import { ReadonlyHomeTab } from "@/components/dashboard/readonly/ReadonlyHomeTab";
 import { ReadonlyHistoryTab } from "@/components/dashboard/readonly/ReadonlyHistoryTab";
 import { ReadonlyHelpTab } from "@/components/dashboard/readonly/ReadonlyHelpTab";
@@ -35,7 +36,12 @@ import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import type { Tables } from "@/integrations/supabase/types";
 import { toast } from "sonner";
+import { evaluateAttendanceLogoutGuard } from "@/lib/attendanceLogoutPolicy";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import {
+  isEmployeeNonAttendanceTab,
+  useAttendanceResourceRestriction,
+} from "@/hooks/useAttendanceResourceRestriction";
 
 type DashboardTab = "home" | "history" | "requests" | "news" | "articles" | "announcements" | "notifications" | "help" | "profile" | "activation" | "billing";
 
@@ -58,7 +64,13 @@ interface EmployeeProfile {
   office_id?: string | null;
   opd_id?: string | null;
   work_unit_id?: string | null;
-  offices?: { id?: string | null; name?: string | null; address?: string | null } | null;
+  offices?: {
+    id?: string | null;
+    name?: string | null;
+    address?: string | null;
+    work_start_time?: string | null;
+    work_end_time?: string | null;
+  } | null;
   opd?: { id?: string | null; name?: string | null; code?: string | null } | null;
   work_unit?: { id?: string | null; name?: string | null } | null;
 }
@@ -186,24 +198,52 @@ export default function EmployeeDashboardReadonly() {
   const [isWfhLoading, setIsWfhLoading] = useState(false);
   const [overtimeSettings, setOvertimeSettings] = useState<OvertimeSettingsRow | null>(null);
   const [refreshFlexible, setRefreshFlexible] = useState(0);
+  const restrictionNoticeRef = useState<{ current: string | null }>({ current: null })[0];
+  const attendanceResourceRestriction = useAttendanceResourceRestriction({
+    tenantId: employee?.tenant_id || null,
+    tenantTimezone: tenant?.timezone || null,
+    officeScheduleFallback: {
+      work_start_time: employee?.offices?.work_start_time || null,
+      work_end_time: employee?.offices?.work_end_time || null,
+    },
+  });
   const { leaveRequests, isLoading: leaveLoading, isSubmitting: leaveSubmitting, createLeaveRequest, cancelLeaveRequest, refetch: refetchLeave } = useLeaveRequests(employee?.id || null);
 
   useEffect(() => {
     const rawTab = (new URLSearchParams(location.search).get("tab") || "home") as DashboardTab;
     const tab = rawTab === "billing" ? "activation" : rawTab;
     const allowed = new Set<DashboardTab>(TABS.map((t) => t.id));
+    if (allowed.has(tab) && attendanceResourceRestriction.isRestrictedNow && isEmployeeNonAttendanceTab(tab)) {
+      if (restrictionNoticeRef.current !== tab) {
+        toast.info(
+          attendanceResourceRestriction.restrictionReason ||
+            "Akses ke halaman non-absensi sedang dibatasi untuk memprioritaskan proses absensi.",
+        );
+        restrictionNoticeRef.current = tab;
+      }
+      navigate({ pathname: "/dashboard", search: "" }, { replace: true });
+      setActiveTab("home");
+      return;
+    }
     setActiveTab(allowed.has(tab) ? tab : "home");
-  }, [location.search]);
+  }, [attendanceResourceRestriction.isRestrictedNow, attendanceResourceRestriction.restrictionReason, location.search, navigate, restrictionNoticeRef]);
 
   const setTab = useCallback(
     (tab: DashboardTab) => {
+      if (attendanceResourceRestriction.isRestrictedNow && isEmployeeNonAttendanceTab(tab)) {
+        toast.info(
+          attendanceResourceRestriction.restrictionReason ||
+            "Akses ke halaman non-absensi sedang dibatasi untuk memprioritaskan proses absensi.",
+        );
+        tab = "home";
+      }
       const params = new URLSearchParams(location.search);
       if (tab === "home") params.delete("tab");
       else params.set("tab", tab);
       const next = params.toString();
       navigate({ pathname: "/dashboard", search: next ? `?${next}` : "" }, { replace: true });
     },
-    [location.search, navigate]
+    [attendanceResourceRestriction.isRestrictedNow, attendanceResourceRestriction.restrictionReason, location.search, navigate]
   );
 
   const loadData = useCallback(async () => {
@@ -471,8 +511,35 @@ export default function EmployeeDashboardReadonly() {
   };
 
   const logout = async () => {
-    await supabase.auth.signOut();
-    navigate("/auth", { replace: true });
+    try {
+      const logoutGuard = await evaluateAttendanceLogoutGuard(employee?.id || null);
+
+      if (logoutGuard.shouldBlock) {
+        toast.error("Logout ditahan", {
+          description: `${logoutGuard.pendingCount} data absensi masih menunggu sinkronisasi. Selesaikan sinkronisasi terlebih dahulu sebelum logout.`,
+        });
+        return;
+      }
+
+      if (logoutGuard.shouldWarn) {
+        const confirmed = window.confirm(
+          `${logoutGuard.pendingCount} data absensi masih menunggu sinkronisasi. Logout akan membersihkan sesi, tetapi data lokal tetap dipertahankan. Lanjut logout?`,
+        );
+        if (!confirmed) {
+          return;
+        }
+      }
+
+      await supabase.auth.signOut();
+      navigate("/auth", { replace: true });
+    } catch (error) {
+      const errorRef = reportError(error, "employee.dashboard.readonly.logout", {
+        employee_id: employee?.id || null,
+      });
+      toast.error(appendErrorReference("Gagal logout", errorRef), {
+        description: "Silakan coba lagi beberapa saat.",
+      });
+    }
   };
 
   const fetchWfhRequests = useCallback(async () => {
@@ -708,6 +775,9 @@ export default function EmployeeDashboardReadonly() {
           </aside>
 
           <main className="space-y-4 pb-20">
+          <div className="flex justify-end">
+            <GlossaryPanel defaultCategory="absensi" />
+          </div>
           {isLoading ? (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {[1, 2, 3, 4].map((i) => (

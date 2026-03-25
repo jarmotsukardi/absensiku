@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { Loader2, Smartphone, Lock, AlertTriangle, Mail, RotateCcw, Eye, EyeOff } from "lucide-react";
 import SingleOTPInput, { SingleOTPInputRef } from "@/components/common/SingleOTPInput";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { getAndroidId } from "@/lib/deviceId";
 
 // Custom Password Input component - FULLY UNCONTROLLED untuk mencegah flicker
 const PasswordInput = memo(function PasswordInput({
@@ -303,28 +304,7 @@ export function DeviceResetDialog({
 
     setIsLoading(true);
     try {
-      // Generate device ID if not exists
-      const currentDeviceId = localStorage.getItem("web_device_id") || (() => {
-        const fingerprint = [
-          navigator.userAgent,
-          navigator.language,
-          screen.width,
-          screen.height,
-          screen.colorDepth,
-          navigator.hardwareConcurrency || 0,
-          navigator.maxTouchPoints || 0,
-          Intl.DateTimeFormat().resolvedOptions().timeZone,
-        ].join("|");
-        let hash = 0;
-        for (let i = 0; i < fingerprint.length; i++) {
-          const char = fingerprint.charCodeAt(i);
-          hash = ((hash << 5) - hash) + char;
-          hash = hash & hash;
-        }
-        const newId = `WEB-${Math.abs(hash).toString(16).toUpperCase().padStart(16, "0")}`;
-        localStorage.setItem("web_device_id", newId);
-        return newId;
-      })();
+      const currentDeviceId = getAndroidId(true);
 
       // Verify OTP dan update device/password dalam SATU panggilan.
       // Beberapa sesi mobile/webview bisa kedaluwarsa; lakukan retry dengan refresh session.

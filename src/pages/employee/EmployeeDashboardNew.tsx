@@ -13,7 +13,13 @@ import { useLeaveRequests } from "@/hooks/useLeaveRequests";
 import { useSessionManagement } from "@/hooks/useSessionManagement";
 import { SessionLoadingScreen } from "@/components/employee/SessionLoadingScreen";
 import { toast } from "sonner";
-import { formatToTimezone, formatTimeToTimezone, getCurrentTimeInTimezone } from "@/lib/timezone";
+import {
+  DEFAULT_TIMEZONE,
+  formatToTimezone,
+  formatTimeToTimezone,
+  getCurrentDateStringInTimezone,
+  getCurrentTimeInTimezone,
+} from "@/lib/timezone";
 import { format, isBefore, startOfDay } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import { useDeviceBinding } from "@/hooks/useDeviceBinding";
@@ -21,7 +27,8 @@ import { useAttendance } from "@/hooks/useAttendance";
 import { useAttendanceValidation } from "@/hooks/useAttendanceValidation";
 import { useSecurityCheck } from "@/hooks/useSecurityCheck";
 import { useWorkShifts } from "@/hooks/useWorkShifts";
-import { saveScalabilityConfig, type ScalabilityTier } from "@/lib/scalabilityConfig";
+import { normalizeAttendanceScalabilitySetting, saveAttendanceScalabilitySetting, saveScalabilityConfig } from "@/lib/scalabilityConfig";
+import { setConfiguredPeakWindows } from "@/lib/attendanceResilience";
 import { CheckoutConfirmDialog } from "@/components/employee/CheckoutConfirmDialog";
 import { DesktopBlockedMessage } from "@/components/employee/DesktopBlockedMessage";
 import { DeviceRegistrationDialog } from "@/components/employee/DeviceRegistrationDialog";
@@ -35,6 +42,7 @@ import { HolidayCalendarDialog } from "@/components/employee/HolidayCalendarDial
 import { MutationSection } from "@/components/employee/MutationSection";
 import { EmployeeNotifications } from "@/pages/employee/EmployeeNotifications";
 import { JoinOrganizationCard } from "@/components/employee/JoinOrganizationCard";
+import { EmployeeInactiveAccessState } from "@/components/employee/EmployeeInactiveAccessState";
 import { OrganizationSelector } from "@/components/employee/OrganizationSelector";
 import { EmployeeSidebar } from "@/components/employee/EmployeeSidebar";
 import { SmartAppBanner } from "@/components/common/SmartAppBanner";
@@ -43,7 +51,11 @@ import EmployeeNewsArticles from "@/pages/employee/EmployeeNewsArticles";
 import EmployeeAnnouncements from "@/pages/employee/EmployeeAnnouncements";
 import DOMPurify from "dompurify";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { evaluateAttendanceLogoutGuard } from "@/lib/attendanceLogoutPolicy";
 import { isFaqVisibleToPublic } from "@/lib/faqAudience";
+import { reconcileTodayAttendance } from "@/lib/attendanceRecordSync";
+import { getAndroidBridge } from "@/lib/androidBridge";
+import { getAndroidId } from "@/lib/deviceId";
 import {
   DEFAULT_ORG_MASTER_DATA_MODULES,
   fetchTenantOrgMasterDataModules,
@@ -56,6 +68,10 @@ const LazyDeviceResetDialog = React.lazy(() =>
 const EmployeeActivationPageLazy = React.lazy(() => import("@/components/employee/EmployeeActivationPage").then(m => ({ default: m.EmployeeActivationPage })));
 import { BillingActivationOverlay } from "@/components/employee/BillingActivationOverlay";
 import { hasActiveIndividualBillingCoverage } from "@/lib/employeeBillingCoverage";
+import {
+  isEmployeeNonAttendanceTab,
+  useAttendanceResourceRestriction,
+} from "@/hooks/useAttendanceResourceRestriction";
 import {
   MapPin,
   LogIn,
@@ -98,6 +114,7 @@ interface EmployeeData {
   golongan?: string;
   employee_category?: string;
   tenant_id?: string;
+  is_active?: boolean | null;
   office_id?: string;
   user_id?: string;
   android_id?: string;
@@ -108,7 +125,28 @@ interface EmployeeData {
   flexible_attendance_limit?: number | null;
   opd?: { name: string; code: string };
   work_unit?: { name: string; id: string; enable_auto_shift?: boolean };
-  offices?: { id: string; name: string; latitude?: number; longitude?: number; radius_meters?: number };
+  offices?: {
+    id: string;
+    name: string;
+    latitude?: number;
+    longitude?: number;
+    radius_meters?: number;
+    work_start_time?: string | null;
+    work_end_time?: string | null;
+  };
+  tenants?: {
+    name?: string | null;
+    logo_url?: string | null;
+  } | null;
+}
+
+function isBufferedAttendanceRecord(attendance: AttendanceRecord | null): boolean {
+  const recordId = attendance?.id;
+  return typeof recordId === "string" && (
+    recordId.startsWith("pending-") ||
+    recordId.startsWith("idb-") ||
+    recordId.startsWith("buffer-")
+  );
 }
 
 interface TenantInfo {
@@ -130,6 +168,20 @@ interface AttendanceRecord {
   check_in_latitude: number | null;
   check_in_longitude: number | null;
   status: string;
+  notes?: string | null;
+  is_wfh?: boolean | null;
+  is_flexible_attendance?: boolean | null;
+  flexible_attendance_reason?: string | null;
+}
+
+interface DashboardAttendanceSource {
+  id: string;
+  date: string;
+  check_in_time: string | null;
+  check_out_time: string | null;
+  check_in_latitude: number | null;
+  check_in_longitude: number | null;
+  status: string | null;
   notes?: string | null;
   is_wfh?: boolean | null;
   is_flexible_attendance?: boolean | null;
@@ -191,16 +243,6 @@ const calculateDistance = (lat1: number, lon1: number, lat2: number, lon2: numbe
   return R * c;
 };
 
-// Helper: Ambil tanggal hari ini berdasarkan timezone tenant (YYYY-MM-DD)
-// Catatan: date kolom di DB dipakai sebagai "tanggal lokal" (bukan UTC), sehingga wajib konsisten.
-const getTodayDateString = (timezone: string): string => {
-  try {
-    return format(getCurrentTimeInTimezone(timezone || "Asia/Jakarta"), "yyyy-MM-dd");
-  } catch {
-    return format(getCurrentTimeInTimezone("Asia/Jakarta"), "yyyy-MM-dd");
-  }
-};
-
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const isValidUuid = (value: string | null | undefined): value is string => {
@@ -208,6 +250,28 @@ const isValidUuid = (value: string | null | undefined): value is string => {
 };
 
 const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+const NATIVE_BOOTSTRAP_SESSION_RETRY_COUNT = 8;
+const NATIVE_BOOTSTRAP_SESSION_RETRY_MS = 250;
+
+const mapAttendanceRecordToDashboard = (
+  record: DashboardAttendanceSource | null | undefined
+): AttendanceRecord | null => {
+  if (!record) return null;
+
+  return {
+    id: String(record.id),
+    date: record.date,
+    check_in_time: record.check_in_time,
+    check_out_time: record.check_out_time,
+    check_in_latitude: record.check_in_latitude,
+    check_in_longitude: record.check_in_longitude,
+    status: record.status || "hadir",
+    notes: record.notes,
+    is_wfh: record.is_wfh,
+    is_flexible_attendance: record.is_flexible_attendance,
+    flexible_attendance_reason: record.flexible_attendance_reason,
+  };
+};
 
 interface EmployeeDashboardNewProps {
   readOnlyMode?: boolean;
@@ -216,6 +280,11 @@ interface EmployeeDashboardNewProps {
 export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeDashboardNewProps = {}) {
   const navigate = useNavigate();
   const location = useLocation();
+  const androidBridge = getAndroidBridge();
+  const loginRedirectPath = androidBridge ? "/employee/login?native=1" : "/employee/login";
+  const isNativeBootstrapNavigation =
+    location.pathname === "/employee/native-bootstrap" ||
+    new URLSearchParams(location.search).get("bootstrap") === "1";
   
   // Session management dengan sliding expiration 7 hari
   const sessionManagement = useSessionManagement();
@@ -223,6 +292,8 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   // State untuk loading screen transisi pada dashboard
   const [showLoadingScreen, setShowLoadingScreen] = useState(true);
   const [sessionCheckComplete, setSessionCheckComplete] = useState(false);
+  const [hasRetriedNativeBootstrap, setHasRetriedNativeBootstrap] = useState(false);
+  const [isRetryingNativeBootstrap, setIsRetryingNativeBootstrap] = useState(false);
   
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -241,7 +312,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   const newsRef = React.useRef<NewsItem[]>([]); // Ref untuk mencegah flicker saat data sama
   const [activeTab, setActiveTab] = useState<EmployeeTab>("home");
   const [billingMode, setBillingMode] = useState<string | null>(null);
-  const [timezone, setTimezone] = useState("Asia/Jakarta");
+  const [timezone, setTimezone] = useState(DEFAULT_TIMEZONE);
   const [tenantInfo, setTenantInfo] = useState<TenantInfo | null>(null);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
   const [workDayError, setWorkDayError] = useState<string | null>(null);
@@ -275,9 +346,11 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
     type: null,
     message: ''
   });
+  const restrictionNoticeRef = React.useRef<string | null>(null);
 
   // State untuk user tanpa employee record (registrasi mandiri) dan multi-organisasi
   const [hasNoEmployee, setHasNoEmployee] = useState(false);
+  const [inactiveEmployees, setInactiveEmployees] = useState<EmployeeData[]>([]);
   const [multipleEmployees, setMultipleEmployees] = useState<EmployeeData[]>([]);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string | null>(null);
   const dashboardBasePath = readOnlyMode ? "/dashboard" : "/employee/dashboard";
@@ -285,8 +358,36 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   const isAndroidRuntime = /Android/i.test(runtimeUserAgent);
   const bottomSafeAreaInset = isAndroidRuntime ? "0px" : "env(safe-area-inset-bottom)";
   const attendanceActionStickyBottom = `calc(${bottomSafeAreaInset} + 4.25rem)`;
+  const attendanceResourceRestriction = useAttendanceResourceRestriction({
+    tenantId: employee?.tenant_id || null,
+    tenantTimezone: tenantInfo?.timezone || null,
+    organizationType: tenantInfo?.organization_type || null,
+    officeScheduleFallback: {
+      work_start_time: employee?.offices?.work_start_time || null,
+      work_end_time: employee?.offices?.work_end_time || null,
+    },
+  });
 
   const navigateToTab = useCallback((tab: EmployeeTab) => {
+    if (attendanceResourceRestriction.isRestrictedNow && isEmployeeNonAttendanceTab(tab)) {
+      toast.info(
+        attendanceResourceRestriction.restrictionReason ||
+          "Akses ke halaman non-absensi sedang dibatasi untuk memprioritaskan proses absensi.",
+      );
+      tab = "home";
+    }
+    if (tab === "billing" || tab === "activation") {
+      if (attendanceResourceRestriction.isRestrictedNow) {
+        toast.info(
+          attendanceResourceRestriction.restrictionReason ||
+            "Akses ke halaman non-absensi sedang dibatasi untuk memprioritaskan proses absensi.",
+        );
+        tab = "home";
+      } else {
+        navigate("/employee/billing");
+        return;
+      }
+    }
     if (tab === "billing" || tab === "activation") {
       navigate("/employee/billing");
       return;
@@ -306,10 +407,10 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       },
       { replace: true }
     );
-  }, [dashboardBasePath, location.search, navigate]);
+  }, [attendanceResourceRestriction.isRestrictedNow, attendanceResourceRestriction.restrictionReason, dashboardBasePath, location.search, navigate]);
 
   // Leave request hook
-  const { createLeaveRequest, isSubmitting: isSubmittingLeave } = useLeaveRequests(employee?.id || null);
+  const { createLeaveRequest, isSubmitting: isSubmittingLeave } = useLeaveRequests(employee?.id || null, employee?.tenant_id || null);
 
   // Handler for leave request from form
   const handleLeaveRequest = async (data: {
@@ -347,7 +448,12 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
     checkIn: saveCheckInOffline,
     checkOut: saveCheckOutOffline,
     syncStats: offlineSyncStats,
-  } = useAttendance(employee?.id || null, employee?.office_id || null);
+  } = useAttendance(employee?.id || null, employee?.office_id || null, timezone);
+
+  useEffect(() => {
+    todayAttendanceRef.current = null;
+    setTodayAttendance(null);
+  }, [employee?.id]);
 
   // Handler ketika loading screen selesai
   const handleLoadingComplete = useCallback(() => {
@@ -358,30 +464,88 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   useEffect(() => {
     // Tunggu sampai loading screen selesai DAN session check selesai
     if (sessionCheckComplete && !sessionManagement.isChecking) {
+      if (user && session) {
+        setShowLoadingScreen(false);
+        return;
+      }
+
+      console.info("[employee-dashboard] session-check", {
+        isValid: sessionManagement.isValid,
+        hasSession: Boolean(sessionManagement.session),
+        hasLocalSession: Boolean(session),
+        isNativeBootstrapNavigation,
+        hasRetriedNativeBootstrap,
+        pathname: location.pathname,
+        search: location.search,
+      });
       if (sessionManagement.isValid && sessionManagement.session) {
         // Sesi valid, set user dan session lalu tampilkan dashboard
         setUser(sessionManagement.user);
         setSession(sessionManagement.session);
         setShowLoadingScreen(false);
+      } else if (isNativeBootstrapNavigation && !hasRetriedNativeBootstrap) {
+        setHasRetriedNativeBootstrap(true);
+        setIsRetryingNativeBootstrap(true);
+        void (async () => {
+          for (let attempt = 0; attempt < NATIVE_BOOTSTRAP_SESSION_RETRY_COUNT; attempt += 1) {
+            const { data: { session } } = await supabase.auth.getSession();
+            console.info("[employee-dashboard] bootstrap-retry", {
+              attempt,
+              hasSession: Boolean(session),
+            });
+            if (session) {
+              setUser(session.user);
+              setSession(session);
+              setShowLoadingScreen(false);
+              setIsRetryingNativeBootstrap(false);
+              return;
+            }
+
+            await sleep(NATIVE_BOOTSTRAP_SESSION_RETRY_MS);
+          }
+
+          setIsRetryingNativeBootstrap(false);
+          console.warn("[employee-dashboard] redirect:login reason=bootstrap-session-missing");
+          navigate(loginRedirectPath, { replace: true });
+        })();
+      } else if (isRetryingNativeBootstrap) {
+        console.info("[employee-dashboard] waiting:native-bootstrap-retry");
       } else {
         // Sesi tidak valid, redirect ke login
-        navigate("/employee/login", { replace: true });
+        console.warn("[employee-dashboard] redirect:login reason=session-invalid");
+        navigate(loginRedirectPath, { replace: true });
       }
     }
-  }, [sessionCheckComplete, sessionManagement.isChecking, sessionManagement.isValid, sessionManagement.session, sessionManagement.user, navigate]);
+  }, [
+    location.pathname,
+    location.search,
+    hasRetriedNativeBootstrap,
+    isNativeBootstrapNavigation,
+    isRetryingNativeBootstrap,
+    loginRedirectPath,
+    navigate,
+    sessionCheckComplete,
+    session,
+    sessionManagement.isChecking,
+    sessionManagement.isValid,
+    sessionManagement.session,
+    sessionManagement.user,
+    user,
+  ]);
 
   // Listen untuk auth state changes - HANYA untuk SIGNED_OUT
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_OUT") {
-        navigate("/employee/login", { replace: true });
+        console.warn("[employee-dashboard] redirect:login reason=signed-out");
+        navigate(loginRedirectPath, { replace: true });
       }
       // TIDAK update user/session di sini untuk mencegah flicker
       // User sudah diset dari sessionManagement
     });
 
     return () => subscription.unsubscribe();
-  }, [navigate]);
+  }, [loginRedirectPath, navigate]);
 
   // Fetch data - HANYA sekali saat user tersedia
   useEffect(() => {
@@ -391,6 +555,31 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       void fetchUnreadNotificationCountRef.current();
     }
   }, [user]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const channel = supabase
+      .channel(`employee-access-${user.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "employees",
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          hasFetchedRef.current = false;
+          void fetchDataRef.current();
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
 
   // Fetch unread notification count
   const fetchUnreadNotificationCount = useCallback(async () => {
@@ -449,6 +638,24 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   // Sinkronkan tab dari query param, contoh: /employee/dashboard?tab=billing
   useEffect(() => {
     const tab = new URLSearchParams(location.search).get("tab");
+    if (tab && attendanceResourceRestriction.isRestrictedNow && isEmployeeNonAttendanceTab(tab)) {
+      if (restrictionNoticeRef.current !== tab) {
+        toast.info(
+          attendanceResourceRestriction.restrictionReason ||
+            "Akses ke halaman non-absensi sedang dibatasi untuk memprioritaskan proses absensi.",
+        );
+        restrictionNoticeRef.current = tab;
+      }
+      setActiveTab("home");
+      navigate(
+        {
+          pathname: dashboardBasePath,
+          search: "",
+        },
+        { replace: true },
+      );
+      return;
+    }
     if (tab === "billing" || tab === "activation") {
       navigate("/employee/billing", { replace: true });
       return;
@@ -472,25 +679,33 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       return;
     }
     setActiveTab("home");
-  }, [location.search, navigate]);
+  }, [attendanceResourceRestriction.isRestrictedNow, attendanceResourceRestriction.restrictionReason, dashboardBasePath, location.search, navigate]);
+
+  useEffect(() => {
+    if (!attendanceResourceRestriction.isRestrictedNow) {
+      restrictionNoticeRef.current = null;
+      return;
+    }
+
+    if (!isEmployeeNonAttendanceTab(activeTab)) {
+      return;
+    }
+
+    if (restrictionNoticeRef.current !== activeTab) {
+      toast.info(
+        attendanceResourceRestriction.restrictionReason ||
+          "Akses ke halaman non-absensi sedang dibatasi untuk memprioritaskan proses absensi.",
+      );
+      restrictionNoticeRef.current = activeTab;
+    }
+
+    void navigateToTab("home");
+  }, [activeTab, attendanceResourceRestriction.isRestrictedNow, attendanceResourceRestriction.restrictionReason, navigateToTab]);
 
   // Sinkronisasi state absensi dari offline-first hook ke UI dashboard ini
   useEffect(() => {
-    if (!offlineTodayAttendance) return;
-
-    const mappedRecord: AttendanceRecord = {
-      id: String(offlineTodayAttendance.id),
-      date: offlineTodayAttendance.date,
-      check_in_time: offlineTodayAttendance.check_in_time,
-      check_out_time: offlineTodayAttendance.check_out_time,
-      check_in_latitude: offlineTodayAttendance.check_in_latitude,
-      check_in_longitude: offlineTodayAttendance.check_in_longitude,
-      status: offlineTodayAttendance.status || "hadir",
-      notes: offlineTodayAttendance.notes,
-      is_wfh: offlineTodayAttendance.is_wfh,
-      is_flexible_attendance: offlineTodayAttendance.is_flexible_attendance,
-      flexible_attendance_reason: offlineTodayAttendance.flexible_attendance_reason,
-    };
+    const mappedRecord = mapAttendanceRecordToDashboard(offlineTodayAttendance);
+    if (!mappedRecord) return;
 
     const currentAtt = todayAttendanceRef.current;
     const isChanged =
@@ -584,42 +799,21 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
 
   // Get current device ID menggunakan utility tunggal
   const getCurrentDeviceId = useCallback((): string => {
-    const storedId = localStorage.getItem("web_device_id");
-    if (storedId) return storedId;
-    
-    // Generate ID stabil (tanpa canvas)
-    const fingerprint = [
-      navigator.userAgent,
-      navigator.language,
-      screen.width,
-      screen.height,
-      screen.colorDepth,
-      navigator.hardwareConcurrency || 0,
-      navigator.maxTouchPoints || 0,
-      Intl.DateTimeFormat().resolvedOptions().timeZone,
-    ].join("|");
-
-    let hash = 0;
-    for (let i = 0; i < fingerprint.length; i++) {
-      const char = fingerprint.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-
-    const deviceId = `WEB-${Math.abs(hash).toString(16).toUpperCase().padStart(16, "0")}`;
-    localStorage.setItem("web_device_id", deviceId);
-    
-    return deviceId;
+    return getAndroidId(true);
   }, []);
 
   // Fungsi untuk cek apakah hari ini libur
-  const checkTodayHoliday = useCallback(async (tenantId: string, organizationType?: string | null) => {
+  const checkTodayHoliday = useCallback(async (
+    tenantId: string,
+    organizationType?: string | null,
+    tenantTimezone: string = DEFAULT_TIMEZONE
+  ) => {
     try {
-      const today = new Date();
+      const today = getCurrentTimeInTimezone(tenantTimezone || DEFAULT_TIMEZONE);
       const year = today.getFullYear();
       const month = today.getMonth() + 1;
       const day = today.getDate().toString().padStart(2, "0");
-      const dateStr = today.toISOString().split("T")[0];
+      const dateStr = getCurrentDateStringInTimezone(tenantTimezone || DEFAULT_TIMEZONE);
 
       // Cek libur nasional
       const { data: nationalHoliday } = await supabase
@@ -690,6 +884,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       reportError(error, "employee.dashboard.check_today_holiday", {
         tenant_id: tenantId,
         organization_type: organizationType ?? null,
+        timezone: tenantTimezone,
       });
       setWorkDayError(null);
     }
@@ -733,28 +928,47 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
 
       stage = "fetch_employees";
       // Fetch ALL employee records for this user (multi-organisasi support)
-      const { data: allEmpData, error: empError } = await supabase
+      const { data: employeeRows, error: empError } = await supabase
         .from("employees")
         .select("*, opd(*), work_unit:work_unit_id(*), offices:office_id(*), tenants:tenant_id(name, logo_url)")
-        .eq("user_id", effectiveUserId)
-        .eq("is_active", true);
+        .eq("user_id", effectiveUserId);
 
       if (empError) throw empError;
 
+      const allEmployees = (employeeRows || []) as EmployeeData[];
+      const activeEmployees = allEmployees.filter((item) => item.is_active !== false);
+      const inactiveEmployeeRows = allEmployees.filter((item) => item.is_active === false);
+
       // Jika tidak ada employee record sama sekali
-      if (!allEmpData || allEmpData.length === 0) {
+      if (allEmployees.length === 0) {
         setHasNoEmployee(true);
+        setInactiveEmployees([]);
+        setEmployee(null);
+        setMultipleEmployees([]);
+        setIsLoading(false);
+        return;
+      }
+
+      if (activeEmployees.length === 0) {
+        setHasNoEmployee(false);
+        setInactiveEmployees(inactiveEmployeeRows);
+        setEmployee(null);
+        setMultipleEmployees([]);
+        setTenantInfo(null);
+        setAttendanceError(null);
+        setDashboardLoadIssue(null);
         setIsLoading(false);
         return;
       }
 
       setHasNoEmployee(false);
-      setMultipleEmployees(allEmpData);
+      setInactiveEmployees([]);
+      setMultipleEmployees(activeEmployees);
 
       // Pilih employee berdasarkan selectedEmployeeId atau default ke yang pertama
-      let empData = allEmpData[0];
+      let empData = activeEmployees[0];
       if (selectedEmployeeId) {
-        const found = allEmpData.find((e: EmployeeData) => e.id === selectedEmployeeId);
+        const found = activeEmployees.find((e: EmployeeData) => e.id === selectedEmployeeId);
         if (found) empData = found;
       }
       
@@ -803,8 +1017,6 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
         );
         return;
       }
-      const todayDayOfWeek = new Date().getDay() === 0 ? 7 : new Date().getDay();
-
       // Semua promise independen dijalankan bersamaan
       stage = "fetch_batch_primary";
       const [tenantResult, deviceUpdateResult, scalabilityResult] = await Promise.all([
@@ -859,15 +1071,16 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
         setBillingMode(tenantData.billing_mode || "centralized");
       }
 
-      const scalabilityValue = scalabilityResult?.data?.value as { tier?: string; effective_tier?: string } | null;
-      const tier = scalabilityValue?.effective_tier || scalabilityValue?.tier;
-      if (tier && ["small", "medium", "large", "enterprise"].includes(tier)) {
-        saveScalabilityConfig(tier as ScalabilityTier);
-      }
+      const scalabilitySetting = normalizeAttendanceScalabilitySetting(scalabilityResult?.data?.value);
+      saveScalabilityConfig(scalabilitySetting.effective_tier);
+      saveAttendanceScalabilitySetting(scalabilitySetting);
+      setConfiguredPeakWindows(scalabilitySetting.peak_hour_windows, scalabilitySetting.peak_hour_enabled);
 
       // Sekarang kita punya timezone & organization_type, jalankan batch kedua secara paralel
-      const tz = tenantData?.timezone || timezone || "Asia/Jakarta";
-      const today = getTodayDateString(tz);
+      const tz = tenantData?.timezone || timezone || DEFAULT_TIMEZONE;
+      const today = getCurrentDateStringInTimezone(tz);
+      const todayInTimezone = getCurrentTimeInTimezone(tz);
+      const todayDayOfWeek = todayInTimezone.getDay() === 0 ? 7 : todayInTimezone.getDay();
       const institutionType = tenantData?.organization_type === "pemerintah_daerah" || tenantData?.organization_type === "instansi_pemerintah" 
         ? "pemerintahan" : tenantData?.organization_type || null;
 
@@ -898,17 +1111,22 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       if (workHourResult.error) partialScopes.push("work_hours_today");
 
       // Process attendance result (anti-flicker)
-      const attData = (attResult.data && attResult.data.length > 0 ? attResult.data[0] : null) as AttendanceRecord | null;
+      const attData = mapAttendanceRecordToDashboard(
+        (attResult.data && attResult.data.length > 0 ? attResult.data[0] : null) as DashboardAttendanceSource | null
+      );
       const currentAtt = todayAttendanceRef.current;
+      const nextAttendance = reconcileTodayAttendance(attData, currentAtt);
       const isDataDifferent = 
-        (!currentAtt && attData) ||
-        (currentAtt && !attData) ||
-        (currentAtt?.check_in_time !== attData?.check_in_time) ||
-        (currentAtt?.check_out_time !== attData?.check_out_time);
+        (!currentAtt && nextAttendance) ||
+        (currentAtt && !nextAttendance) ||
+        (currentAtt?.id !== nextAttendance?.id) ||
+        (currentAtt?.check_in_time !== nextAttendance?.check_in_time) ||
+        (currentAtt?.check_out_time !== nextAttendance?.check_out_time) ||
+        (currentAtt?.status !== nextAttendance?.status);
       
       if (isDataDifferent) {
-        todayAttendanceRef.current = attData;
-        setTodayAttendance(attData);
+        todayAttendanceRef.current = nextAttendance;
+        setTodayAttendance(nextAttendance);
       }
 
       // Process work hours
@@ -918,7 +1136,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
       }
 
       // 5. Cek hari libur (berisi beberapa sub-query, tapi non-blocking untuk UI)
-      checkTodayHoliday(tenantId, tenantData?.organization_type);
+      checkTodayHoliday(tenantId, tenantData?.organization_type, tz);
 
       if (partialScopes.length > 0) {
         const partialRef = reportError(new Error("Employee dashboard partial data load"), "employee.dashboard.fetch_data_partial", {
@@ -1163,9 +1381,25 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
     await proceedWithFlexibleCheckIn(reason);
   };
 
+  const isAttendanceActionClientBlocked =
+    !readOnlyMode &&
+    securityCheck.securityResult.clientMode === "mobile_browser" &&
+    !securityCheck.securityResult.isAndroidApp &&
+    !securityCheck.securityResult.isIphoneSafari;
+
+  const attendanceActionBlockedReason =
+    securityCheck.securityResult.reason ||
+    "Absensi hanya tersedia melalui aplikasi internal Android atau Safari iPhone yang diizinkan organisasi.";
+
   // Proses check-in normal (dalam radius kantor)
   const proceedWithCheckInNormal = async (_shiftId: string | null, flexibleReason: string | null) => {
     if (!employee) return;
+    if (isAttendanceActionClientBlocked) {
+      toast.error("Absensi Tidak Tersedia", {
+        description: attendanceActionBlockedReason,
+      });
+      return;
+    }
 
     try {
       let lat: number, lng: number;
@@ -1219,7 +1453,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
         statusText = ` (${flexibleReason})`;
       }
 
-      toast.success(`Absen Masuk Tersimpan${statusText}`, {
+      toast.success(`Absen Masuk Tersimpan di Perangkat${statusText}`, {
         description: result.message || `Lokasi: ${lat.toFixed(4)}, ${lng.toFixed(4)}`,
       });
     } catch (error: unknown) {
@@ -1239,6 +1473,12 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
 
   const handleCheckOut = async () => {
     if (!employee || !todayAttendance) return;
+    if (isAttendanceActionClientBlocked) {
+      toast.error("Absensi Tidak Tersedia", {
+        description: attendanceActionBlockedReason,
+      });
+      return;
+    }
     
     // Skip jika id masih pending
     if (todayAttendance.id.startsWith('pending-')) {
@@ -1272,7 +1512,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
         return;
       }
 
-      toast.success("Absen Pulang Tersimpan", {
+      toast.success("Absen Pulang Tersimpan di Perangkat", {
         description: result.message || `Lokasi: ${lat.toFixed(4)}, ${lng.toFixed(4)}`,
       });
     } catch (error: unknown) {
@@ -1306,8 +1546,35 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   };
 
   const handleLogout = async () => {
-    await supabase.auth.signOut();
-    navigate("/employee/login");
+    try {
+      const logoutGuard = await evaluateAttendanceLogoutGuard(employee?.id || null);
+
+      if (logoutGuard.shouldBlock) {
+        toast.error("Logout ditahan", {
+          description: `${logoutGuard.pendingCount} data absensi masih menunggu sinkronisasi. Selesaikan sinkronisasi terlebih dahulu sebelum logout.`,
+        });
+        return;
+      }
+
+      if (logoutGuard.shouldWarn) {
+        const confirmed = window.confirm(
+          `${logoutGuard.pendingCount} data absensi masih menunggu sinkronisasi. Logout akan membersihkan sesi, tetapi data lokal tetap dipertahankan. Lanjut logout?`,
+        );
+        if (!confirmed) {
+          return;
+        }
+      }
+
+      await supabase.auth.signOut();
+      navigate(loginRedirectPath);
+    } catch (error) {
+      const errorRef = reportError(error, "employee.dashboard.logout", {
+        employee_id: employee?.id || null,
+      });
+      toast.error(appendErrorReference("Gagal logout", errorRef), {
+        description: "Silakan coba lagi beberapa saat.",
+      });
+    }
   };
 
   const currentTime = getCurrentTimeInTimezone(timezone);
@@ -1359,7 +1626,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
           <div className="text-center">
             <Button variant="ghost" onClick={async () => {
               await supabase.auth.signOut();
-              navigate("/employee/login");
+              navigate(loginRedirectPath);
             }}>
               Logout
             </Button>
@@ -1369,15 +1636,29 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
     );
   }
 
+  if (inactiveEmployees.length > 0) {
+    return (
+      <EmployeeInactiveAccessState
+        records={inactiveEmployees.map((item) => ({
+          id: item.id,
+          name: item.name,
+          tenantName: item.tenants?.name || null,
+          employeeCategory: item.employee_category || null,
+        }))}
+        onLogout={handleLogout}
+      />
+    );
+  }
+
   // Ikuti pengaturan keamanan dari /admin/attendance-security.
   // readOnlyMode (/dashboard) tetap tidak memblokir akses.
   const isSecurityBlocked = !readOnlyMode && securityCheck.securityResult.isBlocked;
+  const shouldShowBlockedPage = isSecurityBlocked && !isAttendanceActionClientBlocked;
 
-  if (isSecurityBlocked) {
+  if (shouldShowBlockedPage) {
     return (
       <DesktopBlockedMessage 
         organizationName={tenantInfo?.name}
-        apkUrl={null}
         reason={securityCheck.securityResult.reason}
       />
     );
@@ -1417,6 +1698,8 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
   const proceedWithCheckIn = async () => {
     await proceedWithCheckInNormal(selectedShiftId, pendingFlexibleReason);
   };
+
+  const hasBufferedTodayAttendance = isBufferedAttendanceRecord(todayAttendance);
 
   return (
     <div className="min-h-screen bg-background pb-20">
@@ -1635,10 +1918,22 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
                   <div>
                     <p className="text-sm text-muted-foreground">Status Hari Ini</p>
                     {todayAttendance ? (
-                      <Badge className="mt-1 status-hadir">
-                        <CheckCircle2 className="w-3 h-3 mr-1" />
-                        Sudah Absen
-                      </Badge>
+                      hasBufferedTodayAttendance ? (
+                        <div className="space-y-1">
+                          <Badge variant="secondary" className="mt-1 border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300">
+                            <Clock className="w-3 h-3 mr-1" />
+                            Tersimpan Lokal
+                          </Badge>
+                          <p className="text-xs text-muted-foreground">
+                            Data belum final sampai server mengonfirmasi.
+                          </p>
+                        </div>
+                      ) : (
+                        <Badge className="mt-1 status-hadir">
+                          <CheckCircle2 className="w-3 h-3 mr-1" />
+                          Sudah Absen
+                        </Badge>
+                      )
                     ) : (
                       <Badge variant="secondary" className="mt-1">
                         Belum Absen
@@ -1736,6 +2031,27 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
                   </div>
                 )}
 
+                {offlineSyncStats.stalePendingCount > 0 && (
+                  <div className="p-3 bg-destructive/10 border border-destructive/30 rounded-lg mb-4">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-medium text-destructive">
+                          Sinkronisasi absensi tertunda terlalu lama
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {offlineSyncStats.stalePendingCount} data belum tercatat final di server
+                          {typeof offlineSyncStats.oldestPendingAgeMinutes === "number"
+                            ? ` selama sekitar ${offlineSyncStats.oldestPendingAgeMinutes} menit`
+                            : ""}
+                          . Pastikan koneksi stabil dan jangan hapus data aplikasi sebelum sinkronisasi selesai.
+                          {offlineSyncStats.staleWarningRef ? ` (Ref: ${offlineSyncStats.staleWarningRef})` : ""}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 {!readOnlyMode && (() => {
                   // Hitung kondisi disable di luar JSX untuk clarity
                   const hasCheckedIn = !!(todayAttendance?.check_in_time);
@@ -1747,14 +2063,35 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
                     todayAttendance?.id?.startsWith('buffer-');
                   const deviceInvalid = deviceBinding.isEnabled && !deviceBinding.isDeviceValid && !deviceBinding.isFirstTime;
                   
-                  const disableCheckIn = isSubmitting || hasCheckedIn || !!attendanceError || !!workDayError || deviceInvalid || isPending || isOptimisticPending;
-                  const disableCheckOut = isSubmitting || !hasCheckedIn || hasCheckedOut || !!attendanceError || isPending || isOptimisticPending;
+                  const disableCheckIn =
+                    isSubmitting ||
+                    hasCheckedIn ||
+                    !!attendanceError ||
+                    !!workDayError ||
+                    deviceInvalid ||
+                    isPending ||
+                    isOptimisticPending ||
+                    isAttendanceActionClientBlocked;
+                  const disableCheckOut =
+                    isSubmitting ||
+                    !hasCheckedIn ||
+                    hasCheckedOut ||
+                    !!attendanceError ||
+                    isPending ||
+                    isOptimisticPending ||
+                    isAttendanceActionClientBlocked;
                   
                   return (
                     <div
                       className="sticky z-20 -mx-1 rounded-xl border border-border/60 bg-card/95 p-2 backdrop-blur supports-[backdrop-filter]:bg-card/80 sm:static sm:mx-0 sm:rounded-none sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none"
                       style={{ bottom: attendanceActionStickyBottom }}
                     >
+                      {isAttendanceActionClientBlocked && (
+                        <div className="mb-3 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                          <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+                          <span>{attendanceActionBlockedReason}</span>
+                        </div>
+                      )}
                       <div className="grid grid-cols-2 gap-3">
                         <Button
                           size="lg"
@@ -1764,6 +2101,11 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
                         >
                           {(isSubmitting && pendingState.type === 'check_in') || (pendingState.status === 'processing' && pendingState.type === 'check_in') ? (
                             <Loader2 className="w-5 h-5 animate-spin" />
+                          ) : isOptimisticPending ? (
+                            <>
+                              <Clock className="w-5 h-5 mr-2 text-amber-400" />
+                              Tersimpan Lokal
+                            </>
                           ) : hasCheckedIn ? (
                             <>
                               <CheckCircle2 className="w-5 h-5 mr-2 text-green-400" />
@@ -1785,6 +2127,11 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
                         >
                           {(isSubmitting && pendingState.type === 'check_out') || (pendingState.status === 'processing' && pendingState.type === 'check_out') ? (
                             <Loader2 className="w-5 h-5 animate-spin" />
+                          ) : isOptimisticPending && hasCheckedOut ? (
+                            <>
+                              <Clock className="w-5 h-5 mr-2 text-amber-400" />
+                              Pulang Lokal
+                            </>
                           ) : hasCheckedOut ? (
                             <>
                               <CheckCircle2 className="w-5 h-5 mr-2 text-green-400" />
@@ -1901,6 +2248,7 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
           ].map((item) => (
             <button
               key={item.id}
+              aria-label={`employee-dashboard-tab-${item.id}`}
               className={`flex flex-col items-center justify-center gap-1 transition-colors ${
                 activeTab === item.id
                   ? "text-primary"
@@ -2334,7 +2682,7 @@ function RequestsTab({ employeeId, tenantId }: { employeeId?: string; tenantId?:
   }, [tenantId]);
   
   // Leave request hook
-  const { createLeaveRequest, isSubmitting: isSubmittingLeave } = useLeaveRequests(employeeId || null);
+  const { createLeaveRequest, isSubmitting: isSubmittingLeave } = useLeaveRequests(employeeId || null, tenantId || null);
 
   // Handler for leave request from form
   const handleLeaveRequest = async (data: {
@@ -2543,6 +2891,7 @@ function RequestsTab({ employeeId, tenantId }: { employeeId?: string; tenantId?:
               <LeaveRequestForm 
                 onSubmit={handleLeaveRequest}
                 isSubmitting={isSubmittingLeave}
+                tenantId={tenantId || null}
               />
             </div>
 
@@ -3202,7 +3551,12 @@ function ProfileTab({ employee, onLogout, deviceBinding }: ProfileTabProps) {
         } : null}
       />
 
-      <Button variant="destructive" className="w-full" onClick={onLogout}>
+      <Button
+        variant="destructive"
+        className="w-full"
+        aria-label="employee-dashboard-logout-button"
+        onClick={onLogout}
+      >
         <LogOut className="w-4 h-4 mr-2" />
         Keluar
       </Button>
@@ -3271,6 +3625,7 @@ function TodayAttendanceNotes({ attendance, timezone, workSchedule }: {
   };
   
   const latenessInfo = getLatenessInfo();
+  const isBufferedRecord = isBufferedAttendanceRecord(attendance);
   // Tentukan status dan keterangan
   const getAttendanceInfo = () => {
     if (!attendance) {
@@ -3329,6 +3684,18 @@ function TodayAttendanceNotes({ attendance, timezone, workSchedule }: {
     // Jika sudah check in
     const checkInTime = formatTimeToTimezone(attendance.check_in_time!, timezone);
     const checkOutTime = hasCheckOut ? formatTimeToTimezone(attendance.check_out_time!, timezone) : null;
+
+    if (isBufferedRecord) {
+      return {
+        status: "Tersimpan Lokal",
+        statusClass: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
+        keterangan: hasCheckOut
+          ? `Absensi ${checkInTime} - ${checkOutTime} baru tersimpan di perangkat. Status final menunggu sinkronisasi server.`
+          : `Absen masuk pukul ${checkInTime} baru tersimpan di perangkat. Status final menunggu sinkronisasi server.`,
+        icon: Clock,
+        iconClass: "text-amber-500"
+      };
+    }
 
     // Jika WFH
     if (attendance.is_wfh) {

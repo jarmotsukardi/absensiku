@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { supabasePublishableKey, supabaseUrl } from "@/integrations/supabase/env";
 import { Button } from "@/components/ui/button";
@@ -9,13 +9,18 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { toast } from "sonner";
 import { Loader2, UserPlus, AlertCircle, CheckCircle2 } from "lucide-react";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { PENDING_INVITATION_CODE_STORAGE_KEY } from "@/lib/employeeAuthRoutes";
 
 interface JoinOrganizationCardProps {
   onSuccess: () => void;
 }
 
 export function JoinOrganizationCard({ onSuccess }: JoinOrganizationCardProps) {
-  const [invitationCode, setInvitationCode] = useState("");
+  const savedInvitationCode = useMemo(() => {
+    if (typeof window === "undefined") return "";
+    return window.localStorage.getItem(PENDING_INVITATION_CODE_STORAGE_KEY)?.trim() || "";
+  }, []);
+  const [invitationCode, setInvitationCode] = useState(savedInvitationCode);
   const [isLoading, setIsLoading] = useState(false);
 
   const handleJoinOrganization = async (e: React.FormEvent) => {
@@ -79,6 +84,9 @@ export function JoinOrganizationCard({ onSuccess }: JoinOrganizationCardProps) {
           }
 
           toast.success("Berhasil bergabung ke organisasi!");
+          if (typeof window !== "undefined") {
+            window.localStorage.removeItem(PENDING_INVITATION_CODE_STORAGE_KEY);
+          }
           setInvitationCode("");
           onSuccess();
           return;
@@ -100,6 +108,9 @@ export function JoinOrganizationCard({ onSuccess }: JoinOrganizationCardProps) {
       }
 
       toast.success(`Berhasil bergabung ke ${String(result.tenant_name || "organisasi")}!`);
+      if (typeof window !== "undefined") {
+        window.localStorage.removeItem(PENDING_INVITATION_CODE_STORAGE_KEY);
+      }
       setInvitationCode("");
       onSuccess();
     } catch (error: unknown) {
@@ -127,6 +138,15 @@ export function JoinOrganizationCard({ onSuccess }: JoinOrganizationCardProps) {
       </CardHeader>
       <CardContent>
         <form onSubmit={handleJoinOrganization} className="space-y-4">
+          {savedInvitationCode ? (
+            <Alert>
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>
+                Kode undangan dari percobaan pendaftaran sebelumnya sudah diisikan otomatis. Setelah akun email selesai dibuat, lanjutkan proses bergabung dari sini.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
           <div className="space-y-2">
             <Label htmlFor="invitation-code">Kode Undangan</Label>
             <div className="relative">

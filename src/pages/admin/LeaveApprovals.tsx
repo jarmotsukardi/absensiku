@@ -56,6 +56,7 @@ import { id } from "date-fns/locale";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import { processLeaveApprovalStep, processLeaveRejection } from "@/lib/leaveApprovalActions";
 
 interface LeaveRequest {
   id: string;
@@ -68,7 +69,16 @@ interface LeaveRequest {
   created_at: string;
   is_half_day: boolean;
   attachment_url: string | null;
+  document_reference_number?: string | null;
+  document_reference_date?: string | null;
+  document_reference_issuer?: string | null;
+  document_reference_notes?: string | null;
   rejection_reason?: string;
+  leave_type_id?: string | null;
+  approval_type_code?: string | null;
+  current_approval_level?: number | null;
+  required_approval_levels?: number | null;
+  approval_history?: Array<Record<string, unknown>> | null;
   employee?: {
     name: string;
     email: string;
@@ -219,17 +229,16 @@ export default function LeaveApprovals() {
     try {
       setIsRetrying(false);
       const approverEmployeeId = await getApproverEmployeeId();
-      const { error } = await withExponentialBackoff(
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Sesi login tidak valid. Silakan login ulang.");
+      const result = await withExponentialBackoff(
         () =>
           withTimeout(
-            supabase
-              .from("leave_requests")
-              .update({
-                status: "disetujui",
-                approved_by: approverEmployeeId,
-                approved_at: new Date().toISOString(),
-              })
-              .eq("id", selectedRequest.id),
+            processLeaveApprovalStep({
+              request: selectedRequest,
+              approverUserId: user.id,
+              approverEmployeeId,
+            }),
             LEAVE_APPROVALS_QUERY_TIMEOUT_MS,
             "admin.leave-approvals.approve timeout"
           ),
@@ -239,9 +248,30 @@ export default function LeaveApprovals() {
           onRetry: () => setIsRetrying(true),
         }
       );
-      if (error) throw error;
-      toast.success(`Pengajuan ${selectedRequest.employee?.name || "pegawai"} telah disetujui`);
-      setRequests(prev => prev.map(r => r.id === selectedRequest.id ? { ...r, status: "disetujui" } : r));
+      if (!result.updated) {
+        toast.warning("Pengajuan sudah diproses admin lain. Data disegarkan.");
+        await fetchData();
+        return;
+      }
+      toast.success(
+        result.isFinalApproval
+          ? `Pengajuan ${selectedRequest.employee?.name || "pegawai"} telah disetujui`
+          : `Tahap persetujuan ${result.currentApprovalLevel}/${result.requiredApprovalLevels} tersimpan`,
+      );
+      setRequests(prev =>
+        prev.map((r) =>
+          r.id === selectedRequest.id
+            ? {
+                ...r,
+                status: result.isFinalApproval ? "disetujui" : "menunggu",
+                current_approval_level: result.isFinalApproval
+                  ? result.requiredApprovalLevels
+                  : result.currentApprovalLevel + 1,
+                required_approval_levels: result.requiredApprovalLevels,
+              }
+            : r,
+        ),
+      );
       setSelectedRequest(null);
       setActionType(null);
     } catch (error: unknown) {
@@ -263,18 +293,16 @@ export default function LeaveApprovals() {
     try {
       setIsRetrying(false);
       const approverEmployeeId = await getApproverEmployeeId();
-      const { error } = await withExponentialBackoff(
+      const { data: { user } } = await supabase.auth.getUser();
+      const result = await withExponentialBackoff(
         () =>
           withTimeout(
-            supabase
-              .from("leave_requests")
-              .update({
-                status: "ditolak",
-                rejection_reason: rejectionReason,
-                approved_by: approverEmployeeId,
-                approved_at: new Date().toISOString(),
-              })
-              .eq("id", selectedRequest.id),
+            processLeaveRejection({
+              request: selectedRequest,
+              approverUserId: user?.id || null,
+              approverEmployeeId,
+              rejectionReason,
+            }),
             LEAVE_APPROVALS_QUERY_TIMEOUT_MS,
             "admin.leave-approvals.reject timeout"
           ),
@@ -284,7 +312,11 @@ export default function LeaveApprovals() {
           onRetry: () => setIsRetrying(true),
         }
       );
-      if (error) throw error;
+      if (!result.updated) {
+        toast.warning("Pengajuan sudah diproses admin lain. Data disegarkan.");
+        await fetchData();
+        return;
+      }
       toast.success(`Pengajuan ${selectedRequest.employee?.name || "pegawai"} telah ditolak`);
       setRequests(prev => prev.map(r => r.id === selectedRequest.id ? { ...r, status: "ditolak" } : r));
       setSelectedRequest(null);
@@ -443,6 +475,11 @@ export default function LeaveApprovals() {
                         <TableCell><Badge variant="outline">{leaveTypeLabels[req.leave_type]}</Badge></TableCell>
                         <TableCell>
                           <div className="flex items-center gap-1 text-sm"><Calendar className="h-3 w-3" />{format(new Date(req.start_date), "d MMM", { locale: id })}{req.start_date !== req.end_date && <> - {format(new Date(req.end_date), "d MMM", { locale: id })}</>}</div>
+                          {req.document_reference_number ? (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Ref: {req.document_reference_number}
+                            </p>
+                          ) : null}
                         </TableCell>
                         <TableCell><Badge variant={statusLabels[req.status]?.variant}>{statusLabels[req.status]?.label}</Badge></TableCell>
                         <TableCell className="text-right">
@@ -452,7 +489,7 @@ export default function LeaveApprovals() {
                               <Button size="sm" variant="outline" className="text-red-600" onClick={() => { setSelectedRequest(req); setActionType("reject"); }}><XCircle className="h-4 w-4" /></Button>
                             </div>
                           ) : (
-                            <Button size="sm" variant="ghost" onClick={() => { setSelectedRequest(req); setActionType(null); }}>Detail</Button>
+                            <Button size="sm" variant="ghost" onClick={() => { setSelectedRequest(req); setActionType(null); }}>Rincian</Button>
                           )}
                         </TableCell>
                       </TableRow>
@@ -548,13 +585,13 @@ export default function LeaveApprovals() {
         </DialogContent>
       </Dialog>
 
-      {/* Detail Dialog */}
+      {/* Dialog Rincian */}
       <Dialog open={selectedRequest !== null && actionType === null} onOpenChange={(open) => !open && setSelectedRequest(null)}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Detail Pengajuan</DialogTitle></DialogHeader>
-          {selectedRequest && <div className="py-4 space-y-2 text-sm"><p><strong>{selectedRequest.employee?.name || "Pegawai"}</strong></p><p>Tipe: {leaveTypeLabels[selectedRequest.leave_type]}</p><p>Status: {statusLabels[selectedRequest.status]?.label}</p><p>Alasan: {selectedRequest.reason}</p>{selectedRequest.rejection_reason && <p className="text-red-600">Alasan ditolak: {selectedRequest.rejection_reason}</p>}</div>}
+          <DialogHeader><DialogTitle>Rincian Pengajuan</DialogTitle></DialogHeader>
+          {selectedRequest && <div className="py-4 space-y-2 text-sm"><p><strong>{selectedRequest.employee?.name || "Pegawai"}</strong></p><p>Tipe: {leaveTypeLabels[selectedRequest.leave_type]}</p><p>Status: {statusLabels[selectedRequest.status]?.label}</p><p>Alasan: {selectedRequest.reason}</p>{selectedRequest.document_reference_number ? <p>Nomor dokumen: {selectedRequest.document_reference_number}</p> : null}{selectedRequest.document_reference_date ? <p>Tanggal dokumen: {format(new Date(selectedRequest.document_reference_date), "dd MMM yyyy", { locale: id })}</p> : null}{selectedRequest.document_reference_issuer ? <p>Penerbit: {selectedRequest.document_reference_issuer}</p> : null}{selectedRequest.document_reference_notes ? <p>Catatan referensi: {selectedRequest.document_reference_notes}</p> : null}{selectedRequest.rejection_reason && <p className="text-red-600">Alasan ditolak: {selectedRequest.rejection_reason}</p>}</div>}
           <DialogFooter className={dialogActionBarClassName}>
-            <DialogActionHint>Detail ini bersifat read-only untuk kebutuhan review.</DialogActionHint>
+            <DialogActionHint>Rincian ini bersifat baca-saja untuk kebutuhan peninjauan.</DialogActionHint>
             <Button variant="outline" className="bg-white" onClick={() => setSelectedRequest(null)}>Tutup</Button>
           </DialogFooter>
         </DialogContent>

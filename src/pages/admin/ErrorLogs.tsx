@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Slider } from "@/components/ui/slider";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -41,15 +42,48 @@ import {
   PaginationNext,
   PaginationPrevious,
 } from "@/components/ui/pagination";
-import { Search, Download, Trash2, AlertTriangle, RefreshCw, Copy, Archive, BellRing, CheckCircle2, Clock3, Eye, ExternalLink, MoreHorizontal } from "lucide-react";
+import {
+  Search,
+  Download,
+  Trash2,
+  AlertTriangle,
+  RefreshCw,
+  Copy,
+  Archive,
+  BellRing,
+  CheckCircle2,
+  ChevronRight,
+  Clock3,
+  Eye,
+  ExternalLink,
+  MoreHorizontal,
+} from "lucide-react";
 import {
   appendErrorReference,
   clearStoredErrorLogs,
+  getRemoteErrorLoggingMode,
   getStoredErrorLogs,
   isNonCriticalClientError,
   reportError,
+  setRemoteErrorLoggingPolicy,
+  setRemoteErrorLoggingModeOverride,
   type AppErrorLogEntry,
 } from "@/lib/errorLogger";
+import {
+  createDefaultRemoteErrorLoggingPolicy,
+  normalizeRemoteErrorLoggingPolicy,
+  resolveEffectiveRemoteErrorLoggingMode,
+  serializeRemoteErrorLoggingPolicy,
+  type RemoteErrorLoggingMode,
+  type RemoteErrorLoggingPolicy,
+} from "@/lib/errorLoggingPolicy";
+import {
+  CENTRALIZED_PURGE_CONFIRMATION_PHRASE,
+  CENTRALIZED_PURGE_SCOPE_LABEL,
+  normalizeCentralizedPurgeScope,
+  resolveCentralizedPurgeErrorMessage,
+  type CentralizedPurgeScope,
+} from "@/lib/errorLogsAdminPolicy";
 import {
   getTopupRequestIdFromErrorEntry,
   resolveTabForErrorEntry,
@@ -61,6 +95,7 @@ import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import { executeRpcWithAvailability } from "@/lib/rpcAvailability";
 
 const escapeCsvCell = (value: unknown): string => {
   const text = String(value ?? "");
@@ -97,6 +132,16 @@ const downloadFile = (filename: string, content: string, mimeType: string) => {
   URL.revokeObjectURL(url);
 };
 
+const toErrorText = (error: unknown): string => {
+  if (error instanceof Error) return error.message || error.name || "unknown_error";
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error ?? "unknown_error");
+  }
+};
+
 type SeverityTab = ErrorSeverityTab;
 type TimeWindow = "all" | "24h" | "7d" | "30d";
 type OwnershipFilter = "all" | "mine";
@@ -107,7 +152,14 @@ const LOCAL_NON_CRITICAL_OVERRIDES_KEY = "absensiku:error_logs_non_critical_over
 const LOCAL_RESOLVED_REFS_KEY = "absensiku:error_logs_resolved_refs";
 const FILTER_STORAGE_KEY_PREFIX = "absensiku:error_logs_filters";
 const ERROR_ALERT_SETTINGS_KEY = "error_alert_settings";
+const ERROR_LOGGING_POLICY_KEY = "client_error_logging_policy";
+const ERROR_RETENTION_POLICY_KEY = "client_error_logs_retention_policy";
 const CRITICAL_ALERT_RELAY_FUNCTION = "critical-error-alert-relay";
+const CENTRALIZED_PURGE_SLIDE_MAX = 100;
+const CENTRALIZED_PURGE_SLIDE_ARM_THRESHOLD = 96;
+const PREVIEW_CLIENT_ERROR_LOGS_PURGE_RPC_NAME = "preview_client_error_logs_purge";
+const APPLY_CLIENT_ERROR_LOGS_RETENTION_RPC_NAME = "apply_client_error_logs_retention";
+const PURGE_CLIENT_ERROR_LOGS_RPC_NAME = "purge_client_error_logs";
 
 interface ErrorLogRow extends AppErrorLogEntry {
   rowId?: string;
@@ -139,6 +191,19 @@ interface ErrorAlertSettings {
   emailWebhookUrl: string;
 }
 
+interface ErrorRetentionPolicySettings {
+  nonCriticalArchiveDays: number;
+  nonCriticalDeleteDays: number;
+  resolvedCriticalArchiveDays: number;
+  criticalDeleteDays: number;
+}
+
+interface TenantOption {
+  id: string;
+  name: string;
+  code: string | null;
+}
+
 interface PersistedFilterState {
   search?: string;
   activeTab?: SeverityTab;
@@ -149,12 +214,38 @@ interface PersistedFilterState {
   itemsPerPage?: number;
 }
 
+interface ErrorLogCostGuardrailSnapshot {
+  last24hCount: number;
+  last7dCount: number;
+  projected30dCount: number;
+  warningLevel: "normal" | "warning" | "high";
+  refreshedAt: string | null;
+}
+
 const DEFAULT_ALERT_SETTINGS: ErrorAlertSettings = {
   enableRealtimeAlerts: false,
   webhookUrl: "",
   slackWebhookUrl: "",
   whatsappWebhookUrl: "",
   emailWebhookUrl: "",
+};
+
+const DEFAULT_ERROR_RETENTION_POLICY_SETTINGS: ErrorRetentionPolicySettings = {
+  nonCriticalArchiveDays: 3,
+  nonCriticalDeleteDays: 30,
+  resolvedCriticalArchiveDays: 7,
+  criticalDeleteDays: 180,
+};
+
+const toPositiveInteger = (value: unknown, fallback: number) => {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(1, Math.floor(value));
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed)) return Math.max(1, parsed);
+  }
+  return fallback;
 };
 
 const normalizeAlertSettings = (value: unknown): ErrorAlertSettings => {
@@ -176,6 +267,46 @@ const serializeAlertSettings = (value: ErrorAlertSettings) => ({
   whatsapp_webhook_url: value.whatsappWebhookUrl.trim(),
   email_webhook_url: value.emailWebhookUrl.trim(),
 });
+
+const normalizeErrorRetentionPolicySettings = (value: unknown): ErrorRetentionPolicySettings => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return DEFAULT_ERROR_RETENTION_POLICY_SETTINGS;
+  }
+  const raw = value as Record<string, unknown>;
+  return {
+    nonCriticalArchiveDays: toPositiveInteger(
+      raw.non_critical_archive_days,
+      DEFAULT_ERROR_RETENTION_POLICY_SETTINGS.nonCriticalArchiveDays,
+    ),
+    nonCriticalDeleteDays: toPositiveInteger(
+      raw.non_critical_delete_days,
+      DEFAULT_ERROR_RETENTION_POLICY_SETTINGS.nonCriticalDeleteDays,
+    ),
+    resolvedCriticalArchiveDays: toPositiveInteger(
+      raw.resolved_critical_archive_days,
+      DEFAULT_ERROR_RETENTION_POLICY_SETTINGS.resolvedCriticalArchiveDays,
+    ),
+    criticalDeleteDays: toPositiveInteger(
+      raw.critical_delete_days,
+      DEFAULT_ERROR_RETENTION_POLICY_SETTINGS.criticalDeleteDays,
+    ),
+  };
+};
+
+const serializeErrorRetentionPolicySettings = (value: ErrorRetentionPolicySettings) => ({
+  non_critical_archive_days: Math.max(1, value.nonCriticalArchiveDays),
+  non_critical_delete_days: Math.max(1, value.nonCriticalDeleteDays),
+  resolved_critical_archive_days: Math.max(1, value.resolvedCriticalArchiveDays),
+  critical_delete_days: Math.max(1, value.criticalDeleteDays),
+});
+
+const DEFAULT_COST_GUARDRAIL_SNAPSHOT: ErrorLogCostGuardrailSnapshot = {
+  last24hCount: 0,
+  last7dCount: 0,
+  projected30dCount: 0,
+  warningLevel: "normal",
+  refreshedAt: null,
+};
 
 const isValidItemsPerPage = (value: unknown): value is number =>
   value === 25 || value === 50 || value === 100;
@@ -376,7 +507,12 @@ export default function ErrorLogs() {
   const [isBulkResolving, setIsBulkResolving] = useState(false);
   const [isBulkReopening, setIsBulkReopening] = useState(false);
   const [isRunningRetention, setIsRunningRetention] = useState(false);
+  const [isRunningCentralizedPurge, setIsRunningCentralizedPurge] = useState(false);
+  const [isLoadingCentralizedPurgePreview, setIsLoadingCentralizedPurgePreview] = useState(false);
   const [isSavingAlertSettings, setIsSavingAlertSettings] = useState(false);
+  const [isSavingRemoteLogMode, setIsSavingRemoteLogMode] = useState(false);
+  const [isSavingErrorRetentionSettings, setIsSavingErrorRetentionSettings] = useState(false);
+  const [isLoadingCostGuardrail, setIsLoadingCostGuardrail] = useState(false);
   const [dataSource, setDataSource] = useState<"centralized" | "local" | "hybrid">("centralized");
   const [ownershipFilter, setOwnershipFilter] = useState<OwnershipFilter>("all");
   const [tenantScopeFilter, setTenantScopeFilter] = useState<TenantScopeFilter>("all_tenants");
@@ -386,14 +522,47 @@ export default function ErrorLogs() {
   const [currentPage, setCurrentPage] = useState(1);
   const [autoRefreshCritical, setAutoRefreshCritical] = useState(false);
   const [bulkConfirmDialog, setBulkConfirmDialog] = useState<BulkConfirmDialogState>(null);
+  const [isCentralizedPurgeDialogOpen, setIsCentralizedPurgeDialogOpen] = useState(false);
+  const [centralizedPurgeScope, setCentralizedPurgeScope] = useState<CentralizedPurgeScope>("archived_or_resolved");
+  const [centralizedPurgeSlideValue, setCentralizedPurgeSlideValue] = useState([0]);
+  const [centralizedPurgePreviewCount, setCentralizedPurgePreviewCount] = useState<number | null>(null);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [currentUserTenantId, setCurrentUserTenantId] = useState<string | null>(null);
+  const [isCurrentUserSuperAdmin, setIsCurrentUserSuperAdmin] = useState(false);
   const [currentUserLabel, setCurrentUserLabel] = useState<string | null>(null);
   const [selectedDetailEntry, setSelectedDetailEntry] = useState<ErrorLogRow | null>(null);
   const [alertSettings, setAlertSettings] = useState<ErrorAlertSettings>(DEFAULT_ALERT_SETTINGS);
+  const [errorRetentionSettings, setErrorRetentionSettings] = useState<ErrorRetentionPolicySettings>(
+    DEFAULT_ERROR_RETENTION_POLICY_SETTINGS,
+  );
+  const [remoteLogPolicy, setRemoteLogPolicy] = useState<RemoteErrorLoggingPolicy>(() =>
+    createDefaultRemoteErrorLoggingPolicy(getRemoteErrorLoggingMode()),
+  );
+  const [tenantOptions, setTenantOptions] = useState<TenantOption[]>([]);
+  const [selectedTenantOverrideId, setSelectedTenantOverrideId] = useState("none");
+  const [selectedTenantOverrideMode, setSelectedTenantOverrideMode] = useState<RemoteErrorLoggingMode>("full");
+  const [costGuardrailSnapshot, setCostGuardrailSnapshot] =
+    useState<ErrorLogCostGuardrailSnapshot>(DEFAULT_COST_GUARDRAIL_SNAPSHOT);
   const focusErrorRef = searchParams.get("errorRef");
 
   const filterStorageKey = useMemo(() => resolveFilterStorageKey(currentUserId), [currentUserId]);
+  const effectiveRemoteLogMode = useMemo(
+    () => resolveEffectiveRemoteErrorLoggingMode(remoteLogPolicy),
+    [remoteLogPolicy],
+  );
+  const tenantOverrideRows = useMemo(() => {
+    return Object.entries(remoteLogPolicy.tenantOverrides || {})
+      .map(([tenantId, mode]) => {
+        const tenant = tenantOptions.find((item) => item.id === tenantId);
+        return {
+          tenantId,
+          mode,
+          name: tenant?.name ?? tenantId,
+          code: tenant?.code ?? null,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [remoteLogPolicy.tenantOverrides, tenantOptions]);
 
   const loadCurrentUser = useCallback(async () => {
     try {
@@ -427,10 +596,8 @@ export default function ErrorLogs() {
             withTimeout(
               supabase
                 .from("user_roles")
-                .select("tenant_id")
-                .eq("user_id", user.id)
-                .not("tenant_id", "is", null)
-                .limit(1),
+                .select("tenant_id, role")
+                .eq("user_id", user.id),
               ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
               "admin.error_logs.load_current_user.role_rows timeout",
             ),
@@ -440,13 +607,19 @@ export default function ErrorLogs() {
             onRetry: () => setIsRetrying(true),
           },
         );
-        setCurrentUserTenantId(roleRows?.[0]?.tenant_id || null);
+        const typedRows = (roleRows || []) as Array<{ tenant_id?: string | null; role?: string | null }>;
+        setCurrentUserTenantId(
+          typedRows.find((row) => typeof row.tenant_id === "string" && row.tenant_id.length > 0)?.tenant_id || null,
+        );
+        setIsCurrentUserSuperAdmin(typedRows.some((row) => row.role === "super_admin"));
       } else {
         setCurrentUserTenantId(null);
+        setIsCurrentUserSuperAdmin(false);
       }
     } catch {
       setCurrentUserId(null);
       setCurrentUserTenantId(null);
+      setIsCurrentUserSuperAdmin(false);
       setCurrentUserLabel(null);
     } finally {
       setIsRetrying(false);
@@ -482,6 +655,124 @@ export default function ErrorLogs() {
     } finally {
       setIsRetrying(false);
     }
+  }, []);
+
+  const loadErrorRetentionSettings = useCallback(async () => {
+    try {
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("value")
+              .eq("key", ERROR_RETENTION_POLICY_KEY)
+              .maybeSingle(),
+            ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
+            "admin.error_logs.retention_settings.fetch timeout",
+          ),
+        {
+          maxRetries: ADMIN_ERROR_LOGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
+      if (error) throw error;
+      setErrorRetentionSettings(normalizeErrorRetentionPolicySettings(data?.value));
+    } catch (error) {
+      const errorRef = reportError(error, "admin.error_logs.retention_settings.fetch");
+      toast.error(appendErrorReference("Gagal memuat pengaturan retensi log error", errorRef));
+      setErrorRetentionSettings(DEFAULT_ERROR_RETENTION_POLICY_SETTINGS);
+    } finally {
+      setIsRetrying(false);
+    }
+  }, []);
+
+  const loadRemoteLoggingPolicy = useCallback(async () => {
+    try {
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("system_settings")
+              .select("value")
+              .eq("key", ERROR_LOGGING_POLICY_KEY)
+              .maybeSingle(),
+            ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
+            "admin.error_logs.remote_log_mode.fetch timeout",
+          ),
+        {
+          maxRetries: ADMIN_ERROR_LOGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
+      if (error) throw error;
+      const nextPolicy = normalizeRemoteErrorLoggingPolicy(data?.value, getRemoteErrorLoggingMode());
+      setRemoteLogPolicy(nextPolicy);
+      setRemoteErrorLoggingModeOverride(null);
+      setRemoteErrorLoggingPolicy(nextPolicy);
+    } catch (error) {
+      const errorRef = reportError(error, "admin.error_logs.remote_log_mode.fetch");
+      toast.error(appendErrorReference("Gagal memuat mode log error", errorRef));
+      const fallback = createDefaultRemoteErrorLoggingPolicy("full");
+      setRemoteLogPolicy(fallback);
+      setRemoteErrorLoggingModeOverride(null);
+      setRemoteErrorLoggingPolicy(fallback);
+    } finally {
+      setIsRetrying(false);
+    }
+  }, []);
+
+  const loadTenantOptions = useCallback(async () => {
+    try {
+      setIsRetrying(false);
+      const { data, error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase
+              .from("tenants")
+              .select("id, name, code")
+              .order("name", { ascending: true }),
+            ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
+            "admin.error_logs.tenants.fetch timeout",
+          ),
+        {
+          maxRetries: ADMIN_ERROR_LOGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
+      if (error) throw error;
+      setTenantOptions((data || []) as TenantOption[]);
+    } catch (error) {
+      const errorRef = reportError(error, "admin.error_logs.tenants.fetch");
+      toast.error(appendErrorReference("Gagal memuat daftar tenant", errorRef));
+      setTenantOptions([]);
+    } finally {
+      setIsRetrying(false);
+    }
+  }, []);
+
+  const applyTenantOverride = useCallback(() => {
+    if (selectedTenantOverrideId === "none") return;
+    setRemoteLogPolicy((prev) => ({
+      ...prev,
+      tenantOverrides: {
+        ...prev.tenantOverrides,
+        [selectedTenantOverrideId]: selectedTenantOverrideMode,
+      },
+    }));
+  }, [selectedTenantOverrideId, selectedTenantOverrideMode]);
+
+  const removeTenantOverride = useCallback((tenantId: string) => {
+    setRemoteLogPolicy((prev) => {
+      if (!prev.tenantOverrides[tenantId]) return prev;
+      const nextOverrides = { ...prev.tenantOverrides };
+      delete nextOverrides[tenantId];
+      return { ...prev, tenantOverrides: nextOverrides };
+    });
   }, []);
 
   const loadCentralizedLogs = useCallback(async (options?: { silent?: boolean }) => {
@@ -564,14 +855,131 @@ export default function ErrorLogs() {
     }
   }, []);
 
+  const loadCostGuardrailSnapshot = useCallback(async () => {
+    setIsLoadingCostGuardrail(true);
+    try {
+      const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const since7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const [dailyResult, weeklyResult] = await Promise.all([
+        supabase
+          .from("client_error_logs" as never)
+          .select("id", { count: "exact", head: true })
+          .gte("occurred_at", since24h),
+        supabase
+          .from("client_error_logs" as never)
+          .select("id", { count: "exact", head: true })
+          .gte("occurred_at", since7d),
+      ]);
+
+      if (dailyResult.error) throw dailyResult.error;
+      if (weeklyResult.error) throw weeklyResult.error;
+
+      const last24hCount = Number(dailyResult.count || 0);
+      const last7dCount = Number(weeklyResult.count || 0);
+      const projected30dCount = Math.max(0, Math.round(last24hCount * 30));
+      const warningLevel =
+        last24hCount >= 10000 || projected30dCount >= 300000
+          ? "high"
+          : last24hCount >= 3000 || projected30dCount >= 90000
+            ? "warning"
+            : "normal";
+
+      setCostGuardrailSnapshot({
+        last24hCount,
+        last7dCount,
+        projected30dCount,
+        warningLevel,
+        refreshedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      reportError(error, "admin.error_logs.cost_guardrail.fetch");
+      setCostGuardrailSnapshot(DEFAULT_COST_GUARDRAIL_SNAPSHOT);
+    } finally {
+      setIsLoadingCostGuardrail(false);
+    }
+  }, []);
+
+  const loadCentralizedPurgePreview = useCallback(
+    async (scope: CentralizedPurgeScope) => {
+      if (!isCurrentUserSuperAdmin) {
+        setCentralizedPurgePreviewCount(null);
+        return;
+      }
+
+      setIsLoadingCentralizedPurgePreview(true);
+      try {
+        const { data, error } = (await withExponentialBackoff(
+          () =>
+            withTimeout(
+              executeRpcWithAvailability<Record<string, unknown>>(
+                PREVIEW_CLIENT_ERROR_LOGS_PURGE_RPC_NAME,
+                () =>
+                  supabase.rpc(
+                    PREVIEW_CLIENT_ERROR_LOGS_PURGE_RPC_NAME as never,
+                    {
+                      p_scope: scope,
+                    } as never,
+                  ),
+              ),
+              ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
+              "admin.error_logs.purge_centralized.preview timeout",
+            ),
+          {
+            maxRetries: ADMIN_ERROR_LOGS_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+            onRetry: () => setIsRetrying(true),
+          },
+        )) as {
+          data: Record<string, unknown> | null;
+          error: { message?: string } | null;
+        };
+        if (error) throw error;
+        const candidateCount = Number(data?.candidate_count || 0);
+        setCentralizedPurgePreviewCount(
+          Number.isFinite(candidateCount) ? Math.max(0, Math.floor(candidateCount)) : 0,
+        );
+      } catch (error) {
+        setCentralizedPurgePreviewCount(null);
+        reportError(error, "admin.error_logs.purge_centralized.preview", {
+          purge_scope: scope,
+        });
+      } finally {
+        setIsLoadingCentralizedPurgePreview(false);
+        setIsRetrying(false);
+      }
+    },
+    [isCurrentUserSuperAdmin],
+  );
+
   useEffect(() => {
     void loadCurrentUser();
     void loadAlertSettings();
-  }, [loadAlertSettings, loadCurrentUser]);
+    void loadErrorRetentionSettings();
+    void loadRemoteLoggingPolicy();
+    void loadTenantOptions();
+  }, [loadAlertSettings, loadCurrentUser, loadErrorRetentionSettings, loadRemoteLoggingPolicy, loadTenantOptions]);
+
+  useEffect(() => {
+    if (selectedTenantOverrideId === "none") {
+      setSelectedTenantOverrideMode(remoteLogPolicy.mode);
+      return;
+    }
+    const overrideMode = remoteLogPolicy.tenantOverrides[selectedTenantOverrideId];
+    setSelectedTenantOverrideMode(overrideMode || "full");
+  }, [remoteLogPolicy.mode, remoteLogPolicy.tenantOverrides, selectedTenantOverrideId]);
 
   useEffect(() => {
     void loadCentralizedLogs();
   }, [loadCentralizedLogs]);
+
+  useEffect(() => {
+    if (!currentUserId) return;
+    if (!isCurrentUserSuperAdmin) {
+      setCostGuardrailSnapshot(DEFAULT_COST_GUARDRAIL_SNAPSHOT);
+      return;
+    }
+    void loadCostGuardrailSnapshot();
+  }, [currentUserId, isCurrentUserSuperAdmin, loadCostGuardrailSnapshot]);
 
   useEffect(() => {
     if (!autoRefreshCritical || activeTab !== "critical") return;
@@ -875,6 +1283,83 @@ export default function ErrorLogs() {
     }
   }, [alertSettings]);
 
+  const saveErrorRetentionSettings = useCallback(async () => {
+    setIsSavingErrorRetentionSettings(true);
+    try {
+      const serialized = serializeErrorRetentionPolicySettings(errorRetentionSettings);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.from("system_settings").upsert(
+              {
+                key: ERROR_RETENTION_POLICY_KEY,
+                value: serialized,
+                description:
+                  "Kebijakan retensi log error client (hari): arsip non-kritis, hapus non-kritis, arsip kritis selesai, hapus kritis.",
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "key" },
+            ),
+            ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
+            "admin.error_logs.retention_settings.save timeout",
+          ),
+        {
+          maxRetries: ADMIN_ERROR_LOGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
+      if (error) throw error;
+      toast.success("Pengaturan retensi log error berhasil disimpan.");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.error_logs.retention_settings.save");
+      toast.error(appendErrorReference("Gagal menyimpan pengaturan retensi log error", errorRef));
+    } finally {
+      setIsSavingErrorRetentionSettings(false);
+      setIsRetrying(false);
+    }
+  }, [errorRetentionSettings]);
+
+  const saveRemoteLoggingPolicy = useCallback(async () => {
+    setIsSavingRemoteLogMode(true);
+    try {
+      const serialized = serializeRemoteErrorLoggingPolicy(remoteLogPolicy);
+      setIsRetrying(false);
+      const { error } = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            supabase.from("system_settings").upsert(
+              {
+                key: ERROR_LOGGING_POLICY_KEY,
+                value: serialized,
+                description: "Mode pencatatan log error client + auto schedule (full/critical_only/paused).",
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "key" },
+            ),
+            ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
+            "admin.error_logs.remote_log_mode.save timeout",
+          ),
+        {
+          maxRetries: ADMIN_ERROR_LOGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
+      if (error) throw error;
+      setRemoteErrorLoggingModeOverride(null);
+      setRemoteErrorLoggingPolicy(remoteLogPolicy);
+      toast.success("Mode log error berhasil disimpan.");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.error_logs.remote_log_mode.save");
+      toast.error(appendErrorReference("Gagal menyimpan mode log error", errorRef));
+    } finally {
+      setIsSavingRemoteLogMode(false);
+      setIsRetrying(false);
+    }
+  }, [remoteLogPolicy]);
+
   const openTopupRequest = useCallback(
     (entry: ErrorLogRow) => {
       const topupRequestId = getTopupRequestIdFromEntry(entry);
@@ -947,6 +1432,9 @@ export default function ErrorLogs() {
 
   const refreshLogs = () => {
     void loadCentralizedLogs();
+    if (isCurrentUserSuperAdmin) {
+      void loadCostGuardrailSnapshot();
+    }
   };
 
   const handleResetAllFilters = () => {
@@ -967,7 +1455,10 @@ export default function ErrorLogs() {
       const { data, error } = (await withExponentialBackoff(
         () =>
           withTimeout(
-            supabase.rpc("apply_client_error_logs_retention" as never),
+            executeRpcWithAvailability<Record<string, unknown>>(
+              APPLY_CLIENT_ERROR_LOGS_RETENTION_RPC_NAME,
+              () => supabase.rpc(APPLY_CLIENT_ERROR_LOGS_RETENTION_RPC_NAME as never),
+            ),
             ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
             "admin.error_logs.retention.run timeout",
           ),
@@ -985,8 +1476,15 @@ export default function ErrorLogs() {
       const archivedResolvedCritical = Number(data?.archived_resolved_critical || 0);
       const deletedNonCritical = Number(data?.deleted_non_critical || 0);
       const deletedCritical = Number(data?.deleted_critical || 0);
+      const retentionPayload =
+        data?.retention_days && typeof data.retention_days === "object"
+          ? (data.retention_days as Record<string, unknown>)
+          : null;
+      const retentionSummary = retentionPayload
+        ? ` (arsip non-kritis ${retentionPayload.non_critical_archive_days ?? "-"}h, hapus non-kritis ${retentionPayload.non_critical_delete_days ?? "-"}h, arsip kritis selesai ${retentionPayload.resolved_critical_archive_days ?? "-"}h, hapus kritis ${retentionPayload.critical_delete_days ?? "-"}h)`
+        : "";
       toast.success(
-        `Retensi selesai. Arsip non-kritis: ${archivedCount}, arsip kritis selesai: ${archivedResolvedCritical}, hapus non-kritis: ${deletedNonCritical}, hapus kritis: ${deletedCritical}.`,
+        `Retensi selesai. Arsip non-kritis: ${archivedCount}, arsip kritis selesai: ${archivedResolvedCritical}, hapus non-kritis: ${deletedNonCritical}, hapus kritis: ${deletedCritical}.${retentionSummary}`,
       );
       void loadCentralizedLogs();
     } catch (error) {
@@ -998,9 +1496,103 @@ export default function ErrorLogs() {
     }
   };
 
+  const openCentralizedPurgeDialog = () => {
+    if (!isCurrentUserSuperAdmin) {
+      toast.warning("Purge log terpusat hanya tersedia untuk Super Admin.");
+      return;
+    }
+    setCentralizedPurgeScope("archived_or_resolved");
+    setCentralizedPurgeSlideValue([0]);
+    setCentralizedPurgePreviewCount(null);
+    setIsCentralizedPurgeDialogOpen(true);
+  };
+
+  const isCentralizedPurgeConfirmationValid =
+    (centralizedPurgeSlideValue[0] ?? 0) >= CENTRALIZED_PURGE_SLIDE_ARM_THRESHOLD;
+  const isCentralizedPurgeAllScope = centralizedPurgeScope === "all";
+  const centralizedPurgeSlideProgress = Math.min(
+    CENTRALIZED_PURGE_SLIDE_MAX,
+    Math.max(0, centralizedPurgeSlideValue[0] ?? 0),
+  );
+
+  const handleConfirmCentralizedPurge = async () => {
+    if (!isCurrentUserSuperAdmin) {
+      toast.warning("Purge log terpusat hanya tersedia untuk Super Admin.");
+      return;
+    }
+    if (!isCentralizedPurgeConfirmationValid) {
+      toast.info("Geser verifikasi sampai ujung kanan untuk mengaktifkan purge.");
+      return;
+    }
+
+    setIsRunningCentralizedPurge(true);
+    try {
+      setIsRetrying(false);
+      const { data, error } = (await withExponentialBackoff(
+        () =>
+          withTimeout(
+            executeRpcWithAvailability<Record<string, unknown>>(
+              PURGE_CLIENT_ERROR_LOGS_RPC_NAME,
+              () =>
+                supabase.rpc(
+                  PURGE_CLIENT_ERROR_LOGS_RPC_NAME as never,
+                  {
+                    p_scope: centralizedPurgeScope,
+                    p_confirmation: CENTRALIZED_PURGE_CONFIRMATION_PHRASE,
+                  } as never,
+                ),
+            ),
+            ADMIN_ERROR_LOGS_QUERY_TIMEOUT_MS,
+            "admin.error_logs.purge_centralized.run timeout",
+          ),
+        {
+          maxRetries: ADMIN_ERROR_LOGS_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      )) as {
+        data: Record<string, unknown> | null;
+        error: { message?: string } | null;
+      };
+      if (error) throw error;
+      const deletedCount = Number(data?.deleted || 0);
+      const auditId = typeof data?.audit_id === "string" ? data.audit_id : null;
+      toast.success(
+        auditId
+          ? `Purge log terpusat selesai. ${deletedCount} entri dihapus (${CENTRALIZED_PURGE_SCOPE_LABEL[centralizedPurgeScope]}). Audit: ${auditId}.`
+          : `Purge log terpusat selesai. ${deletedCount} entri dihapus (${CENTRALIZED_PURGE_SCOPE_LABEL[centralizedPurgeScope]}).`,
+      );
+      setIsCentralizedPurgeDialogOpen(false);
+      setCentralizedPurgeSlideValue([0]);
+      setCentralizedPurgePreviewCount(0);
+      void loadCentralizedLogs();
+      void loadCostGuardrailSnapshot();
+    } catch (error) {
+      const rawErrorText = toErrorText(error).toLowerCase();
+      const purgeMessage = resolveCentralizedPurgeErrorMessage(
+        rawErrorText,
+        CENTRALIZED_PURGE_CONFIRMATION_PHRASE,
+      );
+      const errorRef = reportError(error, "admin.error_logs.purge_centralized.run", {
+        purge_scope: centralizedPurgeScope,
+        error_text: rawErrorText,
+      });
+      toast.error(appendErrorReference(purgeMessage, errorRef));
+    } finally {
+      setIsRunningCentralizedPurge(false);
+      setIsRetrying(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isCentralizedPurgeDialogOpen) return;
+    void loadCentralizedPurgePreview(centralizedPurgeScope);
+  }, [centralizedPurgeScope, isCentralizedPurgeDialogOpen, loadCentralizedPurgePreview]);
+
   const handleClear = () => {
-    if (dataSource === "centralized") {
-      toast.info("Clear hanya tersedia untuk log lokal browser.");
+    const localCount = getStoredErrorLogs().length;
+    if (localCount === 0) {
+      toast.info("Tidak ada log lokal untuk dibersihkan. Data yang tampil saat ini berasal dari log terpusat (Supabase).");
       return;
     }
     clearStoredErrorLogs();
@@ -1012,7 +1604,7 @@ export default function ErrorLogs() {
     } else {
       setEntries([]);
     }
-    toast.success("Log error lokal berhasil dibersihkan.");
+    toast.success(`Log error lokal berhasil dibersihkan (${localCount} entri).`);
   };
 
   const handleExportCsv = () => {
@@ -1022,7 +1614,7 @@ export default function ErrorLogs() {
     }
     const filename = `error-logs-${new Date().toISOString().slice(0, 19).replaceAll(":", "-")}.csv`;
     downloadFile(filename, toCsv(tabbedEntries), "text/csv;charset=utf-8;");
-    toast.success("Export CSV berhasil.");
+    toast.success("Ekspor CSV berhasil.");
   };
 
   const handleExportJson = () => {
@@ -1032,7 +1624,7 @@ export default function ErrorLogs() {
     }
     const filename = `error-logs-${new Date().toISOString().slice(0, 19).replaceAll(":", "-")}.json`;
     downloadFile(filename, JSON.stringify(tabbedEntries, null, 2), "application/json;charset=utf-8;");
-    toast.success("Export JSON berhasil.");
+    toast.success("Ekspor JSON berhasil.");
   };
 
   const handleArchiveCritical = async (entry: ErrorLogRow) => {
@@ -1615,7 +2207,7 @@ export default function ErrorLogs() {
       <div className="flex justify-end gap-2">
         <Button type="button" variant="outline" size="sm" onClick={() => setSelectedDetailEntry(entry)}>
           <Eye className="mr-1 h-3.5 w-3.5" />
-          Detail
+          Rincian
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -1692,36 +2284,439 @@ export default function ErrorLogs() {
               Menampilkan log error terpusat lintas pengguna. Jika koneksi gagal, sistem otomatis fallback ke log lokal browser.
               Error jaringan sementara seperti <code>fetch.network_error</code> diklasifikasikan sebagai Non Kritis.
               Status <code>resolved</code> digunakan untuk menandai insiden yang sudah ditindaklanjuti.
+              Tombol <code>Bersihkan Cache Log Browser</code> hanya menghapus log di browser ini, tidak menghapus data terpusat di Supabase.
+              Untuk menghapus data di Supabase, gunakan <code>Zona Berbahaya</code> dan buka dialog <code>Purge Log Terpusat</code>.
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={refreshLogs}>
               <RefreshCw className="h-4 w-4 mr-2" />
-              Refresh
+              Muat Ulang
             </Button>
             <Button variant="outline" onClick={handleExportCsv}>
               <Download className="h-4 w-4 mr-2" />
-              Export CSV
+              Ekspor CSV
             </Button>
             <Button variant="outline" onClick={handleExportJson}>
               <Download className="h-4 w-4 mr-2" />
-              Export JSON
+              Ekspor JSON
             </Button>
             <Button variant="outline" onClick={() => void handleRunRetentionNow()} disabled={isRunningRetention}>
               <Clock3 className="h-4 w-4 mr-2" />
               {isRunningRetention ? "Menjalankan Retensi..." : "Retensi Sekarang"}
             </Button>
-            <Button variant="destructive" onClick={handleClear}>
-              <Trash2 className="h-4 w-4 mr-2" />
-              Clear Log Lokal
-            </Button>
           </CardContent>
         </Card>
+        {isCurrentUserSuperAdmin ? (
+          <Card>
+          <CardHeader>
+            <CardTitle>Guardrail Biaya Log</CardTitle>
+            <CardDescription>
+              Pantau volume log terpusat untuk kontrol biaya Supabase/Vercel.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="rounded-md border p-3">
+                <p className="text-xs text-muted-foreground">Volume 24 Jam</p>
+                <p className="text-xl font-semibold">{costGuardrailSnapshot.last24hCount}</p>
+              </div>
+              <div className="rounded-md border p-3">
+                <p className="text-xs text-muted-foreground">Volume 7 Hari</p>
+                <p className="text-xl font-semibold">{costGuardrailSnapshot.last7dCount}</p>
+              </div>
+              <div className="rounded-md border p-3">
+                <p className="text-xs text-muted-foreground">Proyeksi 30 Hari</p>
+                <p className="text-xl font-semibold">{costGuardrailSnapshot.projected30dCount}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge
+                className={
+                  costGuardrailSnapshot.warningLevel === "high"
+                    ? "border-red-300 bg-red-50 text-red-700"
+                    : costGuardrailSnapshot.warningLevel === "warning"
+                      ? "border-amber-300 bg-amber-50 text-amber-700"
+                      : "border-emerald-300 bg-emerald-50 text-emerald-700"
+                }
+              >
+                Status:{" "}
+                {costGuardrailSnapshot.warningLevel === "high"
+                  ? "Tinggi"
+                  : costGuardrailSnapshot.warningLevel === "warning"
+                    ? "Waspada"
+                    : "Aman"}
+              </Badge>
+              <span className="text-xs text-muted-foreground">
+                {isLoadingCostGuardrail
+                  ? "Memuat snapshot biaya..."
+                  : costGuardrailSnapshot.refreshedAt
+                    ? `Update ${format(new Date(costGuardrailSnapshot.refreshedAt), "dd MMM yyyy HH:mm:ss", { locale: id })}`
+                    : "Snapshot belum tersedia"}
+              </span>
+            </div>
+          </CardContent>
+          </Card>
+        ) : null}
         {isRetrying && (
           <div className="rounded-md border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm text-amber-800">
             Sedang mencoba ulang koneksi data log error...
           </div>
         )}
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Mode Pencatatan Log Error</CardTitle>
+            <CardDescription>
+              Gunakan mode ini untuk menghemat biaya Supabase/Vercel. Saat mode <code>paused</code>, log error baru tidak dikirim ke
+              <code>client_error_logs</code> sampai diaktifkan kembali.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div className="md:col-span-2">
+                <Select
+                  value={remoteLogPolicy.mode}
+                  onValueChange={(value) =>
+                    setRemoteLogPolicy((prev) => ({ ...prev, mode: value as RemoteErrorLoggingMode }))
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Pilih mode log error" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="full">Full (semua error)</SelectItem>
+                    <SelectItem value="critical_only">Critical Only (hanya kritis)</SelectItem>
+                    <SelectItem value="paused">Paused (matikan sementara)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex items-center gap-2">
+                <Badge variant="outline">Bawaan: {remoteLogPolicy.mode}</Badge>
+                <Badge variant="secondary">Efektif: {effectiveRemoteLogMode}</Badge>
+              </div>
+            </div>
+
+            <div className="rounded-md border p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">Auto Schedule Mode</p>
+                  <p className="text-xs text-muted-foreground">
+                    Otomatis ganti mode antara jam kerja dan luar jam kerja untuk menekan volume log.
+                  </p>
+                </div>
+                <Switch
+                  checked={remoteLogPolicy.schedule.enabled}
+                  onCheckedChange={(checked) =>
+                    setRemoteLogPolicy((prev) => ({
+                      ...prev,
+                      schedule: { ...prev.schedule, enabled: checked },
+                    }))
+                  }
+                />
+              </div>
+              {remoteLogPolicy.schedule.enabled ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Timezone</p>
+                    <Input
+                      value={remoteLogPolicy.schedule.timezone}
+                      onChange={(event) =>
+                        setRemoteLogPolicy((prev) => ({
+                          ...prev,
+                          schedule: { ...prev.schedule, timezone: event.target.value },
+                        }))
+                      }
+                      placeholder="Asia/Jakarta"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Jam Mulai Kerja</p>
+                    <Input
+                      type="time"
+                      value={remoteLogPolicy.schedule.businessStart}
+                      onChange={(event) =>
+                        setRemoteLogPolicy((prev) => ({
+                          ...prev,
+                          schedule: { ...prev.schedule, businessStart: event.target.value },
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Jam Selesai Kerja</p>
+                    <Input
+                      type="time"
+                      value={remoteLogPolicy.schedule.businessEnd}
+                      onChange={(event) =>
+                        setRemoteLogPolicy((prev) => ({
+                          ...prev,
+                          schedule: { ...prev.schedule, businessEnd: event.target.value },
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Mode Jam Kerja</p>
+                    <Select
+                      value={remoteLogPolicy.schedule.businessMode}
+                      onValueChange={(value) =>
+                        setRemoteLogPolicy((prev) => ({
+                          ...prev,
+                          schedule: {
+                            ...prev.schedule,
+                            businessMode: value as RemoteErrorLoggingMode,
+                          },
+                        }))
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Mode jam kerja" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="full">Full</SelectItem>
+                        <SelectItem value="critical_only">Critical Only</SelectItem>
+                        <SelectItem value="paused">Paused</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground">Mode Luar Jam Kerja</p>
+                    <Select
+                      value={remoteLogPolicy.schedule.offHoursMode}
+                      onValueChange={(value) =>
+                        setRemoteLogPolicy((prev) => ({
+                          ...prev,
+                          schedule: {
+                            ...prev.schedule,
+                            offHoursMode: value as RemoteErrorLoggingMode,
+                          },
+                        }))
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Mode luar jam kerja" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="full">Full</SelectItem>
+                        <SelectItem value="critical_only">Critical Only</SelectItem>
+                        <SelectItem value="paused">Paused</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="rounded-md border p-3 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium">Override Tenant (Atas Permintaan)</p>
+                  <p className="text-xs text-muted-foreground">
+                    Gunakan untuk mengaktifkan log error tenant tertentu saat mode global dipause atau dibatasi.
+                  </p>
+                </div>
+                <Badge variant="outline">
+                  {tenantOverrideRows.length} override
+                </Badge>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <Select value={selectedTenantOverrideId} onValueChange={setSelectedTenantOverrideId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Pilih tenant" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Pilih tenant...</SelectItem>
+                    {tenantOptions.map((tenant) => (
+                      <SelectItem key={tenant.id} value={tenant.id}>
+                        {tenant.name} {tenant.code ? `(${tenant.code})` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Select
+                  value={selectedTenantOverrideMode}
+                  onValueChange={(value) => setSelectedTenantOverrideMode(value as RemoteErrorLoggingMode)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Mode override" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="full">Full</SelectItem>
+                    <SelectItem value="critical_only">Critical Only</SelectItem>
+                    <SelectItem value="paused">Paused</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button
+                  type="button"
+                  onClick={applyTenantOverride}
+                  disabled={selectedTenantOverrideId === "none"}
+                >
+                  Simpan Override
+                </Button>
+              </div>
+
+              {tenantOverrideRows.length > 0 ? (
+                <div className="space-y-2">
+                  {tenantOverrideRows.map((row) => (
+                    <div
+                      key={row.tenantId}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs"
+                    >
+                      <div className="flex flex-col">
+                        <span className="font-medium">{row.name}</span>
+                        <span className="text-muted-foreground">
+                          {row.code ? row.code : row.tenantId}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge variant="secondary">{row.mode}</Badge>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => removeTenantOverride(row.tenantId)}
+                        >
+                          Hapus Override
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Belum ada override tenant. Semua tenant mengikuti mode global.
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" onClick={() => void saveRemoteLoggingPolicy()} disabled={isSavingRemoteLogMode}>
+                {isSavingRemoteLogMode ? "Menyimpan..." : "Simpan Mode Log"}
+              </Button>
+              <Button type="button" variant="outline" onClick={() => void loadRemoteLoggingPolicy()} disabled={isSavingRemoteLogMode}>
+                Muat Ulang Mode
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Retensi Auto Delete Log Error</CardTitle>
+            <CardDescription>
+              Atur umur data log error agar database tetap ringan. Nilai menggunakan satuan hari dan dipakai oleh cron harian serta tombol
+              <code> Retensi Sekarang</code>.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">Arsip Non Kritis Setelah (hari)</p>
+                <Input
+                  type="number"
+                  min={1}
+                  value={errorRetentionSettings.nonCriticalArchiveDays}
+                  onChange={(event) =>
+                    setErrorRetentionSettings((prev) => ({
+                      ...prev,
+                      nonCriticalArchiveDays: toPositiveInteger(event.target.value, prev.nonCriticalArchiveDays),
+                    }))
+                  }
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">Hapus Non Kritis Setelah (hari)</p>
+                <Input
+                  type="number"
+                  min={1}
+                  value={errorRetentionSettings.nonCriticalDeleteDays}
+                  onChange={(event) =>
+                    setErrorRetentionSettings((prev) => ({
+                      ...prev,
+                      nonCriticalDeleteDays: toPositiveInteger(event.target.value, prev.nonCriticalDeleteDays),
+                    }))
+                  }
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">Arsip Kritis Selesai Setelah (hari)</p>
+                <Input
+                  type="number"
+                  min={1}
+                  value={errorRetentionSettings.resolvedCriticalArchiveDays}
+                  onChange={(event) =>
+                    setErrorRetentionSettings((prev) => ({
+                      ...prev,
+                      resolvedCriticalArchiveDays: toPositiveInteger(event.target.value, prev.resolvedCriticalArchiveDays),
+                    }))
+                  }
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground">Hapus Kritis Setelah (hari)</p>
+                <Input
+                  type="number"
+                  min={1}
+                  value={errorRetentionSettings.criticalDeleteDays}
+                  onChange={(event) =>
+                    setErrorRetentionSettings((prev) => ({
+                      ...prev,
+                      criticalDeleteDays: toPositiveInteger(event.target.value, prev.criticalDeleteDays),
+                    }))
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" onClick={() => void saveErrorRetentionSettings()} disabled={isSavingErrorRetentionSettings}>
+                {isSavingErrorRetentionSettings ? "Menyimpan..." : "Simpan Retensi"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void loadErrorRetentionSettings()}
+                disabled={isSavingErrorRetentionSettings}
+              >
+                Muat Ulang Retensi
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-destructive/40 bg-destructive/5">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-5 w-5" />
+              Danger Zone
+            </CardTitle>
+            <CardDescription className="text-destructive/90">
+              Gunakan area ini hanya untuk pembersihan manual.
+              <code> Bersihkan Cache Log Browser</code> hanya berdampak pada browser ini,
+              sedangkan <code> Purge Log Terpusat</code> menghapus data di tabel <code>client_error_logs</code> pada Supabase.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="rounded-md border border-destructive/30 bg-background/80 p-3 text-xs text-muted-foreground">
+              Rekomendasi: mulai dari <strong>Retensi Sekarang</strong> atau scope <strong>Arsip + Selesai</strong>.
+              Gunakan scope <strong>Semua Log</strong> hanya saat reset penuh atau insiden storage yang sudah disetujui.
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {isCurrentUserSuperAdmin ? (
+                <Button variant="destructive" onClick={openCentralizedPurgeDialog} disabled={isRunningCentralizedPurge}>
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  {isRunningCentralizedPurge ? "Memproses Purge..." : "Kelola Purge Log Terpusat"}
+                </Button>
+              ) : null}
+              <Button variant="outline" onClick={handleClear}>
+                <Trash2 className="h-4 w-4 mr-2" />
+                Bersihkan Cache Log Browser
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>
@@ -2280,12 +3275,157 @@ export default function ErrorLogs() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      <AlertDialog
+        open={isCentralizedPurgeDialogOpen}
+        onOpenChange={(open) => {
+          if (isRunningCentralizedPurge) return;
+          setIsCentralizedPurgeDialogOpen(open);
+          if (!open) {
+            setCentralizedPurgeSlideValue([0]);
+            setCentralizedPurgePreviewCount(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {isCentralizedPurgeAllScope ? "Purge Semua Log Terpusat?" : "Purge Log Terpusat?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Tindakan ini menghapus log pada tabel <code>client_error_logs</code> sesuai scope yang dipilih.
+              Gunakan hanya saat pembersihan terjadwal atau insiden biaya storage.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">Scope purge</p>
+              <Select
+                value={centralizedPurgeScope}
+                onValueChange={(value) => {
+                  setCentralizedPurgeScope(normalizeCentralizedPurgeScope(value));
+                  setCentralizedPurgeSlideValue([0]);
+                }}
+                disabled={isRunningCentralizedPurge}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Pilih scope purge" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="archived_or_resolved">Arsip + Selesai (Rekomendasi)</SelectItem>
+                  <SelectItem value="non_critical">Semua Non Kritis</SelectItem>
+                  <SelectItem value="all">Semua Log (termasuk kritis aktif)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">
+                Geser verifikasi ke kanan sampai penuh untuk mengaktifkan tombol purge.
+              </p>
+              <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 via-white to-slate-100 p-4 shadow-sm">
+                <div className="mb-3 flex items-center justify-between text-xs text-muted-foreground">
+                  <span>Mulai dari kiri</span>
+                  <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2.5 py-1 text-emerald-700 shadow-sm">
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    Target kanan
+                  </span>
+                </div>
+                <div className="relative overflow-hidden rounded-2xl border border-slate-300/80 bg-slate-100/90 px-4 py-4">
+                  <div className="pointer-events-none absolute inset-y-3 left-3 right-3 rounded-[18px] border border-dashed border-slate-300/80" />
+                  <div className="pointer-events-none absolute inset-y-0 left-0 w-full bg-[radial-gradient(circle_at_20%_50%,rgba(255,255,255,0.7),transparent_38%),radial-gradient(circle_at_80%_50%,rgba(16,185,129,0.12),transparent_30%)]" />
+                  <div className="pointer-events-none absolute inset-y-0 right-4 flex items-center">
+                    <div className="rounded-xl border border-emerald-300/80 bg-emerald-50/95 px-3 py-2 text-[11px] font-medium uppercase tracking-[0.18em] text-emerald-700 shadow-sm">
+                      Match
+                    </div>
+                  </div>
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-16 text-center">
+                    <span
+                      className="text-sm font-medium tracking-[0.02em] text-slate-500 transition-opacity duration-200"
+                      style={{ opacity: isCentralizedPurgeConfirmationValid ? 0.35 : Math.max(0.18, 1 - centralizedPurgeSlideProgress / 90) }}
+                    >
+                      Geser ke kanan untuk verifikasi purge
+                    </span>
+                  </div>
+                  <Slider
+                    value={centralizedPurgeSlideValue}
+                    min={0}
+                    max={CENTRALIZED_PURGE_SLIDE_MAX}
+                    step={1}
+                    disabled={isRunningCentralizedPurge}
+                    aria-label="Geser untuk konfirmasi purge log terpusat"
+                    onValueChange={(value) => {
+                      const nextValue = value[0] ?? 0;
+                      setCentralizedPurgeSlideValue([
+                        nextValue >= CENTRALIZED_PURGE_SLIDE_ARM_THRESHOLD ? CENTRALIZED_PURGE_SLIDE_MAX : nextValue,
+                      ]);
+                    }}
+                    onValueCommit={(value) => {
+                      const nextValue = value[0] ?? 0;
+                      setCentralizedPurgeSlideValue([
+                        nextValue >= CENTRALIZED_PURGE_SLIDE_ARM_THRESHOLD ? CENTRALIZED_PURGE_SLIDE_MAX : 0,
+                      ]);
+                    }}
+                    className="py-3"
+                    trackClassName="h-16 rounded-[20px] border border-slate-300/80 bg-gradient-to-r from-slate-200 via-slate-100 to-slate-50 shadow-inner"
+                    rangeClassName="bg-gradient-to-r from-amber-100 via-slate-200 to-emerald-200"
+                    thumbClassName="flex h-12 w-14 items-center justify-center rounded-2xl border-slate-400 bg-white shadow-[0_8px_22px_rgba(15,23,42,0.18)]"
+                    thumbContent={<ChevronRight className="h-5 w-5 text-slate-600" />}
+                  />
+                </div>
+                <div className="mt-3 rounded-lg border border-dashed px-3 py-2 text-xs">
+                  {isCentralizedPurgeConfirmationValid ? (
+                    <span className="font-medium text-emerald-700">Verifikasi siap. Tombol purge sudah aktif.</span>
+                  ) : (
+                    <span className="text-muted-foreground">Belum aktif. Geser sampai ujung kanan lalu lepaskan.</span>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="rounded-md border border-amber-300/70 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Scope aktif: {CENTRALIZED_PURGE_SCOPE_LABEL[centralizedPurgeScope]}.
+            </div>
+            {isCentralizedPurgeAllScope ? (
+              <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                Scope <strong>Semua Log</strong> akan menghapus seluruh data, termasuk log kritis aktif yang belum diarsipkan atau belum ditandai selesai.
+                Pastikan export sudah dilakukan jika data masih diperlukan untuk audit atau investigasi.
+              </div>
+            ) : null}
+            <div className="rounded-md border border-blue-300/70 bg-blue-50 px-3 py-2 text-xs text-blue-900">
+              {isLoadingCentralizedPurgePreview
+                ? "Menghitung kandidat purge..."
+                : centralizedPurgePreviewCount === null
+                  ? "Pratinjau purge belum tersedia."
+                  : `Pratinjau: ${centralizedPurgePreviewCount} entri akan terhapus pada scope ini.`}
+            </div>
+          </div>
+          <AlertDialogFooter className={dialogActionBarClassName}>
+            <DialogActionHint>
+              Purge tidak dapat dibatalkan. Pastikan export sudah dilakukan jika data perlu arsip eksternal.
+            </DialogActionHint>
+            <AlertDialogCancel className="bg-white" disabled={isRunningCentralizedPurge}>
+              Batal
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault();
+                void handleConfirmCentralizedPurge();
+              }}
+              disabled={!isCentralizedPurgeConfirmationValid || isRunningCentralizedPurge}
+            >
+              {isRunningCentralizedPurge
+                ? "Memproses..."
+                : isCentralizedPurgeAllScope
+                  ? "Ya, Hapus Semua Log Terpusat"
+                  : "Ya, Purge Terpusat"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <Dialog open={Boolean(selectedDetailEntry)} onOpenChange={(open) => !open && setSelectedDetailEntry(null)}>
         <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>Detail Log Error</DialogTitle>
+            <DialogTitle>Rincian Log Error</DialogTitle>
             <DialogDescription>
-              Detail teknis untuk triase insiden berdasarkan Ref Error.
+              Rincian teknis untuk triase insiden berdasarkan Ref Error.
             </DialogDescription>
           </DialogHeader>
           {selectedDetailEntry ? (

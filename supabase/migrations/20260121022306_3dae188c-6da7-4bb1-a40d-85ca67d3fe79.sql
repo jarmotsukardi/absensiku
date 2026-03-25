@@ -24,7 +24,7 @@ CREATE TABLE public.mutation_requests (
   -- Alasan pengajuan mutasi
   reason TEXT NOT NULL,
   
-  -- Dokumen pendukung (jika ada)
+  -- Referensi dokumen administratif lama (legacy)
   attachment_url TEXT,
   
   -- Approval info

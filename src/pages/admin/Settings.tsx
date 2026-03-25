@@ -1,4 +1,5 @@
 import { useState, lazy, Suspense } from "react";
+import { useNavigate } from "react-router-dom";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SuperAdminLayout } from "@/components/admin/superadmin/SuperAdminLayout";
@@ -48,6 +49,7 @@ type SettingsTabId =
   | "skalabilitas"
   | "monitoring-partition"
   | "info-cron"
+  | "uat-monitoring"
   | "database"
   | "supabase"
   | "template-org"
@@ -59,7 +61,7 @@ const settingsCategories: Array<{ id: SettingsCategoryId; label: string }> = [
   { id: "security", label: "Keamanan & Akses" },
   { id: "integration", label: "Integrasi & Gateway" },
   { id: "operations", label: "Operasional Sistem" },
-  { id: "onboarding", label: "Onboarding & Template" },
+  { id: "onboarding", label: "Onboarding & Templat" },
   { id: "billing", label: "Billing & Kebijakan" },
 ];
 
@@ -82,14 +84,15 @@ const settingsTabsByCategory: Record<SettingsCategoryId, Array<{ id: SettingsTab
   operations: [
     { id: "sistem", label: "Sistem" },
     { id: "skalabilitas", label: "Skalabilitas" },
-    { id: "monitoring-partition", label: "Monitoring Partisi" },
+    { id: "monitoring-partition", label: "Pemantauan Partisi" },
     { id: "info-cron", label: "Informasi Cron" },
+    { id: "uat-monitoring", label: "Monitoring UAT Absensi" },
     { id: "database", label: "Database" },
     { id: "supabase", label: "Pengaturan Supabase" },
   ],
   onboarding: [
-    { id: "template-org", label: "Template Onboarding Org" },
-    { id: "template-absence", label: "Template Batas Absen" },
+    { id: "template-org", label: "Templat Onboarding Organisasi" },
+    { id: "template-absence", label: "Templat Batas Absen" },
   ],
   billing: [{ id: "streak", label: "Konfigurasi Streak" }],
 };
@@ -103,6 +106,7 @@ const TabFallback = () => (
 );
 
 export default function Settings() {
+  const navigate = useNavigate();
   const [activeCategory, setActiveCategory] = useState<SettingsCategoryId>("general");
   const [activeTab, setActiveTab] = useState<SettingsTabId>("umum");
   const [showForgotPassword, setShowForgotPassword] = useState(false);
@@ -114,6 +118,16 @@ export default function Settings() {
     if (firstTab) {
       setActiveTab(firstTab.id);
     }
+  };
+
+  const handleTabChange = (value: string) => {
+    const nextTab = value as SettingsTabId;
+    if (nextTab === "uat-monitoring") {
+      navigate("/admin/uat");
+      return;
+    }
+
+    setActiveTab(nextTab);
   };
 
   const currentCategoryTabs = settingsTabsByCategory[activeCategory];
@@ -142,7 +156,7 @@ export default function Settings() {
               </div>
             </div>
 
-            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as SettingsTabId)} className="w-full">
+            <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
               <div className="border-b border-slate-200/70 bg-slate-50/55 px-4 py-2.5">
                 <div className="overflow-x-auto pb-1">
                   <TabsList className="min-w-max h-auto flex-nowrap gap-1.5 rounded-xl border border-slate-200/80 bg-white/95 p-1.5 shadow-[0_6px_16px_rgba(15,23,42,0.07)]">

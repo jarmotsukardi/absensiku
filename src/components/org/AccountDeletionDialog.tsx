@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import SingleOTPInput, { SingleOTPInputRef } from "@/components/common/SingleOTPInput";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { logAuditIfEnabled } from "@/lib/auditLoggingPolicy";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 
 const WORDS_POOL = [
@@ -181,16 +182,25 @@ export function AccountDeletionDialog() {
         .maybeSingle();
 
       if (emp?.tenant_id) {
-        await supabase.from("tenants").update({ is_active: false }).eq("id", emp.tenant_id);
-        await supabase.from("employees").update({ is_active: false }).eq("tenant_id", emp.tenant_id);
+        const resolvedTenantId = await resolveOrgTenantId();
+        if (resolvedTenantId && resolvedTenantId !== emp.tenant_id) {
+          throw new Error("Tenant sesi tidak cocok dengan tenant akun.");
+        }
+        const { error: tenantError } = await supabase.from("tenants").update({ is_active: false }).eq("id", emp.tenant_id);
+        if (tenantError) throw tenantError;
+        const { error: employeeError } = await supabase.from("employees").update({ is_active: false }).eq("tenant_id", emp.tenant_id);
+        if (employeeError) throw employeeError;
       }
 
-      await supabase.from("audit_logs").insert({
-        action: "ACCOUNT_DELETION_REQUEST",
-        table_name: "tenants",
-        record_id: emp?.tenant_id || null,
-        user_id: session.user.id,
-        new_values: { reason: "User requested account deletion", phrase_confirmed: true, otp_verified: true },
+      await logAuditIfEnabled({
+        tenantId: emp?.tenant_id || null,
+        payload: {
+          action: "ACCOUNT_DELETION_REQUEST",
+          table_name: "tenants",
+          record_id: emp?.tenant_id || null,
+          user_id: session.user.id,
+          new_values: { reason: "User requested account deletion", phrase_confirmed: true, otp_verified: true },
+        },
       });
 
       await supabase.auth.signOut();

@@ -1,0 +1,18 @@
+sdk.dir=/Users/your-user/Library/Android/sdk
+ABSENSIKU_WEB_BASE_URL=https://absensipro.com
+ABSENSIKU_SUPABASE_URL=https://your-project-ref.supabase.co
+ABSENSIKU_SUPABASE_PUBLISHABLE_KEY=sb_publishable_xxx
+ABSENSIKU_TENANT_DISPLAY_NAME=Aplikasi Internal Pegawai
+ABSENSIKU_SUPPORT_EMAIL=hr@instansi.go.id
+ABSENSIKU_DEBUG_LOGIN_EMAIL=
+ABSENSIKU_DEBUG_LOGIN_PASSWORD=
+ABSENSIKU_FIREBASE_PROJECT_ID=absensiku-3b3dc
+ABSENSIKU_FIREBASE_SENDER_ID=496996660860
+ABSENSIKU_FIREBASE_APP_ID=
+ABSENSIKU_FIREBASE_API_KEY=
+
+# Contoh debug lokal Genymotion:
+# ABSENSIKU_WEB_BASE_URL=http://10.0.3.2:5173
+# Jalankan web dengan `npm run dev -- --host 0.0.0.0`
+# dan biarkan `/mobile-api` diproxy ke target lokal via env
+# `ABSENSIKU_MOBILE_API_PROXY_TARGET` (default: http://127.0.0.1:3000).

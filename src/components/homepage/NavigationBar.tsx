@@ -1,10 +1,18 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { MapPin, Menu, X } from "lucide-react";
+import { APK_DOWNLOAD_PAGE_PATH } from "@/lib/apkDownload";
+import { PUBLIC_CONSULTATION_PATH } from "@/lib/publicRoutes";
 
 export function NavigationBar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const location = useLocation();
+
+  const linkClassName = (isActive: boolean) =>
+    `text-sm font-medium transition-colors animated-underline ${
+      isActive ? "text-foreground" : "text-muted-foreground hover:text-foreground"
+    }`;
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 glass border-b border-border/60 shadow-soft">
@@ -18,27 +26,36 @@ export function NavigationBar() {
           </Link>
 
           {/* Desktop Menu */}
-          <div className="hidden md:flex items-center gap-8">
-            <a href="/#fitur" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors animated-underline">
-              Fitur
-            </a>
-            <a href="/#harga" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors animated-underline">
+          <div className="hidden md:flex items-center gap-6 lg:gap-7">
+            <Link to="/" className={linkClassName(location.pathname === "/")}>
+              Beranda
+            </Link>
+            <a href="/#harga" className={linkClassName(false)}>
               Harga
             </a>
-            <a href="/#faq" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors animated-underline">
+            <Link to={PUBLIC_CONSULTATION_PATH} className={linkClassName(location.pathname === PUBLIC_CONSULTATION_PATH)}>
+              Konsultasi
+            </Link>
+            <a href="/#faq" className={linkClassName(false)}>
               FAQ
             </a>
-            <Link to="/about" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors animated-underline">
+            <Link
+              to={APK_DOWNLOAD_PAGE_PATH}
+              className={linkClassName(location.pathname === APK_DOWNLOAD_PAGE_PATH)}
+            >
+              Download
+            </Link>
+            <Link to="/about" className={linkClassName(location.pathname === "/about")}>
               Tentang
             </Link>
           </div>
 
-          <div className="hidden md:flex items-center gap-3">
+          <div className="hidden md:flex items-center gap-2">
             <Link to="/auth">
-              <Button variant="ghost">Masuk Pegawai</Button>
+              <Button variant="ghost" className="px-3 lg:px-4">Masuk Pegawai</Button>
             </Link>
             <Link to="/org/login?mode=register">
-              <Button variant="gold">Daftar Gratis</Button>
+              <Button variant="gold" className="px-4 lg:px-5">Daftar Gratis</Button>
             </Link>
           </div>
 
@@ -53,15 +70,25 @@ export function NavigationBar() {
       {mobileMenuOpen && (
         <div className="md:hidden bg-card border-t border-border animate-slide-in-up">
           <div className="container mx-auto px-4 py-4 space-y-4">
-            <a href="/#fitur" className="block text-foreground py-2" onClick={() => setMobileMenuOpen(false)}>
-              Fitur
-            </a>
+            <Link to="/" className="block text-foreground py-2" onClick={() => setMobileMenuOpen(false)}>
+              Beranda
+            </Link>
             <a href="/#harga" className="block text-foreground py-2" onClick={() => setMobileMenuOpen(false)}>
               Harga
             </a>
+            <Link to={PUBLIC_CONSULTATION_PATH} className="block text-foreground py-2" onClick={() => setMobileMenuOpen(false)}>
+              Konsultasi
+            </Link>
             <a href="/#faq" className="block text-foreground py-2" onClick={() => setMobileMenuOpen(false)}>
               FAQ
             </a>
+            <Link
+              to={APK_DOWNLOAD_PAGE_PATH}
+              className="block text-foreground py-2"
+              onClick={() => setMobileMenuOpen(false)}
+            >
+              Download
+            </Link>
             <Link to="/about" className="block text-foreground py-2" onClick={() => setMobileMenuOpen(false)}>
               Tentang
             </Link>

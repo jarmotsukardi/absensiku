@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -109,6 +110,9 @@ export function OrgPayrollComponentsBase({
   guidePath,
 }: PayrollComponentsBaseProps) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target));
   const confirmDialog = useConfirmDialog();
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [rows, setRows] = useState<PayrollComponent[]>([]);
@@ -391,7 +395,7 @@ export function OrgPayrollComponentsBase({
     anchor.click();
     anchor.remove();
     URL.revokeObjectURL(url);
-    toast.success("Export CSV berhasil");
+    toast.success("Ekspor CSV berhasil");
   };
 
   return (
@@ -428,7 +432,7 @@ export function OrgPayrollComponentsBase({
             </CardHeader>
             <CardContent className="space-y-3 text-sm text-muted-foreground">
               <p>Jika konfigurasi komponen sudah siap, lanjutkan lagi ke proses inti payroll untuk memeriksa dampaknya.</p>
-              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/validation")}>
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/payroll/validation")}>
                 Buka Validasi Payroll
               </Button>
             </CardContent>
@@ -525,11 +529,11 @@ export function OrgPayrollComponentsBase({
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => navigate(backPath)}>
+              <Button variant="outline" onClick={() => navigateWithOverlay(backPath)}>
                 <ArrowLeft className="mr-2 h-4 w-4" />Kembali
               </Button>
               <Button onClick={openCreateDialog}><Plus className="mr-2 h-4 w-4" />Tambah Komponen</Button>
-              <Button variant="secondary" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+              <Button variant="secondary" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Ekspor CSV</Button>
             </div>
 
             {loadError ? (

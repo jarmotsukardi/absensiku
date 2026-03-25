@@ -222,7 +222,10 @@ export async function updateEntryStatus(
 /**
  * Ambil semua entries pending/failed untuk sync
  */
-export async function getPendingEntries(employeeId?: string): Promise<AttendanceEntry[]> {
+export async function getPendingEntries(
+  employeeId?: string,
+  maxSyncAttempts: number = 10,
+): Promise<AttendanceEntry[]> {
   const query = db.attendanceEntries
     .where('syncStatus')
     .anyOf('pending', 'failed');
@@ -230,9 +233,9 @@ export async function getPendingEntries(employeeId?: string): Promise<Attendance
   const entries = await query.toArray();
   
   if (employeeId) {
-    return entries.filter(e => e.employeeId === employeeId && e.syncAttempts < 10);
+    return entries.filter(e => e.employeeId === employeeId && e.syncAttempts < maxSyncAttempts);
   }
-  return entries.filter(e => e.syncAttempts < 10);
+  return entries.filter(e => e.syncAttempts < maxSyncAttempts);
 }
 
 /**
@@ -264,7 +267,10 @@ export async function hasCheckOutToday(employeeId: string, attendanceDate?: stri
 /**
  * Cleanup: hapus entries synced yang lebih dari N hari
  */
-export async function cleanupOldEntries(expiryDays: number = 3): Promise<number> {
+export async function cleanupOldEntries(
+  expiryDays: number = 3,
+  maxSyncAttempts: number = 10,
+): Promise<number> {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - expiryDays);
   const cutoffStr = cutoff.toISOString();
@@ -272,7 +278,7 @@ export async function cleanupOldEntries(expiryDays: number = 3): Promise<number>
   const toDelete = await db.attendanceEntries
     .filter(e => {
       if (e.syncStatus === 'synced') return true;
-      if (e.createdAt < cutoffStr && e.syncAttempts >= 10) return true;
+      if (e.createdAt < cutoffStr && e.syncAttempts >= maxSyncAttempts) return true;
       return false;
     })
     .toArray();
@@ -365,13 +371,17 @@ export async function getCachedTodayRecord(employeeId: string, attendanceDate?: 
  * Re-hydration: saat app dibuka kembali, cek dan return semua pending entries
  * untuk dilanjutkan sync-nya
  */
-export async function rehydratePendingEntries(employeeId: string, attendanceDate?: string): Promise<{
+export async function rehydratePendingEntries(
+  employeeId: string,
+  attendanceDate?: string,
+  maxSyncAttempts: number = 10,
+): Promise<{
   pendingCount: number;
   entries: AttendanceEntry[];
   todayCache: JsonObject | null;
 }> {
   await recoverStuckSyncEntries(employeeId);
-  const pending = await getPendingEntries(employeeId);
+  const pending = await getPendingEntries(employeeId, maxSyncAttempts);
   const todayCache = await getCachedTodayRecord(employeeId, attendanceDate);
 
   return {

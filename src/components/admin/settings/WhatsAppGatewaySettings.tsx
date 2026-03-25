@@ -11,6 +11,7 @@ import { MessageCircle, Save, Send, Loader2, CheckCircle2, ExternalLink } from "
 import { toast } from "sonner";
 import { useSystemSettings } from "@/hooks/useSystemSettings";
 import { supabase } from "@/integrations/supabase/client";
+import { supabasePublishableKey, supabaseUrl } from "@/integrations/supabase/env";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { withTimeout } from "@/lib/attendanceResilience";
 
@@ -69,7 +70,7 @@ export function WhatsAppGatewaySettings() {
         REQUEST_TIMEOUT_MS,
         "Memuat sesi autentikasi terlalu lama",
       );
-      let accessToken = sessionData.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      let accessToken = sessionData.session?.access_token || supabasePublishableKey;
       if (!sessionData.session?.access_token) {
         const { data: refreshData } = await withTimeout(
           supabase.auth.refreshSession(),
@@ -90,12 +91,12 @@ export function WhatsAppGatewaySettings() {
       };
 
       const invokeTest = (token: string) =>
-        fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-test-whatsapp`, {
+        fetch(`${supabaseUrl}/functions/v1/send-test-whatsapp`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${token}`,
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "apikey": supabasePublishableKey,
           },
           body: JSON.stringify(payload),
         });
@@ -133,7 +134,7 @@ export function WhatsAppGatewaySettings() {
           REQUEST_TIMEOUT_MS,
           "Menyegarkan sesi retry test WhatsApp terlalu lama",
         );
-        const retryToken = refreshData.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+        const retryToken = refreshData.session?.access_token || supabasePublishableKey;
         response = await withTimeout(
           invokeTest(retryToken),
           REQUEST_TIMEOUT_MS,
@@ -155,7 +156,7 @@ export function WhatsAppGatewaySettings() {
           : (data?.details || data?.raw)
           ? JSON.stringify(data.details || data.raw)
           : "";
-        const detail = detailRaw ? ` Detail: ${detailRaw.slice(0, 300)}` : "";
+        const detail = detailRaw ? ` Rincian: ${detailRaw.slice(0, 300)}` : "";
         throw new Error(
           appendErrorReference(`${baseError}${hint}${detail}`, typeof data?.trace_id === "string" ? data.trace_id : null)
         );
@@ -312,7 +313,7 @@ export function WhatsAppGatewaySettings() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Template Pesan</CardTitle>
+            <CardTitle className="text-base">Templat Pesan</CardTitle>
             <CardDescription>Kustomisasi template notifikasi WhatsApp</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">

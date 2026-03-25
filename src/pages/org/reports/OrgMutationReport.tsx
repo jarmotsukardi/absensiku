@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import { id as localeId } from "date-fns/locale";
-import { Download, Printer, Search, UserCog } from "lucide-react";
+import { Download, FileText, Search, UserCog } from "lucide-react";
 import { toast } from "sonner";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,14 @@ import { PageGlossarySection } from "@/components/admin/common/PageGlossarySecti
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { RequestReportsTabs } from "@/components/org/reports/RequestReportsTabs";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import {
+  buildReportCsv,
+  createReportTraceId,
+  downloadCsvFile,
+  downloadReportPdf,
+  recordReportOutputAudit,
+  type ReportOutputColumn,
+} from "@/lib/reportOutput";
 
 type MutationRequestRow = Tables<"mutation_requests">;
 type OPD = Tables<"opd">;
@@ -32,10 +40,6 @@ interface EmployeeLite {
   nip: string | null;
   opd_id: string | null;
   work_unit_id: string | null;
-}
-
-interface MutationQueryRow extends MutationRequestRow {
-  employees: EmployeeLite | null;
 }
 
 interface MutationRecord extends MutationRequestRow {
@@ -55,14 +59,6 @@ const toJsonRecord = (value: Json | null): Record<string, Json | undefined> => {
   }
   return {};
 };
-
-const escapeHtml = (value: string): string =>
-  value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 
 const getMutationTypeLabel = (type: string): string =>
   type === "profile_change" ? "Perubahan Profil" : "Mutasi/Pindah";
@@ -104,6 +100,9 @@ const normalizeText = (value: unknown): string => {
   if (typeof value === "boolean") return value ? "Ya" : "Tidak";
   return JSON.stringify(value);
 };
+
+const getMutationCreatedAtLabel = (record: MutationRecord, pattern: string) =>
+  format(new Date(record.created_at), pattern, { locale: localeId });
 
 export default function OrgMutationReport() {
   const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
@@ -231,6 +230,44 @@ export default function OrgMutationReport() {
     [opdMap, workUnitMap]
   );
 
+  const mutationCsvColumns = useMemo(
+    () =>
+      [
+        { header: "No", value: (_row, index) => index + 1, align: "right", width: 28 },
+        { header: "Tanggal Pengajuan", value: (row) => format(new Date(row.created_at), "yyyy-MM-dd HH:mm"), width: 82 },
+        { header: "Nama Pegawai", value: (row) => row.employees?.name || "-" },
+        { header: "NIP", value: (row) => row.employees?.nip || "-", width: 68 },
+        { header: "Tipe", value: (row) => getMutationTypeLabel(row.mutation_type) },
+        { header: "Status", value: (row) => getStatusLabel(row.status), width: 54 },
+        { header: "OPD Saat Ini", value: (row) => resolveOpdAndUnit(row).currentOpdLabel },
+        { header: "Unit Saat Ini", value: (row) => resolveOpdAndUnit(row).currentWorkUnitLabel },
+        { header: "OPD Tujuan", value: (row) => resolveOpdAndUnit(row).targetOpdLabel },
+        { header: "Unit Tujuan", value: (row) => resolveOpdAndUnit(row).targetWorkUnitLabel },
+        { header: "Alasan", value: (row) => row.reason || "-" },
+        { header: "Catatan Penolakan", value: (row) => row.rejection_reason || "-" },
+        { header: "Nomor Dokumen", value: (row) => row.document_reference_number || "-" },
+        { header: "Penerbit Dokumen", value: (row) => row.document_reference_issuer || "-" },
+        { header: "Ringkasan Perubahan", value: (row) => getChangeSummary(row) },
+      ] satisfies ReportOutputColumn<MutationRecord>[],
+    [getChangeSummary, resolveOpdAndUnit]
+  );
+
+  const mutationPdfColumns = useMemo(
+    () =>
+      [
+        { header: "No", value: (_row, index) => index + 1, align: "right", width: 28 },
+        { header: "Tanggal", value: (row) => getMutationCreatedAtLabel(row, "d MMM yyyy HH:mm"), width: 82 },
+        { header: "Nama", value: (row) => row.employees?.name || "-" },
+        { header: "NIP", value: (row) => row.employees?.nip || "-", width: 68 },
+        { header: "Tipe", value: (row) => getMutationTypeLabel(row.mutation_type) },
+        { header: "Status", value: (row) => getStatusLabel(row.status), width: 54 },
+        { header: "OPD Saat Ini", value: (row) => resolveOpdAndUnit(row).currentOpdLabel },
+        { header: "OPD Tujuan", value: (row) => resolveOpdAndUnit(row).targetOpdLabel },
+        { header: "Ringkasan Perubahan", value: (row) => getChangeSummary(row) },
+      ] satisfies ReportOutputColumn<MutationRecord>[],
+    [getChangeSummary, resolveOpdAndUnit]
+  );
+
   const fetchMutations = useCallback(async () => {
     if (!tenantId) {
       setRecords([]);
@@ -241,13 +278,13 @@ export default function OrgMutationReport() {
     try {
       setLoadError(null);
 
-      const allRows: MutationRecord[] = [];
+      const allRows: MutationRequestRow[] = [];
       let offset = 0;
 
       while (true) {
         let query = supabase
           .from("mutation_requests")
-          .select("id, employee_id, mutation_type, requested_changes, original_data, reason, status, rejection_reason, created_at, approved_at, approved_by, attachment_url, updated_at, tenant_id, employees!mutation_requests_employee_id_fkey(id, name, nip, opd_id, work_unit_id)")
+          .select("id, employee_id, mutation_type, requested_changes, original_data, reason, status, rejection_reason, created_at, approved_at, approved_by, document_reference_number, document_reference_date, document_reference_issuer, document_reference_notes, updated_at, tenant_id")
           .eq("tenant_id", tenantId)
           .order("created_at", { ascending: false })
           .range(offset, offset + FETCH_CHUNK - 1);
@@ -279,19 +316,88 @@ export default function OrgMutationReport() {
         );
         if (error) throw error;
 
-        const chunk = ((data || []) as MutationQueryRow[]).map((row) => ({
-          ...row,
-          employees: row.employees || null,
-          requested_changes_record: toJsonRecord(row.requested_changes),
-          original_data_record: toJsonRecord(row.original_data),
-        }));
+        const chunk = (data || []) as MutationRequestRow[];
 
         allRows.push(...chunk);
         if (chunk.length < FETCH_CHUNK) break;
         offset += FETCH_CHUNK;
       }
 
-      setRecords(allRows);
+      const employeeIds = Array.from(new Set(allRows.map((row) => row.employee_id).filter(Boolean)));
+      let employeeMap = new Map<string, EmployeeLite>();
+
+      if (employeeIds.length > 0) {
+        const { data: employeesData, error: employeesError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("employees")
+                .select("id, name, nip, opd_id, work_unit_id")
+                .in("id", employeeIds),
+              MUTATION_REPORT_QUERY_TIMEOUT_MS,
+              "org.reports.mutations.fetch.employee_detail timeout",
+            ),
+          {
+            maxRetries: MUTATION_REPORT_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
+        );
+
+        if (employeesError) {
+          const { data: employeesFallback, error: employeesFallbackError } = await withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase
+                  .from("employees")
+                  .select("id, name, nip")
+                  .in("id", employeeIds),
+                MUTATION_REPORT_QUERY_TIMEOUT_MS,
+                "org.reports.mutations.fetch.employee_fallback timeout",
+              ),
+            {
+              maxRetries: MUTATION_REPORT_QUERY_RETRY_MAX,
+              shouldRetry: isRetryableError,
+            },
+          );
+
+          if (employeesFallbackError) throw employeesFallbackError;
+
+          employeeMap = new Map(
+            (employeesFallback || []).map((employee) => [
+              employee.id,
+              {
+                id: employee.id,
+                name: employee.name,
+                nip: employee.nip,
+                opd_id: null,
+                work_unit_id: null,
+              },
+            ]),
+          );
+        } else {
+          employeeMap = new Map(
+            (employeesData || []).map((employee) => [
+              employee.id,
+              {
+                id: employee.id,
+                name: employee.name,
+                nip: employee.nip,
+                opd_id: employee.opd_id,
+                work_unit_id: employee.work_unit_id,
+              },
+            ]),
+          );
+        }
+      }
+
+      setRecords(
+        allRows.map((row) => ({
+          ...row,
+          employees: employeeMap.get(row.employee_id) || null,
+          requested_changes_record: toJsonRecord(row.requested_changes),
+          original_data_record: toJsonRecord(row.original_data),
+        })),
+      );
     } catch (error) {
       const errorRef = reportError(error, "org.reports.mutations.fetch", {
         tenant_id: tenantId,
@@ -335,6 +441,8 @@ export default function OrgMutationReport() {
         record.employees?.nip || "",
         record.reason || "",
         record.rejection_reason || "",
+        record.document_reference_number || "",
+        record.document_reference_issuer || "",
         getMutationTypeLabel(record.mutation_type),
         getStatusLabel(record.status),
       ]
@@ -395,57 +503,47 @@ export default function OrgMutationReport() {
     }
 
     try {
-      const csv = [
-        [
-          "No",
-          "Tanggal Pengajuan",
-          "Nama Pegawai",
-          "NIP",
-          "Tipe",
-          "Status",
-          "OPD Saat Ini",
-          "Unit Saat Ini",
-          "OPD Tujuan",
-          "Unit Tujuan",
-          "Alasan",
-          "Catatan Penolakan",
-          "Ringkasan Perubahan",
-        ].join(","),
-        ...filteredRecords.map((record, idx) => {
-          const unit = resolveOpdAndUnit(record);
-          return [
-            idx + 1,
-            format(new Date(record.created_at), "yyyy-MM-dd HH:mm"),
-            `"${(record.employees?.name || "-").replace(/"/g, '""')}"`,
-            record.employees?.nip || "-",
-            getMutationTypeLabel(record.mutation_type),
-            getStatusLabel(record.status),
-            `"${unit.currentOpdLabel.replace(/"/g, '""')}"`,
-            `"${unit.currentWorkUnitLabel.replace(/"/g, '""')}"`,
-            `"${unit.targetOpdLabel.replace(/"/g, '""')}"`,
-            `"${unit.targetWorkUnitLabel.replace(/"/g, '""')}"`,
-            `"${(record.reason || "-").replace(/"/g, '""')}"`,
-            `"${(record.rejection_reason || "-").replace(/"/g, '""')}"`,
-            `"${getChangeSummary(record).replace(/"/g, '""')}"`,
-          ].join(",");
-        }),
-      ].join("\n");
+      const traceId = createReportTraceId("MUT-CSV");
+      const csv = buildReportCsv({
+        columns: mutationCsvColumns,
+        rows: filteredRecords,
+      });
 
-      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `riwayat-mutasi-${startDate || "all"}-${endDate || "all"}.csv`;
-      link.click();
-      window.URL.revokeObjectURL(url);
-      toast.success("Export berhasil");
+      downloadCsvFile(`riwayat-mutasi-${startDate || "all"}-${endDate || "all"}.csv`, csv);
+
+      const auditResult = await recordReportOutputAudit({
+        action: "mutation_report_export_csv",
+        filters: {
+          end_date: endDate || null,
+          mutation_type: typeFilter === "all" ? null : typeFilter,
+          opd_id: opdFilter === "all" ? null : opdFilter,
+          search: searchTerm.trim() || null,
+          start_date: startDate || null,
+          status: statusFilter === "all" ? null : statusFilter,
+          work_unit_id: workUnitFilter === "all" ? null : workUnitFilter,
+        },
+        outputType: "csv",
+        reportName: "Laporan Riwayat Mutasi Organisasi",
+        rowCount: filteredRecords.length,
+        tenantId,
+        traceId,
+      });
+
+      if (!auditResult.ok) {
+        toast.warning(
+          appendErrorReference(`CSV berhasil diunduh, tetapi audit log gagal dicatat. Ref dokumen: ${traceId}`, auditResult.errorRef),
+        );
+        return;
+      }
+
+      toast.success(`CSV berhasil diunduh (Ref: ${traceId})`);
     } catch (error) {
       const errorRef = reportError(error, "org.reports.mutations.export");
       toast.error(appendErrorReference("Gagal export riwayat mutasi", errorRef));
     }
   };
 
-  const handlePrintPdf = async () => {
+  const handleDownloadPdf = async () => {
     if (!hasQueried) {
       toast.error("Klik Tampilkan terlebih dahulu");
       return;
@@ -456,80 +554,73 @@ export default function OrgMutationReport() {
     }
 
     try {
-      const periodLabel = startDate && endDate ? `${startDate} s/d ${endDate}` : "Semua periode";
-      const printedAt = format(new Date(), "d MMMM yyyy HH:mm", { locale: localeId });
-      const rowsHtml = filteredRecords
-        .map((record, idx) => {
-          const unit = resolveOpdAndUnit(record);
-          return `
-            <tr>
-              <td>${idx + 1}</td>
-              <td>${escapeHtml(format(new Date(record.created_at), "d MMM yyyy HH:mm", { locale: localeId }))}</td>
-              <td>${escapeHtml(record.employees?.name || "-")}</td>
-              <td>${escapeHtml(record.employees?.nip || "-")}</td>
-              <td>${escapeHtml(getMutationTypeLabel(record.mutation_type))}</td>
-              <td>${escapeHtml(getStatusLabel(record.status))}</td>
-              <td>${escapeHtml(unit.currentOpdLabel)}</td>
-              <td>${escapeHtml(unit.targetOpdLabel)}</td>
-              <td>${escapeHtml(getChangeSummary(record))}</td>
-            </tr>
-          `;
-        })
-        .join("");
+      const traceId = createReportTraceId("MUT-PDF");
+      const periodLabel =
+        startDate && endDate
+          ? `${startDate} s/d ${endDate}`
+          : startDate
+            ? `Mulai ${startDate}`
+            : endDate
+              ? `Sampai ${endDate}`
+              : "Semua periode";
+      const opdLabel =
+        opdFilter === "all"
+          ? "Semua OPD"
+          : (() => {
+              const opd = opds.find((item) => item.id === opdFilter);
+              return opd ? `${opd.code} - ${opd.name}` : opdFilter;
+            })();
+      const workUnitLabel =
+        workUnitFilter === "all" ? "Semua satuan kerja" : workUnits.find((item) => item.id === workUnitFilter)?.name || workUnitFilter;
 
-      const printWindow = window.open("", "_blank", "width=1200,height=800");
-      if (!printWindow) {
-        toast.error("Popup diblokir browser. Izinkan popup untuk cetak PDF.");
+      downloadReportPdf({
+        columns: mutationPdfColumns,
+        filename: `riwayat-mutasi-${startDate || "all"}-${endDate || "all"}.pdf`,
+        metadataLines: [
+          `Periode: ${periodLabel}`,
+          `Filter status: ${statusFilter === "all" ? "Semua status" : getStatusLabel(statusFilter)}`,
+          `Jenis mutasi: ${typeFilter === "all" ? "Semua jenis" : getMutationTypeLabel(typeFilter)}`,
+          `Filter OPD: ${opdLabel}`,
+          `Filter satuan kerja: ${workUnitLabel}`,
+          `Pencarian: ${searchTerm.trim() || "-"}`,
+          `Total data: ${filteredRecords.length}`,
+        ],
+        orientation: "landscape",
+        rows: filteredRecords,
+        sourceLabel: "AbsensiKu /org/reports/mutations",
+        title: "Laporan Riwayat Mutasi Pegawai",
+        traceId,
+      });
+
+      const auditResult = await recordReportOutputAudit({
+        action: "mutation_report_download_pdf",
+        filters: {
+          end_date: endDate || null,
+          mutation_type: typeFilter === "all" ? null : typeFilter,
+          opd_id: opdFilter === "all" ? null : opdFilter,
+          search: searchTerm.trim() || null,
+          start_date: startDate || null,
+          status: statusFilter === "all" ? null : statusFilter,
+          work_unit_id: workUnitFilter === "all" ? null : workUnitFilter,
+        },
+        outputType: "pdf",
+        reportName: "Laporan Riwayat Mutasi Organisasi",
+        rowCount: filteredRecords.length,
+        tenantId,
+        traceId,
+      });
+
+      if (!auditResult.ok) {
+        toast.warning(
+          appendErrorReference(`PDF berhasil diunduh, tetapi audit log gagal dicatat. Ref dokumen: ${traceId}`, auditResult.errorRef),
+        );
         return;
       }
 
-      printWindow.document.write(`
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta charset="UTF-8" />
-            <title>Laporan Riwayat Mutasi</title>
-            <style>
-              body { font-family: Arial, sans-serif; margin: 24px; color: #111; }
-              h1 { margin: 0 0 8px; font-size: 20px; }
-              .meta { margin: 0 0 16px; font-size: 12px; color: #444; }
-              table { width: 100%; border-collapse: collapse; font-size: 11px; }
-              th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
-              th { background: #f3f4f6; }
-              .footer { margin-top: 12px; font-size: 11px; color: #666; }
-            </style>
-          </head>
-          <body>
-            <h1>Laporan Riwayat Mutasi Pegawai</h1>
-            <p class="meta">Periode: ${escapeHtml(periodLabel)} | Total: ${filteredRecords.length} data | Dicetak: ${escapeHtml(printedAt)}</p>
-            <table>
-              <thead>
-                <tr>
-                  <th>No</th>
-                  <th>Tanggal</th>
-                  <th>Nama</th>
-                  <th>NIP</th>
-                  <th>Tipe</th>
-                  <th>Status</th>
-                  <th>OPD Saat Ini</th>
-                  <th>OPD Tujuan</th>
-                  <th>Ringkasan Perubahan</th>
-                </tr>
-              </thead>
-              <tbody>${rowsHtml}</tbody>
-            </table>
-            <p class="footer">Sumber: AbsensiKu /org/reports/mutations</p>
-          </body>
-        </html>
-      `);
-      printWindow.document.close();
-      printWindow.onload = () => {
-        printWindow.focus();
-        printWindow.print();
-      };
+      toast.success(`PDF berhasil diunduh (Ref: ${traceId})`);
     } catch (error) {
-      const errorRef = reportError(error, "org.reports.mutations.print");
-      toast.error(appendErrorReference("Gagal menyiapkan print PDF", errorRef));
+      const errorRef = reportError(error, "org.reports.mutations.pdf_download");
+      toast.error(appendErrorReference("Gagal menyiapkan PDF riwayat mutasi", errorRef));
     }
   };
 
@@ -545,8 +636,8 @@ export default function OrgMutationReport() {
             <p className="text-muted-foreground">Riwayat pengajuan perubahan profil dan mutasi pegawai</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={handlePrintPdf} disabled={filteredRecords.length === 0 || isLoading}>
-              <Printer className="mr-2 h-4 w-4" /> Print PDF
+            <Button variant="outline" onClick={handleDownloadPdf} disabled={filteredRecords.length === 0 || isLoading}>
+              <FileText className="mr-2 h-4 w-4" /> Unduh PDF
             </Button>
             <Button variant="outline" onClick={handleExport} disabled={filteredRecords.length === 0 || isLoading}>
               <Download className="mr-2 h-4 w-4" /> Export CSV

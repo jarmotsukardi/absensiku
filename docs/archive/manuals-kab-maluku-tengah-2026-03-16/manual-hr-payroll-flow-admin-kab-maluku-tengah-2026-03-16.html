@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Manual Alur HR ke Payroll (Admin)</title>
+  <style>
+    :root { color-scheme: light; }
+    body { font-family: "Times New Roman", Times, serif; line-height: 1.55; margin: 40px; color: #111; }
+    h1 { font-size: 22px; margin: 0 0 12px; }
+    h2 { font-size: 16px; margin-top: 22px; }
+    h3 { font-size: 14px; margin-top: 16px; }
+    p { margin: 0 0 10px; }
+    ul { padding-left: 18px; margin: 6px 0 12px; }
+    img { width: 100%; border: 1px solid #ddd; margin: 8px 0 12px; }
+    .step { margin-bottom: 18px; }
+  </style>
+</head>
+<body>
+  <h1>Manual Alur HR ke Payroll (Admin)</h1>
+  <p>Terakhir diperbarui: 16 Maret 2026</p>
+
+  <h2>Tujuan</h2>
+  <ul>
+    <li>Menjelaskan alur uji coba HR ke Payroll menggunakan 1 pegawai dari Kab. Maluku Tengah.</li>
+    <li>Menunjukkan komponen layar, penjelasan gambar, dan detail langkah operasional.</li>
+  </ul>
+
+  <h2>Prasyarat</h2>
+  <ul>
+    <li>Login sebagai admin organisasi Kab. Maluku Tengah.</li>
+    <li>Akses menu HR dan Payroll aktif di sidebar.</li>
+    <li>Data pegawai tersedia untuk diuji.</li>
+  </ul>
+
+  <h2>Alur Uji Coba HR ke Payroll</h2>
+
+  <div class="step">
+    <h3>1. HR &gt; Data Pegawai</h3>
+    <img src="../public/manuals/screenshots/flow/01-hr-data-pegawai.png" alt="HR Data Pegawai" />
+    <p><strong>Komponen layar:</strong></p>
+    <ul>
+      <li>Pencarian pegawai.</li>
+      <li>Daftar pegawai dan ringkasan data.</li>
+    </ul>
+    <p><strong>Penjelasan gambar:</strong> Menampilkan daftar pegawai dan hasil pencarian 1 pegawai uji.</p>
+    <p><strong>Detail langkah:</strong></p>
+    <ul>
+      <li>Buka menu <strong>HR &gt; Data Pegawai</strong>.</li>
+      <li>Gunakan kolom pencarian untuk memilih 1 pegawai uji.</li>
+      <li>Pastikan data pegawai tampil lengkap sebelum masuk ke payroll.</li>
+    </ul>
+  </div>
+
+  <div class="step">
+    <h3>2. HR &gt; Kontrak Kerja</h3>
+    <img src="../public/manuals/screenshots/flow/02-hr-kontrak-kerja.png" alt="HR Kontrak Kerja" />
+    <p><strong>Komponen layar:</strong></p>
+    <ul>
+      <li>Daftar kontrak kerja.</li>
+      <li>Status kontrak aktif.</li>
+    </ul>
+    <p><strong>Penjelasan gambar:</strong> Memastikan kontrak kerja pegawai tersedia untuk proses payroll.</p>
+    <p><strong>Detail langkah:</strong></p>
+    <ul>
+      <li>Buka menu <strong>HR &gt; Kontrak Kerja</strong>.</li>
+      <li>Periksa status kontrak pegawai yang akan diuji.</li>
+      <li>Pastikan kontrak aktif agar payroll bisa dijalankan.</li>
+    </ul>
+  </div>
+
+  <div class="step">
+    <h3>3. Payroll &gt; Periode Payroll</h3>
+    <img src="../public/manuals/screenshots/flow/03-payroll-periode.png" alt="Payroll Periode" />
+    <p><strong>Komponen layar:</strong></p>
+    <ul>
+      <li>Daftar periode payroll.</li>
+      <li>Status periode aktif.</li>
+    </ul>
+    <p><strong>Penjelasan gambar:</strong> Menentukan periode payroll yang akan digunakan untuk uji coba.</p>
+    <p><strong>Detail langkah:</strong></p>
+    <ul>
+      <li>Buka menu <strong>Payroll &gt; Periode Payroll</strong>.</li>
+      <li>Pastikan ada periode aktif untuk penggajian.</li>
+      <li>Catat periode aktif sebagai acuan proses berikutnya.</li>
+    </ul>
+  </div>
+
+  <div class="step">
+    <h3>4. Payroll &gt; Input Variabel</h3>
+    <img src="../public/manuals/screenshots/flow/04-payroll-input-variabel.png" alt="Payroll Input Variabel" />
+    <p><strong>Komponen layar:</strong></p>
+    <ul>
+      <li>Tombol tambah input variabel.</li>
+      <li>Form input variabel komponen gaji.</li>
+    </ul>
+    <p><strong>Penjelasan gambar:</strong> Menambahkan komponen variabel gaji untuk 1 pegawai uji.</p>
+    <p><strong>Detail langkah:</strong></p>
+    <ul>
+      <li>Buka menu <strong>Payroll &gt; Input Variabel</strong>.</li>
+      <li>Tambahkan komponen variabel untuk pegawai uji.</li>
+      <li>Isi kode komponen, nama komponen, nominal, dan catatan.</li>
+      <li>Simpan input variabel sebagai data uji payroll.</li>
+    </ul>
+  </div>
+
+  <div class="step">
+    <h3>5. Payroll &gt; Validasi Payroll</h3>
+    <img src="../public/manuals/screenshots/flow/05-payroll-validasi.png" alt="Payroll Validasi" />
+    <p><strong>Komponen layar:</strong></p>
+    <ul>
+      <li>Tombol tambah validasi.</li>
+      <li>Ringkasan temuan validasi.</li>
+    </ul>
+    <p><strong>Penjelasan gambar:</strong> Membuat catatan validasi sebelum proses payroll dijalankan.</p>
+    <p><strong>Detail langkah:</strong></p>
+    <ul>
+      <li>Buka menu <strong>Payroll &gt; Validasi Payroll</strong>.</li>
+      <li>Tambahkan validasi untuk periode uji.</li>
+      <li>Isi tingkat perhatian dan ringkasan temuan.</li>
+      <li>Simpan validasi untuk memastikan kesiapan data.</li>
+    </ul>
+  </div>
+
+  <div class="step">
+    <h3>6. Payroll &gt; Proses Payroll</h3>
+    <img src="../public/manuals/screenshots/flow/06-payroll-proses.png" alt="Payroll Proses" />
+    <p><strong>Komponen layar:</strong></p>
+    <ul>
+      <li>Tombol buat proses payroll.</li>
+      <li>Form proses payroll.</li>
+    </ul>
+    <p><strong>Penjelasan gambar:</strong> Menjalankan proses payroll untuk periode uji.</p>
+    <p><strong>Detail langkah:</strong></p>
+    <ul>
+      <li>Buka menu <strong>Payroll &gt; Proses Payroll</strong>.</li>
+      <li>Pilih periode payroll yang aktif.</li>
+      <li>Tambahkan catatan proses dan simpan.</li>
+      <li>Tunggu proses selesai sebelum ke tahap persetujuan.</li>
+    </ul>
+  </div>
+
+  <div class="step">
+    <h3>7. Payroll &gt; Persetujuan Payroll</h3>
+    <img src="../public/manuals/screenshots/flow/07-payroll-persetujuan.png" alt="Payroll Persetujuan" />
+    <p><strong>Komponen layar:</strong></p>
+    <ul>
+      <li>Tombol sinkronisasi dari proses.</li>
+      <li>Daftar persetujuan payroll.</li>
+    </ul>
+    <p><strong>Penjelasan gambar:</strong> Mengecek hasil proses payroll dan menyiapkan persetujuan.</p>
+    <p><strong>Detail langkah:</strong></p>
+    <ul>
+      <li>Buka menu <strong>Payroll &gt; Persetujuan Payroll</strong>.</li>
+      <li>Sinkronkan dari proses payroll jika tersedia.</li>
+      <li>Pastikan data persetujuan muncul untuk pegawai uji.</li>
+    </ul>
+  </div>
+
+  <div class="step">
+    <h3>8. Payroll &gt; Slip Gaji</h3>
+    <img src="../public/manuals/screenshots/flow/08-payroll-slip-gaji.png" alt="Payroll Slip Gaji" />
+    <p><strong>Komponen layar:</strong></p>
+    <ul>
+      <li>Daftar slip gaji.</li>
+      <li>Ringkasan komponen gaji.</li>
+    </ul>
+    <p><strong>Penjelasan gambar:</strong> Meninjau slip gaji pegawai uji setelah proses payroll.</p>
+    <p><strong>Detail langkah:</strong></p>
+    <ul>
+      <li>Buka menu <strong>Payroll &gt; Slip Gaji</strong>.</li>
+      <li>Cari slip gaji pegawai uji.</li>
+      <li>Periksa komponen gaji dan nominalnya.</li>
+    </ul>
+  </div>
+
+  <div class="step">
+    <h3>9. Payroll &gt; Pembayaran Payroll</h3>
+    <img src="../public/manuals/screenshots/flow/09-payroll-pembayaran.png" alt="Payroll Pembayaran" />
+    <p><strong>Komponen layar:</strong></p>
+    <ul>
+      <li>Ringkasan pembayaran.</li>
+      <li>Status pembayaran payroll.</li>
+    </ul>
+    <p><strong>Penjelasan gambar:</strong> Meninjau status pembayaran payroll untuk pegawai uji.</p>
+    <p><strong>Detail langkah:</strong></p>
+    <ul>
+      <li>Buka menu <strong>Payroll &gt; Pembayaran Payroll</strong>.</li>
+      <li>Pastikan data pembayaran muncul untuk periode uji.</li>
+      <li>Verifikasi status pembayaran sesuai kebutuhan.</li>
+    </ul>
+  </div>
+
+  <h2>Glosarium</h2>
+  <ul>
+    <li><strong>Input Variabel</strong>: Komponen gaji yang tidak tetap, seperti lembur atau bonus.</li>
+    <li><strong>Periode Payroll</strong>: Rentang waktu penggajian yang sedang berjalan.</li>
+    <li><strong>Validasi Payroll</strong>: Pemeriksaan kelengkapan data sebelum proses payroll.</li>
+    <li><strong>Proses Payroll</strong>: Eksekusi perhitungan payroll untuk periode tertentu.</li>
+    <li><strong>Persetujuan Payroll</strong>: Tahap persetujuan hasil proses payroll.</li>
+    <li><strong>Slip Gaji</strong>: Dokumen rincian gaji pegawai.</li>
+    <li><strong>Pembayaran Payroll</strong>: Tahap pembayaran gaji kepada pegawai.</li>
+  </ul>
+</body>
+</html>

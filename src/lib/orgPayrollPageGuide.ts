@@ -1,3 +1,5 @@
+import { PAYROLL_GLOSSARY } from "@/lib/payrollComplianceRules";
+
 type PayrollGlossaryItem = {
   term: string;
   definition: string;
@@ -82,6 +84,40 @@ const PAYROLL_GUIDES: Record<string, PayrollPageGuide> = {
     ],
     relatedRoutes: [
       { path: "/org/payroll/periods", label: "Periode Payroll", note: "Buka periode setelah kebijakan siap." },
+    ],
+  },
+  "/org/payroll/compliance-master": {
+    badge: "Pengaturan",
+    title: "Panduan Master Kepatuhan Payroll",
+    summary: "Master kepatuhan dipakai untuk menyimpan tarif TER, BPJS, dan standar UMP/UMK.",
+    focusPoints: [
+      "Mengisi tarif TER sesuai kategori pajak A/B/C.",
+      "Menetapkan tarif BPJS per program dan risk level.",
+      "Menyimpan UMP/UMK per wilayah kerja yang aktif.",
+    ],
+    useCases: [
+      "Saat organisasi memulai payroll swasta umum.",
+      "Saat ada perubahan tarif pajak atau BPJS.",
+      "Saat UMP/UMK wilayah kerja diperbarui.",
+    ],
+    outputs: [
+      "Tarif pajak dan BPJS yang siap dipakai perhitungan.",
+      "Standar upah minimum per wilayah yang terdokumentasi.",
+      "Referensi kepatuhan yang mudah diaudit.",
+    ],
+    watchouts: [
+      "Pastikan tanggal efektif tidak saling tumpang tindih.",
+      "Gunakan status aktif agar tarif yang dipakai hanya satu versi.",
+    ],
+    glossary: [
+      ...PAYROLL_GLOSSARY,
+      { term: "Tarif TER", definition: "Tarif efektif rata-rata PPh 21 sesuai kategori pajak." },
+      { term: "Tarif BPJS", definition: "Persentase iuran BPJS untuk perusahaan dan pegawai." },
+      { term: "Upah Minimum", definition: "Standar upah minimum wilayah kerja (UMP/UMK)." },
+    ],
+    relatedRoutes: [
+      { path: "/org/payroll/policies", label: "Kebijakan Payroll", note: "Pastikan kebijakan payroll sudah siap." },
+      { path: "/org/payroll/validation", label: "Validasi Payroll", note: "Lakukan cek kepatuhan setelah master data lengkap." },
     ],
   },
   "/org/payroll/periods": {
@@ -297,6 +333,7 @@ const PAYROLL_GUIDES: Record<string, PayrollPageGuide> = {
       "Pusat bantuan ringan untuk workspace payroll.",
     ],
     glossary: [
+      ...PAYROLL_GLOSSARY,
       { term: "Rujukan", definition: "Halaman lain yang dipakai untuk membantu memahami atau menelusuri kondisi payroll." },
       { term: "Audit Log", definition: "Jejak perubahan payroll yang membantu menelusuri siapa melakukan apa." },
       { term: "Log Error", definition: "Daftar error aktif yang perlu ditindaklanjuti secara operasional." },
@@ -304,30 +341,32 @@ const PAYROLL_GUIDES: Record<string, PayrollPageGuide> = {
   },
   "/org/payroll/employees": {
     badge: "Referensi HR",
-    title: "Panduan Data Pegawai Payroll",
-    summary: "Halaman ini menjadi referensi kesiapan data pegawai dari HR agar payroll tidak membuat master pegawai baru.",
+    title: "Panduan Kompensasi Pegawai",
+    summary: "Halaman ini dipakai untuk melengkapi gaji pokok dan parameter kepatuhan per pegawai.",
     focusPoints: [
-      "Membaca data pegawai aktif dari HR.",
-      "Menjadi titik cek kesiapan payroll per pegawai.",
-      "Menghindari duplikasi master data pegawai.",
+      "Mengisi gaji pokok dan kategori TER.",
+      "Menetapkan risk level JKK dan wilayah UMP/UMK.",
+      "Menjadi fondasi perhitungan payroll otomatis.",
     ],
     useCases: [
-      "Saat ingin memastikan pegawai sudah siap diproses payroll.",
-      "Saat ada masalah data pegawai yang memengaruhi payroll.",
-      "Saat tim butuh melihat referensi HR tanpa pindah konteks terlalu jauh.",
+      "Saat memulai payroll otomatis dan butuh data gaji pokok.",
+      "Saat ada perubahan kategori pajak atau BPJS pegawai.",
+      "Saat ingin mengecek kepatuhan UMP/UMK per pegawai.",
     ],
     outputs: [
-      "Ringkasan kesiapan data pegawai.",
-      "Acuan untuk menelusuri data HR yang kurang lengkap.",
-      "Jembatan antara payroll dan master pegawai HR.",
+      "Data kompensasi yang siap dipakai perhitungan payroll.",
+      "Ringkasan pegawai yang belum lengkap.",
+      "Parameter kepatuhan yang terdokumentasi.",
     ],
     glossary: [
       { term: "Referensi HR", definition: "Data sumber dari modul HR yang dibaca payroll sebagai acuan." },
-      { term: "Kesiapan Payroll", definition: "Kondisi minimum data pegawai yang dibutuhkan agar payroll bisa diproses." },
-      { term: "Master Data", definition: "Data utama yang dikelola di modul sumber, bukan diduplikasi di payroll." },
+      { term: "Gaji Pokok", definition: "Nominal dasar kompensasi pegawai yang menjadi basis perhitungan payroll." },
+      { term: "Kategori TER", definition: "Kategori pajak A/B/C yang dipakai untuk menghitung PPh 21." },
+      { term: "Risk Level JKK", definition: "Level risiko kerja untuk menentukan tarif JKK BPJS Ketenagakerjaan." },
     ],
     relatedRoutes: [
       { path: "/org/payroll/org-grade", label: "Struktur Organisasi dan Grade", note: "Lihat konteks organisasi dan grade dari HR." },
+      { path: "/org/payroll/compliance-master", label: "Master Kepatuhan Payroll", note: "Pastikan tarif TER/BPJS/UMP sudah lengkap." },
     ],
   },
   "/org/payroll/org-grade": {
@@ -540,37 +579,6 @@ const PAYROLL_GUIDES: Record<string, PayrollPageGuide> = {
       { term: "Audit Log", definition: "Catatan perubahan dan aktivitas yang terjadi di dalam sistem." },
       { term: "Entitas", definition: "Objek data yang berubah, misalnya proses payroll, webhook, atau laporan." },
       { term: "Aksi", definition: "Jenis perubahan yang terjadi, seperti membuat, mengubah, atau menghapus." },
-    ],
-    relatedRoutes: [
-      { path: "/org/payroll/error-log", label: "Log Error Payroll", note: "Lanjutkan ke log error bila masalah masih aktif." },
-    ],
-  },
-  "/org/payroll/error-log": {
-    badge: "Ditunda",
-    title: "Panduan Log Error Payroll",
-    summary: "Log error payroll membantu tim memusatkan triase error aktif saat modul payroll sudah cukup banyak dipakai.",
-    focusPoints: [
-      "Memantau error aktif berdasarkan tingkat prioritas.",
-      "Menyediakan nomor referensi untuk tindak lanjut cepat.",
-      "Membantu menghubungkan error ke konteks payroll tertentu.",
-    ],
-    useCases: [
-      "Saat payroll sudah aktif dipakai dan perlu triase error.",
-      "Saat tim ingin melacak error kritis lebih dulu.",
-      "Saat butuh referensi cepat sebelum membuka audit log.",
-    ],
-    outputs: [
-      "Daftar error aktif yang mudah dipantau.",
-      "Nomor referensi untuk investigasi dan eskalasi.",
-      "Dasar pengambilan tindakan terhadap insiden payroll.",
-    ],
-    glossary: [
-      { term: "Error Kritis", definition: "Masalah yang berpotensi mengganggu alur utama payroll dan perlu diprioritaskan." },
-      { term: "Referensi Error", definition: "Nomor atau kode yang memudahkan tim menelusuri sumber masalah." },
-      { term: "Retensi", definition: "Aturan penyimpanan log agar daftar tetap relevan dan performa tetap terjaga." },
-    ],
-    relatedRoutes: [
-      { path: "/org/payroll/audit-log", label: "Audit Log Payroll", note: "Gunakan audit log untuk melihat jejak perubahan setelah menemukan error." },
     ],
   },
   "/org/payroll/settings": {

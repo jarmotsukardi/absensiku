@@ -197,13 +197,13 @@ export default function AdminHRFAQ() {
 
   return (
     <AdminHRPageShell
-      title="FAQ Dukungan HR"
+      title="FAQ Platform HR"
       subtitle="Pertanyaan umum dukungan HR"
       description="Kumpulan jawaban standar untuk tim dukungan HR agar respons ke tenant tetap konsisten, cepat, dan dapat ditelusuri."
     >
       <div className="space-y-4">
         <div className="grid gap-3 md:grid-cols-3">
-          <MetricCard title="FAQ Aktif" value={items.length} note="Item FAQ yang siap dipakai tim dukungan." />
+          <MetricCard title="FAQ Aktif" value={items.length} note="Item FAQ yang siap dipakai tim support." />
           <MetricCard title="Kategori" value={categoryCount} note="Kelompok topik untuk navigasi internal." />
           <MetricCard title="Hasil Pencarian" value={filteredItems.length} note="Item yang cocok dengan query saat ini." />
         </div>

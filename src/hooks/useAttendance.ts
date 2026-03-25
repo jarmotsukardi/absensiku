@@ -23,12 +23,33 @@ import {
   isPeakHours,
   getQueueMessageInfo,
 } from "@/lib/attendanceResilience";
-import { loadScalabilityConfig } from "@/lib/scalabilityConfig";
+import { loadAttendanceScalabilitySetting, loadScalabilityConfig } from "@/lib/scalabilityConfig";
 import { useAttendanceSync } from "./useAttendanceSync";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { buildAttendanceClientContext } from "@/lib/attendanceClientContext";
 import { reconcileTodayAttendance } from "@/lib/attendanceRecordSync";
 import { DEFAULT_TIMEZONE, getCurrentDateStringInTimezone } from "@/lib/timezone";
+import {
+  buildLocalProductionWriteBlockMessage,
+  shouldBlockLocalProductionWrites,
+} from "@/lib/runtimeEnvironment";
+import {
+  buildDeferredAttendanceResult,
+  buildDelayedBufferedPendingState,
+  buildDeferredAttendanceMessages,
+  buildDeferredBufferedPendingState,
+  buildHeldBufferedPendingState,
+  buildErrorPendingState,
+  buildInitialBufferedPendingState,
+  buildJitterPendingState,
+  buildProcessingPendingState,
+  buildRpcFailureAttendanceResult,
+  buildRpcSuccessAttendanceResult,
+  resolveAttendanceSyncDecision,
+  buildSyncFailureMessage,
+  buildSuccessPendingState,
+  buildDelayedAttendanceResult,
+} from "@/lib/attendanceSyncPolicy";
 
 type AttendanceRecord = Tables<"attendance_records">;
 type Office = Tables<"offices">;
@@ -52,6 +73,7 @@ export interface PendingState {
   status: PendingStatus;
   type: 'check_in' | 'check_out' | null;
   message: string;
+  detail?: string;
   jitterMs?: number;
   retryCount?: number;
   syncStatus?: 'pending' | 'syncing' | 'synced' | 'failed'; // IndexedDB sync status
@@ -173,6 +195,8 @@ export function useAttendance(
 
   const abortRef = useRef<AbortController | null>(null);
   const todayAttendanceRef = useRef<AttendanceRecord | null>(null);
+  const checkInLockRef = useRef(false);
+  const checkOutLockRef = useRef(false);
   const today = getCurrentDateStringInTimezone(timezone || DEFAULT_TIMEZONE);
 
   // Background sync hook (re-hydration, online detection, auto-sync)
@@ -333,6 +357,7 @@ export function useAttendance(
             status: 'processing',
             type,
             message: `Mencoba ulang (${attempt}/3)...`,
+            detail: 'Data belum final di server. Sistem sedang mencoba sinkron ulang.',
             retryCount: attempt,
             syncStatus: 'syncing',
           });
@@ -354,165 +379,185 @@ export function useAttendance(
       return { success: false, message: "Anda sudah melakukan absen masuk hari ini" };
     }
 
-    const existingBuffer = await hasCheckInToday(employeeId, today);
-    if (existingBuffer && existingBuffer.syncStatus !== 'failed') {
+    if (checkInLockRef.current) {
       return { success: false, message: "Absen masuk sedang diproses" };
     }
 
-    // Circuit Breaker check (3 failures = open)
-    const cbCheck = canMakeRequest();
-    if (!cbCheck.allowed) {
-      setPendingState({ status: 'circuit_open', type: 'check_in', message: cbCheck.reason || 'Server sibuk', syncStatus: 'pending' });
-      return { success: false, message: cbCheck.reason || 'Server sedang sibuk, coba lagi nanti' };
+    if (shouldBlockLocalProductionWrites()) {
+      const message = buildLocalProductionWriteBlockMessage("Absen masuk");
+      setPendingState(buildErrorPendingState(
+        "check_in",
+        message,
+        "Localhost saat ini hanya boleh membaca data production. Pakai staging remote atau override eksplisit bila benar-benar diperlukan.",
+      ));
+      return { success: false, message };
     }
 
-    // Validasi jarak
-    const distance = calculateDistance(latitude, longitude, Number(office.latitude), Number(office.longitude));
-    const radiusLimit = office.radius_meters || 100;
-    if (distance > radiusLimit) {
-      return {
-        success: false,
-        message: `Anda berada di luar radius kantor (${Math.round(distance)}m, maks ${radiusLimit}m)`,
-        distance,
-      };
-    }
-
-    // SAVE TO INDEXEDDB FIRST (instant, < 5ms)
-    const now = new Date();
-    const entry = await saveAttendanceEntry({
-      employeeId,
-      officeId,
-      date: today,
-      type: 'check_in',
-      latitude,
-      longitude,
-      distanceMeters: Math.round(distance),
-      timestamp: now.toISOString(),
-    });
-
-    const optimisticRecord = entryToOptimisticRecord(entry);
-    setTodayAttendance(optimisticRecord);
-    await cacheTodayRecord(employeeId, optimisticRecord, today);
-
-    setPendingState({ status: 'buffered', type: 'check_in', message: 'Data absensi tersimpan di perangkat', syncStatus: 'pending' });
-
-    // Deferred mode: store-first, sync in background to reduce burst load.
-    const scalabilityProfile = loadScalabilityConfig();
-    if (scalabilityProfile.syncMode === 'deferred') {
-      const deferredMs = scalabilityProfile.deferredSyncDelayMs + generateAdaptiveJitter(0);
-      window.setTimeout(() => {
-        triggerSync();
-      }, deferredMs);
-
-      setPendingState({
-        status: 'buffered',
-        type: 'check_in',
-        message: `Absensi disimpan lokal. Sinkronisasi dijadwalkan ~${Math.ceil(deferredMs / 1000)} detik.`,
-        syncStatus: 'pending',
-      });
-      window.setTimeout(() => {
-        setPendingState({ status: 'idle', type: null, message: '' });
-      }, 4000);
-
-      return {
-        success: true,
-        message: "Absen masuk tersimpan di perangkat dan akan disinkronkan otomatis.",
-        distance,
-      };
-    }
-
-    setIsSubmitting(true);
-
-    abortRef.current?.abort();
-    abortRef.current = new AbortController();
-    const signal = abortRef.current.signal;
-
-    // ADAPTIVE JITTER
-    const jitterMs = generateAdaptiveJitter(0);
-    const peakInfo = isPeakHours() ? ' (jam sibuk)' : '';
-    setPendingState({
-      status: 'jitter',
-      type: 'check_in',
-      message: `Menghubungkan ke server${peakInfo}...`,
-      jitterMs,
-      syncStatus: 'pending',
-    });
-
+    checkInLockRef.current = true;
     try {
-      await delayWithAbort(jitterMs, signal);
-    } catch {
-      setIsSubmitting(false);
-      setPendingState({ status: 'buffered', type: 'check_in', message: 'Tersimpan di perangkat, akan disinkronkan otomatis', syncStatus: 'pending' });
-      return { success: true, message: "Absen masuk tersimpan (sinkronisasi tertunda)" };
-    }
-
-    // RPC SYNC
-    setPendingState({ status: 'processing', type: 'check_in', message: 'Menyimpan ke server...', syncStatus: 'syncing' });
-    await updateEntryStatus(entry.bufferId, { syncStatus: 'syncing' });
-
-    try {
-      const result = await syncWithResilience(entry, 'check_in', signal);
-
-      if (!result.success) {
-        await updateEntryStatus(entry.bufferId, {
-          syncStatus: 'failed', syncAttempts: 1,
-          lastSyncAttempt: now.toISOString(), syncError: result.message,
-        });
-        recordFailure();
-        setPendingState({ status: 'error', type: 'check_in', message: result.message, syncStatus: 'failed' });
-        setTimeout(() => setPendingState({ status: 'idle', type: null, message: '' }), 5000);
-        return { success: false, message: result.message };
+      const existingBuffer = await hasCheckInToday(employeeId, today);
+      if (existingBuffer && existingBuffer.syncStatus !== 'failed') {
+        return { success: false, message: "Absen masuk sedang diproses" };
       }
 
-      // Success
-      await updateEntryStatus(entry.bufferId, {
-        syncStatus: 'synced', serverRecordId: result.id || null,
-        lastSyncAttempt: now.toISOString(),
-      });
-      recordSuccess();
+      // Circuit Breaker check (3 failures = open)
+      const cbCheck = canMakeRequest();
+      if (!cbCheck.allowed) {
+        setPendingState({ status: 'circuit_open', type: 'check_in', message: cbCheck.reason || 'Server sibuk', syncStatus: 'pending' });
+        return { success: false, message: cbCheck.reason || 'Server sedang sibuk, coba lagi nanti' };
+      }
 
-      const confirmedRecord: AttendanceRecord = {
-        ...optimisticRecord,
-        id: result.id!,
-        status: (result.status as AttendanceRecord['status']) || 'hadir',
-        check_in_time: result.check_in_time || now.toISOString(),
-      };
-      setTodayAttendance(confirmedRecord);
-      await cacheTodayRecord(employeeId, confirmedRecord, today);
+      // Validasi jarak
+      const distance = calculateDistance(latitude, longitude, Number(office.latitude), Number(office.longitude));
+      const radiusLimit = office.radius_meters || 100;
+      if (distance > radiusLimit) {
+        return {
+          success: false,
+          message: `Anda berada di luar radius kantor (${Math.round(distance)}m, maks ${radiusLimit}m)`,
+          distance,
+        };
+      }
 
-      setPendingState({ status: 'success', type: 'check_in', message: result.message, syncStatus: 'synced' });
-      setTimeout(() => setPendingState({ status: 'idle', type: null, message: '' }), 3000);
-
-      fetchAttendance();
-      return { success: true, message: result.message, distance };
-
-    } catch (error: unknown) {
-      const errorRef = reportError(error, "attendance.check_in.sync", {
+      // SAVE TO INDEXEDDB FIRST (instant, < 5ms)
+      const now = new Date();
+      const entry = await saveAttendanceEntry({
         employeeId,
         officeId,
         date: today,
+        type: 'check_in',
+        latitude,
+        longitude,
+        distanceMeters: Math.round(distance),
+        timestamp: now.toISOString(),
       });
-      console.error(`[IndexedDB ${errorRef}] Check-in sync failed:`, error);
 
-      await updateEntryStatus(entry.bufferId, {
-        syncStatus: 'failed', syncAttempts: 1,
-        lastSyncAttempt: new Date().toISOString(),
-        syncError: getErrorMessage(error) || 'Unknown error',
-      });
-      recordFailure();
+      const optimisticRecord = entryToOptimisticRecord(entry);
+      setTodayAttendance(optimisticRecord);
+      await cacheTodayRecord(employeeId, optimisticRecord, today);
 
-      const isTimeout = getErrorMessage(error).toLowerCase().includes('timeout');
-      const msg = isTimeout
-        ? 'Timeout, absensi tersimpan di perangkat dan akan disinkronkan otomatis.'
-        : 'Gagal sinkronisasi, data aman di perangkat. Akan dicoba ulang otomatis.';
-      const userMsg = appendErrorReference(msg, errorRef);
+      setPendingState(buildInitialBufferedPendingState('check_in'));
 
-      setPendingState({ status: 'error', type: 'check_in', message: userMsg, syncStatus: 'failed' });
-      setTimeout(() => setPendingState({ status: 'idle', type: null, message: '' }), 5000);
+      // Deferred mode: store-first, sync in background to reduce burst load.
+      const scalabilityProfile = loadScalabilityConfig();
+      const runtimeSetting = loadAttendanceScalabilitySetting();
+      const busyHours = isPeakHours();
+      const syncDecision = resolveAttendanceSyncDecision(scalabilityProfile, busyHours, runtimeSetting);
+      if (syncDecision.shouldDefer) {
+        const deferredBaseMs = syncDecision.deferredBaseMs;
+        const deferredMs = deferredBaseMs + generateAdaptiveJitter(0);
+        const scheduledMessages = buildDeferredAttendanceMessages('check_in', deferredMs);
+        if (syncDecision.shouldTriggerClientSync) {
+          window.setTimeout(() => {
+            triggerSync();
+          }, deferredMs);
+          setPendingState(buildDeferredBufferedPendingState('check_in', deferredMs, syncDecision.detailMessage));
+        } else {
+          setPendingState(buildHeldBufferedPendingState('check_in', syncDecision.detailMessage));
+        }
+        window.setTimeout(() => {
+          setPendingState({ status: 'idle', type: null, message: '', detail: '' });
+        }, 4000);
 
-      return { success: true, message: userMsg, distance };
+        return {
+          ...buildDeferredAttendanceResult('check_in', distance),
+          message: scheduledMessages.successMessage,
+        };
+      }
+
+      setIsSubmitting(true);
+
+      abortRef.current?.abort();
+      abortRef.current = new AbortController();
+      const signal = abortRef.current.signal;
+
+      // ADAPTIVE JITTER
+      const jitterMs = generateAdaptiveJitter(0);
+      setPendingState(buildJitterPendingState('check_in', jitterMs, busyHours));
+
+      try {
+        await delayWithAbort(jitterMs, signal);
+      } catch {
+        setIsSubmitting(false);
+        setPendingState(buildDelayedBufferedPendingState('check_in'));
+        return buildDelayedAttendanceResult('check_in');
+      }
+
+      // RPC SYNC
+      setPendingState(buildProcessingPendingState('check_in'));
+      await updateEntryStatus(entry.bufferId, { syncStatus: 'syncing' });
+
+      try {
+        const result = await syncWithResilience(entry, 'check_in', signal);
+
+        if (!result.success) {
+          await updateEntryStatus(entry.bufferId, {
+            syncStatus: 'failed', syncAttempts: 1,
+            lastSyncAttempt: now.toISOString(), syncError: result.message,
+          });
+          recordFailure();
+          setPendingState(buildErrorPendingState(
+            'check_in',
+            result.message,
+            'Absensi masih tersimpan di perangkat dan belum final di server.',
+          ));
+          setTimeout(() => setPendingState({ status: 'idle', type: null, message: '', detail: '' }), 5000);
+          return buildRpcFailureAttendanceResult(result.message);
+        }
+
+        // Success
+        await updateEntryStatus(entry.bufferId, {
+          syncStatus: 'synced', serverRecordId: result.id || null,
+          lastSyncAttempt: now.toISOString(),
+        });
+        recordSuccess();
+
+        const confirmedRecord: AttendanceRecord = {
+          ...optimisticRecord,
+          id: result.id!,
+          status: (result.status as AttendanceRecord['status']) || 'hadir',
+          check_in_time: result.check_in_time || now.toISOString(),
+        };
+        setTodayAttendance(confirmedRecord);
+        await cacheTodayRecord(employeeId, confirmedRecord, today);
+
+        setPendingState(buildSuccessPendingState('check_in', result.message));
+        setTimeout(() => setPendingState({ status: 'idle', type: null, message: '', detail: '' }), 3000);
+
+        fetchAttendance();
+        return buildRpcSuccessAttendanceResult(result.message, distance);
+
+      } catch (error: unknown) {
+        const errorRef = reportError(error, "attendance.check_in.sync", {
+          employeeId,
+          officeId,
+          date: today,
+        });
+        console.error(`[IndexedDB ${errorRef}] Check-in sync failed:`, error);
+
+        await updateEntryStatus(entry.bufferId, {
+          syncStatus: 'failed', syncAttempts: 1,
+          lastSyncAttempt: new Date().toISOString(),
+          syncError: getErrorMessage(error) || 'Unknown error',
+        });
+        recordFailure();
+
+        const isTimeout = getErrorMessage(error).toLowerCase().includes('timeout');
+        const failureMessage = buildSyncFailureMessage('check_in', isTimeout);
+        const userMsg = appendErrorReference(failureMessage.userMessage, errorRef);
+
+        setPendingState(buildErrorPendingState(
+          'check_in',
+          userMsg,
+          failureMessage.detailMessage,
+        ));
+        setTimeout(() => setPendingState({ status: 'idle', type: null, message: '', detail: '' }), 5000);
+
+        return buildRpcSuccessAttendanceResult(userMsg, distance);
+      } finally {
+        setIsSubmitting(false);
+      }
     } finally {
-      setIsSubmitting(false);
+      checkInLockRef.current = false;
     }
   };
 
@@ -535,41 +580,57 @@ export function useAttendance(
       return { success: false, message: "Anda sudah melakukan absen pulang hari ini" };
     }
 
-    const existingBuffer = await hasCheckOutToday(employeeId, today);
-    if (existingBuffer && existingBuffer.syncStatus !== 'failed') {
+    if (checkOutLockRef.current) {
       return { success: false, message: "Absen pulang sedang diproses" };
     }
 
-    // Circuit Breaker
-    const cbCheck = canMakeRequest();
-    if (!cbCheck.allowed) {
-      setPendingState({ status: 'circuit_open', type: 'check_out', message: cbCheck.reason || 'Server sibuk', syncStatus: 'pending' });
-      return { success: false, message: cbCheck.reason || 'Server sedang sibuk, coba lagi nanti' };
+    if (shouldBlockLocalProductionWrites()) {
+      const message = buildLocalProductionWriteBlockMessage("Absen pulang");
+      setPendingState(buildErrorPendingState(
+        "check_out",
+        message,
+        "Localhost saat ini hanya boleh membaca data production. Pakai staging remote atau override eksplisit bila benar-benar diperlukan.",
+      ));
+      return { success: false, message };
     }
 
-    // Validasi jarak
-    const distance = calculateDistance(latitude, longitude, Number(office.latitude), Number(office.longitude));
-    const radiusLimit = office.radius_meters || 100;
-    if (distance > radiusLimit) {
-      return {
-        success: false,
-        message: `Anda berada di luar radius kantor (${Math.round(distance)}m, maks ${radiusLimit}m)`,
-        distance,
-      };
-    }
+    checkOutLockRef.current = true;
+    try {
+      const existingBuffer = await hasCheckOutToday(employeeId, today);
+      if (existingBuffer && existingBuffer.syncStatus !== 'failed') {
+        return { success: false, message: "Absen pulang sedang diproses" };
+      }
 
-    // SAVE TO INDEXEDDB FIRST
-    const now = new Date();
-    const entry = await saveAttendanceEntry({
-      employeeId,
-      officeId: officeId!,
-      date: today,
-      type: 'check_out',
-      latitude,
-      longitude,
-      distanceMeters: Math.round(distance),
-      timestamp: now.toISOString(),
-    });
+      // Circuit Breaker
+      const cbCheck = canMakeRequest();
+      if (!cbCheck.allowed) {
+        setPendingState({ status: 'circuit_open', type: 'check_out', message: cbCheck.reason || 'Server sibuk', syncStatus: 'pending' });
+        return { success: false, message: cbCheck.reason || 'Server sedang sibuk, coba lagi nanti' };
+      }
+
+      // Validasi jarak
+      const distance = calculateDistance(latitude, longitude, Number(office.latitude), Number(office.longitude));
+      const radiusLimit = office.radius_meters || 100;
+      if (distance > radiusLimit) {
+        return {
+          success: false,
+          message: `Anda berada di luar radius kantor (${Math.round(distance)}m, maks ${radiusLimit}m)`,
+          distance,
+        };
+      }
+
+      // SAVE TO INDEXEDDB FIRST
+      const now = new Date();
+      const entry = await saveAttendanceEntry({
+        employeeId,
+        officeId: officeId!,
+        date: today,
+        type: 'check_out',
+        latitude,
+        longitude,
+        distanceMeters: Math.round(distance),
+        timestamp: now.toISOString(),
+      });
 
     const previousRecord = { ...todayAttendance };
     const optimisticRecord: AttendanceRecord = {
@@ -582,34 +643,36 @@ export function useAttendance(
     setTodayAttendance(optimisticRecord);
     await cacheTodayRecord(employeeId, optimisticRecord, today);
 
-    setPendingState({ status: 'buffered', type: 'check_out', message: 'Data tersimpan di perangkat', syncStatus: 'pending' });
+      setPendingState(buildInitialBufferedPendingState('check_out'));
 
     // Deferred mode: store-first, sync in background to reduce burst load.
-    const scalabilityProfile = loadScalabilityConfig();
-    if (scalabilityProfile.syncMode === 'deferred') {
-      const deferredMs = scalabilityProfile.deferredSyncDelayMs + generateAdaptiveJitter(0);
+      const scalabilityProfile = loadScalabilityConfig();
+      const runtimeSetting = loadAttendanceScalabilitySetting();
+      const busyHours = isPeakHours();
+      const syncDecision = resolveAttendanceSyncDecision(scalabilityProfile, busyHours, runtimeSetting);
+      if (syncDecision.shouldDefer) {
+      const deferredBaseMs = syncDecision.deferredBaseMs;
+      const deferredMs = deferredBaseMs + generateAdaptiveJitter(0);
+      const scheduledMessages = buildDeferredAttendanceMessages('check_out', deferredMs);
+      if (syncDecision.shouldTriggerClientSync) {
+        window.setTimeout(() => {
+          triggerSync();
+        }, deferredMs);
+        setPendingState(buildDeferredBufferedPendingState('check_out', deferredMs, syncDecision.detailMessage));
+      } else {
+        setPendingState(buildHeldBufferedPendingState('check_out', syncDecision.detailMessage));
+      }
       window.setTimeout(() => {
-        triggerSync();
-      }, deferredMs);
-
-      setPendingState({
-        status: 'buffered',
-        type: 'check_out',
-        message: `Absen pulang disimpan lokal. Sinkronisasi dijadwalkan ~${Math.ceil(deferredMs / 1000)} detik.`,
-        syncStatus: 'pending',
-      });
-      window.setTimeout(() => {
-        setPendingState({ status: 'idle', type: null, message: '' });
+        setPendingState({ status: 'idle', type: null, message: '', detail: '' });
       }, 4000);
 
-      return {
-        success: true,
-        message: "Absen pulang tersimpan di perangkat dan akan disinkronkan otomatis.",
-        distance,
-      };
-    }
+        return {
+          ...buildDeferredAttendanceResult('check_out', distance),
+          message: scheduledMessages.successMessage,
+        };
+      }
 
-    setIsSubmitting(true);
+      setIsSubmitting(true);
 
     abortRef.current?.abort();
     abortRef.current = new AbortController();
@@ -617,23 +680,22 @@ export function useAttendance(
 
     // ADAPTIVE JITTER
     const jitterMs = generateAdaptiveJitter(0);
-    const peakInfo = isPeakHours() ? ' (jam sibuk)' : '';
-    setPendingState({ status: 'jitter', type: 'check_out', message: `Menghubungkan ke server${peakInfo}...`, jitterMs, syncStatus: 'pending' });
+      setPendingState(buildJitterPendingState('check_out', jitterMs, busyHours));
 
     try {
       await delayWithAbort(jitterMs, signal);
     } catch {
       setIsSubmitting(false);
-      setPendingState({ status: 'buffered', type: 'check_out', message: 'Tersimpan di perangkat, akan disinkronkan otomatis', syncStatus: 'pending' });
-      return { success: true, message: "Absen pulang tersimpan (sinkronisasi tertunda)" };
+      setPendingState(buildDelayedBufferedPendingState('check_out'));
+      return buildDelayedAttendanceResult('check_out');
     }
 
     // RPC SYNC
-    setPendingState({ status: 'processing', type: 'check_out', message: 'Menyimpan ke server...', syncStatus: 'syncing' });
+    setPendingState(buildProcessingPendingState('check_out'));
     await updateEntryStatus(entry.bufferId, { syncStatus: 'syncing' });
 
     try {
-      const result = await syncWithResilience(entry, 'check_out', signal);
+        const result = await syncWithResilience(entry, 'check_out', signal);
 
       if (!result.success) {
         await updateEntryStatus(entry.bufferId, {
@@ -643,9 +705,13 @@ export function useAttendance(
         recordFailure();
         setTodayAttendance(previousRecord);
         await cacheTodayRecord(employeeId, previousRecord, today);
-        setPendingState({ status: 'error', type: 'check_out', message: result.message, syncStatus: 'failed' });
-        setTimeout(() => setPendingState({ status: 'idle', type: null, message: '' }), 5000);
-        return { success: false, message: result.message };
+        setPendingState(buildErrorPendingState(
+          'check_out',
+          result.message,
+          'Absensi masih tersimpan di perangkat dan belum final di server.',
+        ));
+        setTimeout(() => setPendingState({ status: 'idle', type: null, message: '', detail: '' }), 5000);
+        return buildRpcFailureAttendanceResult(result.message);
       }
 
       // Success
@@ -667,13 +733,13 @@ export function useAttendance(
       setTodayAttendance(confirmedRecord);
       await cacheTodayRecord(employeeId, confirmedRecord, today);
 
-      setPendingState({ status: 'success', type: 'check_out', message: result.message, syncStatus: 'synced' });
-      setTimeout(() => setPendingState({ status: 'idle', type: null, message: '' }), 3000);
+      setPendingState(buildSuccessPendingState('check_out', result.message));
+      setTimeout(() => setPendingState({ status: 'idle', type: null, message: '', detail: '' }), 3000);
 
       fetchAttendance();
-      return { success: true, message: result.message, distance };
+        return buildRpcSuccessAttendanceResult(result.message, distance);
 
-    } catch (error: unknown) {
+      } catch (error: unknown) {
       const errorRef = reportError(error, "attendance.check_out.sync", {
         employeeId,
         officeId,
@@ -689,17 +755,22 @@ export function useAttendance(
       recordFailure();
 
       const isTimeout = getErrorMessage(error).toLowerCase().includes('timeout');
-      const msg = isTimeout
-        ? 'Timeout, absensi pulang tersimpan di perangkat dan akan disinkronkan otomatis.'
-        : 'Gagal sinkronisasi, data aman di perangkat. Akan dicoba ulang otomatis.';
-      const userMsg = appendErrorReference(msg, errorRef);
+      const failureMessage = buildSyncFailureMessage('check_out', isTimeout);
+      const userMsg = appendErrorReference(failureMessage.userMessage, errorRef);
 
-      setPendingState({ status: 'error', type: 'check_out', message: userMsg, syncStatus: 'failed' });
-      setTimeout(() => setPendingState({ status: 'idle', type: null, message: '' }), 5000);
+      setPendingState(buildErrorPendingState(
+        'check_out',
+        userMsg,
+        failureMessage.detailMessage,
+      ));
+      setTimeout(() => setPendingState({ status: 'idle', type: null, message: '', detail: '' }), 5000);
 
-      return { success: true, message: userMsg, distance };
+        return buildRpcSuccessAttendanceResult(userMsg, distance);
+      } finally {
+        setIsSubmitting(false);
+      }
     } finally {
-      setIsSubmitting(false);
+      checkOutLockRef.current = false;
     }
   };
 

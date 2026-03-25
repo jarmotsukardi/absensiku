@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { Helmet } from "react-helmet-async";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
 import { BannerSidebar } from "@/components/banners/BannerSidebar";
@@ -33,10 +34,50 @@ export function FAQSection({ faqs, showPromoSidebar = false, promoTitle, promoSu
 
   return (
     <section id="faq" className="py-20 px-4 bg-muted/30">
+      <Helmet>
+        <script
+          type="application/ld+json"
+        >{JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "FAQPage",
+          mainEntity: displayFAQs.map((faq) => ({
+            "@type": "Question",
+            name: faq.question,
+            acceptedAnswer: {
+              "@type": "Answer",
+              text: faq.answer,
+            },
+          })),
+        })}</script>
+      </Helmet>
       <div className="container mx-auto">
         <div className="text-center mb-12">
           <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-4">Pertanyaan Umum</h2>
           <p className="text-muted-foreground text-lg">Temukan jawaban untuk pertanyaan yang sering diajukan.</p>
+        </div>
+
+        <div className="max-w-4xl mx-auto mb-8 grid gap-4 md:grid-cols-3">
+          <div className="rounded-2xl border bg-card p-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">Tahap 1</p>
+            <h3 className="mt-2 text-lg font-semibold text-foreground">Mulai dari Absensi</h3>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              Cocok untuk organisasi yang ingin merapikan check-in, check-out, validasi lokasi, sinkronisasi, dan laporan kehadiran harian.
+            </p>
+          </div>
+          <div className="rounded-2xl border bg-card p-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-info">Tahap 2</p>
+            <h3 className="mt-2 text-lg font-semibold text-foreground">Pertimbangkan HR saat siap</h3>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              Saat absensi sudah stabil, organisasi bisa mulai membahas data pegawai, cuti, approval, onboarding, dokumen, dan workflow SDM.
+            </p>
+          </div>
+          <div className="rounded-2xl border bg-card p-5">
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent-foreground">Tahap 3</p>
+            <h3 className="mt-2 text-lg font-semibold text-foreground">Pertimbangkan Payroll bila perlu</h3>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              Setelah fondasi data operasional dan HR rapi, payroll bisa dipertimbangkan untuk menutup periode gaji dengan validasi, approval, slip, dan audit.
+            </p>
+          </div>
         </div>
 
         <div className={`grid gap-8 ${showPromoSidebar ? 'lg:grid-cols-3' : 'max-w-4xl mx-auto'}`}>

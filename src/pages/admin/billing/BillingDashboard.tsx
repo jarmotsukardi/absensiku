@@ -42,7 +42,7 @@ import { BillingPolicySettings } from "@/components/admin/billing/BillingPolicyS
 import { ManualPaymentArchive } from "@/components/admin/billing/ManualPaymentArchive";
 import { WalletTopupVerification } from "@/components/admin/billing/WalletTopupVerification";
 import { GlossaryPanel } from "@/components/common/GlossaryPanel";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
@@ -99,6 +99,7 @@ const resolveGroupForTab = (tabId: string): BillingTabGroupId => {
 };
 
 export default function BillingDashboard() {
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState("overview");
   const [activeGroup, setActiveGroup] = useState<BillingTabGroupId>("operasional");
@@ -150,6 +151,7 @@ export default function BillingDashboard() {
   const validTabIds = useMemo(() => new Set(BILLING_TABS.map((tab) => tab.id)), []);
   const focusTopupRequestId = searchParams.get("topupRequestId");
   const sourceErrorRef = searchParams.get("errorRef");
+  const focusedTenantId = searchParams.get("tenantId") || searchParams.get("tenant_id");
 
   const fetchOperationalTabCounts = useCallback(async () => {
     const [archiveRes, topupRes] = await Promise.all([
@@ -279,7 +281,10 @@ export default function BillingDashboard() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "manual_payments" },
-        () => void fetchOperationalTabCounts(),
+        () => {
+          void fetchOperationalTabCounts();
+          void refetchManualVerification();
+        },
       )
       .on(
         "postgres_changes",
@@ -289,14 +294,18 @@ export default function BillingDashboard() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "invoices" },
-        () => void fetchDummyInvoiceCount(),
+        () => {
+          void fetchDummyInvoiceCount();
+          void refetchInvoices();
+          void refetchManualVerification();
+        },
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchDummyInvoiceCount, fetchOperationalTabCounts]);
+  }, [fetchDummyInvoiceCount, fetchOperationalTabCounts, refetchInvoices, refetchManualVerification]);
 
   const visibleTabs = useMemo(() => {
     const group = BILLING_TAB_GROUPS.find((item) => item.id === activeGroup) || BILLING_TAB_GROUPS[0];
@@ -308,6 +317,15 @@ export default function BillingDashboard() {
     setActiveTab("invoices");
     setInvoiceFilterMode(invoiceNumberHealth.invalid > 0 ? "invalid_number" : "all");
   };
+
+  const clearFocusedTenant = useCallback(() => {
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.delete("tenantId");
+    nextParams.delete("tenant_id");
+    nextParams.set("tab", "invoices");
+    const query = nextParams.toString();
+    navigate(query ? `/admin/billing?${query}` : "/admin/billing", { replace: true });
+  }, [navigate, searchParams]);
 
   return (
     <SuperAdminLayout
@@ -322,7 +340,7 @@ export default function BillingDashboard() {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Gross Revenue (Bulan Ini)</CardTitle>
+              <CardTitle className="text-sm font-medium">Pendapatan Kotor (Bulan Ini)</CardTitle>
               <DollarSign className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
@@ -337,7 +355,7 @@ export default function BillingDashboard() {
 
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Net Revenue</CardTitle>
+              <CardTitle className="text-sm font-medium">Pendapatan Bersih</CardTitle>
               <TrendingUp className="h-4 w-4 text-green-600" />
             </CardHeader>
             <CardContent>
@@ -386,7 +404,7 @@ export default function BillingDashboard() {
                 </div>
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Lunas / Pending / Expired
+                Lunas / Menunggu / Berakhir
               </p>
             </CardContent>
           </Card>
@@ -518,6 +536,8 @@ export default function BillingDashboard() {
                   <InvoicesManager
                     filterMode={invoiceFilterMode}
                     onClearFilterMode={() => setInvoiceFilterMode("all")}
+                    focusedTenantId={focusedTenantId}
+                    onClearFocusedTenant={clearFocusedTenant}
                   />
                 </TabsContent>
                 <TabsContent value="manual" className="mt-0">

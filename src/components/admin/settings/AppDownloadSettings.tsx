@@ -7,7 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
-import { Loader2, Save, Smartphone, Plus, Trash2, Download } from "lucide-react";
+import { Loader2, Save, Smartphone, Download } from "lucide-react";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { withTimeout } from "@/lib/attendanceResilience";
 
@@ -19,7 +19,6 @@ interface AppDownloadSettings {
   apk_url: string;
   playstore_url: string;
   appstore_url: string;
-  features: string[];
   show_qr_code: boolean;
 }
 
@@ -27,16 +26,10 @@ const defaultSettings: AppDownloadSettings = {
   enabled: true,
   title: "Unduh Aplikasi AbsensiKu",
   subtitle: "Tersedia untuk Android",
-  description: "Unduh aplikasi mobile AbsensiKu untuk kemudahan absensi di mana saja.",
+  description: "Unduh aplikasi seluler AbsensiKu untuk kemudahan absensi di mana saja.",
   apk_url: "",
   playstore_url: "",
   appstore_url: "",
-  features: [
-    "Absensi dengan GPS akurat",
-    "Notifikasi pengingat absen",
-    "Riwayat kehadiran lengkap",
-    "Pengajuan izin & cuti online",
-  ],
   show_qr_code: false,
 };
 
@@ -121,20 +114,6 @@ export function AppDownloadSettings() {
     }
   };
 
-  const addFeature = () => {
-    setSettings({ ...settings, features: [...settings.features, ""] });
-  };
-
-  const updateFeature = (index: number, value: string) => {
-    const newFeatures = [...settings.features];
-    newFeatures[index] = value;
-    setSettings({ ...settings, features: newFeatures });
-  };
-
-  const removeFeature = (index: number) => {
-    setSettings({ ...settings, features: settings.features.filter((_, i) => i !== index) });
-  };
-
   if (isLoading) {
     return <div className="flex items-center justify-center h-32"><Loader2 className="h-6 w-6 animate-spin" /></div>;
   }
@@ -148,15 +127,15 @@ export function AppDownloadSettings() {
             Pengaturan Unduh Aplikasi
           </CardTitle>
           <CardDescription>
-            Kelola section unduh aplikasi mobile di halaman depan
+            Kelola bagian unduh aplikasi seluler di halaman depan
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           {/* Enable/Disable */}
           <div className="flex items-center justify-between rounded-lg border p-4">
             <div>
-              <Label className="font-medium">Aktifkan Section Unduh</Label>
-              <p className="text-sm text-muted-foreground">Tampilkan section unduh aplikasi di halaman depan</p>
+              <Label className="font-medium">Aktifkan Bagian Unduh</Label>
+              <p className="text-sm text-muted-foreground">Tampilkan bagian unduh aplikasi di halaman depan</p>
             </div>
             <Switch
               checked={settings.enabled}
@@ -167,7 +146,7 @@ export function AppDownloadSettings() {
           {/* Title & Description */}
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
-              <Label>Judul Section</Label>
+              <Label>Judul Bagian</Label>
               <Input
                 value={settings.title}
                 onChange={(e) => setSettings({ ...settings, title: e.target.value })}
@@ -189,7 +168,7 @@ export function AppDownloadSettings() {
             <Textarea
               value={settings.description}
               onChange={(e) => setSettings({ ...settings, description: e.target.value })}
-              placeholder="Unduh aplikasi mobile..."
+              placeholder="Unduh aplikasi seluler..."
               rows={2}
             />
           </div>
@@ -231,30 +210,12 @@ export function AppDownloadSettings() {
             </CardContent>
           </Card>
 
-          {/* Features List */}
-          <Card>
-            <CardHeader className="pb-3 flex flex-row items-center justify-between">
-              <CardTitle className="text-base">Fitur Aplikasi</CardTitle>
-              <Button size="sm" variant="outline" onClick={addFeature}>
-                <Plus className="h-4 w-4 mr-1" />
-                Tambah
-              </Button>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {settings.features.map((feature, index) => (
-                <div key={index} className="flex gap-2 items-center">
-                  <Input
-                    value={feature}
-                    onChange={(e) => updateFeature(index, e.target.value)}
-                    placeholder="Fitur aplikasi..."
-                  />
-                  <Button variant="ghost" size="icon" onClick={() => removeFeature(index)}>
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
+          <div className="rounded-lg border border-primary/25 bg-primary/5 p-4">
+            <p className="text-sm font-medium text-foreground">Fitur Aplikasi di section unduh sudah otomatis</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Daftar fitur di halaman unduh sekarang mengikuti data dari menu <strong>Pengaturan Fitur</strong> agar tidak dobel input.
+            </p>
+          </div>
 
           {/* QR Code Option */}
           <div className="flex items-center justify-between rounded-lg border p-4">

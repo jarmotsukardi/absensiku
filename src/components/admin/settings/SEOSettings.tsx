@@ -10,13 +10,13 @@ import { useSystemSettings } from "@/hooks/useSystemSettings";
 export function SEOSettings() {
   const { setting, isLoading, isSaving, saveSetting } = useSystemSettings("seo_settings");
   const [settings, setSettings] = useState({
-    metaTitle: "AbsensiKu - Platform Absensi GPS #1 Indonesia",
+    metaTitle: "AbsensiKu - Sistem Absensi GPS #1 Indonesia",
     metaDescription: "Aplikasi absensi pegawai berbasis GPS untuk pemerintah daerah, instansi pemerintah, perusahaan, dan sekolah. Akurat, aman, dan mudah digunakan.",
     metaKeywords: "absensi, gps, pegawai, pemerintah, perusahaan, sekolah, kehadiran",
-    ogTitle: "AbsensiKu - Platform Absensi GPS Terpercaya",
+    ogTitle: "AbsensiKu - Sistem Absensi GPS Terpercaya",
     ogDescription: "Kelola kehadiran pegawai dengan akurat menggunakan teknologi GPS.",
     ogImage: "",
-    twitterTitle: "AbsensiKu - Platform Absensi GPS #1",
+    twitterTitle: "AbsensiKu - Sistem Absensi GPS #1",
     twitterDescription: "Aplikasi absensi pegawai berbasis GPS untuk semua jenis organisasi.",
     googleAnalyticsId: "",
     googleTagManagerId: "",
@@ -104,12 +104,12 @@ export function SEOSettings() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Open Graph (Facebook)</CardTitle>
+            <CardTitle className="text-base">Pratinjau Facebook</CardTitle>
             <CardDescription>Tampilan saat dibagikan di Facebook</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="ogTitle">OG Title</Label>
+              <Label htmlFor="ogTitle">Judul OG</Label>
               <Input
                 id="ogTitle"
                 value={settings.ogTitle}
@@ -117,7 +117,7 @@ export function SEOSettings() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="ogDescription">OG Description</Label>
+              <Label htmlFor="ogDescription">Deskripsi OG</Label>
               <Textarea
                 id="ogDescription"
                 value={settings.ogDescription}
@@ -126,7 +126,7 @@ export function SEOSettings() {
               />
             </div>
             <div className="space-y-2">
-              <Label>OG Image URL</Label>
+              <Label>URL Gambar OG</Label>
               <Input
                 placeholder="https://example.com/og-image.jpg (1200x630)"
                 value={settings.ogImage || ""}
@@ -134,7 +134,7 @@ export function SEOSettings() {
               />
               {settings.ogImage && (
                 <div className="h-20 w-36 rounded-lg bg-muted overflow-hidden">
-                  <img src={settings.ogImage} alt="OG Image" className="w-full h-full object-cover" />
+                  <img src={settings.ogImage} alt="Gambar OG" className="w-full h-full object-cover" />
                 </div>
               )}
             </div>

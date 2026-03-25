@@ -2,7 +2,46 @@ import { OrganizationLayout } from "@/components/admin/organization/Organization
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
+const ACCESS_EXPLANATION_ITEMS = [
+  {
+    title: "Fondasi Absensi",
+    description:
+      "Tahap ketika struktur kerja, lokasi kerja, jam kerja, batas absen, data pegawai, dan rekam absensi awal sudah mulai siap dipakai sebagai dasar HR.",
+  },
+  {
+    title: "Mode Lihat Saja",
+    description:
+      "Tahap ketika menu HR sudah bisa dibuka untuk ditinjau, tetapi data belum bisa ditambah atau diubah.",
+  },
+  {
+    title: "Bisa Diedit",
+    description:
+      "Tahap ketika pengelolaan data HR sudah dibuka penuh, sehingga admin organisasi dapat menambah dan memperbarui data.",
+  },
+  {
+    title: "Langganan Aktif",
+    description:
+      "Tahap ketika layanan berjalan penuh dan akses fitur organisasi mengikuti paket yang sedang berlaku.",
+  },
+];
+
 const HR_FAQ_ITEMS = [
+  {
+    q: "Apa arti Fondasi Absensi pada tahap aktivasi HR?",
+    a: "Fondasi Absensi berarti organisasi sudah menyiapkan dasar operasional seperti struktur kerja, lokasi kerja, jam kerja, batas absen, data pegawai, dan rekam absensi awal. Tahap ini penting agar HR dibuka di atas data yang sudah rapi.",
+  },
+  {
+    q: "Apa arti Mode Lihat Saja di workspace HR?",
+    a: "Mode Lihat Saja berarti menu HR sudah bisa dibuka untuk dipelajari, tetapi data belum bisa ditambah, diubah, atau diproses penuh. Tahap ini membantu admin organisasi memahami alur sebelum pengelolaan penuh dibuka.",
+  },
+  {
+    q: "Kapan HR bisa diedit penuh oleh admin organisasi?",
+    a: "HR dibuka bertahap. Setelah fondasi absensi siap dan organisasi masuk ke tahap aktivasi yang sesuai, admin organisasi dapat melanjutkan ke pengelolaan penuh sesuai kebijakan akses yang berlaku.",
+  },
+  {
+    q: "Kenapa Payroll biasanya belum langsung bisa dipakai penuh?",
+    a: "Payroll mengikuti tahap aktivasi yang lebih ketat karena berkaitan dengan periode gaji, validasi, distribusi, dan jejak audit yang sensitif. Karena itu, Payroll umumnya menyusul setelah organisasi benar-benar siap dan langganannya aktif.",
+  },
   {
     q: "Bagaimana menambah pegawai baru di area kerja HR?",
     a: "Gunakan menu Data Pegawai, lalu lengkapi data pegawai dari alur HR tanpa pindah ke area kerja Absensi.",
@@ -77,9 +116,26 @@ export default function OrgHRFAQ() {
           <Badge variant="outline">Bantuan</Badge>
           <h1 className="text-2xl font-semibold tracking-tight">FAQ HR</h1>
           <p className="text-sm text-muted-foreground">
-            Pertanyaan umum untuk operasional HR tanpa perlu keluar dari area kerja HR.
+            Pertanyaan umum untuk operasional HR, termasuk cara membaca tahap akses agar admin organisasi tahu kapan modul hanya bisa ditinjau dan kapan sudah bisa dikelola penuh.
           </p>
         </div>
+
+        <Card className="border-primary/20 bg-primary/5">
+          <CardHeader>
+            <CardTitle className="text-base">Cara membaca tahap akses HR</CardTitle>
+            <CardDescription>
+              Empat istilah ini paling sering muncul saat organisasi mulai menyiapkan HR di atas fondasi absensi.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3 md:grid-cols-2">
+            {ACCESS_EXPLANATION_ITEMS.map((item) => (
+              <div key={item.title} className="rounded-lg border bg-background/90 p-4">
+                <p className="text-sm font-medium">{item.title}</p>
+                <p className="mt-1 text-sm text-muted-foreground">{item.description}</p>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
 
         <div className="space-y-3">
           {HR_FAQ_ITEMS.map((item) => (

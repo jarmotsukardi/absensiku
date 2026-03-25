@@ -265,7 +265,7 @@ export function AttendanceCard({
       return (
         <div className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
           <Cloud className="w-3.5 h-3.5" />
-          <span>Synced to Server</span>
+          <span>Sudah tercatat di server</span>
         </div>
       );
     }
@@ -275,7 +275,7 @@ export function AttendanceCard({
       return (
         <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
           <Database className="w-3.5 h-3.5 animate-pulse" />
-          <span>Saved in Phone / In Queue</span>
+          <span>Tersimpan di perangkat, menunggu sinkronisasi</span>
         </div>
       );
     }
@@ -285,7 +285,7 @@ export function AttendanceCard({
       return (
         <div className="flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400">
           <Loader2 className="w-3.5 h-3.5 animate-spin" />
-          <span>Syncing...</span>
+          <span>Sedang disinkronkan ke server</span>
         </div>
       );
     }
@@ -295,7 +295,7 @@ export function AttendanceCard({
       return (
         <div className="flex items-center gap-1.5 text-xs text-red-600 dark:text-red-400">
           <CloudOff className="w-3.5 h-3.5" />
-          <span>Sync Failed - Retrying</span>
+          <span>Sinkronisasi belum berhasil, akan dicoba ulang</span>
         </div>
       );
     }
@@ -426,7 +426,7 @@ export function AttendanceCard({
          })()}
 
          {/* Reconnected Banner */}
-        {wasOffline && isOnline && (
+         {wasOffline && isOnline && (
           <div className="mb-4 p-3 rounded-lg border bg-green-500/10 border-green-500/30 animate-in fade-in slide-in-from-top-2 duration-300">
             <div className="flex items-center gap-2">
               <Wifi className="w-5 h-5 text-green-600 dark:text-green-400" />
@@ -440,7 +440,26 @@ export function AttendanceCard({
           </div>
         )}
 
-        {/* Pending Status Banner */}
+        {syncStats && syncStats.stalePendingCount > 0 && (
+          <div className="mb-4 p-3 rounded-lg border bg-red-500/10 border-red-500/30 animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-400 mt-0.5" />
+              <div>
+                <p className="font-medium text-sm text-red-700 dark:text-red-300">
+                  Sinkronisasi absensi tertunda terlalu lama
+                </p>
+                <p className="text-xs text-red-600/80 dark:text-red-400/80 mt-1">
+                  {syncStats.stalePendingCount} data belum tercatat final di server
+                  {typeof syncStats.oldestPendingAgeMinutes === "number" && ` selama sekitar ${syncStats.oldestPendingAgeMinutes} menit`}.
+                  Pastikan koneksi stabil dan jangan hapus data aplikasi sebelum sinkronisasi selesai.
+                  {syncStats.staleWarningRef && ` (Ref: ${syncStats.staleWarningRef})`}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+         {/* Pending Status Banner */}
         {pendingState.status !== 'idle' && (
           <div className={cn(
             "mb-4 p-4 rounded-lg border animate-in fade-in slide-in-from-top-2 duration-300",
@@ -478,7 +497,7 @@ export function AttendanceCard({
                         </p>
                         <p className="text-xs text-amber-600/80 dark:text-amber-400/80 mt-1">
                           Data Anda aman tersimpan di perangkat dan sedang mengantre untuk dikirim
-                          {queueInfo.show && ` (Estimasi: ${queueInfo.estimatedSeconds} detik)`}. Jangan tutup aplikasi Anda.
+                          {queueInfo.show && ` (Estimasi: ${queueInfo.estimatedSeconds} detik)`}. Status ini belum final sampai server mengonfirmasi.
                         </p>
                       </div>
                     );
@@ -492,22 +511,36 @@ export function AttendanceCard({
                 {pendingState.status === 'buffered' && (
                   <div>
                     <p className="font-medium text-sm text-amber-700 dark:text-amber-300">
-                      Data tersimpan di perangkat
+                      {pendingState.message}
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Tidak perlu menekan tombol lagi. Data akan otomatis dikirim ke server.
+                      {pendingState.detail || "Status ini belum final. Data akan otomatis dikirim ke server."}
                     </p>
                   </div>
                 )}
                 {pendingState.status === 'processing' && (
-                  <p className="font-medium text-sm text-blue-700 dark:text-blue-300">
-                    {pendingState.message}
-                  </p>
+                  <div>
+                    <p className="font-medium text-sm text-blue-700 dark:text-blue-300">
+                      {pendingState.message}
+                    </p>
+                    {pendingState.detail && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {pendingState.detail}
+                      </p>
+                    )}
+                  </div>
                 )}
                 {pendingState.status === 'success' && (
-                  <p className="font-medium text-sm text-green-700 dark:text-green-300">
-                    {pendingState.message}
-                  </p>
+                  <div>
+                    <p className="font-medium text-sm text-green-700 dark:text-green-300">
+                      {pendingState.message}
+                    </p>
+                    {pendingState.detail && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {pendingState.detail}
+                      </p>
+                    )}
+                  </div>
                 )}
                 {pendingState.status === 'error' && (
                   <div>
@@ -515,7 +548,7 @@ export function AttendanceCard({
                       {pendingState.message}
                     </p>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Data aman di perangkat, akan dicoba ulang otomatis
+                      {pendingState.detail || "Data masih tersimpan di perangkat dan akan dicoba ulang otomatis."}
                     </p>
                   </div>
                 )}

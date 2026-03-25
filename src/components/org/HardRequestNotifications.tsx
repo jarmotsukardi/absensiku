@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -18,9 +18,11 @@ import {
   UserCog,
 } from "lucide-react";
 import { toast } from "sonner";
-import { formatDistanceToNow } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
 import { id as localeId } from "date-fns/locale";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { isEarlyLeavePermissionReason, isLatePermissionReason } from "@/lib/latePermissionRequest";
+import { getTenantEmployeeIds } from "@/lib/orgTenantContext";
 
 type RequestType = "leave" | "wfh" | "overtime" | "flexible" | "mutation";
 
@@ -37,6 +39,7 @@ interface RecentSubmission {
   employee_id: string | null;
   created_at: string;
   requestType: RequestType;
+  requestLabel?: string | null;
 }
 
 interface RecentSubmissionView extends RecentSubmission {
@@ -47,6 +50,15 @@ interface RequestMeta {
   label: string;
   path: string;
   icon: React.ElementType;
+}
+
+interface HardRequestSummaryRow {
+  pending_leave?: number;
+  pending_wfh?: number;
+  pending_overtime?: number;
+  pending_flexible?: number;
+  pending_mutation?: number;
+  latest?: unknown;
 }
 
 const REQUEST_ORDER: RequestType[] = ["leave", "wfh", "overtime", "flexible", "mutation"];
@@ -92,6 +104,8 @@ const FETCH_ERROR_SESSION_KEY_PREFIX = "org:hard-request-notif:fetch-error";
 const REALTIME_ERROR_SESSION_KEY_PREFIX = "org:hard-request-notif:realtime-error";
 const ACCESS_WARNING_SESSION_KEY_PREFIX = "org:hard-request-notif:access-warning";
 const NETWORK_WARNING_SESSION_KEY_PREFIX = "org:hard-request-notif:network-warning";
+const REALTIME_ERROR_LOG_THROTTLE_MS = 5 * 60 * 1000;
+const PENDING_COUNT_MODE = "exact" as const;
 
 function showToastOncePerSession(
   sessionKey: string,
@@ -173,55 +187,79 @@ function isTransientNetworkError(error: unknown): boolean {
   );
 }
 
+type RealtimePayloadLike = {
+  eventType: string;
+  new?: Record<string, unknown> | null;
+  old?: Record<string, unknown> | null;
+};
+
+function pickRealtimeField(payload: RealtimePayloadLike, field: string): string | null {
+  const fromNew = payload.new?.[field];
+  if (typeof fromNew === "string" && fromNew.length > 0) return fromNew;
+
+  const fromOld = payload.old?.[field];
+  if (typeof fromOld === "string" && fromOld.length > 0) return fromOld;
+
+  return null;
+}
+
+function isPendingStatusForType(requestType: RequestType, status: string | null): boolean {
+  if (!status) return false;
+  if (requestType === "overtime") {
+    return status === "pending" || status === "menunggu";
+  }
+  return status === "menunggu";
+}
+
+const getTodayDateKey = (): string => format(new Date(), "yyyy-MM-dd");
+
 async function fetchPendingCount(tenantId: string, requestType: RequestType): Promise<number> {
+  const today = getTodayDateKey();
   switch (requestType) {
     case "leave": {
       const { count, error } = await supabase
         .from("leave_requests")
-        .select("id, employees!leave_requests_employee_id_fkey!inner(id)", { count: "exact" })
+        .select("id, employees!leave_requests_employee_id_fkey!inner(id)", { count: PENDING_COUNT_MODE, head: true })
         .eq("employees.tenant_id", tenantId)
         .eq("status", "menunggu")
-        .limit(1);
+        .gte("start_date", today);
       if (error) throw error;
       return count || 0;
     }
     case "wfh": {
       const { count, error } = await supabase
         .from("wfh_requests")
-        .select("id, employees!wfh_requests_employee_id_fkey!inner(id)", { count: "exact" })
+        .select("id, employees!wfh_requests_employee_id_fkey!inner(id)", { count: PENDING_COUNT_MODE, head: true })
         .eq("employees.tenant_id", tenantId)
         .eq("status", "menunggu")
-        .limit(1);
+        .gte("request_date", today);
       if (error) throw error;
       return count || 0;
     }
     case "overtime": {
       const { count, error } = await supabase
         .from("overtime_requests")
-        .select("id", { count: "exact" })
+        .select("id", { count: PENDING_COUNT_MODE, head: true })
         .eq("tenant_id", tenantId)
-        .in("status", ["pending", "menunggu"])
-        .limit(1);
+        .in("status", ["pending", "menunggu"]);
       if (error) throw error;
       return count || 0;
     }
     case "flexible": {
       const { count, error } = await supabase
         .from("flexible_attendance_requests")
-        .select("id", { count: "exact" })
+        .select("id", { count: PENDING_COUNT_MODE, head: true })
         .eq("tenant_id", tenantId)
-        .eq("status", "menunggu")
-        .limit(1);
+        .eq("status", "menunggu");
       if (error) throw error;
       return count || 0;
     }
     case "mutation": {
       const { count, error } = await supabase
         .from("mutation_requests")
-        .select("id", { count: "exact" })
+        .select("id", { count: PENDING_COUNT_MODE, head: true })
         .eq("tenant_id", tenantId)
-        .eq("status", "menunggu")
-        .limit(1);
+        .eq("status", "menunggu");
       if (error) throw error;
       return count || 0;
     }
@@ -231,17 +269,30 @@ async function fetchPendingCount(tenantId: string, requestType: RequestType): Pr
 }
 
 async function fetchLatestSubmissions(tenantId: string, requestType: RequestType): Promise<RecentSubmission[]> {
+  const today = getTodayDateKey();
   switch (requestType) {
     case "leave": {
       const { data, error } = await supabase
         .from("leave_requests")
-        .select("id, employee_id, created_at, employees!leave_requests_employee_id_fkey!inner(id)")
+        .select("id, employee_id, created_at, leave_type, reason, employees!leave_requests_employee_id_fkey!inner(id)")
         .eq("employees.tenant_id", tenantId)
         .eq("status", "menunggu")
+        .gte("start_date", today)
         .order("created_at", { ascending: false })
         .limit(5);
       if (error) throw error;
-      return (data || []).map((row) => ({ ...row, requestType }));
+      return (data || []).map((row) => ({
+        id: row.id,
+        employee_id: row.employee_id,
+        created_at: row.created_at,
+        requestType,
+        requestLabel:
+          row.leave_type === "izin" && isLatePermissionReason(row.reason)
+            ? "Izin Terlambat"
+            : row.leave_type === "izin" && isEarlyLeavePermissionReason(row.reason)
+              ? "Izin Pulang Cepat"
+              : null,
+      }));
     }
     case "wfh": {
       const { data, error } = await supabase
@@ -249,6 +300,7 @@ async function fetchLatestSubmissions(tenantId: string, requestType: RequestType
         .select("id, employee_id, created_at, employees!wfh_requests_employee_id_fkey!inner(id)")
         .eq("employees.tenant_id", tenantId)
         .eq("status", "menunggu")
+        .gte("request_date", today)
         .order("created_at", { ascending: false })
         .limit(5);
       if (error) throw error;
@@ -301,11 +353,40 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
   const [recentItems, setRecentItems] = useState<RecentSubmissionView[]>([]);
   const [accessRestrictedTypes, setAccessRestrictedTypes] = useState<RequestType[]>([]);
   const [networkIssueTypes, setNetworkIssueTypes] = useState<RequestType[]>([]);
+  const [isPageVisible, setIsPageVisible] = useState(
+    typeof document === "undefined" ? true : document.visibilityState === "visible"
+  );
+  const [isOnline, setIsOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
+  const lastRealtimeErrorLogAtRef = useRef(0);
+  const isBootstrappedRef = useRef(false);
+  const tenantEmployeeIdsRef = useRef<Set<string>>(new Set());
+  const tenantEmployeeScopeReadyRef = useRef(false);
 
   const totalPending = useMemo(
     () => counts.leave + counts.wfh + counts.overtime + counts.flexible + counts.mutation,
     [counts]
   );
+
+  const refreshTenantEmployeeScope = useCallback(async () => {
+    if (!tenantId) {
+      tenantEmployeeIdsRef.current = new Set();
+      tenantEmployeeScopeReadyRef.current = false;
+      return;
+    }
+
+    try {
+      const employeeIds = await getTenantEmployeeIds(tenantId);
+      tenantEmployeeIdsRef.current = new Set(employeeIds);
+      tenantEmployeeScopeReadyRef.current = true;
+    } catch (error) {
+      tenantEmployeeScopeReadyRef.current = false;
+      if (!isAccessRestrictedError(error) && !isTransientNetworkError(error)) {
+        reportError(error, "org.hard_request_notifications.refresh_employee_scope", {
+          tenant_id: tenantId,
+        });
+      }
+    }
+  }, [tenantId]);
 
   const fetchAlerts = useCallback(
     async (opts?: { forceOpen?: boolean }) => {
@@ -314,6 +395,7 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
         setRecentItems([]);
         setAccessRestrictedTypes([]);
         setNetworkIssueTypes([]);
+        isBootstrappedRef.current = true;
         setIsBootstrapped(true);
         return;
       }
@@ -328,6 +410,7 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
           setRecentItems([]);
           setAccessRestrictedTypes([]);
           setNetworkIssueTypes([]);
+          isBootstrappedRef.current = true;
           setIsBootstrapped(true);
           return;
         }
@@ -426,7 +509,8 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
         );
 
         const todayKey = `${DAILY_SESSION_KEY_PREFIX}:${tenantId}:${new Date().toISOString().slice(0, 10)}`;
-        if (!isBootstrapped) {
+        if (!isBootstrappedRef.current) {
+          isBootstrappedRef.current = true;
           setIsBootstrapped(true);
           try {
             const alreadySeen = sessionStorage.getItem(todayKey) === "1";
@@ -508,30 +592,83 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
         setIsLoading(false);
       }
     },
-    [isBootstrapped, tenantId]
+    [tenantId]
   );
 
   useEffect(() => {
-    setIsBootstrapped(false);
-    void fetchAlerts();
-  }, [tenantId, fetchAlerts]);
+    if (typeof document === "undefined") return;
+    const handleVisibilityChange = () => {
+      setIsPageVisible(document.visibilityState === "visible");
+    };
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
 
   useEffect(() => {
-    if (!tenantId) return;
+    isBootstrappedRef.current = isBootstrapped;
+  }, [isBootstrapped]);
+
+  useEffect(() => {
+    if (!tenantId || !isPageVisible || !isOnline) return;
+    void refreshTenantEmployeeScope();
+  }, [tenantId, isPageVisible, isOnline, refreshTenantEmployeeScope]);
+
+  useEffect(() => {
+    if (!tenantId || !isPageVisible || !isOnline) return;
+    isBootstrappedRef.current = false;
+    setIsBootstrapped(false);
+    void fetchAlerts();
+  }, [tenantId, fetchAlerts, isPageVisible, isOnline]);
+
+  useEffect(() => {
+    if (!tenantId || !isPageVisible || !isOnline) return;
 
     const channel = supabase.channel(`org-hard-request-alert-${tenantId}`);
-    const register = (table: string, requestType: RequestType) => {
+    const isPayloadRelevant = (requestType: RequestType, payload: RealtimePayloadLike) => {
+      if (requestType === "leave" || requestType === "wfh") {
+        const employeeId = pickRealtimeField(payload, "employee_id");
+        if (!employeeId) return !tenantEmployeeScopeReadyRef.current;
+        if (!tenantEmployeeScopeReadyRef.current) return true;
+        return tenantEmployeeIdsRef.current.has(employeeId);
+      }
+
+      const payloadTenantId = pickRealtimeField(payload, "tenant_id");
+      if (!payloadTenantId) return true;
+      return payloadTenantId === tenantId;
+    };
+
+    const register = (
+      table: string,
+      requestType: RequestType,
+      filter: string | undefined,
+    ) => {
       channel.on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table,
-          filter: `tenant_id=eq.${tenantId}`,
+          filter,
         },
         (payload) => {
-          void fetchAlerts({ forceOpen: payload.eventType === "INSERT" });
-          if (payload.eventType === "INSERT") {
+          const realtimePayload = payload as RealtimePayloadLike;
+          if (!isPayloadRelevant(requestType, realtimePayload)) return;
+
+          const status = pickRealtimeField(realtimePayload, "status");
+          const shouldForceOpen =
+            realtimePayload.eventType === "INSERT" &&
+            isPendingStatusForType(requestType, status);
+
+          void fetchAlerts({ forceOpen: shouldForceOpen });
+          if (shouldForceOpen) {
             const meta = REQUEST_META[requestType];
             toast.warning(`Pengajuan baru: ${meta.label}`, {
               description: "Perlu verifikasi Admin Organisasi.",
@@ -542,17 +679,25 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
       );
     };
 
-    register("leave_requests", "leave");
-    register("wfh_requests", "wfh");
-    register("overtime_requests", "overtime");
-    register("flexible_attendance_requests", "flexible");
-    register("mutation_requests", "mutation");
+    register("leave_requests", "leave", undefined);
+    register("wfh_requests", "wfh", undefined);
+    register("overtime_requests", "overtime", `tenant_id=eq.${tenantId}`);
+    register("flexible_attendance_requests", "flexible", `tenant_id=eq.${tenantId}`);
+    register("mutation_requests", "mutation", `tenant_id=eq.${tenantId}`);
 
     channel.subscribe((status) => {
-      if (status === "CHANNEL_ERROR") {
-        const errorRef = reportError(new Error("Realtime channel error"), "org.hard_request_notifications.realtime", {
-          tenant_id: tenantId,
-        });
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        const now = Date.now();
+        const shouldLogToRemote = now - lastRealtimeErrorLogAtRef.current >= REALTIME_ERROR_LOG_THROTTLE_MS;
+        const errorRef = shouldLogToRemote
+          ? reportError(new Error(`Realtime channel ${status.toLowerCase()}`), "org.hard_request_notifications.realtime", {
+              tenant_id: tenantId,
+              realtime_status: status,
+            })
+          : undefined;
+        if (shouldLogToRemote) {
+          lastRealtimeErrorLogAtRef.current = now;
+        }
         showToastOncePerSession(
           `${REALTIME_ERROR_SESSION_KEY_PREFIX}:${tenantId}:${new Date().toISOString().slice(0, 10)}`,
           () =>
@@ -569,7 +714,7 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchAlerts, tenantId]);
+  }, [fetchAlerts, tenantId, isOnline, isPageVisible]);
 
   if (!tenantId) return null;
 
@@ -672,7 +817,7 @@ export function HardRequestNotifications({ tenantId }: { tenantId: string | null
                           <div className="min-w-0">
                             <p className="truncate text-sm font-medium">{row.employee_name}</p>
                             <p className="text-xs text-muted-foreground">
-                              {meta.label} •{" "}
+                              {row.requestLabel || meta.label} •{" "}
                               {formatDistanceToNow(new Date(row.created_at), {
                                 addSuffix: true,
                                 locale: localeId,

@@ -14,6 +14,12 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
+import { isAttendanceOnlyBillingPackage } from "@/lib/billingPackageScope";
+import {
+  getBillingPackageEffectivePricePerMonth,
+  getBillingPackagePromoLabel,
+  isBillingPackagePromoActive,
+} from "@/lib/billingPackagePricing";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { ACTIVE_INVOICE_STATUSES, isActiveInvoiceStatus } from "@/lib/billingGuards";
 import { Badge } from "@/components/ui/badge";
@@ -31,10 +37,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  CENTRALIZED_MIN_DURATION_SETTING_KEYS,
-  INDIVIDUAL_MIN_DURATION_SETTING_KEY,
-  resolveMinimumBillingDuration,
-} from "@/lib/billingMinDuration";
+  getAttendanceIntroPromoCampaignText,
+  normalizeAttendanceIntroPromoConfig,
+} from "@/lib/attendanceOnboardingPromo";
 
 interface EmployeeActivationPageProps {
   tenantId: string;
@@ -49,6 +54,10 @@ interface SubscriptionPackage {
   base_price_per_month: number;
   discount_percentage: number;
   description: string | null;
+  module_scope?: string | null;
+  promo_active?: boolean | null;
+  promo_price_per_month?: number | null;
+  promo_label?: string | null;
 }
 
 interface EmployeeInvoiceRecord {
@@ -193,7 +202,7 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
   const [packages, setPackages] = useState<SubscriptionPackage[]>([]);
   const [invoices, setInvoices] = useState<EmployeeInvoiceRecord[]>([]);
   const [selectedPkgId, setSelectedPkgId] = useState<string>("");
-  const [minDurationMonths, setMinDurationMonths] = useState(1);
+  const [attendanceIntroPromoCampaignText, setAttendanceIntroPromoCampaignText] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isCreatingInvoice, setIsCreatingInvoice] = useState(false);
@@ -227,10 +236,10 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
       }
 
       try {
-        const [pkgRes, invRes, tenantRes, minDurationRes] = await Promise.all([
+        const [pkgRes, invRes, tenantRes, promoRes] = await Promise.all([
           supabase
             .from("subscription_packages")
-            .select("id, name, duration_months, base_price_per_month, discount_percentage, description")
+            .select("*")
             .eq("is_active", true)
             .order("sort_order", { ascending: true }),
           supabase
@@ -247,31 +256,20 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
           supabase
             .from("billing_settings")
             .select("setting_key, setting_value")
-            .in("setting_key", [
-              INDIVIDUAL_MIN_DURATION_SETTING_KEY,
-              CENTRALIZED_MIN_DURATION_SETTING_KEYS.pemerintah_daerah,
-              CENTRALIZED_MIN_DURATION_SETTING_KEYS.instansi_pemerintah,
-              CENTRALIZED_MIN_DURATION_SETTING_KEYS.perusahaan,
-              CENTRALIZED_MIN_DURATION_SETTING_KEYS.sekolah,
-            ]),
+            .eq("setting_key", "attendance_intro_promo")
+            .maybeSingle(),
         ]);
 
         if (pkgRes.error) throw pkgRes.error;
         if (invRes.error) throw invRes.error;
         if (tenantRes.error) throw tenantRes.error;
-        if (minDurationRes.error) throw minDurationRes.error;
+        if (promoRes.error) throw promoRes.error;
 
-        const minDurationRows = (minDurationRes.data || []) as BillingSettingRow[];
-        const minDurationMap = new Map(minDurationRows.map((row) => [row.setting_key, row.setting_value]));
-        const resolvedMinDuration = resolveMinimumBillingDuration({
-          billingMode: tenantRes.data?.billing_mode,
-          organizationType: tenantRes.data?.organization_type,
-          getSettingValue: (key) => minDurationMap.get(key),
-        });
-        setMinDurationMonths(resolvedMinDuration);
+        const promoConfig = normalizeAttendanceIntroPromoConfig((promoRes.data as BillingSettingRow | null)?.setting_value);
+        setAttendanceIntroPromoCampaignText(getAttendanceIntroPromoCampaignText(promoConfig));
 
-        const packageRows = ((pkgRes.data || []) as SubscriptionPackage[]).filter(
-          (pkg) => Number(pkg.duration_months || 0) >= resolvedMinDuration,
+        const packageRows = ((pkgRes.data || []) as SubscriptionPackage[]).filter((pkg) =>
+          isAttendanceOnlyBillingPackage(pkg),
         );
         const invoiceRows = ((invRes.data || []) as EmployeeInvoiceRecord[]).filter((row) => {
           const scope = parseMetadataScope(row.metadata);
@@ -716,9 +714,11 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <p className="text-xs text-muted-foreground">
-            Minimum durasi pembayaran billing mandiri: <strong>{minDurationMonths} bulan</strong>.
-          </p>
+          {attendanceIntroPromoCampaignText ? (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/25 dark:text-emerald-100">
+              {attendanceIntroPromoCampaignText}
+            </div>
+          ) : null}
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             {packages.map((pkg) => (
               <button
@@ -731,16 +731,25 @@ export function EmployeeActivationPage({ tenantId, employeeId, onBack }: Employe
               >
                 <p className="font-semibold">{pkg.name}</p>
                 <p className="text-sm text-muted-foreground">{pkg.duration_months} bulan</p>
-                <p className="mt-2 text-sm">
-                  {formatCurrency(pkg.base_price_per_month)}/bulan
-                  {pkg.discount_percentage > 0 ? ` • diskon ${pkg.discount_percentage}%` : ""}
-                </p>
+                <div className="mt-2 space-y-1 text-sm">
+                  <p>
+                    {formatCurrency(getBillingPackageEffectivePricePerMonth(pkg, pkg.base_price_per_month))}/bulan
+                    {pkg.discount_percentage > 0 && !isBillingPackagePromoActive(pkg, pkg.base_price_per_month)
+                      ? ` • diskon ${pkg.discount_percentage}%`
+                      : ""}
+                  </p>
+                  {isBillingPackagePromoActive(pkg, pkg.base_price_per_month) ? (
+                    <p className="text-xs text-emerald-700 dark:text-emerald-300">
+                      {getBillingPackagePromoLabel(pkg, pkg.base_price_per_month) || "Promo aktif"} • harga normal {formatCurrency(pkg.base_price_per_month)}
+                    </p>
+                  ) : null}
+                </div>
               </button>
             ))}
           </div>
           {packages.length === 0 ? (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-100">
-              Tidak ada paket aktif yang memenuhi minimum {minDurationMonths} bulan.
+              Tidak ada paket aktif.
             </div>
           ) : null}
 

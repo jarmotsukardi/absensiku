@@ -3,6 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function () {
+        if (typeof window === "undefined") return;
+        if (window.location.hostname !== "www.absensipro.com") return;
+        var target =
+          "https://absensipro.com" +
+          window.location.pathname +
+          window.location.search +
+          window.location.hash;
+        if (window.location.href !== target) {
+          window.location.replace(target);
+        }
+      })();
+    </script>
     
     <!-- Primary Meta Tags -->
     <title>AbsensiKu - Sistem Absensi Digital Berbasis GPS untuk Pemerintah &amp; Perusahaan</title>
@@ -14,14 +28,14 @@
     
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://absensiku.id/" />
+    <meta property="og:url" content="https://absensipro.com/" />
     
     
     <meta property="og:image" content="/og-image.png" />
     
     <!-- Twitter -->
     <meta property="twitter:card" content="summary_large_image" />
-    <meta property="twitter:url" content="https://absensiku.id/" />
+    <meta property="twitter:url" content="https://absensipro.com/" />
     <meta property="twitter:title" content="AbsensiKu - Sistem Absensi Digital Berbasis GPS" />
     <meta property="twitter:description" content="Solusi absensi modern berbasis GPS untuk pemerintah daerah dan perusahaan. Akurat, transparan, siap audit." />
     <meta property="twitter:image" content="/og-image.png" />
@@ -30,7 +44,7 @@
     <link rel="icon" type="image/png" href="https://storage.googleapis.com/gpt-engineer-file-uploads/YiG4vutaHxeJX1je6rv0tIwuuYZ2/uploads/1768217258078-absensiku-icon.png">
     
     <!-- Canonical -->
-    <link rel="canonical" href="https://absensiku.id/" />
+    <link rel="canonical" href="https://absensipro.com/" />
     
     <!-- Theme Color -->
     <meta name="theme-color" content="#1e3a5f" />

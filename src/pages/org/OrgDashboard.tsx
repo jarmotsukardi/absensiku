@@ -31,15 +31,22 @@ import { OrganizationLayout } from "@/components/admin/organization/Organization
 import { OverdueRequestsOverlay } from "@/components/org/OverdueRequestsOverlay";
 import { StabilityStreakWidget } from "@/components/dashboard/StabilityStreakWidget";
 import { FloatingBugReport } from "@/components/common/FloatingBugReport";
+import { SmartAppBanner } from "@/components/common/SmartAppBanner";
 import { PageGlossarySection } from "@/components/admin/common/PageGlossarySection";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import {
+  getBillingSubscriptionJourneyFromNotes,
+  getBillingSubscriptionJourneyUiCopy,
+} from "@/lib/billingSubscriptionJourney";
+import { resolveOrgTenantIdForUser } from "@/lib/orgTenantContext";
 
 interface SubscriptionInfo {
   id: string;
   status: string;
   start_date: string | null;
   end_date: string | null;
+  notes: string | null;
 }
 
 interface DashboardStats {
@@ -78,6 +85,7 @@ interface BillingAlertNotification {
   id: string;
   title: string | null;
   message: string | null;
+  link: string | null;
   created_at: string;
   metadata: Record<string, unknown> | null;
 }
@@ -218,7 +226,7 @@ export default function OrgDashboard() {
             Promise.resolve(
               supabase
                 .from("user_roles")
-                .select("role, tenant_id")
+                .select("role, tenant_id, created_at")
                 .eq("user_id", user.id)
                 .in("role", ["admin_instansi", "super_admin"]),
             ),
@@ -232,9 +240,12 @@ export default function OrgDashboard() {
       );
       if (roleRowsError) throw roleRowsError;
 
-      const adminRole = roleRows?.find((r) => r.role === "admin_instansi" && r.tenant_id);
       isSuperAdmin = roleRows?.some((r) => r.role === "super_admin") || false;
-      resolvedTenantId = adminRole?.tenant_id || (isSuperAdmin ? queryTenantId : null);
+      const hasAdminInstansiRole = roleRows?.some((r) => r.role === "admin_instansi") || false;
+      const resolvedAdminTenantId = hasAdminInstansiRole
+        ? await resolveOrgTenantIdForUser(user.id, { roleRows })
+        : null;
+      resolvedTenantId = resolvedAdminTenantId || (isSuperAdmin ? queryTenantId : null);
       resolvedTenantIdForLog = resolvedTenantId;
 
       if (!resolvedTenantId) {
@@ -581,6 +592,7 @@ export default function OrgDashboard() {
                 .from("employee_invitations")
                 .select("id", { count: "exact", head: true })
                 .eq("tenant_id", resolvedTenantId)
+                .is("archived_at", null)
                 .eq("status", "pending")
                 .lt("expires_at", new Date().toISOString()),
               supabase
@@ -746,7 +758,7 @@ export default function OrgDashboard() {
 
       const { data, error } = await supabase
         .from("notifications")
-        .select("id, title, message, created_at, metadata")
+        .select("id, title, message, link, created_at, metadata")
         .eq("user_id", userId)
         .eq("is_read", false)
         .order("created_at", { ascending: false })
@@ -761,6 +773,7 @@ export default function OrgDashboard() {
         const title = String(row.title || "").toLowerCase();
         const message = String(row.message || "").toLowerCase();
         return source === "billing_grace_notifier"
+          || source === "streak_invoice_created"
           || title.includes("tagihan")
           || title.includes("grace")
           || message.includes("tagihan")
@@ -827,6 +840,73 @@ export default function OrgDashboard() {
   }, [fetchBillingAlerts]);
 
   useEffect(() => {
+    let isMounted = true;
+    let activeChannelName: string | null = null;
+
+    const subscribeToBillingAlerts = async () => {
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData.user?.id;
+      if (!isMounted || !userId) return;
+
+      activeChannelName = `org-billing-alerts-${userId}`;
+      const channel = supabase
+        .channel(activeChannelName)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "notifications",
+            filter: `user_id=eq.${userId}`,
+          },
+          (payload) => {
+            const row = (payload.new ?? payload.old ?? {}) as {
+              title?: string | null;
+              message?: string | null;
+              metadata?: unknown;
+            };
+            const metadata = row.metadata && typeof row.metadata === "object"
+              ? (row.metadata as Record<string, unknown>)
+              : null;
+            const source = String(metadata?.source || "").toLowerCase();
+            const title = String(row.title || "").toLowerCase();
+            const message = String(row.message || "").toLowerCase();
+
+            if (
+              source === "billing_grace_notifier" ||
+              source === "streak_invoice_created" ||
+              title.includes("tagihan") ||
+              title.includes("grace") ||
+              message.includes("tagihan") ||
+              message.includes("grace") ||
+              message.includes("pembayaran")
+            ) {
+              void fetchBillingAlerts();
+            }
+          },
+        )
+        .subscribe();
+
+      if (!isMounted) {
+        supabase.removeChannel(channel);
+      }
+    };
+
+    void subscribeToBillingAlerts();
+
+    return () => {
+      isMounted = false;
+      if (!activeChannelName) return;
+      const existingChannel = supabase
+        .getChannels()
+        .find((channel) => channel.topic === `realtime:${activeChannelName}`);
+      if (existingChannel) {
+        supabase.removeChannel(existingChannel);
+      }
+    };
+  }, [fetchBillingAlerts]);
+
+  useEffect(() => {
     if (!isLoading) return;
     const timer = window.setTimeout(() => {
       const errorRef = reportError(new Error("Org dashboard loading watchdog timeout"), "org.dashboard.loading_watchdog", {
@@ -871,14 +951,23 @@ export default function OrgDashboard() {
 
   const status = getSubscriptionStatus();
   const daysRemaining = getDaysRemaining();
+  const billingJourney = getBillingSubscriptionJourneyFromNotes(subscription?.notes);
+  const billingJourneyUi = getBillingSubscriptionJourneyUiCopy(billingJourney);
   const totalPendingRequests = stats.pendingLeaves + stats.pendingWfh + stats.pendingOvertime;
   const unlinkedEmployees = Math.max(0, stats.totalEmployees - stats.linkedEmployees);
   const todayAbsent = Math.max(0, stats.totalEmployees - stats.todayPresent);
   const attendanceCoveragePct = stats.totalEmployees > 0
     ? Math.min(100, Math.round((stats.todayPresent / stats.totalEmployees) * 100))
     : 0;
+  const primaryBillingAlertTarget = billingAlerts.find((row) => typeof row.link === "string" && row.link.startsWith("/"))?.link
+    || "/org/billing?menu=invoices";
   return (
     <OrganizationLayout>
+      <SmartAppBanner
+        apkUrl={apkInfo?.url ?? null}
+        appName="AbsensiKu Admin"
+        dismissKey="smart_app_banner_org_dashboard_dismissed"
+      />
       <OverdueRequestsOverlay tenantId={tenantId} />
       <div className="space-y-6">
         {/* Welcome & Trial Warning */}
@@ -903,14 +992,19 @@ export default function OrgDashboard() {
                           ? `${daysRemaining} hari tersisa` 
                           : "Trial telah berakhir"}
                       </p>
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Jalur normal tenant baru dipantau oleh <strong>Streak Monitoring</strong>.
+                        Jika organisasi sudah siap berlangganan lebih awal, Anda tetap bisa membuat
+                        invoice sekarang sebagai <strong>Aktivasi Awal</strong>.
+                      </p>
                     </div>
                   </div>
                   <Button
                     size="sm"
                     className="bg-amber-600 hover:bg-amber-700"
-                    onClick={() => navigate("/org/billing?menu=offers")}
-                  >
-                    Upgrade Sekarang
+                  onClick={() => navigate("/org/billing?menu=offers")}
+                >
+                    Lihat Paket & Aktivasi Awal
                   </Button>
                 </div>
               </CardContent>
@@ -1386,8 +1480,19 @@ export default function OrgDashboard() {
                 className="cursor-pointer rounded-lg bg-muted/50 p-4 transition-colors hover:bg-muted"
                 onClick={() => navigate("/org/billing?menu=offers")}
               >
-                <p className="text-sm text-muted-foreground">Kebijakan Akses</p>
-                <p className="font-semibold mt-1">Streak Monitoring</p>
+                <p className="text-sm text-muted-foreground">
+                  {subscription?.status === "trial" ? "Jalur Trial" : "Jalur Billing"}
+                </p>
+                <p className="font-semibold mt-1">
+                  {subscription?.status === "trial"
+                    ? "Trial & Streak Monitoring"
+                    : billingJourneyUi.label}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {subscription?.status === "trial"
+                    ? "Invoice normal terbit setelah trial dinilai siap ditagih."
+                    : billingJourneyUi.description}
+                </p>
               </div>
               <div
                 className="cursor-pointer rounded-lg bg-muted/50 p-4 transition-colors hover:bg-muted"
@@ -1489,8 +1594,8 @@ export default function OrgDashboard() {
               <Button variant="outline" className="w-full sm:w-auto bg-white" onClick={() => navigate("/org/notifications")}>
                 Lihat Riwayat Notifikasi
               </Button>
-              <Button variant="outline" onClick={() => navigate("/org/billing?menu=offers")}>
-                Buka Aktivasi
+              <Button variant="outline" onClick={() => navigate(primaryBillingAlertTarget)}>
+                Buka Invoice
               </Button>
               <Button variant="destructive" onClick={() => void markBillingAlertsAsRead()}>
                 Tandai Sudah Dibaca

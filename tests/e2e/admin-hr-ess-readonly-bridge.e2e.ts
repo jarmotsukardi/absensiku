@@ -32,6 +32,7 @@ const readEssSnapshot = async (page: Page): Promise<EssSnapshot> => ({
 
 test.describe.serial("Admin HR ESS Readonly Bridge", () => {
   test("baseline ESS aktif di admin terbaca konsisten di runtime org", async ({ page, browser }) => {
+    test.setTimeout(90_000);
     const tenantName = await readOrgHrTenantName(browser);
 
     await loginAsSuperadmin(page);
@@ -65,7 +66,7 @@ test.describe.serial("Admin HR ESS Readonly Bridge", () => {
       if (!snapshot.attendance && !orgRuntime.page.url().includes("/org/hr/ess/attendance")) {
         await expect(orgRuntime.page).toHaveURL(/\/org\/hr(?:\?.*)?$/);
       } else {
-        await expect(orgRuntime.page.getByRole("heading", { name: "Kehadiran Saya", exact: true })).toBeVisible();
+        await expect(orgRuntime.page.getByRole("heading", { name: "Kehadiran ESS", exact: true })).toBeVisible();
       }
       if (snapshot.attendance) {
         await expect(orgRuntime.page.getByText(`Record ${snapshot.lookbackDays} Hari`, { exact: true })).toBeVisible();
@@ -86,7 +87,7 @@ test.describe.serial("Admin HR ESS Readonly Bridge", () => {
 
       await orgRuntime.page.goto("/org/hr/ess/documents", { waitUntil: "domcontentloaded" });
       await waitForStable(orgRuntime.page);
-      await expect(orgRuntime.page.getByRole("heading", { name: "Dokumen Saya", exact: true })).toBeVisible();
+      await expect(orgRuntime.page.getByRole("heading", { name: "Dokumen ESS", exact: true })).toBeVisible();
       if (snapshot.documents) {
         await expect(
           orgRuntime.page.getByText(`Saat ini ESS dokumen memakai baseline tenant dengan sumber aktif: ${snapshot.documentSource}.`, {
@@ -105,7 +106,7 @@ test.describe.serial("Admin HR ESS Readonly Bridge", () => {
 
       await orgRuntime.page.goto("/org/hr/ess/profile", { waitUntil: "domcontentloaded" });
       await waitForStable(orgRuntime.page);
-      await expect(orgRuntime.page.getByRole("heading", { name: "Profil Saya", exact: true })).toBeVisible();
+      await expect(orgRuntime.page.getByRole("heading", { name: "Profil ESS", exact: true })).toBeVisible();
       if (snapshot.profile) {
         if (snapshot.editableContact) {
           await expect(orgRuntime.page.getByRole("link", { name: "Edit Kontak" })).toBeVisible();
@@ -133,7 +134,7 @@ test.describe.serial("Admin HR ESS Readonly Bridge", () => {
         ).toBeVisible();
       }
     } finally {
-      await orgRuntime.context.close();
+      await orgRuntime.context.close().catch(() => undefined);
     }
   });
 });

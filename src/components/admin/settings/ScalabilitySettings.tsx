@@ -28,6 +28,10 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
+  DEFAULT_PEAK_HOUR_WINDOWS,
+  getScalabilityPeakHourLabel,
+  normalizeAttendanceScalabilitySetting,
+  type AttendanceScalabilitySetting,
   type ScalabilityTier,
   type ScalabilityProfile,
   getAllProfiles,
@@ -39,22 +43,9 @@ import {
 
 type ScalabilityMode = "manual" | "auto";
 
-type AttendanceScalabilitySetting = {
-  mode?: ScalabilityMode;
-  tier?: ScalabilityTier;
-  effective_tier?: ScalabilityTier;
-  measured_active_employees?: number;
-  measured_at?: string;
-  updated_at?: string;
-};
-
 const SCALABILITY_KEY = "attendance_scalability";
 const VALID_TIERS: ScalabilityTier[] = ["small", "medium", "large", "enterprise"];
 const SCALABILITY_OP_RETRY_MAX = 1;
-
-const isValidTier = (value: unknown): value is ScalabilityTier => {
-  return typeof value === "string" && VALID_TIERS.includes(value as ScalabilityTier);
-};
 
 type CapacityThresholds = {
   utilizationWarn: number;
@@ -113,6 +104,9 @@ const BASE_THRESHOLDS_BY_TIER: Record<ScalabilityTier, CapacityThresholds> = {
 export function ScalabilitySettings() {
   const { toast } = useToast();
   const [activeProfile, setActiveProfile] = useState<ScalabilityProfile>(loadScalabilityConfig());
+  const [globalSetting, setGlobalSetting] = useState<AttendanceScalabilitySetting>(
+    normalizeAttendanceScalabilitySetting({})
+  );
   const [estimatedUsers, setEstimatedUsers] = useState<string>(String(activeProfile.maxUsers));
   const [activeTab, setActiveTab] = useState<"konfigurasi" | "kesehatan-kapasitas">("konfigurasi");
   const [scalabilityMode, setScalabilityMode] = useState<ScalabilityMode>("manual");
@@ -136,6 +130,21 @@ export function ScalabilitySettings() {
   const throughput = calculateThroughput(activeProfile);
   const estimatedUsersNumber = Math.max(0, parseInt(estimatedUsers) || 0);
   const measuredUsers = (activeEmployeesCount ?? estimatedUsersNumber) || activeProfile.maxUsers;
+  const effectiveTier = globalSetting.effective_tier || activeProfile.tier;
+  const effectiveProfileLabel = profiles.find((profile) => profile.tier === effectiveTier)?.label ?? activeProfile.label;
+  const configuredPeakLabel = getScalabilityPeakHourLabel(globalSetting.peak_hour_windows || DEFAULT_PEAK_HOUR_WINDOWS);
+  const releaseStrategyLabel =
+    globalSetting.offpeak_release_strategy === "worker_only"
+      ? "Worker only"
+      : globalSetting.offpeak_release_strategy === "worker_preferred"
+        ? "Worker preferred"
+        : "Client setelah window";
+  const logoutPolicyLabel =
+    globalSetting.logout_pending_policy === "block_logout"
+      ? "Blok logout saat masih pending"
+      : globalSetting.logout_pending_policy === "warn_then_logout"
+        ? "Peringatkan sebelum logout"
+        : "Pending tetap disimpan lokal";
   const capacityThresholds = useMemo(() => {
     const base = BASE_THRESHOLDS_BY_TIER[activeProfile.tier];
     const processedLast5m = Math.max(0, ingestHealth?.processed_last_5m ?? 0);
@@ -406,14 +415,18 @@ export function ScalabilitySettings() {
 
         if (shouldPersist) {
           const now = new Date().toISOString();
-          await upsertScalabilitySetting({
+          const nextSetting = {
+            ...normalizeAttendanceScalabilitySetting({}),
             mode: "auto",
             tier: nextTier,
             effective_tier: nextTier,
+            suggested_tier: nextTier,
             measured_active_employees: count,
             measured_at: now,
             updated_at: now,
-          });
+          };
+          await upsertScalabilitySetting(nextSetting);
+          setGlobalSetting(nextSetting);
         }
       } finally {
         setIsAutoSyncing(false);
@@ -457,14 +470,17 @@ export function ScalabilitySettings() {
       setIsSaving(true);
       try {
         const now = new Date().toISOString();
-        await upsertScalabilitySetting({
+        const nextSetting = {
+          ...normalizeAttendanceScalabilitySetting({}),
           mode: "manual",
           tier: activeProfile.tier,
           effective_tier: activeProfile.tier,
           measured_active_employees: activeEmployeesCount ?? undefined,
           measured_at: activeEmployeesCount !== null ? now : undefined,
           updated_at: now,
-        });
+        };
+        await upsertScalabilitySetting(nextSetting);
+        setGlobalSetting(nextSetting);
         toast({
           title: "Mode Manual Aktif",
           description: `Tier dikunci ke ${activeProfile.label}.`,
@@ -499,21 +515,17 @@ export function ScalabilitySettings() {
 
         if (error) throw error;
 
-        const value = data?.value as AttendanceScalabilitySetting | null;
-        const savedMode = value?.mode === "auto" ? "auto" : "manual";
-        const resolvedTier = isValidTier(value?.effective_tier)
-          ? value.effective_tier
-          : isValidTier(value?.tier)
-            ? value.tier
-            : null;
-        if (!resolvedTier) return;
+        const value = normalizeAttendanceScalabilitySetting(data?.value);
+        const savedMode = value.mode;
+        const resolvedTier = value.effective_tier;
 
         const profile = getAllProfiles().find((p) => p.tier === resolvedTier);
         if (!profile) return;
 
         setActiveProfile(profile);
         setScalabilityMode(savedMode);
-        if (typeof value?.measured_active_employees === "number") {
+        setGlobalSetting(value);
+        if (typeof value.measured_active_employees === "number") {
           setActiveEmployeesCount(value.measured_active_employees);
           setEstimatedUsers(String(value.measured_active_employees));
         } else {
@@ -571,14 +583,17 @@ export function ScalabilitySettings() {
     try {
       const now = new Date().toISOString();
       const payload = {
+        ...normalizeAttendanceScalabilitySetting({}),
         mode: "manual" as ScalabilityMode,
         tier,
+        suggested_tier: tier,
         effective_tier: tier,
         measured_active_employees: activeEmployeesCount ?? undefined,
         measured_at: activeEmployeesCount !== null ? now : undefined,
         updated_at: now,
       };
       await upsertScalabilitySetting(payload);
+      setGlobalSetting(payload);
 
       toast({
         title: "Profil Skalabilitas Diterapkan",
@@ -703,54 +718,118 @@ export function ScalabilitySettings() {
         </CardContent>
       </Card>
 
+      <Card className="border-primary/20">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center gap-2">
+            <Server className="h-4 w-4" />
+            Policy Runtime Aktif
+          </CardTitle>
+          <CardDescription>
+            Ringkasan policy operasional yang saat ini dibaca runtime absensi dan worker queue.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            <Badge variant="outline">Mode: {globalSetting.mode === "auto" ? "Otomatis" : "Manual"}</Badge>
+            <Badge className={tierBadgeColors[effectiveTier]}>
+              Tier efektif: {effectiveProfileLabel}
+            </Badge>
+            <Badge variant="outline">
+              Tier disarankan: {globalSetting.suggested_tier || recommendedTier}
+            </Badge>
+            <Badge variant="outline">
+              Pegawai terukur: {(globalSetting.measured_active_employees ?? activeEmployeesCount ?? measuredUsers).toLocaleString()}
+            </Badge>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+            <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Peak-Hour Hold</p>
+              <Badge className={cn("border", globalSetting.peak_hour_hold_sync ? "bg-amber-500/10 text-amber-700 border-amber-500/30 dark:text-amber-300" : "bg-green-500/10 text-green-700 border-green-500/30 dark:text-green-300")}>
+                {globalSetting.peak_hour_hold_sync ? "Aktif" : "Nonaktif"}
+              </Badge>
+              <p className="text-xs text-muted-foreground">
+                Window: {configuredPeakLabel}
+              </p>
+            </div>
+
+            <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Queue-Only Ingest</p>
+              <Badge className={cn("border", globalSetting.queue_only_ingest ? "bg-purple-500/10 text-purple-700 border-purple-500/30 dark:text-purple-300" : "bg-slate-500/10 text-slate-700 border-slate-500/30 dark:text-slate-300")}>
+                {globalSetting.queue_only_ingest ? "Aktif" : "Tidak dipaksa"}
+              </Badge>
+              <p className="text-xs text-muted-foreground">
+                Request user {globalSetting.queue_only_ingest ? "berhenti di antrean" : "masih boleh memicu proses langsung"}
+              </p>
+            </div>
+
+            <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Off-Peak Release</p>
+              <Badge variant="outline">{releaseStrategyLabel}</Badge>
+              <p className="text-xs text-muted-foreground">
+                Jitter lepas: {globalSetting.release_jitter_min_ms ?? 15000}–{globalSetting.release_jitter_max_ms ?? 120000} ms
+              </p>
+            </div>
+
+            <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">Policy Logout Pending</p>
+              <Badge variant="outline">{logoutPolicyLabel}</Badge>
+              <p className="text-xs text-muted-foreground">
+                Visibilitas admin: {globalSetting.admin_visibility_mode === "final_and_pending_summary" ? "final + ringkasan pending" : globalSetting.admin_visibility_mode === "final_only_with_backlog" ? "final + backlog" : "final saja"}
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Ingestion Queue Health */}
       <Card className="border-primary/20">
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center justify-between">
             <span className="flex items-center gap-2">
               <Layers className="h-4 w-4" />
-              Health Ingestion Queue
+              Kesehatan Antrean Ingestion
             </span>
             <Button variant="outline" size="sm" onClick={loadIngestHealth} disabled={isHealthLoading}>
               <RefreshCw className={cn("h-3 w-3 mr-1", isHealthLoading && "animate-spin")} />
-              Refresh
+              Muat Ulang
             </Button>
           </CardTitle>
           <CardDescription>
-            Monitoring antrean sinkronisasi absensi real-time untuk deteksi bottleneck.
+            Pemantauan antrean sinkronisasi absensi real-time untuk deteksi bottleneck.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {ingestHealth ? (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
               <div className="p-3 rounded-md bg-muted/40">
-                <p className="text-xs text-muted-foreground">Queue Depth</p>
+                <p className="text-xs text-muted-foreground">Kedalaman Antrean</p>
                 <p className="text-lg font-semibold">{ingestHealth.queue_depth.toLocaleString()}</p>
               </div>
               <div className="p-3 rounded-md bg-muted/40">
-                <p className="text-xs text-muted-foreground">Processing</p>
+                <p className="text-xs text-muted-foreground">Sedang Diproses</p>
                 <p className="text-lg font-semibold">{ingestHealth.processing_count.toLocaleString()}</p>
               </div>
               <div className="p-3 rounded-md bg-muted/40">
-                <p className="text-xs text-muted-foreground">Failed / Dead</p>
+                <p className="text-xs text-muted-foreground">Gagal / Mati</p>
                 <p className="text-lg font-semibold">
                   {ingestHealth.failed_count.toLocaleString()} / {ingestHealth.dead_count.toLocaleString()}
                 </p>
               </div>
               <div className="p-3 rounded-md bg-muted/40">
-                <p className="text-xs text-muted-foreground">Processed 5m</p>
+                <p className="text-xs text-muted-foreground">Diproses 5 Menit</p>
                 <p className="text-lg font-semibold">{ingestHealth.processed_last_5m.toLocaleString()}</p>
               </div>
               <div className="p-3 rounded-md bg-muted/40">
-                <p className="text-xs text-muted-foreground">Avg Lag</p>
+                <p className="text-xs text-muted-foreground">Rata-rata Lag</p>
                 <p className="text-lg font-semibold">{Math.round(ingestHealth.avg_lag_seconds)}s</p>
               </div>
               <div className="p-3 rounded-md bg-muted/40">
-                <p className="text-xs text-muted-foreground">P95 Lag</p>
+                <p className="text-xs text-muted-foreground">Lag P95</p>
                 <p className="text-lg font-semibold">{Math.round(ingestHealth.p95_lag_seconds)}s</p>
               </div>
               <div className="p-3 rounded-md bg-muted/40 col-span-2">
-                <p className="text-xs text-muted-foreground">Max Pending Age</p>
+                <p className="text-xs text-muted-foreground">Menunggu Tertua Maksimum</p>
                 <p className="text-lg font-semibold">{Math.round(ingestHealth.max_pending_age_seconds)}s</p>
               </div>
             </div>
@@ -886,7 +965,7 @@ export function ScalabilitySettings() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Server className="h-4 w-4" />
-            Detail Konfigurasi Aktif: {activeProfile.label}
+            Rincian Konfigurasi Aktif: {activeProfile.label}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -895,15 +974,15 @@ export function ScalabilitySettings() {
             <div className="p-4 rounded-lg bg-muted/50 space-y-2">
               <h4 className="text-sm font-semibold flex items-center gap-1.5">
                 <Timer className="h-4 w-4 text-blue-500" />
-                Adaptive Jitter
+                Jitter Adaptif
               </h4>
               <div className="space-y-1 text-xs text-muted-foreground">
                 <div className="flex justify-between">
-                  <span>Peak (06-09, 15-18)</span>
+                  <span>Jam Sibuk ({configuredPeakLabel})</span>
                   <span className="font-mono font-medium text-foreground">0–{formatMs(activeProfile.jitterPeakMaxMs)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Off-Peak</span>
+                  <span>Di Luar Jam Sibuk</span>
                   <span className="font-mono font-medium text-foreground">0–{formatMs(activeProfile.jitterOffpeakMaxMs)}</span>
                 </div>
               </div>
@@ -913,19 +992,19 @@ export function ScalabilitySettings() {
             <div className="p-4 rounded-lg bg-muted/50 space-y-2">
               <h4 className="text-sm font-semibold flex items-center gap-1.5">
                 <RefreshCw className="h-4 w-4 text-amber-500" />
-                Exponential Backoff
+                Backoff Eksponensial
               </h4>
               <div className="space-y-1 text-xs text-muted-foreground">
                 <div className="flex justify-between">
-                  <span>Base Delay</span>
+                  <span>Jeda Awal</span>
                   <span className="font-mono font-medium text-foreground">{formatMs(activeProfile.backoffBaseMs)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Max Delay</span>
+                  <span>Jeda Maksimum</span>
                   <span className="font-mono font-medium text-foreground">{formatMs(activeProfile.backoffMaxMs)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Max Retries</span>
+                  <span>Percobaan Maksimum</span>
                   <span className="font-mono font-medium text-foreground">{activeProfile.backoffMaxRetries}x</span>
                 </div>
               </div>
@@ -935,19 +1014,19 @@ export function ScalabilitySettings() {
             <div className="p-4 rounded-lg bg-muted/50 space-y-2">
               <h4 className="text-sm font-semibold flex items-center gap-1.5">
                 <Shield className="h-4 w-4 text-red-500" />
-                Circuit Breaker
+                Pemutus Sirkuit
               </h4>
               <div className="space-y-1 text-xs text-muted-foreground">
                 <div className="flex justify-between">
-                  <span>Failure Threshold</span>
+                  <span>Ambang Kegagalan</span>
                   <span className="font-mono font-medium text-foreground">{activeProfile.cbFailureThreshold} kali</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Recovery Timeout</span>
+                  <span>Timeout Pemulihan</span>
                   <span className="font-mono font-medium text-foreground">{formatMs(activeProfile.cbRecoveryTimeoutMs)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Success to Close</span>
+                  <span>Sukses untuk Menutup</span>
                   <span className="font-mono font-medium text-foreground">{activeProfile.cbSuccessThreshold} kali</span>
                 </div>
               </div>
@@ -957,15 +1036,15 @@ export function ScalabilitySettings() {
             <div className="p-4 rounded-lg bg-muted/50 space-y-2">
               <h4 className="text-sm font-semibold flex items-center gap-1.5">
                 <Clock className="h-4 w-4 text-green-500" />
-                RPC Timeout
+                Timeout RPC
               </h4>
               <div className="space-y-1 text-xs text-muted-foreground">
                 <div className="flex justify-between">
-                  <span>Base Timeout</span>
+                  <span>Timeout Awal</span>
                   <span className="font-mono font-medium text-foreground">{formatMs(activeProfile.rpcTimeoutBaseMs)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Max Timeout</span>
+                  <span>Timeout Maksimum</span>
                   <span className="font-mono font-medium text-foreground">{formatMs(activeProfile.rpcTimeoutMaxMs)}</span>
                 </div>
               </div>
@@ -1001,25 +1080,25 @@ export function ScalabilitySettings() {
               </h4>
               <div className="space-y-1 text-xs text-muted-foreground">
                 <div className="flex justify-between">
-                  <span>Peak Req/s</span>
+                  <span>Permintaan/detik Jam Sibuk</span>
                   <span className="font-mono font-medium text-foreground">~{throughput.peakReqPerSec}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Off-peak Req/s</span>
+                  <span>Permintaan/detik Di Luar Jam Sibuk</span>
                   <span className="font-mono font-medium text-foreground">~{throughput.offpeakReqPerSec}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Queue Message</span>
+                  <span>Pesan Antrean</span>
                   <span className="font-mono font-medium text-foreground">{activeProfile.showQueueMessage ? 'Aktif' : 'Nonaktif'}</span>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Queue Message Preview */}
+          {/* Pratinjau pesan antrean */}
           {activeProfile.showQueueMessage && (
             <div className="mt-6">
-              <h4 className="text-sm font-semibold mb-2">Preview Pesan Antrean (tampil di aplikasi pegawai):</h4>
+              <h4 className="text-sm font-semibold mb-2">Pratinjau Pesan Antrean (tampil di aplikasi pegawai):</h4>
               <div className="p-4 rounded-lg bg-blue-500/10 border border-blue-500/30 animate-in fade-in">
                 <div className="flex items-start gap-3">
                   <Timer className="h-5 w-5 text-blue-600 dark:text-blue-400 animate-pulse flex-shrink-0 mt-0.5" />
@@ -1073,16 +1152,16 @@ export function ScalabilitySettings() {
             <div className="p-4 rounded-lg border space-y-2">
               <h5 className="text-sm font-semibold flex items-center gap-2">
                 <Timer className="h-4 w-4 text-blue-500" />
-                Adaptive Jitter
+                Jitter Adaptif
               </h5>
               <p className="text-xs text-muted-foreground leading-relaxed">
                 <strong>Jitter</strong> adalah penundaan acak (random delay) yang ditambahkan sebelum data dikirim ke server. 
                 Tujuannya untuk mencegah fenomena <em>"Thundering Herd"</em> — situasi di mana ribuan perangkat mengirim data secara bersamaan dan membuat server kewalahan. 
-                Delay ini bersifat <strong>adaptif</strong>: lebih besar di jam sibuk (pagi 06-09 & sore 15-18) dan minimal di luar jam puncak. 
+                Delay ini bersifat <strong>adaptif</strong>: lebih besar di jam sibuk (pagi 06:30-09:00 & sore 16:00-18:30) dan minimal di luar jam puncak. 
                 Contoh: Pada tier Enterprise, setiap perangkat menunggu acak antara 0–120 detik sebelum mengirim data, sehingga beban server tersebar merata.
               </p>
               <div className="text-xs p-2 rounded bg-muted/50">
-                <strong>Peak:</strong> Jam masuk/pulang kerja &nbsp;|&nbsp; <strong>Off-Peak:</strong> Di luar jam tersebut
+                <strong>Jam Sibuk:</strong> Jam masuk/pulang kerja &nbsp;|&nbsp; <strong>Di Luar Jam Sibuk:</strong> Di luar jam tersebut
               </div>
             </div>
 
@@ -1093,14 +1172,14 @@ export function ScalabilitySettings() {
                 Exponential Backoff
               </h5>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                Strategi pengiriman ulang (retry) ketika request gagal. Setiap percobaan ulang memiliki jeda yang semakin panjang secara eksponensial: 
+                Strategi pengiriman ulang (retry) ketika permintaan gagal. Setiap percobaan ulang memiliki jeda yang semakin panjang secara eksponensial: 
                 percobaan ke-1 menunggu 1 detik, ke-2 menunggu 2 detik, ke-3 menunggu 4 detik, dst. 
                 Hal ini mencegah server dibanjiri retry secara bersamaan saat terjadi gangguan.
               </p>
               <div className="text-xs p-2 rounded bg-muted/50">
-                <strong>Base Delay:</strong> Jeda awal percobaan ulang &nbsp;|&nbsp; 
-                <strong>Max Delay:</strong> Batas maksimum jeda &nbsp;|&nbsp; 
-                <strong>Max Retries:</strong> Jumlah percobaan ulang maksimal
+                <strong>Jeda Awal:</strong> Jeda awal percobaan ulang &nbsp;|&nbsp; 
+                <strong>Jeda Maksimum:</strong> Batas maksimum jeda &nbsp;|&nbsp; 
+                <strong>Percobaan Maksimum:</strong> Jumlah percobaan ulang maksimal
               </div>
             </div>
 
@@ -1112,15 +1191,15 @@ export function ScalabilitySettings() {
               </h5>
               <p className="text-xs text-muted-foreground leading-relaxed">
                 Mekanisme pemutus sirkuit yang melindungi server dari overload. Memiliki 3 status: 
-                <strong> Closed</strong> (normal, request dikirim), 
-                <strong> Open</strong> (server bermasalah, request dihentikan sementara), dan 
+                <strong> Closed</strong> (normal, permintaan dikirim), 
+                <strong> Open</strong> (server bermasalah, permintaan dihentikan sementara), dan 
                 <strong> Half-Open</strong> (percobaan kirim sebagian untuk mengecek apakah server pulih). 
                 Jika kegagalan beruntun mencapai threshold, circuit breaker berpindah ke status Open dan menghentikan semua pengiriman selama periode pemulihan.
               </p>
               <div className="text-xs p-2 rounded bg-muted/50">
-                <strong>Failure Threshold:</strong> Jumlah gagal sebelum "Open" &nbsp;|&nbsp; 
-                <strong>Recovery Timeout:</strong> Waktu tunggu sebelum coba lagi &nbsp;|&nbsp; 
-                <strong>Success to Close:</strong> Sukses berturut-turut untuk kembali "Closed"
+                <strong>Ambang Kegagalan:</strong> Jumlah gagal sebelum "Open" &nbsp;|&nbsp; 
+                <strong>Timeout Pemulihan:</strong> Waktu tunggu sebelum coba lagi &nbsp;|&nbsp; 
+                <strong>Sukses untuk Menutup:</strong> Sukses berturut-turut untuk kembali "Closed"
               </div>
             </div>
 
@@ -1132,13 +1211,13 @@ export function ScalabilitySettings() {
               </h5>
               <p className="text-xs text-muted-foreground leading-relaxed">
                 <strong>RPC (Remote Procedure Call)</strong> adalah panggilan fungsi ke server database. 
-                Timeout menentukan berapa lama sistem menunggu respons server sebelum menganggap request gagal. 
+                Timeout menentukan berapa lama sistem menunggu respons server sebelum menganggap permintaan gagal. 
                 Timeout yang terlalu pendek menyebabkan banyak gagal palsu; terlalu panjang membuat pengguna menunggu lama. 
                 Nilai timeout bersifat <strong>adaptif</strong>: bertambah setiap kali percobaan ulang untuk mengantisipasi server yang sedang lambat.
               </p>
               <div className="text-xs p-2 rounded bg-muted/50">
-                <strong>Base:</strong> Timeout percobaan pertama &nbsp;|&nbsp; 
-                <strong>Max:</strong> Batas maksimum timeout
+                <strong>Awal:</strong> Timeout percobaan pertama &nbsp;|&nbsp; 
+                <strong>Maksimum:</strong> Batas maksimum timeout
               </div>
             </div>
 
@@ -1168,15 +1247,15 @@ export function ScalabilitySettings() {
                 Estimasi Throughput
               </h5>
               <p className="text-xs text-muted-foreground leading-relaxed">
-                <strong>Throughput</strong> adalah estimasi jumlah request yang dapat diproses server per detik. 
+                <strong>Throughput</strong> adalah estimasi jumlah permintaan yang dapat diproses server per detik. 
                 Dihitung berdasarkan jumlah pengguna dan jitter window: semakin besar jitter, semakin tersebar beban, 
-                sehingga request per detik ke server semakin rendah dan stabil. 
-                <strong> Queue Message</strong> adalah pesan informatif yang ditampilkan kepada pegawai saat jitter melebihi 5 detik, 
+                sehingga permintaan per detik ke server semakin rendah dan stabil. 
+                <strong> Pesan Antrean</strong> adalah pesan informatif yang ditampilkan kepada pegawai saat jitter melebihi 5 detik, 
                 memberitahu bahwa data aman dan sedang mengantre.
               </p>
               <div className="text-xs p-2 rounded bg-muted/50">
-                <strong>Peak Req/s:</strong> Request/detik di jam sibuk &nbsp;|&nbsp; 
-                <strong>Off-peak Req/s:</strong> Request/detik di luar jam sibuk
+                <strong>Permintaan/detik Jam Sibuk:</strong> permintaan/detik di jam sibuk &nbsp;|&nbsp; 
+                <strong>Permintaan/detik Di Luar Jam Sibuk:</strong> permintaan/detik di luar jam sibuk
               </div>
             </div>
 
@@ -1235,12 +1314,12 @@ export function ScalabilitySettings() {
               Alur Kerja Sistem Saat Pegawai Menekan Tombol Absen
             </h4>
             <ol className="text-xs text-muted-foreground space-y-2 list-decimal list-inside leading-relaxed">
-              <li><strong>Simpan Instan:</strong> Data absen (timestamp, GPS, jarak) langsung disimpan ke IndexedDB di perangkat. Status: <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-amber-500/10 text-amber-700 dark:text-amber-300">Pending</Badge></li>
-              <li><strong>Adaptive Jitter:</strong> Sistem menghitung delay acak berdasarkan tier dan jam saat ini, lalu menunggu selama delay tersebut.</li>
-              <li><strong>Cek Circuit Breaker:</strong> Jika status "Open" (server bermasalah), data tetap di antrean lokal. Jika "Closed", lanjut kirim.</li>
-              <li><strong>Kirim ke Server (RPC):</strong> Data dikirim via fungsi database atomik. Jika gagal, masuk mekanisme Exponential Backoff.</li>
-              <li><strong>Sinkronisasi Berhasil:</strong> Status diperbarui menjadi <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-green-500/10 text-green-700 dark:text-green-300">Synced</Badge>. Data aman di server.</li>
-              <li><strong>Re-hydration:</strong> Jika aplikasi/HP mati mendadak, saat dibuka kembali sistem memulihkan data "stuck" dari IndexedDB dan melanjutkan sinkronisasi.</li>
+              <li><strong>Simpan Instan:</strong> Data absen (timestamp, GPS, jarak) langsung disimpan ke IndexedDB di perangkat. Status: <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-amber-500/10 text-amber-700 dark:text-amber-300">Menunggu</Badge></li>
+              <li><strong>Jitter Adaptif:</strong> Sistem menghitung delay acak berdasarkan tier dan jam saat ini, lalu menunggu selama delay tersebut.</li>
+              <li><strong>Cek Pemutus Sirkuit:</strong> Jika status "Open" (server bermasalah), data tetap di antrean lokal. Jika "Closed", lanjut kirim.</li>
+              <li><strong>Kirim ke Server (RPC):</strong> Data dikirim via fungsi database atomik. Jika gagal, masuk mekanisme Backoff Eksponensial.</li>
+              <li><strong>Sinkronisasi Berhasil:</strong> Status diperbarui menjadi <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-green-500/10 text-green-700 dark:text-green-300">Tersinkron</Badge>. Data aman di server.</li>
+              <li><strong>Pemulihan Ulang:</strong> Jika aplikasi/HP mati mendadak, saat dibuka kembali sistem memulihkan data "stuck" dari IndexedDB dan melanjutkan sinkronisasi.</li>
             </ol>
           </div>
 
@@ -1252,10 +1331,10 @@ export function ScalabilitySettings() {
             </h4>
             <ol className="text-xs text-muted-foreground space-y-2 list-decimal list-inside leading-relaxed">
               <li>Lihat <strong>Status & Skor</strong> untuk indikator cepat apakah sistem aman atau perlu tindakan.</li>
-              <li>Cek <strong>Indikator Operasional</strong> (Queue Depth, P95 Lag, Pending Age) untuk menemukan bottleneck utama.</li>
+              <li>Cek <strong>Indikator Operasional</strong> (Kedalaman Antrean, P95 Lag, Usia Menunggu) untuk menemukan bottleneck utama.</li>
               <li>Gunakan panel <strong>Saran Tier</strong> jika jumlah pegawai atau antrian sudah melewati batas aman.</li>
               <li>Periksa <strong>Threshold Dinamis Aktif</strong> agar keputusan tuning sesuai konteks trafik saat ini.</li>
-              <li>Eksekusi rekomendasi pada blok <strong>Temuan & Tindakan</strong>, lalu refresh metrik untuk validasi.</li>
+              <li>Eksekusi rekomendasi pada blok <strong>Temuan & Tindakan</strong>, lalu muat ulang metrik untuk validasi.</li>
             </ol>
           </div>
 
@@ -1323,11 +1402,11 @@ export function ScalabilitySettings() {
                 <p className="text-lg font-semibold">{capacityHealth.userUtilization}%</p>
               </div>
               <div className="p-3 rounded-md bg-muted/40">
-                <p className="text-xs text-muted-foreground">Kapasitas Peak (estimasi)</p>
+                <p className="text-xs text-muted-foreground">Kapasitas Jam Sibuk (estimasi)</p>
                 <p className="text-lg font-semibold">~{capacityHealth.peakCapacityEstimate.toLocaleString()} req/s</p>
               </div>
               <div className="p-3 rounded-md bg-muted/40">
-                <p className="text-xs text-muted-foreground">Kapasitas Off-Peak</p>
+                <p className="text-xs text-muted-foreground">Kapasitas Di Luar Jam Sibuk</p>
                 <p className="text-lg font-semibold">~{capacityHealth.offpeakCapacityEstimate.toLocaleString()} req/s</p>
               </div>
             </CardContent>
@@ -1343,30 +1422,30 @@ export function ScalabilitySettings() {
               </CardHeader>
               <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="p-3 rounded-md bg-muted/40">
-                  <p className="text-xs text-muted-foreground">Queue Depth</p>
+                  <p className="text-xs text-muted-foreground">Kedalaman Antrean</p>
                   <p className="text-lg font-semibold">{capacityHealth.queueDepth.toLocaleString()}</p>
                   <Badge className={cn("mt-2 border", capacityHealth.queuePressureTone)}>
                     Tekanan: {capacityHealth.queuePressure}
                   </Badge>
                 </div>
                 <div className="p-3 rounded-md bg-muted/40">
-                  <p className="text-xs text-muted-foreground">Processed 5 Menit</p>
+                  <p className="text-xs text-muted-foreground">Diproses 5 Menit</p>
                   <p className="text-lg font-semibold">{capacityHealth.processedLast5m.toLocaleString()}</p>
                 </div>
                 <div className="p-3 rounded-md bg-muted/40">
-                  <p className="text-xs text-muted-foreground">P95 Lag</p>
+                  <p className="text-xs text-muted-foreground">Lag P95</p>
                   <p className="text-lg font-semibold">{capacityHealth.p95Lag}s</p>
                 </div>
                 <div className="p-3 rounded-md bg-muted/40">
-                  <p className="text-xs text-muted-foreground">Pending Tertua</p>
+                  <p className="text-xs text-muted-foreground">Menunggu Tertua</p>
                   <p className="text-lg font-semibold">{capacityHealth.maxPendingAge}s</p>
                 </div>
                 <div className="p-3 rounded-md bg-muted/40">
-                  <p className="text-xs text-muted-foreground">Failed Queue</p>
+                  <p className="text-xs text-muted-foreground">Antrean Gagal</p>
                   <p className="text-lg font-semibold">{capacityHealth.failedCount.toLocaleString()}</p>
                 </div>
                 <div className="p-3 rounded-md bg-muted/40">
-                  <p className="text-xs text-muted-foreground">Dead Queue</p>
+                  <p className="text-xs text-muted-foreground">Antrean Mati</p>
                   <p className="text-lg font-semibold">{capacityHealth.deadCount.toLocaleString()}</p>
                 </div>
               </CardContent>
@@ -1419,19 +1498,19 @@ export function ScalabilitySettings() {
                 </p>
               </div>
               <div className="p-3 rounded-md bg-muted/40">
-                <p className="text-xs text-muted-foreground">Queue Depth</p>
+                  <p className="text-xs text-muted-foreground">Kedalaman Antrean</p>
                 <p className="font-semibold">
                   Warn {capacityHealth.thresholds.queueWarn.toLocaleString()} / Critical {capacityHealth.thresholds.queueCritical.toLocaleString()}
                 </p>
               </div>
               <div className="p-3 rounded-md bg-muted/40">
-                <p className="text-xs text-muted-foreground">P95 Lag</p>
+                  <p className="text-xs text-muted-foreground">Lag P95</p>
                 <p className="font-semibold">
                   Warn {capacityHealth.thresholds.p95Warn}s / Critical {capacityHealth.thresholds.p95Critical}s
                 </p>
               </div>
               <div className="p-3 rounded-md bg-muted/40">
-                <p className="text-xs text-muted-foreground">Max Pending Age</p>
+                <p className="text-xs text-muted-foreground">Menunggu Tertua Maksimum</p>
                 <p className="font-semibold">
                   Warn {capacityHealth.thresholds.pendingWarn}s / Critical {capacityHealth.thresholds.pendingCritical}s
                 </p>

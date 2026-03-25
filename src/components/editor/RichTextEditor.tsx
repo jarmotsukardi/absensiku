@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import DOMPurify from "dompurify";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -56,18 +57,58 @@ export function RichTextEditor({
   const [editorMode, setEditorMode] = useState<"visual" | "source">("visual");
   const [sourceCode, setSourceCode] = useState(value || "");
 
+  const sanitizeHtml = useCallback((input: string) => {
+    const sanitized = DOMPurify.sanitize(input, {
+      ALLOWED_TAGS: [
+        "p",
+        "br",
+        "strong",
+        "em",
+        "u",
+        "s",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "ul",
+        "ol",
+        "li",
+        "a",
+        "blockquote",
+        "pre",
+        "code",
+        "table",
+        "thead",
+        "tbody",
+        "tr",
+        "th",
+        "td",
+        "img",
+        "hr",
+        "sub",
+        "sup",
+      ],
+      ALLOWED_ATTR: ["href", "src", "alt", "title", "target", "rel", "width", "height", "style"],
+      ALLOW_DATA_ATTR: false,
+    });
+
+    return sanitized.replace(/<a\b(?![^>]*\brel=)([^>]*)>/gi, '<a rel="noopener noreferrer"$1>');
+  }, []);
+
   // Initialize content only once
   useEffect(() => {
     if (editorRef.current && !isInitialized) {
-      editorRef.current.innerHTML = value || "";
+      editorRef.current.innerHTML = sanitizeHtml(value || "");
       setIsInitialized(true);
     }
-  }, [value, isInitialized]);
+  }, [value, isInitialized, sanitizeHtml]);
 
   // Sync source code with value
   useEffect(() => {
-    setSourceCode(value || "");
-  }, [value]);
+    setSourceCode(sanitizeHtml(value || ""));
+  }, [value, sanitizeHtml]);
 
   // Update from external value changes
   useEffect(() => {
@@ -76,34 +117,36 @@ export function RichTextEditor({
       if (value !== currentContent && value !== undefined) {
         const selection = window.getSelection();
         const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
-        editorRef.current.innerHTML = value;
+        editorRef.current.innerHTML = sanitizeHtml(value);
         if (range && editorRef.current.contains(range.commonAncestorContainer)) {
           selection?.removeAllRanges();
           selection?.addRange(range);
         }
       }
     }
-  }, [value, isInitialized, editorMode]);
+  }, [value, isInitialized, editorMode, sanitizeHtml]);
 
   const handleInput = useCallback(() => {
     if (editorRef.current) {
-      const html = editorRef.current.innerHTML;
+      const html = sanitizeHtml(editorRef.current.innerHTML);
+      editorRef.current.innerHTML = html;
       onChange(html);
       setSourceCode(html);
     }
-  }, [onChange]);
+  }, [onChange, sanitizeHtml]);
 
   const handleSourceChange = useCallback((newSource: string) => {
-    setSourceCode(newSource);
-    onChange(newSource);
+    const sanitized = sanitizeHtml(newSource);
+    setSourceCode(sanitized);
+    onChange(sanitized);
     if (editorRef.current) {
-      editorRef.current.innerHTML = newSource;
+      editorRef.current.innerHTML = sanitized;
     }
-  }, [onChange]);
+  }, [onChange, sanitizeHtml]);
 
   const handleModeChange = (mode: string) => {
     if (mode === "visual" && editorRef.current) {
-      editorRef.current.innerHTML = sourceCode;
+      editorRef.current.innerHTML = sanitizeHtml(sourceCode);
     }
     setEditorMode(mode as "visual" | "source");
   };
@@ -123,14 +166,20 @@ export function RichTextEditor({
   const insertLink = useCallback(() => {
     const url = prompt("Masukkan URL:");
     if (url) {
-      execCommand("createLink", url);
+      const normalizedUrl = url.trim();
+      if (/^(https?:\/\/|mailto:|tel:|\/|#)/i.test(normalizedUrl)) {
+        execCommand("createLink", normalizedUrl);
+      }
     }
   }, [execCommand]);
 
   const insertImage = useCallback(() => {
     const url = prompt("Masukkan URL gambar:");
     if (url) {
-      execCommand("insertImage", url);
+      const normalizedUrl = url.trim();
+      if (/^https?:\/\//i.test(normalizedUrl)) {
+        execCommand("insertImage", normalizedUrl);
+      }
     }
   }, [execCommand]);
 

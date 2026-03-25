@@ -54,7 +54,7 @@ test.describe.serial("Admin HR Review360 Runtime Bridge", () => {
     try {
       await applyReview360Snapshot(page, updatedState);
       await saveButton.click();
-      await expectToast(page, "Baseline Ulasan 360 berhasil disimpan.");
+      await expectToast(page, "Acuan bawaan Ulasan 360 berhasil disimpan.");
 
       await page.reload({ waitUntil: "domcontentloaded" });
       await waitForStable(page);
@@ -85,7 +85,7 @@ test.describe.serial("Admin HR Review360 Runtime Bridge", () => {
       await expect(saveButton).toBeEnabled({ timeout: 15000 });
       await applyReview360Snapshot(page, originalState);
       await saveButton.click();
-      await expectToast(page, "Baseline Ulasan 360 berhasil disimpan.");
+      await expectToast(page, "Acuan bawaan Ulasan 360 berhasil disimpan.");
     }
   });
 });

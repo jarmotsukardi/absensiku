@@ -383,6 +383,10 @@ export default function OrgSettings() {
     );
   }
 
+  const b2bMinEmployees = Math.max(2001, b2bThreshold);
+  const isCentralizedBilling = organization?.billing_mode !== "individual";
+  const hasB2BNegotiationAccess = isCentralizedBilling && activeEmployeeCount >= b2bMinEmployees;
+
   return (
     <OrganizationLayout>
       <div className="space-y-6">
@@ -687,7 +691,7 @@ export default function OrgSettings() {
                   <button
                     type="button"
                     className={`p-5 rounded-xl border-2 text-left transition-all relative ${
-                      organization?.billing_mode !== "individual"
+                      isCentralizedBilling
                         ? "border-primary bg-primary/5"
                         : "border-border hover:border-primary/50"
                     }`}
@@ -698,12 +702,12 @@ export default function OrgSettings() {
                         setBillingOtpSent(false);
                         setBillingOtpValid(false);
                         billingOtpRef.current?.clear();
-                      } else if (activeEmployeeCount >= b2bThreshold) {
+                      } else if (hasB2BNegotiationAccess) {
                         setShowB2bOverlay(true);
                       }
                     }}
                     onMouseEnter={() => {
-                      if (organization?.billing_mode !== "individual" && activeEmployeeCount >= b2bThreshold) {
+                      if (hasB2BNegotiationAccess) {
                         setShowB2bOverlay(true);
                       }
                     }}
@@ -713,14 +717,14 @@ export default function OrgSettings() {
                       <div className="absolute inset-0 z-10 rounded-xl bg-primary/95 text-primary-foreground p-5 flex flex-col justify-center animate-in fade-in duration-200">
                         <p className="font-semibold text-sm mb-1">🤝 Negosiasi B2B Tersedia</p>
                         <p className="text-xs opacity-90">
-                          Dengan <strong>{activeEmployeeCount.toLocaleString()}</strong> pegawai aktif (≥ {b2bThreshold.toLocaleString()}),
+                          Dengan <strong>{activeEmployeeCount.toLocaleString()}</strong> pegawai aktif (≥ {b2bMinEmployees.toLocaleString()}),
                           Anda dapat melakukan negosiasi harga khusus korporasi. Hubungi tim sales kami.
                         </p>
                       </div>
                     )}
                     <div className="flex items-start gap-3">
                       <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                        organization?.billing_mode !== "individual" ? "bg-primary text-primary-foreground" : "bg-muted"
+                        isCentralizedBilling ? "bg-primary text-primary-foreground" : "bg-muted"
                       }`}>
                         <Building2 className="h-5 w-5" />
                       </div>

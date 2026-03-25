@@ -31,6 +31,13 @@ import {
   saveTenantOrgMasterDataModules,
   type OrgMasterDataModuleKey,
 } from "@/lib/orgMasterDataModules";
+import {
+  DEFAULT_ORG_WORKSPACE_MODULES,
+  emitOrgWorkspaceModulesUpdated,
+  fetchTenantOrgWorkspaceModules,
+  saveTenantOrgWorkspaceModules,
+  type OrgWorkspaceModuleKey,
+} from "@/lib/orgWorkspaceModules";
 
 const EMPTY_COUNTS: OrgOnboardingCounts = {
   opd: 0,
@@ -69,6 +76,8 @@ export default function OrgOnboardingSetup() {
   const [applyResult, setApplyResult] = useState<OrgOnboardingApplyResult | null>(null);
   const [masterDataModules, setMasterDataModules] = useState(DEFAULT_ORG_MASTER_DATA_MODULES);
   const [isSavingMasterDataModules, setIsSavingMasterDataModules] = useState(false);
+  const [workspaceModules, setWorkspaceModules] = useState(DEFAULT_ORG_WORKSPACE_MODULES);
+  const [isSavingWorkspaceModules, setIsSavingWorkspaceModules] = useState(false);
 
   const activeChecklistModules = MODULE_LINKS;
 
@@ -79,6 +88,10 @@ export default function OrgOnboardingSetup() {
   const activeMasterDataModuleCount = useMemo(
     () => ORG_MASTER_DATA_MODULE_OPTIONS.filter((item) => masterDataModules[item.key]).length,
     [masterDataModules]
+  );
+  const activeWorkspaceModuleCount = useMemo(
+    () => Object.values(workspaceModules).filter(Boolean).length,
+    [workspaceModules]
   );
 
   const refreshData = useCallback(async () => {
@@ -106,7 +119,7 @@ export default function OrgOnboardingSetup() {
       }
       setTenantId(resolvedTenantId);
 
-      const [{ template, updatedAt }, tenantCounts, moduleSetting] = await withExponentialBackoff(
+      const [{ template, updatedAt }, tenantCounts, moduleSetting, workspaceSetting] = await withExponentialBackoff(
         () =>
           Promise.all([
             withTimeout(
@@ -124,6 +137,11 @@ export default function OrgOnboardingSetup() {
               ORG_ONBOARDING_QUERY_TIMEOUT_MS,
               "org.onboarding.refresh.fetch_master_data_modules timeout",
             ),
+            withTimeout(
+              fetchTenantOrgWorkspaceModules(resolvedTenantId),
+              ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+              "org.onboarding.refresh.fetch_workspace_modules timeout",
+            ),
           ]),
         {
           maxRetries: ORG_ONBOARDING_QUERY_RETRY_MAX,
@@ -136,6 +154,7 @@ export default function OrgOnboardingSetup() {
       setTemplateUpdatedAt(updatedAt);
       setCounts(tenantCounts);
       setMasterDataModules(moduleSetting.modules);
+      setWorkspaceModules(workspaceSetting.modules);
     } catch (error: unknown) {
       const errorRef = reportError(error, "org.onboarding.fetch_data");
       const message = appendErrorReference("Gagal memuat data onboarding organisasi", errorRef);
@@ -187,6 +206,46 @@ export default function OrgOnboardingSetup() {
       toast.error(appendErrorReference("Gagal menyimpan preferensi modul master data", errorRef));
     } finally {
       setIsSavingMasterDataModules(false);
+      setIsRetrying(false);
+    }
+  };
+
+  const handleToggleWorkspaceModule = (key: OrgWorkspaceModuleKey, checked: boolean) => {
+    setWorkspaceModules((prev) => ({ ...prev, [key]: checked }));
+  };
+
+  const handleSaveWorkspaceModules = async () => {
+    if (!tenantId) {
+      toast.error("Tenant organisasi belum tersedia. Muat ulang halaman.");
+      return;
+    }
+
+    try {
+      setIsSavingWorkspaceModules(true);
+      setIsRetrying(false);
+      const savedModules = await withExponentialBackoff(
+        () =>
+          withTimeout(
+            saveTenantOrgWorkspaceModules(tenantId, workspaceModules),
+            ORG_ONBOARDING_QUERY_TIMEOUT_MS,
+            "org.onboarding.save_workspace_modules timeout",
+          ),
+        {
+          maxRetries: ORG_ONBOARDING_QUERY_RETRY_MAX,
+          shouldRetry: isRetryableError,
+          onRetry: () => setIsRetrying(true),
+        },
+      );
+      setWorkspaceModules(savedModules);
+      emitOrgWorkspaceModulesUpdated(savedModules);
+      toast.success("Preferensi workspace HR/Payroll berhasil disimpan.");
+    } catch (error: unknown) {
+      const errorRef = reportError(error, "org.onboarding.save_workspace_modules", {
+        tenant_id: tenantId,
+      });
+      toast.error(appendErrorReference("Gagal menyimpan preferensi workspace HR/Payroll", errorRef));
+    } finally {
+      setIsSavingWorkspaceModules(false);
       setIsRetrying(false);
     }
   };
@@ -275,6 +334,9 @@ export default function OrgOnboardingSetup() {
               <Badge variant="outline">{templateLabel}</Badge>
               <Badge variant={configuredModules === activeChecklistModules.length ? "default" : "secondary"}>
                 Modul Siap: {configuredModules}/{activeChecklistModules.length}
+              </Badge>
+              <Badge variant={activeWorkspaceModuleCount === 2 ? "default" : "secondary"}>
+                Workspace Aktif: {activeWorkspaceModuleCount}/2
               </Badge>
             </div>
             {templateUpdatedAt && (
@@ -366,6 +428,68 @@ export default function OrgOnboardingSetup() {
               Jika nanti butuh modul yang sempat dimatikan, aktifkan kembali di halaman ini lalu submenu akan muncul lagi.
             </p>
             <p className="text-xs text-muted-foreground">Checklist setup fokus ke 5 modul inti operasional.</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Pilihan Workspace Aplikasi</CardTitle>
+            <CardDescription>
+              Kontrol visibilitas area kerja HR dan Payroll. Switcher header + sidebar akan mengikuti pengaturan ini.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant={activeWorkspaceModuleCount === 2 ? "default" : "secondary"}>
+                Workspace Aktif: {activeWorkspaceModuleCount}/2
+              </Badge>
+              <Badge variant="outline">Sinkron ke App Switcher + Sidebar</Badge>
+            </div>
+            <div className="space-y-3">
+              <div className="flex items-start justify-between gap-4 rounded-md border p-3">
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold">Workspace HR</p>
+                  <p className="text-xs text-muted-foreground">Aktifkan area kerja `/org/hr` untuk operasi HR.</p>
+                </div>
+                <Switch
+                  checked={workspaceModules.hr}
+                  onCheckedChange={(checked) => handleToggleWorkspaceModule("hr", checked)}
+                  aria-label="Aktifkan workspace HR"
+                />
+              </div>
+              <div className="flex items-start justify-between gap-4 rounded-md border p-3">
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold">Workspace Payroll</p>
+                  <p className="text-xs text-muted-foreground">Aktifkan area kerja `/org/payroll` untuk operasi Payroll.</p>
+                </div>
+                <Switch
+                  checked={workspaceModules.payroll}
+                  onCheckedChange={(checked) => handleToggleWorkspaceModule("payroll", checked)}
+                  aria-label="Aktifkan workspace Payroll"
+                />
+              </div>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => void refreshData()}
+                disabled={isLoading || isApplying || isSavingWorkspaceModules}
+              >
+                {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCcw className="mr-2 h-4 w-4" />}
+                Muat Ulang
+              </Button>
+              <Button
+                onClick={() => void handleSaveWorkspaceModules()}
+                disabled={isLoading || isApplying || isSavingWorkspaceModules}
+              >
+                {isSavingWorkspaceModules ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="mr-2 h-4 w-4" />
+                )}
+                Simpan Workspace
+              </Button>
+            </div>
           </CardContent>
         </Card>
 

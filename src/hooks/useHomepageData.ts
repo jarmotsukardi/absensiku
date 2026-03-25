@@ -3,7 +3,16 @@ import { supabase } from "@/integrations/supabase/client";
 import { isFaqVisibleToPublic } from "@/lib/faqAudience";
 import type { FaqAudience } from "@/lib/faqAudience";
 import { getHomepageSectionOrder, isHomepageSectionEnabled } from "@/lib/homepageLayout";
-import { mapSubscriptionPackagesToPricingPlans } from "@/lib/pricingPlans";
+import {
+  getAttendanceIntroPromoCampaignText,
+  normalizeAttendanceIntroPromoConfig,
+} from "@/lib/attendanceOnboardingPromo";
+import {
+  mapSubscriptionPackagesToPublicPricingPlans,
+  type BillingPackageLike,
+  type HomepagePricingPlan,
+} from "@/lib/pricingPlans";
+import { DEFAULT_HOMEPAGE_FEATURES, normalizeHomepageFeatures } from "@/lib/homepageFeatures";
 
 interface HomepageSection {
   id: string;
@@ -76,25 +85,21 @@ interface Feature {
   description: string;
 }
 
-interface PricingPlan {
-  id: string;
-  name: string;
-  description: string;
-  price: number;
-  period: string;
-  features: string[];
-  is_popular: boolean;
-  original_price?: number | null;
-  discount_percentage?: number | null;
-  duration_months?: number | null;
-  total_price?: number | null;
-  total_price_before_discount?: number | null;
-  popular_label?: string | null;
-}
+type PricingPlan = HomepagePricingPlan;
 
 interface PricingSectionSettings {
   section_title: string;
   section_subtitle: string;
+}
+
+interface BillingPackageRow extends BillingPackageLike {
+  is_active?: boolean | null;
+  module_scope?: string | null;
+}
+
+interface BillingSettingRow {
+  setting_key: string;
+  setting_value: unknown;
 }
 
 interface FAQ {
@@ -130,6 +135,8 @@ interface FooterSettings {
   company_name: string;
   company_description: string;
   copyright_text: string;
+  enable_contact: boolean;
+  enable_social_media: boolean;
   address: string;
   email: string;
   phone: string;
@@ -264,6 +271,8 @@ const defaultFooterSettings: FooterSettings = {
   company_name: "AbsensiKu",
   company_description: "Sistem absensi GPS modern untuk pemerintah dan perusahaan.",
   copyright_text: "© 2024 AbsensiKu. Hak cipta dilindungi.",
+  enable_contact: true,
+  enable_social_media: true,
   address: "",
   email: "",
   phone: "",
@@ -287,6 +296,17 @@ const defaultFooterSettings: FooterSettings = {
   social_telegram: "",
 };
 
+const applyCampaignNoteToPricingPlans = (
+  plans: PricingPlan[],
+  campaignNote: string | null,
+): PricingPlan[] =>
+  plans.map((plan) => ({
+    ...plan,
+    campaign_note: campaignNote ?? plan.campaign_note ?? null,
+    is_promo_active: false,
+    promo_label: null,
+  }));
+
 export function useHomepageData() {
   const [sections, setSections] = useState<HomepageSection[]>([]);
   const [heroSettings, setHeroSettings] = useState<HeroSettings>(defaultHeroSettings);
@@ -294,9 +314,13 @@ export function useHomepageData() {
   const [newsSettings, setNewsSettings] = useState<NewsSettings>(defaultNewsSettings);
   const [targetSegmentSettings, setTargetSegmentSettings] = useState<TargetSegmentSettings>(defaultTargetSegmentSettings);
   const [promoSidebarSettings, setPromoSidebarSettings] = useState<PromoSidebarSettings>(defaultPromoSidebarSettings);
-  const [pricingSectionSettings, setPricingSectionSettings] = useState<PricingSectionSettings>({ section_title: "Harga Transparan", section_subtitle: "Pilih paket yang sesuai dengan kebutuhan instansi Anda." });
+  const [pricingSectionSettings, setPricingSectionSettings] = useState<PricingSectionSettings>({
+    section_title: "Harga Transparan",
+    section_subtitle:
+      "Harga publik saat ini difokuskan untuk paket Absensi. Modul HR dan Payroll disiapkan sebagai tahap lanjutan.",
+  });
   const [b2bNegotiationThreshold, setB2bNegotiationThreshold] = useState(2000);
-  const [features, setFeatures] = useState<Feature[]>([]);
+  const [features, setFeatures] = useState<Feature[]>(DEFAULT_HOMEPAGE_FEATURES.map((feature) => ({ ...feature })));
   const [pricingPlans, setPricingPlans] = useState<PricingPlan[]>([]);
   const [faqs, setFaqs] = useState<FAQ[]>([]);
   const [testimonials, setTestimonials] = useState<Testimonial[]>([]);
@@ -353,7 +377,9 @@ export function useHomepageData() {
           const ps = pricingSection.settings as Record<string, unknown>;
           setPricingSectionSettings({
             section_title: (ps.section_title as string) || "Harga Transparan",
-            section_subtitle: (ps.section_subtitle as string) || "Pilih paket yang sesuai dengan kebutuhan instansi Anda.",
+            section_subtitle:
+              (ps.section_subtitle as string) ||
+              "Harga publik saat ini difokuskan untuk paket Absensi. Modul HR dan Payroll disiapkan sebagai tahap lanjutan.",
           });
         }
       }
@@ -386,7 +412,12 @@ export function useHomepageData() {
               if (setting.value) setHeroSettings({ ...defaultHeroSettings, ...setting.value as unknown as Partial<HeroSettings> });
               break;
             case "features_settings":
-              if (Array.isArray(setting.value)) setFeatures(setting.value as unknown as Feature[]);
+              {
+                const normalizedFeatures = normalizeHomepageFeatures(setting.value);
+                if (normalizedFeatures) {
+                  setFeatures(normalizedFeatures);
+                }
+              }
               break;
             case "pricing_settings":
               if (Array.isArray(setting.value)) {
@@ -472,9 +503,23 @@ export function useHomepageData() {
         setFooterSettings(footerBase);
       }
 
+      const { data: attendancePromoSettings } = await supabase
+        .from("billing_settings")
+        .select("setting_key, setting_value")
+        .eq("setting_key", "attendance_intro_promo")
+        .maybeSingle();
+
+      const attendanceIntroPromoCampaignText = attendancePromoSettings
+        ? getAttendanceIntroPromoCampaignText(
+            normalizeAttendanceIntroPromoConfig(
+              (attendancePromoSettings as BillingSettingRow).setting_value,
+            ),
+          )
+        : null;
+
       const { data: billingPackages, error: billingPackagesError } = await supabase
         .from("subscription_packages")
-        .select("id, name, description, base_price_per_month, duration_months, discount_percentage, features, sort_order")
+        .select("*")
         .eq("is_active", true)
         .order("sort_order");
 
@@ -483,9 +528,22 @@ export function useHomepageData() {
       }
 
       if (billingPackages && billingPackages.length > 0) {
-        setPricingPlans(mapSubscriptionPackagesToPricingPlans(billingPackages, legacyPricingPlans));
+        const packageRows = billingPackages as BillingPackageRow[];
+        if (packageRows.length > 0) {
+          setPricingPlans(
+            mapSubscriptionPackagesToPublicPricingPlans(
+              packageRows,
+              legacyPricingPlans,
+              attendanceIntroPromoCampaignText,
+            ),
+          );
+        } else if (legacyPricingPlans.length > 0) {
+          setPricingPlans(applyCampaignNoteToPricingPlans(legacyPricingPlans, attendanceIntroPromoCampaignText));
+        } else {
+          setPricingPlans([]);
+        }
       } else if (legacyPricingPlans.length > 0) {
-        setPricingPlans(legacyPricingPlans);
+        setPricingPlans(applyCampaignNoteToPricingPlans(legacyPricingPlans, attendanceIntroPromoCampaignText));
       } else {
         setPricingPlans([]);
       }

@@ -20,18 +20,63 @@ type TimeRange = "24h" | "7d" | "30d";
 
 const ITEMS_PER_PAGE = 20;
 
+type LoadHint = {
+  title: string;
+  description: string;
+};
+
+const getErrorMessage = (error: unknown) => {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return "";
+  }
+};
+
+const getPayrollErrorLogLoadHint = (error: unknown): LoadHint | null => {
+  const message = getErrorMessage(error).toLowerCase();
+  const code = typeof error === "object" && error && "code" in error ? String((error as { code?: string }).code || "") : "";
+
+  if (code === "42P01" || (message.includes("payroll_audit_logs") && message.includes("does not exist"))) {
+    return {
+      title: "Tabel payroll_audit_logs belum tersedia",
+      description:
+        "Migration payroll audit log belum terpasang di Supabase remote. Jalankan migration HR/Payroll phase-3 audit + payroll_errorlog_columns + payroll_audit_log_state_columns.",
+    };
+  }
+
+  if (code === "42501" || message.includes("permission denied")) {
+    return {
+      title: "Akses log payroll ditolak",
+      description:
+        "Pastikan akun memiliki role super_admin dan policy payroll_audit_logs sudah aktif di Supabase remote.",
+    };
+  }
+
+  return null;
+};
+
 const formatDateTime = (value: string | null) => {
   if (!value) return "-";
   return new Intl.DateTimeFormat("id-ID", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 };
 
 const inferSeverity = (row: PayrollAuditLog): "error" | "warning" => {
+  const rawSeverity = (row.severity || "").toLowerCase();
+  if (rawSeverity.includes("warn")) return "warning";
+  if (rawSeverity.includes("error") || rawSeverity.includes("critical")) return "error";
   const haystack = `${row.action_type || ""} ${row.action_label || ""} ${row.notes || ""}`.toLowerCase();
   if (haystack.includes("warn")) return "warning";
   return "error";
 };
 
 const inferStatus = (row: PayrollAuditLog): "open" | "done" | "archived" => {
+  const rawStatus = (row.status || "").toLowerCase();
+  if (rawStatus === "archived") return "archived";
+  if (rawStatus === "done" || rawStatus === "resolved") return "done";
+  if (rawStatus === "open") return "open";
   const haystack = `${row.action_type || ""} ${row.action_label || ""} ${row.notes || ""}`.toLowerCase();
   if (haystack.includes("archive") || haystack.includes("arsip")) return "archived";
   if (haystack.includes("done") || haystack.includes("resolved") || haystack.includes("selesai") || haystack.includes("fixed")) {
@@ -50,6 +95,8 @@ const inferContext = (row: PayrollAuditLog): string => {
 };
 
 const inferRoute = (row: PayrollAuditLog): string => {
+  const rawRoute = (row.source_route || "").trim();
+  if (rawRoute) return rawRoute;
   const notes = row.notes || "";
   const match = notes.match(/\/(org|admin)\/payroll\/[a-z-]+/i);
   if (match?.[0]) return match[0];
@@ -82,6 +129,7 @@ export default function AdminPayrollErrorLogs() {
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadHint, setLoadHint] = useState<LoadHint | null>(null);
   const [searchTerm, setSearchTerm] = useState(() => searchParams.get("trace") || searchParams.get("log") || "");
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>("all");
   const [activeTab, setActiveTab] = useState<ErrorTab>("critical");
@@ -94,6 +142,7 @@ export default function AdminPayrollErrorLogs() {
   const fetchRows = useCallback(async () => {
     setIsLoading(true);
     setLoadError(null);
+    setLoadHint(null);
     try {
       let query = supabase.from("payroll_audit_logs").select("*").order("created_at", { ascending: false }).limit(1500);
       if (tenantFilter !== "all") {
@@ -104,7 +153,12 @@ export default function AdminPayrollErrorLogs() {
       setRows((data || []).filter(isErrorLikeRow));
     } catch (error) {
       const ref = reportError(error, "admin.payroll.error_log.fetch");
-      const message = appendErrorReference("Gagal memuat log error payroll lintas tenant", ref);
+      const hint = getPayrollErrorLogLoadHint(error);
+      const message = appendErrorReference(
+        hint ? `${hint.title}. ${hint.description}` : "Gagal memuat log error payroll lintas tenant",
+        ref,
+      );
+      setLoadHint(hint);
       setLoadError(message);
       toast.error(message);
       setRows([]);
@@ -443,6 +497,12 @@ export default function AdminPayrollErrorLogs() {
             {loadError ? (
               <div className="rounded-md border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
                 {loadError}
+              </div>
+            ) : null}
+            {loadHint ? (
+              <div className="rounded-md border border-amber-200 bg-amber-50/80 p-3 text-sm text-amber-900">
+                <p className="font-semibold">{loadHint.title}</p>
+                <p className="mt-1 text-amber-800">{loadHint.description}</p>
               </div>
             ) : null}
 

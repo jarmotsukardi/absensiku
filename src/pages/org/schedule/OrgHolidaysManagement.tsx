@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -91,21 +91,64 @@ export default function OrgHolidaysManagement() {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
 
+  const getCurrentTenantId = useCallback(async (): Promise<string | null> => {
+    const {
+      data: { user },
+    } = await withExponentialBackoff(
+      () =>
+        withTimeout(
+          supabase.auth.getUser(),
+          ORG_HOLIDAYS_QUERY_TIMEOUT_MS,
+          "org.schedule.holidays.get_tenant.auth timeout"
+        ),
+      {
+        maxRetries: ORG_HOLIDAYS_QUERY_RETRY_MAX,
+        shouldRetry: isRetryableError,
+        onRetry: () => setIsRetrying(true),
+      }
+    );
+    if (!user) return null;
+
+    const { data: roleData, error: roleError } = await withExponentialBackoff(
+      () =>
+        withTimeout(
+          supabase.from("user_roles").select("tenant_id").eq("user_id", user.id).eq("role", "admin_instansi").maybeSingle(),
+          ORG_HOLIDAYS_QUERY_TIMEOUT_MS,
+          "org.schedule.holidays.get_tenant.role timeout"
+        ),
+      {
+        maxRetries: ORG_HOLIDAYS_QUERY_RETRY_MAX,
+        shouldRetry: isRetryableError,
+        onRetry: () => setIsRetrying(true),
+      }
+    );
+    if (roleError) throw roleError;
+    return roleData?.tenant_id || null;
+  }, []);
+
   useEffect(() => {
     void fetchData();
     void fetchWorkHours();
-  }, []);
+  }, [fetchData, fetchWorkHours]);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoadError(null);
       setIsRetrying(false);
+      const tenantId = await getCurrentTenantId();
+      if (!tenantId) {
+        setHolidays([]);
+        setLoadError("Tenant organisasi tidak ditemukan.");
+        setIsLoading(false);
+        return;
+      }
       const { data, error } = await withExponentialBackoff(
         () =>
           withTimeout(
             supabase
               .from("work_holidays")
               .select("*")
+              .eq("tenant_id", tenantId)
               .order("year", { ascending: false })
               .order("month", { ascending: true }),
             ORG_HOLIDAYS_QUERY_TIMEOUT_MS,
@@ -129,17 +172,23 @@ export default function OrgHolidaysManagement() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [getCurrentTenantId]);
 
-  const fetchWorkHours = async () => {
+  const fetchWorkHours = useCallback(async () => {
     try {
       setIsRetrying(false);
+      const tenantId = await getCurrentTenantId();
+      if (!tenantId) {
+        setWorkHours([]);
+        return;
+      }
       const { data } = await withExponentialBackoff(
         () =>
           withTimeout(
             supabase
               .from("work_hours")
               .select("day_of_week, institution_type")
+              .eq("tenant_id", tenantId)
               .eq("is_active", true),
             ORG_HOLIDAYS_QUERY_TIMEOUT_MS,
             "org.schedule.holidays.fetch_work_hours timeout"
@@ -159,7 +208,7 @@ export default function OrgHolidaysManagement() {
       toast.error(message);
       setWorkHours([]);
     }
-  };
+  }, [getCurrentTenantId]);
 
   // Get working days for institution (days that have work hours configured)
   const getWorkingDays = (institutionType: string): number[] => {
@@ -467,11 +516,16 @@ export default function OrgHolidaysManagement() {
     }
 
     try {
+      const tenantId = await getCurrentTenantId();
+      if (!tenantId) {
+        toast.error("Tenant tidak ditemukan");
+        return;
+      }
       setIsRetrying(false);
       const { error } = await withExponentialBackoff(
         () =>
           withTimeout(
-            supabase.from("work_holidays").delete().eq("id", id),
+            supabase.from("work_holidays").delete().eq("id", id).eq("tenant_id", tenantId),
             ORG_HOLIDAYS_QUERY_TIMEOUT_MS,
             "org.schedule.holidays.delete timeout"
           ),

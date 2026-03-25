@@ -25,6 +25,8 @@ import {
 } from "lucide-react";
 import { resolveFaqAudience } from "@/lib/faqAudience";
 import type { FaqAudience } from "@/lib/faqAudience";
+import { AttendanceAccessRestrictionMessage } from "@/components/employee/AttendanceAccessRestrictionMessage";
+import { useAttendanceResourceRestriction } from "@/hooks/useAttendanceResourceRestriction";
 
 interface TenantInfo {
   name: string;
@@ -131,7 +133,11 @@ export default function EmployeeHelp() {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [tenantInfo, setTenantInfo] = useState<TenantInfo | null>(null);
+  const [tenantId, setTenantId] = useState<string | null>(null);
   const [managedFaqItems, setManagedFaqItems] = useState<FAQSection[]>([]);
+  const attendanceResourceRestriction = useAttendanceResourceRestriction({
+    tenantId,
+  });
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
@@ -158,6 +164,7 @@ export default function EmployeeHelp() {
         .maybeSingle();
 
       if (empData?.tenant_id) {
+        setTenantId(empData.tenant_id);
         const { data: tenant } = await supabase
           .from("tenants")
           .select("name")
@@ -202,6 +209,25 @@ export default function EmployeeHelp() {
   useEffect(() => {
     void fetchManagedFaqs();
   }, [fetchManagedFaqs]);
+
+  if (tenantId && attendanceResourceRestriction.isLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <CheckCircle2 className="h-0 w-0" />
+      </div>
+    );
+  }
+
+  if (attendanceResourceRestriction.isRestrictedNow) {
+    return (
+      <AttendanceAccessRestrictionMessage
+        reason={attendanceResourceRestriction.restrictionReason}
+        scheduleLabel={attendanceResourceRestriction.scheduleLabel}
+        reopensAtLabel={attendanceResourceRestriction.reopensAtLabel}
+        onBack={() => navigate("/employee/dashboard", { replace: true })}
+      />
+    );
+  }
 
   const faqItems: FAQSection[] = [
     {

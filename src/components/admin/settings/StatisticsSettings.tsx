@@ -25,7 +25,7 @@ interface StatisticsSettings {
 }
 
 const defaultSettings: StatisticsSettings = {
-  title: "Platform Terpercaya",
+  title: "Sistem Terpercaya",
   subtitle: "Dipercaya oleh berbagai instansi di seluruh Indonesia",
   show_active_institutions: true,
   show_employees: true,
@@ -121,15 +121,15 @@ export function StatisticsSettings() {
           {/* Teks Header */}
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
-              <Label>Judul Section</Label>
+              <Label>Judul Bagian</Label>
               <Input
                 value={settings.title}
                 onChange={(e) => setSettings({ ...settings, title: e.target.value })}
-                placeholder="Platform Terpercaya"
+                placeholder="Sistem Terpercaya"
               />
             </div>
             <div className="space-y-2">
-              <Label>Subtitle</Label>
+              <Label>Subjudul</Label>
               <Input
                 value={settings.subtitle}
                 onChange={(e) => setSettings({ ...settings, subtitle: e.target.value })}

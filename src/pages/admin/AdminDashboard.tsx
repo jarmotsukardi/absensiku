@@ -6,14 +6,14 @@ import { RecentActivity } from "@/components/admin/superadmin/RecentActivity";
 export default function AdminDashboard() {
   return (
     <SuperAdminLayout 
-      title="Dashboard" 
+      title="Dasbor" 
       subtitle="Selamat datang di panel Super Admin AbsensiKu"
     >
       <div className="space-y-6">
-        {/* Stats Widgets */}
+        {/* Widget Statistik */}
         <DashboardWidgets />
 
-        {/* Recent Data Grid */}
+        {/* Grid Data Terkini */}
         <div className="grid gap-6 lg:grid-cols-2">
           <RecentOrganizations />
           <RecentActivity />

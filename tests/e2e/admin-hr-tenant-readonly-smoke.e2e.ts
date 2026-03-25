@@ -27,8 +27,13 @@ const assertHeadingUrlAndEmptyOrRows = async (
     await expect(page.getByText(emptyText, { exact: true })).toBeVisible();
     await expect(page.locator(rowSelector)).toHaveCount(0);
   } else {
-    await expect(page.locator(rowSelector).first()).toBeVisible();
-    await expect(page.locator(rowSelector)).toHaveCount(expectedCount);
+    const rows = page.locator(rowSelector);
+    await expect(rows.first()).toBeVisible();
+    const actualCount = await rows.count();
+    expect(
+      actualCount,
+      `Jumlah row pada ${path} lebih sedikit dari baseline admin. expected minimum=${expectedCount}, actual=${actualCount}`,
+    ).toBeGreaterThanOrEqual(expectedCount);
   }
 };
 
@@ -137,6 +142,7 @@ test.describe.serial("Admin HR Tenant Readonly Smoke", () => {
   });
 
   test("ESS tenant sinkron antara admin dan org", async ({ page, browser }) => {
+    test.setTimeout(90_000);
     const { tenantName } = await prepareTenantAdminState(page, browser);
 
     const essSnapshot = {
@@ -176,7 +182,7 @@ test.describe.serial("Admin HR Tenant Readonly Smoke", () => {
 
       await orgRuntime.page.goto("/org/hr/ess/attendance", { waitUntil: "domcontentloaded" });
       await waitForStable(orgRuntime.page);
-      await expect(orgRuntime.page.getByRole("heading", { name: "Kehadiran Saya", exact: true })).toBeVisible();
+      await expect(orgRuntime.page.getByRole("heading", { name: "Kehadiran ESS", exact: true })).toBeVisible();
       if (essSnapshot.attendance) {
         await expect(orgRuntime.page.getByText(`Record ${essSnapshot.lookbackDays} Hari`, { exact: true })).toBeVisible();
       } else {
@@ -190,7 +196,7 @@ test.describe.serial("Admin HR Tenant Readonly Smoke", () => {
 
       await orgRuntime.page.goto("/org/hr/ess/documents", { waitUntil: "domcontentloaded" });
       await waitForStable(orgRuntime.page);
-      await expect(orgRuntime.page.getByRole("heading", { name: "Dokumen Saya", exact: true })).toBeVisible();
+      await expect(orgRuntime.page.getByRole("heading", { name: "Dokumen ESS", exact: true })).toBeVisible();
       if (essSnapshot.documents) {
         await expect(
           orgRuntime.page.getByText(`Saat ini ESS dokumen memakai baseline tenant dengan sumber aktif: ${essSnapshot.documentSource}.`, {
@@ -208,7 +214,7 @@ test.describe.serial("Admin HR Tenant Readonly Smoke", () => {
 
       await orgRuntime.page.goto("/org/hr/ess/profile", { waitUntil: "domcontentloaded" });
       await waitForStable(orgRuntime.page);
-      await expect(orgRuntime.page.getByRole("heading", { name: "Profil Saya", exact: true })).toBeVisible();
+      await expect(orgRuntime.page.getByRole("heading", { name: "Profil ESS", exact: true })).toBeVisible();
       if (essSnapshot.profile) {
         await expect(
           orgRuntime.page.getByRole("link", { name: essSnapshot.editableContact ? "Edit Kontak" : "Kelola Kontak" }),

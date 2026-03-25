@@ -5,11 +5,17 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   getAndroidBridge,
   isRememberSessionEnabled,
-  parseBridgeSessionPayload,
   serializeSessionForAndroid,
 } from "@/lib/androidBridge";
+import {
+  resolveNativeBootstrapPayload,
+  shouldNavigateWebLoginOnBootstrapFailure,
+} from "@/lib/nativeBootstrap";
 
 const FAIL_MESSAGE = "Sesi native tidak tersedia atau tidak valid.";
+const PERSIST_WAIT_RETRY_COUNT = 8;
+const PERSIST_WAIT_INTERVAL_MS = 250;
+const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
 export default function EmployeeNativeBootstrap() {
   const navigate = useNavigate();
@@ -17,30 +23,36 @@ export default function EmployeeNativeBootstrap() {
 
   useEffect(() => {
     let isMounted = true;
+    console.info("[native-bootstrap] mounted");
 
     const fail = (message: string) => {
       if (!isMounted) return;
+      console.warn("[native-bootstrap] fail", message);
       const bridge = getAndroidBridge();
       bridge?.notifySessionBootstrapFailed?.(message);
-      navigate("/employee/login", { replace: true });
+      if (shouldNavigateWebLoginOnBootstrapFailure(Boolean(bridge))) {
+        navigate("/employee/login?native=1", { replace: true });
+      }
     };
 
     const bootstrap = async () => {
       const bridge = getAndroidBridge();
-      if (!bridge?.consumeBootstrapSession) {
-        fail("Bridge native login tidak tersedia.");
-        return;
-      }
-
-      const rawPayload = bridge.consumeBootstrapSession();
-      const payload = parseBridgeSessionPayload(rawPayload);
+      const payload = await resolveNativeBootstrapPayload();
       if (!payload) {
+        if (!bridge?.consumeBootstrapSession) {
+          fail("Bridge native login tidak tersedia.");
+          return;
+        }
         fail(FAIL_MESSAGE);
         return;
       }
 
       try {
         setStatus("Menyusun sesi aplikasi…");
+        console.info("[native-bootstrap] setSession:start", {
+          userId: payload.user?.id ?? null,
+          rememberSession: payload.rememberSession,
+        });
         const { data, error } = await supabase.auth.setSession({
           access_token: payload.accessToken,
           refresh_token: payload.refreshToken,
@@ -50,6 +62,10 @@ export default function EmployeeNativeBootstrap() {
           fail("Bootstrap sesi native gagal. Silakan login ulang.");
           return;
         }
+        console.info("[native-bootstrap] setSession:success", {
+          userId: data.session.user.id,
+          expiresAt: data.session.expires_at ?? null,
+        });
 
         if (payload.rememberSession || isRememberSessionEnabled()) {
           bridge.syncWebSession?.(serializeSessionForAndroid(data.session, true));
@@ -57,8 +73,27 @@ export default function EmployeeNativeBootstrap() {
           bridge.clearRememberedSession?.();
         }
 
+        setStatus("Menyimpan sesi ke perangkat…");
+        for (let attempt = 0; attempt < PERSIST_WAIT_RETRY_COUNT; attempt += 1) {
+          const {
+            data: { session: persistedSession },
+          } = await supabase.auth.getSession();
+
+          console.info("[native-bootstrap] persist-check", {
+            attempt,
+            hasSession: Boolean(persistedSession?.access_token),
+          });
+
+          if (persistedSession?.access_token) {
+            break;
+          }
+
+          await sleep(PERSIST_WAIT_INTERVAL_MS);
+        }
+
         bridge.notifySessionBootstrapComplete?.();
-        navigate("/employee/dashboard", { replace: true });
+        console.info("[native-bootstrap] navigate:dashboard");
+        navigate("/employee/dashboard?bootstrap=1", { replace: true });
       } catch {
         fail("Terjadi kesalahan saat menyalakan sesi native.");
       }
@@ -67,6 +102,7 @@ export default function EmployeeNativeBootstrap() {
     void bootstrap();
 
     return () => {
+      console.info("[native-bootstrap] unmounted");
       isMounted = false;
     };
   }, [navigate]);

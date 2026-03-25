@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { format } from "date-fns";
+import { format, parseISO } from "date-fns";
 import { id as localeId } from "date-fns/locale";
-import { Download, Printer, Search, Timer } from "lucide-react";
+import { Download, FileText, Search, Timer } from "lucide-react";
 import { toast } from "sonner";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,14 @@ import { PageGlossarySection } from "@/components/admin/common/PageGlossarySecti
 import { getTenantEmployeeIds, resolveOrgTenantId } from "@/lib/orgTenantContext";
 import { RequestReportsTabs } from "@/components/org/reports/RequestReportsTabs";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
+import {
+  buildReportCsv,
+  createReportTraceId,
+  downloadCsvFile,
+  downloadReportPdf,
+  recordReportOutputAudit,
+  type ReportOutputColumn,
+} from "@/lib/reportOutput";
 
 type OvertimeRequestRow = Tables<"overtime_requests">;
 type OPD = Tables<"opd">;
@@ -41,7 +49,6 @@ interface OvertimeEmployee {
 }
 
 interface OvertimeQueryRow extends OvertimeRequestRow {
-  employee: OvertimeEmployee | null;
   dates: OvertimeDateRow[] | null;
 }
 
@@ -62,14 +69,6 @@ const STATUS_OPTIONS = [
   { value: "cancelled", label: "Dibatalkan" },
 ] as const;
 
-const escapeHtml = (value: string): string =>
-  value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-
 const getStatusLabel = (status: string): string =>
   STATUS_OPTIONS.find((option) => option.value === status)?.label || status;
 
@@ -87,10 +86,57 @@ const getDateRangeLabel = (dates: OvertimeDateRow[]): string => {
   if (!dates.length) return "-";
   const sorted = [...dates].sort((a, b) => a.date.localeCompare(b.date));
   if (sorted.length === 1) {
-    return format(new Date(sorted[0].date), "d MMM yyyy", { locale: localeId });
+    return format(parseISO(sorted[0].date), "d MMM yyyy", { locale: localeId });
   }
-  return `${format(new Date(sorted[0].date), "d MMM yyyy", { locale: localeId })} - ${format(new Date(sorted[sorted.length - 1].date), "d MMM yyyy", { locale: localeId })}`;
+  return `${format(parseISO(sorted[0].date), "d MMM yyyy", { locale: localeId })} - ${format(parseISO(sorted[sorted.length - 1].date), "d MMM yyyy", { locale: localeId })}`;
 };
+
+const getOvertimeCreatedAtLabel = (record: OvertimeRecord, pattern: string) =>
+  format(new Date(record.created_at), pattern, { locale: localeId });
+
+const getOvertimeOpdLabel = (record: OvertimeRecord, opdMap: Map<string, OPD>) =>
+  record.employee?.opd_id ? opdMap.get(record.employee.opd_id)?.code || "-" : "-";
+
+const getOvertimeWorkUnitLabel = (record: OvertimeRecord, workUnitMap: Map<string, WorkUnit>) =>
+  record.employee?.work_unit_id ? workUnitMap.get(record.employee.work_unit_id)?.name || "-" : "-";
+
+const buildOvertimeCsvColumns = (
+  opdMap: Map<string, OPD>,
+  workUnitMap: Map<string, WorkUnit>,
+) =>
+  [
+    { header: "No", value: (_row, index) => index + 1, align: "right", width: 28 },
+    { header: "Tanggal Pengajuan", value: (row) => format(new Date(row.created_at), "yyyy-MM-dd HH:mm"), width: 82 },
+    { header: "No Request", value: (row) => row.request_number || "-" },
+    { header: "Nama Pegawai", value: (row) => row.employee?.name || "-" },
+    { header: "NIP", value: (row) => row.employee?.nip || "-", width: 68 },
+    { header: "OPD", value: (row) => getOvertimeOpdLabel(row, opdMap) },
+    { header: "Satuan Kerja", value: (row) => getOvertimeWorkUnitLabel(row, workUnitMap) },
+    { header: "Rentang Tanggal Lembur", value: (row) => getDateRangeLabel(row.dates) },
+    { header: "Jumlah Tanggal", value: (row) => row.dates.length, align: "right", width: 48 },
+    { header: "Total Jam", value: (row) => Number(row.total_hours || 0).toFixed(2), align: "right", width: 48 },
+    { header: "Status", value: (row) => getStatusLabel(row.status), width: 54 },
+    { header: "Alasan", value: (row) => row.reason || "-" },
+    { header: "Catatan Penolakan", value: (row) => row.rejection_reason || "-" },
+  ] satisfies ReportOutputColumn<OvertimeRecord>[];
+
+const buildOvertimePdfColumns = (
+  opdMap: Map<string, OPD>,
+  workUnitMap: Map<string, WorkUnit>,
+) =>
+  [
+    { header: "No", value: (_row, index) => index + 1, align: "right", width: 28 },
+    { header: "Tanggal Pengajuan", value: (row) => getOvertimeCreatedAtLabel(row, "d MMM yyyy HH:mm"), width: 82 },
+    { header: "No Request", value: (row) => row.request_number || "-" },
+    { header: "Nama Pegawai", value: (row) => row.employee?.name || "-" },
+    { header: "NIP", value: (row) => row.employee?.nip || "-", width: 68 },
+    { header: "OPD", value: (row) => getOvertimeOpdLabel(row, opdMap) },
+    { header: "Satuan Kerja", value: (row) => getOvertimeWorkUnitLabel(row, workUnitMap) },
+    { header: "Rentang Tanggal Lembur", value: (row) => getDateRangeLabel(row.dates) },
+    { header: "Jumlah Tanggal", value: (row) => row.dates.length, align: "right", width: 48 },
+    { header: "Total Jam", value: (row) => formatHours(row.total_hours), align: "right", width: 52 },
+    { header: "Status", value: (row) => getStatusLabel(row.status), width: 54 },
+  ] satisfies ReportOutputColumn<OvertimeRecord>[];
 
 export default function OrgOvertimeReport() {
   const [tenantId, setTenantId] = useState<string | null | undefined>(undefined);
@@ -166,6 +212,9 @@ export default function OrgOvertimeReport() {
     return map;
   }, [workUnits]);
 
+  const overtimeCsvColumns = useMemo(() => buildOvertimeCsvColumns(opdMap, workUnitMap), [opdMap, workUnitMap]);
+  const overtimePdfColumns = useMemo(() => buildOvertimePdfColumns(opdMap, workUnitMap), [opdMap, workUnitMap]);
+
   const fetchReport = useCallback(async () => {
     if (!tenantId) {
       setRecords([]);
@@ -192,13 +241,14 @@ export default function OrgOvertimeReport() {
         return;
       }
 
-      const allRows: OvertimeRecord[] = [];
+      const allRows: OvertimeQueryRow[] = [];
       let offset = 0;
 
       while (true) {
         let query = supabase
           .from("overtime_requests")
-          .select("id, employee_id, tenant_id, request_number, total_hours, reason, status, approved_by, approved_at, rejection_reason, notes, created_at, updated_at, employee:employees!overtime_requests_employee_id_fkey(id, name, nip, opd_id, work_unit_id), dates:overtime_request_dates(date, start_time, end_time, hours, is_weekend, is_holiday)")
+          .select("id, employee_id, tenant_id, request_number, total_hours, reason, status, approved_by, approved_at, rejection_reason, notes, created_at, updated_at, dates:overtime_request_dates(date, start_time, end_time, hours, is_weekend, is_holiday)")
+          .eq("tenant_id", tenantId)
           .in("employee_id", employeeIds)
           .order("created_at", { ascending: false })
           .range(offset, offset + FETCH_CHUNK - 1);
@@ -227,18 +277,89 @@ export default function OrgOvertimeReport() {
         );
         if (error) throw error;
 
-        const chunk = ((data || []) as OvertimeQueryRow[]).map((row) => ({
-          ...row,
-          employee: row.employee || null,
-          dates: row.dates || [],
-        }));
+        const chunk = (data || []) as OvertimeQueryRow[];
         allRows.push(...chunk);
 
         if (chunk.length < FETCH_CHUNK) break;
         offset += FETCH_CHUNK;
       }
 
-      setRecords(allRows);
+      const overtimeEmployeeIds = Array.from(
+        new Set(allRows.map((row) => row.employee_id).filter((employeeId): employeeId is string => Boolean(employeeId))),
+      );
+      let employeeMap = new Map<string, OvertimeEmployee>();
+
+      if (overtimeEmployeeIds.length > 0) {
+        const { data: employeesData, error: employeesError } = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              supabase
+                .from("employees")
+                .select("id, name, nip, opd_id, work_unit_id")
+                .in("id", overtimeEmployeeIds),
+              OVERTIME_REPORT_QUERY_TIMEOUT_MS,
+              "org.reports.overtime.fetch.employee_detail timeout",
+            ),
+          {
+            maxRetries: OVERTIME_REPORT_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
+        );
+
+        if (employeesError) {
+          const { data: employeesFallback, error: employeesFallbackError } = await withExponentialBackoff(
+            () =>
+              withTimeout(
+                supabase
+                  .from("employees")
+                  .select("id, name, nip")
+                  .in("id", overtimeEmployeeIds),
+                OVERTIME_REPORT_QUERY_TIMEOUT_MS,
+                "org.reports.overtime.fetch.employee_fallback timeout",
+              ),
+            {
+              maxRetries: OVERTIME_REPORT_QUERY_RETRY_MAX,
+              shouldRetry: isRetryableError,
+            },
+          );
+
+          if (employeesFallbackError) throw employeesFallbackError;
+
+          employeeMap = new Map(
+            (employeesFallback || []).map((employee) => [
+              employee.id,
+              {
+                id: employee.id,
+                name: employee.name,
+                nip: employee.nip,
+                opd_id: null,
+                work_unit_id: null,
+              },
+            ]),
+          );
+        } else {
+          employeeMap = new Map(
+            (employeesData || []).map((employee) => [
+              employee.id,
+              {
+                id: employee.id,
+                name: employee.name,
+                nip: employee.nip,
+                opd_id: employee.opd_id,
+                work_unit_id: employee.work_unit_id,
+              },
+            ]),
+          );
+        }
+      }
+
+      setRecords(
+        allRows.map((row) => ({
+          ...row,
+          employee: employeeMap.get(row.employee_id) || null,
+          dates: row.dates || [],
+        })),
+      );
     } catch (error) {
       const errorRef = reportError(error, "org.reports.overtime.fetch", {
         tenant_id: tenantId,
@@ -324,58 +445,46 @@ export default function OrgOvertimeReport() {
     }
 
     try {
-      const csv = [
-        [
-          "No",
-          "Tanggal Pengajuan",
-          "No Request",
-          "Nama Pegawai",
-          "NIP",
-          "OPD",
-          "Satuan Kerja",
-          "Rentang Tanggal Lembur",
-          "Jumlah Tanggal",
-          "Total Jam",
-          "Status",
-          "Alasan",
-          "Catatan Penolakan",
-        ].join(","),
-        ...filteredRecords.map((record, index) => {
-          const opdLabel = record.employee?.opd_id ? opdMap.get(record.employee.opd_id)?.code || "-" : "-";
-          const unitLabel = record.employee?.work_unit_id ? workUnitMap.get(record.employee.work_unit_id)?.name || "-" : "-";
-          return [
-            index + 1,
-            format(new Date(record.created_at), "yyyy-MM-dd HH:mm"),
-            record.request_number || "-",
-            `"${(record.employee?.name || "-").replace(/"/g, '""')}"`,
-            record.employee?.nip || "-",
-            `"${opdLabel.replace(/"/g, '""')}"`,
-            `"${unitLabel.replace(/"/g, '""')}"`,
-            `"${getDateRangeLabel(record.dates).replace(/"/g, '""')}"`,
-            record.dates.length,
-            Number(record.total_hours || 0).toFixed(2),
-            getStatusLabel(record.status),
-            `"${(record.reason || "-").replace(/"/g, '""')}"`,
-            `"${(record.rejection_reason || "-").replace(/"/g, '""')}"`,
-          ].join(",");
-        }),
-      ].join("\n");
+      const traceId = createReportTraceId("OT-CSV");
+      const csv = buildReportCsv({
+        columns: overtimeCsvColumns,
+        rows: filteredRecords,
+      });
 
-      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `laporan-lembur-${startDate || "all"}-${endDate || "all"}.csv`;
-      link.click();
-      window.URL.revokeObjectURL(url);
-      toast.success("Export berhasil");
+      downloadCsvFile(`laporan-lembur-${startDate || "all"}-${endDate || "all"}.csv`, csv);
+
+      const auditResult = await recordReportOutputAudit({
+        action: "overtime_report_export_csv",
+        filters: {
+          end_date: endDate || null,
+          opd_id: opdFilter === "all" ? null : opdFilter,
+          search: searchTerm.trim() || null,
+          start_date: startDate || null,
+          status: statusFilter === "all" ? null : statusFilter,
+          work_unit_id: workUnitFilter === "all" ? null : workUnitFilter,
+        },
+        outputType: "csv",
+        reportName: "Laporan Lembur Organisasi",
+        rowCount: filteredRecords.length,
+        tenantId,
+        traceId,
+      });
+
+      if (!auditResult.ok) {
+        toast.warning(
+          appendErrorReference(`CSV berhasil diunduh, tetapi audit log gagal dicatat. Ref dokumen: ${traceId}`, auditResult.errorRef),
+        );
+        return;
+      }
+
+      toast.success(`CSV berhasil diunduh (Ref: ${traceId})`);
     } catch (error) {
       const errorRef = reportError(error, "org.reports.overtime.export");
       toast.error(appendErrorReference("Gagal export laporan lembur", errorRef));
     }
   };
 
-  const handlePrintPdf = async () => {
+  const handleDownloadPdf = async () => {
     if (!hasQueried) {
       toast.error("Klik Tampilkan terlebih dahulu");
       return;
@@ -386,85 +495,71 @@ export default function OrgOvertimeReport() {
     }
 
     try {
-      const periodLabel = startDate && endDate ? `${startDate} s/d ${endDate}` : "Semua periode";
-      const printedAt = format(new Date(), "d MMMM yyyy HH:mm", { locale: localeId });
-      const rowsHtml = filteredRecords
-        .map((record, index) => {
-          const opdLabel = record.employee?.opd_id ? opdMap.get(record.employee.opd_id)?.code || "-" : "-";
-          const unitLabel = record.employee?.work_unit_id ? workUnitMap.get(record.employee.work_unit_id)?.name || "-" : "-";
-          return `
-            <tr>
-              <td>${index + 1}</td>
-              <td>${escapeHtml(format(new Date(record.created_at), "d MMM yyyy HH:mm", { locale: localeId }))}</td>
-              <td>${escapeHtml(record.request_number || "-")}</td>
-              <td>${escapeHtml(record.employee?.name || "-")}</td>
-              <td>${escapeHtml(record.employee?.nip || "-")}</td>
-              <td>${escapeHtml(opdLabel)}</td>
-              <td>${escapeHtml(unitLabel)}</td>
-              <td>${escapeHtml(getDateRangeLabel(record.dates))}</td>
-              <td>${record.dates.length}</td>
-              <td>${escapeHtml(formatHours(record.total_hours))}</td>
-              <td>${escapeHtml(getStatusLabel(record.status))}</td>
-            </tr>
-          `;
-        })
-        .join("");
+      const traceId = createReportTraceId("OT-PDF");
+      const periodLabel =
+        startDate && endDate
+          ? `${startDate} s/d ${endDate}`
+          : startDate
+            ? `Mulai ${startDate}`
+            : endDate
+              ? `Sampai ${endDate}`
+              : "Semua periode";
+      const opdLabel =
+        opdFilter === "all"
+          ? "Semua OPD"
+          : (() => {
+              const opd = opds.find((item) => item.id === opdFilter);
+              return opd ? `${opd.code} - ${opd.name}` : opdFilter;
+            })();
+      const workUnitLabel =
+        workUnitFilter === "all" ? "Semua satuan kerja" : workUnits.find((item) => item.id === workUnitFilter)?.name || workUnitFilter;
 
-      const printWindow = window.open("", "_blank", "width=1200,height=800");
-      if (!printWindow) {
-        toast.error("Popup diblokir browser. Izinkan popup untuk cetak PDF.");
+      downloadReportPdf({
+        columns: overtimePdfColumns,
+        filename: `laporan-lembur-${startDate || "all"}-${endDate || "all"}.pdf`,
+        metadataLines: [
+          `Periode: ${periodLabel}`,
+          `Filter status: ${statusFilter === "all" ? "Semua status" : getStatusLabel(statusFilter)}`,
+          `Filter OPD: ${opdLabel}`,
+          `Filter satuan kerja: ${workUnitLabel}`,
+          `Pencarian: ${searchTerm.trim() || "-"}`,
+          `Total data: ${filteredRecords.length}`,
+        ],
+        orientation: "landscape",
+        rows: filteredRecords,
+        sourceLabel: "AbsensiKu /org/reports/overtime",
+        title: "Laporan Pengajuan Lembur",
+        traceId,
+      });
+
+      const auditResult = await recordReportOutputAudit({
+        action: "overtime_report_download_pdf",
+        filters: {
+          end_date: endDate || null,
+          opd_id: opdFilter === "all" ? null : opdFilter,
+          search: searchTerm.trim() || null,
+          start_date: startDate || null,
+          status: statusFilter === "all" ? null : statusFilter,
+          work_unit_id: workUnitFilter === "all" ? null : workUnitFilter,
+        },
+        outputType: "pdf",
+        reportName: "Laporan Lembur Organisasi",
+        rowCount: filteredRecords.length,
+        tenantId,
+        traceId,
+      });
+
+      if (!auditResult.ok) {
+        toast.warning(
+          appendErrorReference(`PDF berhasil diunduh, tetapi audit log gagal dicatat. Ref dokumen: ${traceId}`, auditResult.errorRef),
+        );
         return;
       }
 
-      printWindow.document.write(`
-        <!DOCTYPE html>
-        <html>
-          <head>
-            <meta charset="UTF-8" />
-            <title>Laporan Lembur</title>
-            <style>
-              body { font-family: Arial, sans-serif; margin: 24px; color: #111; }
-              h1 { margin: 0 0 8px; font-size: 20px; }
-              .meta { margin: 0 0 16px; font-size: 12px; color: #444; }
-              table { width: 100%; border-collapse: collapse; font-size: 11px; }
-              th, td { border: 1px solid #ddd; padding: 6px 8px; text-align: left; vertical-align: top; }
-              th { background: #f3f4f6; }
-              .footer { margin-top: 12px; font-size: 11px; color: #666; }
-            </style>
-          </head>
-          <body>
-            <h1>Laporan Pengajuan Lembur</h1>
-            <p class="meta">Periode: ${escapeHtml(periodLabel)} | Total: ${filteredRecords.length} data | Dicetak: ${escapeHtml(printedAt)}</p>
-            <table>
-              <thead>
-                <tr>
-                  <th>No</th>
-                  <th>Tgl Pengajuan</th>
-                  <th>No Request</th>
-                  <th>Nama</th>
-                  <th>NIP</th>
-                  <th>OPD</th>
-                  <th>Satuan Kerja</th>
-                  <th>Rentang Lembur</th>
-                  <th>Jml Hari</th>
-                  <th>Total Jam</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>${rowsHtml}</tbody>
-            </table>
-            <p class="footer">Sumber: AbsensiKu /org/reports/overtime</p>
-          </body>
-        </html>
-      `);
-      printWindow.document.close();
-      printWindow.onload = () => {
-        printWindow.focus();
-        printWindow.print();
-      };
+      toast.success(`PDF berhasil diunduh (Ref: ${traceId})`);
     } catch (error) {
-      const errorRef = reportError(error, "org.reports.overtime.print");
-      toast.error(appendErrorReference("Gagal menyiapkan print PDF", errorRef));
+      const errorRef = reportError(error, "org.reports.overtime.pdf_download");
+      toast.error(appendErrorReference("Gagal menyiapkan PDF laporan lembur", errorRef));
     }
   };
 
@@ -480,8 +575,8 @@ export default function OrgOvertimeReport() {
             <p className="text-muted-foreground">Laporan pengajuan lembur pegawai dan status persetujuan</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={handlePrintPdf} disabled={filteredRecords.length === 0 || isLoading}>
-              <Printer className="mr-2 h-4 w-4" /> Print PDF
+            <Button variant="outline" onClick={handleDownloadPdf} disabled={filteredRecords.length === 0 || isLoading}>
+              <FileText className="mr-2 h-4 w-4" /> Unduh PDF
             </Button>
             <Button variant="outline" onClick={handleExport} disabled={filteredRecords.length === 0 || isLoading}>
               <Download className="mr-2 h-4 w-4" /> Export CSV

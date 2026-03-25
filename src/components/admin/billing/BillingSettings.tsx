@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useBillingSettings } from "@/hooks/useBilling";
 import { supabase } from "@/integrations/supabase/client";
 import type { Json } from "@/integrations/supabase/types";
@@ -15,6 +15,7 @@ import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import {
   BILLING_INVOICE_TEMPLATE_TOKENS,
   DEFAULT_BILLING_INVOICE_TEMPLATE,
+  renderBillingInvoiceTemplate,
 } from "@/lib/billingInvoiceTemplate";
 import {
   BILLING_DURATION_OPTIONS,
@@ -25,6 +26,12 @@ import {
   normalizeDurationOption,
 } from "@/lib/billingMinDuration";
 import {
+  calculateAttendanceIntroPromoBreakdown,
+  getAttendanceIntroPromoCampaignText,
+  getAttendanceIntroPromoLabel,
+  normalizeAttendanceIntroPromoConfig,
+} from "@/lib/attendanceOnboardingPromo";
+import {
   isRetryableError,
   withExponentialBackoff,
   withTimeout,
@@ -32,14 +39,58 @@ import {
 const BILLING_SETTINGS_READ_TIMEOUT_MS = 12000;
 const BILLING_SETTINGS_WRITE_TIMEOUT_MS = 15000;
 const BILLING_SETTINGS_MAX_RETRIES = 2;
+const formatCurrency = (amount: number) =>
+  new Intl.NumberFormat("id-ID", {
+    style: "currency",
+    currency: "IDR",
+    minimumFractionDigits: 0,
+  }).format(amount);
+
+const buildDefaultAttendanceIntroPromoLabel = (duration: 1 | 2 | 3) =>
+  getAttendanceIntroPromoLabel({ promo_duration_months: duration, label: null });
+
+const BILLING_INVOICE_TEMPLATE_PREVIEW_VALUES: Record<string, string> = {
+  invoice_number: "INV-20260223-0001",
+  invoice_status: "LUNAS",
+  invoice_status_class: "status-paid",
+  issue_date: "23 Februari 2026",
+  due_date: "02 Maret 2026",
+  tenant_name: "Pengajian Al-Akbar",
+  tenant_code: "PENGAJIAN-A-981359",
+  tenant_address: "Jl. Melati No. 17, Jakarta",
+  bank_account_name: "PT AbsensiKu Indonesia",
+  bank_name: "Bank BCA",
+  bank_account_number: "1234567890",
+  payment_method: "Transfer Bank",
+  invoice_item_name: "Paket Semester",
+  invoice_item_meta: "6 bulan • 1 pegawai • Billing Mandiri",
+  subtotal: formatCurrency(150000),
+  discount: formatCurrency(15000),
+  vat_percentage: "13%",
+  vat_amount: formatCurrency(17550),
+  service_fee: formatCurrency(0),
+  total: formatCurrency(152550),
+  net: formatCurrency(152550),
+  transaction_rows:
+    '<tr><td>24 Feb 2026</td><td>Manual</td><td>TRF-BCA-992211</td><td class="text-right">Rp152.550</td></tr>',
+  balance: formatCurrency(0),
+  notes:
+    '<div class="actions-note">Pratinjau ini memakai data dummy untuk membantu validasi format sebelum disimpan.</div>',
+};
 
 export function BillingSettings() {
-  const { settings, isLoading, getSetting, updateSetting } = useBillingSettings();
+  const { settings, isLoading, getSetting, updateSetting, refetch } = useBillingSettings();
   const [isSaving, setIsSaving] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   
   const [pricePerEmployee, setPricePerEmployee] = useState(15000);
+  const [attendanceIntroPromoActive, setAttendanceIntroPromoActive] = useState(true);
+  const [attendanceIntroPromoPrice, setAttendanceIntroPromoPrice] = useState(5000);
+  const [attendanceIntroPromoDuration, setAttendanceIntroPromoDuration] = useState<1 | 2 | 3>(2);
+  const [attendanceIntroPromoLabel, setAttendanceIntroPromoLabel] = useState("Promo onboarding 2 bulan pertama");
+  const [attendanceIntroPromoNewTenantsOnly, setAttendanceIntroPromoNewTenantsOnly] = useState(true);
+  const [attendanceIntroPromoLabelTouched, setAttendanceIntroPromoLabelTouched] = useState(false);
   const [vatPercentage, setVatPercentage] = useState(11);
   const [pphPercentage, setPphPercentage] = useState(2);
   const [gracePeriodDays, setGracePeriodDays] = useState(3);
@@ -67,6 +118,14 @@ export function BillingSettings() {
   const [bankAccountName, setBankAccountName] = useState("");
   const [paymentInstructions, setPaymentInstructions] = useState("");
   const [invoiceTemplateHtml, setInvoiceTemplateHtml] = useState(DEFAULT_BILLING_INVOICE_TEMPLATE);
+  const invoiceTemplatePreviewHtml = useMemo(
+    () =>
+      renderBillingInvoiceTemplate(
+        invoiceTemplateHtml.trim() || DEFAULT_BILLING_INVOICE_TEMPLATE,
+        BILLING_INVOICE_TEMPLATE_PREVIEW_VALUES,
+      ),
+    [invoiceTemplateHtml],
+  );
 
   // Only initialize form values ONCE when settings first load
   useEffect(() => {
@@ -91,8 +150,22 @@ export function BillingSettings() {
       );
       const xendit = getSetting("xendit_enabled");
       const manual = getSetting("manual_payment_enabled");
+      const attendanceIntroPromo = normalizeAttendanceIntroPromoConfig(getSetting("attendance_intro_promo"));
+      const defaultPromoLabel = buildDefaultAttendanceIntroPromoLabel(
+        attendanceIntroPromo.promo_duration_months,
+      );
 
       if (price) setPricePerEmployee(price.amount || 15000);
+      setAttendanceIntroPromoActive(attendanceIntroPromo.active);
+      setAttendanceIntroPromoPrice(attendanceIntroPromo.promo_price_per_month);
+      setAttendanceIntroPromoDuration(attendanceIntroPromo.promo_duration_months);
+      setAttendanceIntroPromoLabel(
+        attendanceIntroPromo.label || defaultPromoLabel,
+      );
+      setAttendanceIntroPromoLabelTouched(
+        Boolean(attendanceIntroPromo.label && attendanceIntroPromo.label !== defaultPromoLabel),
+      );
+      setAttendanceIntroPromoNewTenantsOnly(attendanceIntroPromo.new_tenants_only);
       if (vat) setVatPercentage(vat.value || 11);
       if (pph) setPphPercentage(pph.value || 2);
       if (grace) setGracePeriodDays(grace.value || 3);
@@ -132,6 +205,80 @@ export function BillingSettings() {
       setInitialized(true);
     }
   }, [settings, isLoading, initialized, getSetting]);
+
+  const resolvedAttendanceIntroPromoConfig = useMemo(
+    () =>
+      normalizeAttendanceIntroPromoConfig({
+        active: attendanceIntroPromoActive,
+        promo_price_per_month: attendanceIntroPromoPrice,
+        promo_duration_months: attendanceIntroPromoDuration,
+        label: attendanceIntroPromoLabel,
+        new_tenants_only: attendanceIntroPromoNewTenantsOnly,
+      }),
+    [
+      attendanceIntroPromoActive,
+      attendanceIntroPromoPrice,
+      attendanceIntroPromoDuration,
+      attendanceIntroPromoLabel,
+      attendanceIntroPromoNewTenantsOnly,
+    ],
+  );
+
+  const attendanceIntroPromoPreviewRows = useMemo(
+    () =>
+      ([1, 2, 3, 12] as const).map((months) => {
+        const breakdown = calculateAttendanceIntroPromoBreakdown({
+          normalPricePerEmployee: pricePerEmployee,
+          packageDiscountPercentage: 0,
+          durationMonths: months,
+          employeeCount: 1,
+          promoConfig: resolvedAttendanceIntroPromoConfig,
+          promoState: null,
+          canInitializePromo: resolvedAttendanceIntroPromoConfig.active,
+        });
+        return {
+          months,
+          total: breakdown.taxableBase,
+          average: breakdown.effectiveAveragePricePerEmployee,
+          promoMonthsApplied: breakdown.promoMonthsApplied,
+        };
+      }),
+    [pricePerEmployee, resolvedAttendanceIntroPromoConfig],
+  );
+
+  const attendanceIntroPromoValidationMessage = useMemo(() => {
+    if (!attendanceIntroPromoActive) return null;
+    if (!Number.isFinite(pricePerEmployee) || pricePerEmployee <= 0) {
+      return "Harga dasar Absensi harus lebih besar dari Rp0 sebelum promo onboarding diaktifkan.";
+    }
+    if (!Number.isFinite(attendanceIntroPromoPrice) || attendanceIntroPromoPrice <= 0) {
+      return "Harga promo onboarding harus lebih besar dari Rp0.";
+    }
+    if (attendanceIntroPromoPrice >= pricePerEmployee) {
+      return "Harga promo onboarding harus lebih rendah dari harga dasar Absensi.";
+    }
+    return null;
+  }, [attendanceIntroPromoActive, attendanceIntroPromoPrice, pricePerEmployee]);
+
+  const handleAttendanceIntroPromoDurationChange = (rawValue: string) => {
+    const nextDuration = normalizeAttendanceIntroPromoConfig({
+      promo_duration_months: Number(rawValue),
+    }).promo_duration_months;
+    const currentDefaultLabel = buildDefaultAttendanceIntroPromoLabel(attendanceIntroPromoDuration);
+    const nextDefaultLabel = buildDefaultAttendanceIntroPromoLabel(nextDuration);
+
+    setAttendanceIntroPromoDuration(nextDuration);
+    setAttendanceIntroPromoLabel((currentLabel) => {
+      const trimmed = currentLabel.trim();
+      if (!attendanceIntroPromoLabelTouched || trimmed === "" || trimmed === currentDefaultLabel) {
+        return nextDefaultLabel;
+      }
+      return currentLabel;
+    });
+    if (!attendanceIntroPromoLabelTouched) {
+      setAttendanceIntroPromoLabelTouched(false);
+    }
+  };
 
   // Fetch billing_settings (bank account info) from system_settings
   useEffect(() => {
@@ -204,30 +351,50 @@ export function BillingSettings() {
   const handleSave = async () => {
     setIsSaving(true);
     try {
+      if (attendanceIntroPromoValidationMessage) {
+        toast.error(attendanceIntroPromoValidationMessage);
+        return;
+      }
+
       // Save billing pricing settings
       await Promise.all([
-        updateSetting("price_per_employee", { amount: pricePerEmployee, currency: "IDR" }),
-        updateSetting("vat_percentage", { value: vatPercentage }),
-        updateSetting("pph_percentage", { value: pphPercentage }),
-        updateSetting("grace_period_days", { value: gracePeriodDays }),
+        updateSetting(
+          "price_per_employee",
+          { amount: pricePerEmployee, currency: "IDR" },
+          { silent: true, skipRefetch: true, throwOnError: true },
+        ),
+        updateSetting(
+          "attendance_intro_promo",
+          {
+            active: resolvedAttendanceIntroPromoConfig.active,
+            promo_price_per_month: resolvedAttendanceIntroPromoConfig.promo_price_per_month,
+            promo_duration_months: resolvedAttendanceIntroPromoConfig.promo_duration_months,
+            label: resolvedAttendanceIntroPromoConfig.label,
+            new_tenants_only: resolvedAttendanceIntroPromoConfig.new_tenants_only,
+          },
+          { silent: true, skipRefetch: true, throwOnError: true },
+        ),
+        updateSetting("vat_percentage", { value: vatPercentage }, { silent: true, skipRefetch: true, throwOnError: true }),
+        updateSetting("pph_percentage", { value: pphPercentage }, { silent: true, skipRefetch: true, throwOnError: true }),
+        updateSetting("grace_period_days", { value: gracePeriodDays }, { silent: true, skipRefetch: true, throwOnError: true }),
         updateSetting("payment_archive_retention_days", {
           value: Math.min(365, Math.max(1, Number.isFinite(paymentArchiveRetentionDays) ? paymentArchiveRetentionDays : 7)),
-        }),
-        updateSetting(INDIVIDUAL_MIN_DURATION_SETTING_KEY, { value: individualMinDuration }),
+        }, { silent: true, skipRefetch: true, throwOnError: true }),
+        updateSetting(INDIVIDUAL_MIN_DURATION_SETTING_KEY, { value: individualMinDuration }, { silent: true, skipRefetch: true, throwOnError: true }),
         updateSetting(CENTRALIZED_MIN_DURATION_SETTING_KEYS.pemerintah_daerah, {
           value: centralizedPemdaMinDuration,
-        }),
+        }, { silent: true, skipRefetch: true, throwOnError: true }),
         updateSetting(CENTRALIZED_MIN_DURATION_SETTING_KEYS.instansi_pemerintah, {
           value: centralizedInstansiMinDuration,
-        }),
+        }, { silent: true, skipRefetch: true, throwOnError: true }),
         updateSetting(CENTRALIZED_MIN_DURATION_SETTING_KEYS.perusahaan, {
           value: centralizedPerusahaanMinDuration,
-        }),
+        }, { silent: true, skipRefetch: true, throwOnError: true }),
         updateSetting(CENTRALIZED_MIN_DURATION_SETTING_KEYS.sekolah, {
           value: centralizedSekolahMinDuration,
-        }),
-        updateSetting("xendit_enabled", { value: xenditEnabled }),
-        updateSetting("manual_payment_enabled", { value: manualPaymentEnabled }),
+        }, { silent: true, skipRefetch: true, throwOnError: true }),
+        updateSetting("xendit_enabled", { value: xenditEnabled }, { silent: true, skipRefetch: true, throwOnError: true }),
+        updateSetting("manual_payment_enabled", { value: manualPaymentEnabled }, { silent: true, skipRefetch: true, throwOnError: true }),
       ]);
 
       // Save bank account settings
@@ -300,13 +467,14 @@ export function BillingSettings() {
             .insert({
               key: "billing_invoice_template",
               value: templatePayload,
-              description: "Template HTML lembar faktur yang digunakan saat print/download invoice organisasi.",
+              description: "Templat HTML lembar faktur yang digunakan saat cetak/unduh invoice organisasi.",
             }),
           BILLING_SETTINGS_WRITE_TIMEOUT_MS,
           "Simpan template invoice timeout."
         );
       }
 
+      await refetch();
       toast.success("Pengaturan billing berhasil disimpan");
     } catch (error) {
       const errorRef = reportError(error, "admin.billing.settings.save");
@@ -324,7 +492,7 @@ export function BillingSettings() {
         </div>
         <p className="text-base font-medium text-slate-900">Memuat pengaturan billing</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Konfigurasi rekening, biaya, dan template invoice sedang diproses.
+          Konfigurasi rekening, biaya, dan templat invoice sedang diproses.
         </p>
       </div>
     );
@@ -408,7 +576,7 @@ export function BillingSettings() {
             Format Lembar Faktur (Editable)
           </CardTitle>
           <CardDescription>
-            Template HTML untuk print/download faktur pada halaman organisasi.
+            Templat HTML untuk cetak/unduh faktur pada halaman organisasi.
             Gunakan placeholder seperti {"{{invoice_number}}"} dan {"{{transaction_rows}}"}.
           </CardDescription>
         </CardHeader>
@@ -424,7 +592,7 @@ export function BillingSettings() {
             </div>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="invoiceTemplateHtml">Template HTML Faktur</Label>
+            <Label htmlFor="invoiceTemplateHtml">Templat HTML Faktur</Label>
             <Textarea
               id="invoiceTemplateHtml"
               value={invoiceTemplateHtml}
@@ -434,13 +602,27 @@ export function BillingSettings() {
               placeholder="Masukkan HTML template faktur..."
             />
           </div>
+          <div className="space-y-2">
+            <Label>Pratinjau Faktur</Label>
+            <div className="overflow-hidden rounded-md border bg-white">
+              <iframe
+                title="Pratinjau templat faktur"
+                srcDoc={invoiceTemplatePreviewHtml}
+                sandbox=""
+                className="h-[620px] w-full bg-white"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Pratinjau memakai data contoh. Placeholder yang belum cocok akan tetap tampil apa adanya.
+            </p>
+          </div>
           <div className="flex justify-end">
             <Button
               type="button"
               variant="outline"
               onClick={() => setInvoiceTemplateHtml(DEFAULT_BILLING_INVOICE_TEMPLATE)}
             >
-              Reset Template Default
+              Reset Templat Bawaan
             </Button>
           </div>
         </CardContent>
@@ -495,6 +677,153 @@ export function BillingSettings() {
                 />
                 <Percent className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-primary/30" data-testid="billing-attendance-intro-promo-card">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Percent className="h-4 w-4" />
+            Promo Onboarding Absensi
+          </CardTitle>
+          <CardDescription>
+            Atur harga promosi untuk 1, 2, atau 3 bulan pertama per subscription attendance.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div>
+              <Label className="font-medium">Aktifkan Promo Onboarding</Label>
+              <p className="text-xs text-muted-foreground">
+                Promo berlaku otomatis saat invoice dibuat untuk langganan attendance yang eligible.
+              </p>
+            </div>
+            <Switch
+              checked={attendanceIntroPromoActive}
+              onCheckedChange={setAttendanceIntroPromoActive}
+              data-testid="billing-attendance-intro-promo-active"
+            />
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div className="space-y-2">
+              <Label htmlFor="attendanceIntroPromoPrice">Harga Promo/Bulan</Label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">Rp</span>
+                <Input
+                  id="attendanceIntroPromoPrice"
+                  type="number"
+                  value={attendanceIntroPromoPrice}
+                  onChange={(e) => setAttendanceIntroPromoPrice(Number(e.target.value))}
+                  className="pl-10"
+                  min={0}
+                  disabled={!attendanceIntroPromoActive}
+                  data-testid="billing-attendance-intro-promo-price"
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Durasi Promo</Label>
+              <Select
+                value={String(attendanceIntroPromoDuration)}
+                onValueChange={handleAttendanceIntroPromoDurationChange}
+                disabled={!attendanceIntroPromoActive}
+              >
+                <SelectTrigger data-testid="billing-attendance-intro-promo-duration">
+                  <SelectValue placeholder="Pilih durasi promo" />
+                </SelectTrigger>
+                <SelectContent>
+                  {[1, 2, 3].map((duration) => (
+                    <SelectItem key={`attendance-promo-${duration}`} value={String(duration)}>
+                      {duration} bulan pertama
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2 xl:col-span-2">
+              <Label htmlFor="attendanceIntroPromoLabel">Label Promo</Label>
+              <Input
+                id="attendanceIntroPromoLabel"
+                value={attendanceIntroPromoLabel}
+                onChange={(e) => {
+                  const nextValue = e.target.value;
+                  const defaultLabel = buildDefaultAttendanceIntroPromoLabel(attendanceIntroPromoDuration);
+                  setAttendanceIntroPromoLabel(nextValue);
+                  setAttendanceIntroPromoLabelTouched(
+                    nextValue.trim().length > 0 && nextValue.trim() !== defaultLabel,
+                  );
+                }}
+                placeholder="Promo onboarding 2 bulan pertama"
+                disabled={!attendanceIntroPromoActive}
+                data-testid="billing-attendance-intro-promo-label"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between rounded-lg border p-3">
+            <div>
+              <Label className="font-medium">Hanya untuk tenant baru</Label>
+              <p className="text-xs text-muted-foreground">
+                Jika aktif, promo hanya diberikan saat subscription baru pertama kali dibuat.
+              </p>
+            </div>
+            <Switch
+              checked={attendanceIntroPromoNewTenantsOnly}
+              onCheckedChange={setAttendanceIntroPromoNewTenantsOnly}
+              disabled={!attendanceIntroPromoActive}
+              data-testid="billing-attendance-intro-promo-new-tenants-only"
+            />
+          </div>
+
+          {attendanceIntroPromoValidationMessage && (
+            <div
+              className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-3 text-sm text-amber-800"
+              data-testid="billing-attendance-intro-promo-validation"
+            >
+              {attendanceIntroPromoValidationMessage}
+            </div>
+          )}
+
+          <div
+            className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-3 text-sm"
+            data-testid="billing-attendance-intro-promo-preview"
+          >
+            <p className="font-medium">Pratinjau campaign</p>
+            <p className="mt-1 text-muted-foreground">
+              {getAttendanceIntroPromoCampaignText(resolvedAttendanceIntroPromoConfig) || "Promo onboarding tidak aktif."}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Setelah promo habis, invoice berikutnya otomatis kembali ke harga normal Absensi{" "}
+              {formatCurrency(pricePerEmployee)}/pegawai/bulan.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Simulasi tagihan per pegawai</p>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              {attendanceIntroPromoPreviewRows.map((preview) => (
+                <div
+                  key={`attendance-intro-preview-${preview.months}`}
+                  className="rounded-lg border bg-muted/20 p-3 text-sm"
+                  data-testid={`billing-attendance-intro-promo-summary-${preview.months}`}
+                >
+                  <p className="font-medium">
+                    Paket {preview.months} bulan
+                  </p>
+                  <p className="mt-1 text-muted-foreground">
+                    Total tagihan: <span className="font-medium text-foreground">{formatCurrency(preview.total)}</span>
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Rata-rata: {formatCurrency(preview.average)}/bulan
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Promo terpakai: {preview.promoMonthsApplied} bulan
+                  </p>
+                </div>
+              ))}
             </div>
           </div>
         </CardContent>
@@ -721,7 +1050,7 @@ export function BillingSettings() {
       </Card>
 
       <div className="flex justify-end">
-        <Button onClick={handleSave} disabled={isSaving}>
+        <Button onClick={handleSave} disabled={isSaving} data-testid="billing-settings-save">
           {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
           Simpan Pengaturan
         </Button>

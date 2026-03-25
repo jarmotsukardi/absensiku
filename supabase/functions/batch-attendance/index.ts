@@ -10,6 +10,7 @@
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { createTraceId, logTraceError, withTrace } from '../_shared/error-utils.ts'
+import { decideBatchIngestPolicy } from '../_shared/attendance-scalability.ts'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -79,6 +80,18 @@ Deno.serve(async (req) => {
     // Use service role for batch processing
     const adminClient = createClient(supabaseUrl, supabaseServiceKey)
 
+    const { data: scalabilityRow, error: scalabilityError } = await adminClient
+      .from('system_settings')
+      .select('value')
+      .eq('key', 'attendance_scalability')
+      .maybeSingle()
+
+    if (scalabilityError) {
+      logTraceError(traceId, 'Failed to load attendance_scalability, using safe fallback', scalabilityError)
+    }
+
+    const ingestPolicy = decideBatchIngestPolicy(scalabilityRow?.value)
+
     const { data: enqueued, error: enqueueError } = await adminClient.rpc('enqueue_attendance_batch', {
       p_entries: entries,
       p_trace_id: traceId,
@@ -98,7 +111,8 @@ Deno.serve(async (req) => {
       .filter((id): id is string => typeof id === 'string' && id.length > 0)
 
     let processedResults = enqueueResults
-    if (queueIds.length > 0) {
+    let processingSkipped = false
+    if (queueIds.length > 0 && ingestPolicy.shouldProcessQueueNow) {
       const { data: processed, error: processError } = await adminClient.rpc('process_attendance_queue', {
         p_limit: Math.min(queueIds.length, 100),
         p_trace_id: traceId,
@@ -126,10 +140,20 @@ Deno.serve(async (req) => {
 
         processedResults = Array.from(merged.values())
       }
+    } else if (queueIds.length > 0) {
+      processingSkipped = true
     }
 
-    const { data: healthData } = await adminClient.rpc('get_attendance_ingest_health')
-    const health = Array.isArray(healthData) ? healthData[0] : null
+    const health = processingSkipped
+      ? null
+      : await (async () => {
+          const { data: healthData, error: healthError } = await adminClient.rpc('get_attendance_ingest_health')
+          if (healthError) {
+            logTraceError(traceId, 'Failed to fetch attendance ingest health', healthError)
+            return null
+          }
+          return Array.isArray(healthData) ? healthData[0] : null
+        })()
 
     return new Response(
       JSON.stringify({
@@ -137,6 +161,11 @@ Deno.serve(async (req) => {
         trace_id: traceId,
         enqueued_count: enqueueResults.length,
         processed_count: processedResults.filter((item) => item?.queue_status === 'processed').length,
+        processing_skipped: processingSkipped,
+        processing_policy_reason: ingestPolicy.reason,
+        peak_hour_active: ingestPolicy.peakHourActive,
+        queue_only_ingest_active: ingestPolicy.queueOnlyIngest,
+        offpeak_release_strategy: ingestPolicy.offpeakReleaseStrategy,
         results: processedResults,
         health,
       }),

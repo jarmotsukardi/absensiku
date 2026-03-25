@@ -340,7 +340,7 @@ export function XenditSettings() {
               rel="noopener noreferrer"
               className="text-primary hover:underline inline-flex items-center gap-1"
             >
-              Xendit Dashboard <ExternalLink className="h-3 w-3" />
+              Dasbor Xendit <ExternalLink className="h-3 w-3" />
             </a>
           </CardDescription>
         </CardHeader>
@@ -431,7 +431,7 @@ export function XenditSettings() {
             Webhook Configuration
           </CardTitle>
           <CardDescription>
-            Konfigurasi URL ini di Xendit Dashboard → Settings → Callbacks
+            Konfigurasi URL ini di Dasbor Xendit → Settings → Callbacks
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -458,7 +458,7 @@ export function XenditSettings() {
             <AlertDescription>
               <strong>Langkah Setup Webhook:</strong>
               <ol className="list-decimal list-inside mt-2 space-y-1 text-sm">
-                <li>Buka Xendit Dashboard → Settings → Callbacks</li>
+                <li>Buka Dasbor Xendit → Settings → Callbacks</li>
                 <li>Tambahkan URL webhook di atas untuk event "Invoice"</li>
                 <li>Copy Callback Token dan paste di field di atas</li>
                 <li>Simpan pengaturan di kedua tempat</li>

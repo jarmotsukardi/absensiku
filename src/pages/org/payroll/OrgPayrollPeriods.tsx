@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -47,7 +48,7 @@ const initialFormState: PeriodFormState = {
 };
 
 const STATUS_OPTIONS: Array<{ value: PeriodStatus; label: string }> = [
-  { value: "draft", label: "Draft" },
+  { value: "draft", label: "Draf" },
   { value: "review", label: "Tinjau" },
   { value: "approved", label: "Disetujui" },
   { value: "paid", label: "Dibayar" },
@@ -61,7 +62,7 @@ const buildDefaultPeriodKey = () => {
 const ITEMS_PER_PAGE = 10;
 
 const PERIOD_STATUS_LABELS: Record<PeriodStatus, string> = {
-  draft: "Draft",
+  draft: "Draf",
   review: "Tinjau",
   approved: "Disetujui",
   paid: "Dibayar",
@@ -70,6 +71,9 @@ const PERIOD_STATUS_LABELS: Record<PeriodStatus, string> = {
 
 export default function OrgPayrollPeriods() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target));
   const confirmDialog = useConfirmDialog();
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [periods, setPeriods] = useState<PayrollPeriod[]>([]);
@@ -356,7 +360,7 @@ export default function OrgPayrollPeriods() {
     anchor.click();
     document.body.removeChild(anchor);
     URL.revokeObjectURL(url);
-    toast.success("Export CSV periode payroll berhasil.");
+    toast.success("Ekspor CSV periode payroll berhasil.");
   };
 
   return (
@@ -370,13 +374,13 @@ export default function OrgPayrollPeriods() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => navigate("/org/payroll")}> 
+            <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll")}> 
               <ArrowLeft className="mr-2 h-4 w-4" />
               Kembali ke Beranda
             </Button>
             <Button variant="outline" onClick={() => void handleExportCsv()}>
               <Download className="mr-2 h-4 w-4" />
-              Export CSV
+              Ekspor CSV
             </Button>
             <Button onClick={openCreateDialog}>
               <Plus className="mr-2 h-4 w-4" />
@@ -414,7 +418,7 @@ export default function OrgPayrollPeriods() {
               <CardTitle className="text-lg">Input Variabel</CardTitle>
             </CardHeader>
             <CardContent>
-              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/variable-input")}>
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/payroll/variable-input")}>
                 Buka Input Variabel
               </Button>
             </CardContent>
@@ -428,7 +432,7 @@ export default function OrgPayrollPeriods() {
               Daftar Periode
             </CardTitle>
             <CardDescription>
-              Draft: {statusCounts.draft} • Tinjau: {statusCounts.review} • Disetujui: {statusCounts.approved} • Dibayar: {statusCounts.paid} • Arsip: {statusCounts.archived}
+              Draf: {statusCounts.draft} • Tinjau: {statusCounts.review} • Disetujui: {statusCounts.approved} • Dibayar: {statusCounts.paid} • Arsip: {statusCounts.archived}
             </CardDescription>
           </CardHeader>
           <CardContent>

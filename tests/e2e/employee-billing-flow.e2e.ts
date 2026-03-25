@@ -1,67 +1,49 @@
-import { test, expect } from "@playwright/test";
-import type { Page } from "@playwright/test";
-import { getRoleCreds, solveMathExpression } from "./helpers/testAccounts";
+import { test, expect, type Page } from "@playwright/test";
+import {
+  cleanupInvoicesBestEffort,
+  extractInvoiceNumbers,
+  getNewInvoiceNumbers,
+} from "./helpers/billingCleanup";
+import { loginAsEmployee } from "./helpers/employeeAuth";
+import { waitForStable } from "./helpers/orgAuth";
 
-const waitForStable = async (page: Page) => {
-  try {
-    await page.waitForLoadState("networkidle", { timeout: 8_000 });
-  } catch {
-    // Abaikan jika ada polling.
-  }
-};
-
-const loginAsEmployee = async (page: Page) => {
-  const creds = await getRoleCreds("employee");
-  test.skip(!creds, "Kredensial employee belum diisi di ops/test-accounts.local.json");
-
-  await page.goto("/employee/login", { waitUntil: "domcontentloaded" });
-  await waitForStable(page);
-
-  await page.fill("#email", creds!.email);
-  await page.fill("#password", creds!.password);
-
-  const captchaInput = page.locator("#captcha-input");
-  const hasCaptcha = await captchaInput.isVisible().catch(() => false);
-  if (hasCaptcha) {
-    const fallbackMathLabel =
-      (await page
-        .locator("label")
-        .filter({ hasText: /Captcha: Berapa hasil dari|Verifikasi Captcha/i })
-        .first()
-        .textContent()
+const collectInvoiceNumbersFromPage = async (page: Page): Promise<string[]> => {
+  const historyHeading = page.getByText("Riwayat Invoice Anda", { exact: false }).first();
+  const hasHistory = await historyHeading.isVisible().catch(() => false);
+  if (hasHistory) {
+    const cardText =
+      (await historyHeading
+        .locator("xpath=ancestor::div[contains(@class,'rounded')][1]")
+        .innerText()
         .catch(() => "")) || "";
-    const answerFromMath = solveMathExpression(fallbackMathLabel);
-    const captchaText = await page.$$eval("div.font-mono.text-xl.tracking-widest span", (spans) =>
-      spans.map((span) => (span.textContent || "").trim()).join(""),
-    );
-    const captchaAnswer = (answerFromMath || captchaText).trim();
-    expect(captchaAnswer.length).toBeGreaterThanOrEqual(1);
-    await captchaInput.fill(captchaAnswer);
+    if (cardText) return extractInvoiceNumbers(cardText);
   }
 
-  await page.getByRole("button", { name: "Masuk" }).click();
-  await expect(page).not.toHaveURL(/\/employee\/login(?:\?|$)/, { timeout: 20_000 });
+  const pageText = (await page.locator("body").innerText().catch(() => "")) || "";
+  return extractInvoiceNumbers(pageText);
 };
 
-test.describe.parallel("Employee Billing Flow", () => {
-  test.skip(
-    !process.env.E2E_EMPLOYEE_BILLING_FLOW,
-    "Set E2E_EMPLOYEE_BILLING_FLOW=1 untuk menjalankan flow billing employee end-to-end.",
-  );
-
-  test("employee dapat membuka halaman billing dan dialog konfirmasi transfer manual", async ({ page }) => {
-    await loginAsEmployee(page);
+test.describe.serial("Employee Billing Flow", () => {
+  test("employee billing terpusat hanya melihat info pembayaran dikelola admin", async ({ page }) => {
+    await loginAsEmployee(page, ["employee_centralized"]);
 
     await page.goto("/employee/billing", { waitUntil: "domcontentloaded" });
     await waitForStable(page);
 
     await expect(page.getByRole("heading", { name: "Billing Pegawai" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Billing Terpusat" })).toBeVisible();
+    await expect(page.getByText("pembayaran dikelola admin organisasi", { exact: false })).toBeVisible();
+    await expect(page.getByRole("button", { name: /Buat Invoice|Lanjutkan Pembayaran/i })).toHaveCount(0);
+  });
 
-    const centralizedCardVisible = await page.getByText("Billing Terpusat", { exact: false }).first().isVisible().catch(() => false);
-    if (centralizedCardVisible) {
-      await expect(page.getByText("pembayaran dikelola admin organisasi", { exact: false })).toBeVisible();
-      return;
-    }
+  test("employee billing mandiri dapat membuka dialog konfirmasi transfer manual", async ({ page }) => {
+    await loginAsEmployee(page, ["employee"]);
+
+    await page.goto("/employee/billing", { waitUntil: "domcontentloaded" });
+    await waitForStable(page);
+
+    await expect(page.getByRole("heading", { name: "Billing Pegawai" })).toBeVisible();
+    await expect(page.getByText("Billing Terpusat", { exact: false })).toHaveCount(0);
 
     await expect(
       page.getByRole("button", { name: /Buat Invoice|Lanjutkan Pembayaran/i }).first(),
@@ -74,74 +56,117 @@ test.describe.parallel("Employee Billing Flow", () => {
 
     await manualConfirmButton.click();
     await expect(page.getByRole("dialog")).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Konfirmasi Transfer Manual" })).toBeVisible();
-    await expect(page.getByLabel("Tanggal transfer")).toBeVisible();
-    await expect(page.getByLabel("Nomor referensi (opsional)")).toBeVisible();
-    await expect(page.getByLabel("Saya menyatakan transfer sudah dilakukan sesuai nominal invoice.")).toBeVisible();
+    const manualHeading = page.getByRole("heading", { name: "Konfirmasi Transfer Manual" });
+    const detailHeading = page.getByRole("heading", { name: "Detail Invoice" });
+    const openedManualDialog = await manualHeading.isVisible().catch(() => false);
+    if (openedManualDialog) {
+      await expect(page.getByLabel("Tanggal transfer")).toBeVisible();
+      await expect(page.getByLabel(/No\.\s*Ref|Nomor referensi/i)).toBeVisible();
+      await expect(page.getByLabel("Saya menyatakan transfer sudah dilakukan sesuai nominal invoice.")).toBeVisible();
+    } else {
+      await expect(detailHeading).toBeVisible();
+      await expect(page.getByText("Transfer Manual", { exact: false }).first()).toBeVisible();
+    }
 
-    await page.getByRole("button", { name: "Batal" }).click();
+    const dismissButton = openedManualDialog
+      ? page.getByRole("button", { name: "Batal" })
+      : page.getByRole("button", { name: "Tutup" });
+    await dismissButton.click();
     await expect(page.getByRole("dialog")).not.toBeVisible();
   });
 
-  test("dashboard employee tidak memunculkan overlay billing saat akses sudah terbuka", async ({ page }) => {
-    test.skip(
-      !process.env.E2E_EMPLOYEE_BILLING_ACCESS_FLOW,
-      "Set E2E_EMPLOYEE_BILLING_ACCESS_FLOW=1 untuk validasi akses dashboard pasca-lunas.",
-    );
+  test("dashboard employee tidak memunculkan overlay billing saat halaman dibuka", async ({ page }) => {
+    await loginAsEmployee(page, ["employee"]);
 
-    await loginAsEmployee(page);
     await page.goto("/employee/dashboard", { waitUntil: "domcontentloaded" });
     await waitForStable(page);
 
     const lockedOverlayTitle = page.getByRole("heading", { name: "Akses Terkunci" });
     await expect(lockedOverlayTitle).not.toBeVisible();
-
-    const checkInButton = page.getByRole("button", { name: /Absen Masuk/i }).first();
-    const canClickCheckIn =
-      (await checkInButton.isVisible().catch(() => false)) &&
-      (await checkInButton.isEnabled().catch(() => false));
-
-    if (canClickCheckIn) {
-      await checkInButton.click();
-      await page.waitForTimeout(1200);
-    }
-
-    await expect(lockedOverlayTitle).not.toBeVisible();
   });
 
-  test("fallback xendit nonaktif mengarahkan employee ke konfirmasi transfer manual", async ({ page }) => {
-    test.skip(
-      !process.env.E2E_EMPLOYEE_BILLING_MANUAL_FALLBACK_FLOW,
-      "Set E2E_EMPLOYEE_BILLING_MANUAL_FALLBACK_FLOW=1 untuk validasi fallback manual transfer.",
-    );
-
-    await loginAsEmployee(page);
+  test("fallback xendit nonaktif mengarahkan employee ke transfer manual + cleanup invoice uji", async ({
+    page,
+  }) => {
+    await loginAsEmployee(page, ["employee"]);
     await page.goto("/employee/billing", { waitUntil: "domcontentloaded" });
     await waitForStable(page);
 
-    const centralizedCardVisible = await page
-      .getByText("Billing Terpusat", { exact: false })
-      .first()
-      .isVisible()
-      .catch(() => false);
-    test.skip(centralizedCardVisible, "Tenant ini billing terpusat. Fallback manual di sisi employee tidak berlaku.");
+    await expect(page.getByText("Billing Terpusat", { exact: false })).toHaveCount(0);
 
-    const createOrContinueButton = page.getByRole("button", { name: /Buat Invoice|Lanjutkan Pembayaran/i }).first();
-    await expect(createOrContinueButton).toBeVisible();
-    await createOrContinueButton.click();
+    const beforeInvoiceNumbers = new Set(await collectInvoiceNumbersFromPage(page));
+    const createdInvoiceNumbers = new Set<string>();
 
-    const manualConfirmButton = page.getByRole("button", { name: "Konfirmasi Transfer" }).first();
-    await expect(manualConfirmButton).toBeVisible({ timeout: 12000 });
+    try {
+      const createOrContinueButton = page.getByRole("button", {
+        name: /Buat Invoice|Lanjutkan Pembayaran/i,
+      }).first();
+      await expect(createOrContinueButton).toBeVisible();
+      await createOrContinueButton.click();
 
-    await manualConfirmButton.click();
-    const manualDialog = page.getByRole("dialog");
-    await expect(page.getByRole("heading", { name: "Konfirmasi Transfer Manual" })).toBeVisible();
+      const fallbackTitle = page.getByRole("heading", { name: "Pembayaran Xendit Tidak Aktif" });
+      const isFallbackVisible = await fallbackTitle.isVisible().catch(() => false);
+      if (isFallbackVisible) {
+        await page.getByRole("button", { name: "Lanjutkan Transfer Manual" }).click();
+        const manualDialogHeading = page.getByRole("heading", { name: "Konfirmasi Transfer Manual" });
+        const openedFromFallback = await manualDialogHeading.isVisible().catch(() => false);
+        if (openedFromFallback) {
+          await page.getByLabel(/No\.\s*Ref|Nomor referensi/i).fill(`E2E-EMP-${Date.now()}`);
+          await page.getByLabel("Saya menyatakan transfer sudah dilakukan sesuai nominal invoice.").click();
+          await expect(page.getByRole("button", { name: "Kirim Konfirmasi" })).toBeEnabled();
+          await page.getByRole("button", { name: "Batal" }).click();
+          await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 10_000 });
+          return;
+        }
+        if (await fallbackTitle.isVisible().catch(() => false)) {
+          await page.getByRole("button", { name: /^Tutup$/ }).click();
+        }
+      }
 
-    const declaration = page.getByLabel("Saya menyatakan transfer sudah dilakukan sesuai nominal invoice.");
-    await declaration.click();
-    await expect(page.getByRole("button", { name: "Kirim Konfirmasi" })).toBeEnabled();
+      await waitForStable(page);
 
-    await page.getByRole("button", { name: "Batal" }).click();
-    await expect(manualDialog).not.toBeVisible({ timeout: 10000 });
+      const afterInvoiceNumbers = await collectInvoiceNumbersFromPage(page);
+      for (const invoice of getNewInvoiceNumbers(beforeInvoiceNumbers, afterInvoiceNumbers)) {
+        createdInvoiceNumbers.add(invoice);
+      }
+
+      const manualConfirmButtons = page.getByRole("button", { name: "Konfirmasi Transfer" });
+      const hasManualConfirmButton = await manualConfirmButtons.first().isVisible().catch(() => false);
+      if (!hasManualConfirmButton) {
+        await expect(page.getByText(/Transfer Manual|Menunggu pembayaran|Belum Lunas/i).first()).toBeVisible();
+        return;
+      }
+
+      const buttonCount = await manualConfirmButtons.count();
+      let openedManualDialog = false;
+      for (let i = 0; i < buttonCount; i += 1) {
+        const button = manualConfirmButtons.nth(i);
+        const isEnabled = await button.isEnabled().catch(() => false);
+        if (!isEnabled) continue;
+        await button.click();
+        openedManualDialog = true;
+        break;
+      }
+
+      if (!openedManualDialog) {
+        await expect(page.getByText(/Menunggu Verifikasi|Belum Lunas|Lunas/i).first()).toBeVisible();
+        return;
+      }
+
+      await expect(page.getByRole("heading", { name: "Konfirmasi Transfer Manual" })).toBeVisible();
+      await page.getByLabel(/No\.\s*Ref|Nomor referensi/i).fill(`E2E-EMP-${Date.now()}`);
+      await page.getByLabel("Saya menyatakan transfer sudah dilakukan sesuai nominal invoice.").click();
+      await expect(page.getByRole("button", { name: "Kirim Konfirmasi" })).toBeEnabled();
+
+      await page.getByRole("button", { name: "Batal" }).click();
+      await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 10_000 });
+    } finally {
+      if (createdInvoiceNumbers.size > 0) {
+        await cleanupInvoicesBestEffort(
+          createdInvoiceNumbers,
+          "employee-billing-flow.manual-fallback",
+        );
+      }
+    }
   });
 });

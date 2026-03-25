@@ -55,10 +55,10 @@ export function AboutPageSettings() {
 <h3>Keunggulan AbsensiKu</h3>
 <ul>
   <li><strong>Akurasi GPS:</strong> Verifikasi lokasi real-time dengan radius yang dapat dikonfigurasi</li>
-  <li><strong>Multi-Platform:</strong> Tersedia dalam versi web dan aplikasi mobile</li>
+  <li><strong>Multi-Platform:</strong> Tersedia dalam versi web dan aplikasi seluler</li>
   <li><strong>Keamanan Data:</strong> Enkripsi end-to-end dan perlindungan data sesuai standar</li>
   <li><strong>Laporan Lengkap:</strong> Rekapitulasi harian, mingguan, dan bulanan</li>
-  <li><strong>Dukungan Teknis:</strong> Tim support yang siap membantu 24/7</li>
+  <li><strong>Dukungan Teknis:</strong> Tim dukungan yang siap membantu 24/7</li>
 </ul>
 
 <h3>Hubungi Kami</h3>
@@ -147,7 +147,7 @@ export function AboutPageSettings() {
           <div className="flex justify-between pt-4">
             <Button variant="outline" onClick={() => setIsPreviewOpen(true)}>
               <Eye className="mr-2 h-4 w-4" />
-              Preview
+              Pratinjau
             </Button>
             <Button onClick={handleSave} disabled={isSaving}>
               {isSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
@@ -157,11 +157,11 @@ export function AboutPageSettings() {
         </CardContent>
       </Card>
 
-      {/* Preview Dialog */}
+      {/* Dialog pratinjau */}
       <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
         <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Preview Halaman Tentang</DialogTitle>
+            <DialogTitle>Pratinjau Halaman Tentang</DialogTitle>
           </DialogHeader>
           <div className="prose prose-sm dark:prose-invert max-w-none py-4">
             {content ? (

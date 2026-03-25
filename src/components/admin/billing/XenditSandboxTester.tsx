@@ -318,7 +318,7 @@
                          onClick={() => simulateExpire(invoice.id)}
                        >
                          <Clock className="h-4 w-4 mr-1" />
-                         Expired
+                         Berakhir
                        </Button>
                        <Button 
                          size="sm" 

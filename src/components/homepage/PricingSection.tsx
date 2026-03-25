@@ -2,8 +2,9 @@ import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { AlertCircle, ArrowRight, BadgePercent, CheckCircle2 } from "lucide-react";
+import { AlertCircle, BadgePercent, CheckCircle2 } from "lucide-react";
 import type { PricingPlan } from "@/hooks/useHomepageData";
+import { PUBLIC_CONSULTATION_PATH } from "@/lib/publicRoutes";
 
 interface PricingSectionProps {
   plans: PricingPlan[];
@@ -16,14 +17,14 @@ const defaultPlans: PricingPlan[] = [
   {
     id: "1",
     name: "Bulanan",
-    price: 18000,
+    price: 7500,
     original_price: null,
-    discount_percentage: null,
+    discount_percentage: 0,
     duration_months: 1,
-    total_price: 18000,
+    total_price: 7500,
     total_price_before_discount: null,
     period: "/pegawai/bulan",
-    description: "Fleksibel untuk mulai cepat tanpa komitmen durasi panjang.",
+    description: "Paket Absensi untuk mulai cepat tanpa komitmen durasi panjang.",
     features: [
       "Tagihan per bulan",
       "Semua fitur absensi inti",
@@ -35,18 +36,17 @@ const defaultPlans: PricingPlan[] = [
   },
   {
     id: "2",
-    name: "Semester",
-    price: 16500,
-    original_price: 18000,
-    discount_percentage: 8,
-    duration_months: 6,
-    total_price: 99000,
-    total_price_before_discount: 108000,
+    name: "Triwulan",
+    price: 7500,
+    original_price: null,
+    discount_percentage: 0,
+    duration_months: 3,
+    total_price: 22500,
+    total_price_before_discount: null,
     period: "/pegawai/bulan",
-    description: "Cocok untuk instansi yang ingin efisiensi biaya menengah.",
+    description: "Paket Absensi untuk rollout singkat 3 bulan.",
     features: [
-      "Durasi 6 bulan",
-      "Diskon paket",
+      "Durasi 3 bulan",
       "Monitoring dashboard lengkap",
       "Dukungan prioritas",
     ],
@@ -56,14 +56,14 @@ const defaultPlans: PricingPlan[] = [
   {
     id: "3",
     name: "Tahunan",
-    price: 15000,
-    original_price: 18000,
-    discount_percentage: 17,
+    price: 6900,
+    original_price: 7500,
+    discount_percentage: 8,
     duration_months: 12,
-    total_price: 180000,
-    total_price_before_discount: 216000,
+    total_price: 82800,
+    total_price_before_discount: 90000,
     period: "/pegawai/bulan",
-    description: "Harga paling hemat untuk organisasi dengan kebutuhan berkelanjutan.",
+    description: "Harga Absensi paling hemat untuk organisasi dengan kebutuhan berkelanjutan.",
     features: [
       "Durasi 12 bulan",
       "Harga termurah per pegawai",
@@ -108,10 +108,13 @@ const getPlansContainerMaxWidth = (planCount: number): string => {
 export function PricingSection({
   plans,
   title = "Harga Transparan",
-  subtitle = "Pilih paket yang sesuai dengan kebutuhan instansi Anda.",
+  subtitle = "Harga publik saat ini difokuskan untuk paket Absensi. Modul HR dan Payroll disiapkan sebagai tahap lanjutan.",
   negotiationThreshold = 2000,
 }: PricingSectionProps) {
   const displayPlans = plans.length > 0 ? plans : defaultPlans;
+  const onboardingCampaignNote =
+    displayPlans.find((plan) => typeof plan.campaign_note === "string" && plan.campaign_note.trim().length > 0)
+      ?.campaign_note?.trim() || null;
   const thresholdValue = Math.max(1, Math.floor(Number(negotiationThreshold) || 2000));
   const plansGridClass = getPlansGridClass(displayPlans.length);
   const plansContainerClass = getPlansContainerMaxWidth(displayPlans.length);
@@ -123,8 +126,19 @@ export function PricingSection({
           <h2 className="text-2xl md:text-3xl font-bold text-foreground mb-2">{title}</h2>
           <p className="text-muted-foreground text-sm">{subtitle}</p>
           <p className="text-xs text-primary font-medium mt-2">
-            Mulai gratis sekarang, bayar saat instansi siap aktivasi penuh.
+            Gunakan langsung sekarang, mulai berlangganan saat instansi sudah siap.
           </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            Harga yang dipublikasi di halaman ini khusus untuk layanan Absensi. Aktivasi HR dan Payroll dibahas terpisah sesuai kesiapan organisasi.
+          </p>
+          {onboardingCampaignNote ? (
+            <div className="mx-auto mt-4 max-w-3xl rounded-lg border border-primary/20 bg-primary/5 px-4 py-3 text-left">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-primary">
+                Catatan onboarding Absensi
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">{onboardingCampaignNote}</p>
+            </div>
+          ) : null}
         </div>
 
         <div className={`grid ${plansGridClass} gap-4 ${plansContainerClass} mx-auto items-stretch`}>
@@ -132,11 +146,14 @@ export function PricingSection({
             const isCustomEnterprise = plan.price === 0 && plan.name.toLowerCase().includes("enterprise");
             const duration = Math.max(1, Math.floor(plan.duration_months || 1));
             const totalPrice = resolveTotalPrice(plan);
-            const showDiscount =
+            const hasSavings =
+              typeof plan.original_price === "number" && plan.original_price > plan.price;
+            const showPromoBadge = Boolean(plan.is_promo_active && plan.promo_label);
+            const showSavingsBadge =
+              !showPromoBadge &&
               typeof plan.discount_percentage === "number" &&
               plan.discount_percentage > 0 &&
-              typeof plan.original_price === "number" &&
-              plan.original_price > plan.price;
+              hasSavings;
 
             return (
               <Card
@@ -156,12 +173,19 @@ export function PricingSection({
                 <CardHeader className="p-4 pb-2">
                   <CardTitle className="text-lg">{plan.name}</CardTitle>
 
-                  {showDiscount && (
+                  {(showPromoBadge || showSavingsBadge) && (
                     <div className="mt-1 flex items-center gap-2">
-                      <Badge variant="secondary" className="text-[11px]">
-                        <BadgePercent className="mr-1 h-3 w-3" />
-                        Hemat {plan.discount_percentage}%
-                      </Badge>
+                      {showPromoBadge ? (
+                        <Badge variant="secondary" className="text-[11px]">
+                          {plan.promo_label || "Promo"}
+                        </Badge>
+                      ) : null}
+                      {showSavingsBadge ? (
+                        <Badge variant="secondary" className="text-[11px]">
+                          <BadgePercent className="mr-1 h-3 w-3" />
+                          Hemat {plan.discount_percentage}%
+                        </Badge>
+                      ) : null}
                     </div>
                   )}
 
@@ -175,9 +199,9 @@ export function PricingSection({
                       )}
                     </div>
 
-                    {showDiscount && (
+                    {hasSavings && (
                       <p className="text-xs text-muted-foreground mt-1">
-                        Sebelum diskon:{" "}
+                        {showPromoBadge ? "Harga normal: " : "Sebelum diskon: "}
                         <span className="line-through">
                           {formatPrice(plan.original_price || 0)}
                         </span>
@@ -189,6 +213,10 @@ export function PricingSection({
                       <p className="text-xs text-muted-foreground mt-1">
                         Total {duration} bulan: <span className="font-semibold text-foreground">{formatPrice(totalPrice)}</span>
                       </p>
+                    )}
+
+                    {!isCustomEnterprise && plan.commitment_label && (
+                      <p className="text-xs font-medium text-primary mt-1">{plan.commitment_label}</p>
                     )}
                   </div>
 
@@ -210,9 +238,9 @@ export function PricingSection({
                     )}
                   </ul>
 
-                  <Link to="/org/login?mode=register" className="block mt-auto">
+                  <Link to={isCustomEnterprise ? PUBLIC_CONSULTATION_PATH : "/org/login?mode=register"} className="block mt-auto">
                     <Button variant={plan.is_popular ? "gold" : "outline"} className="w-full" size="sm">
-                      {isCustomEnterprise ? "Hubungi Sales" : plan.price === 0 ? "Mulai Gratis" : "Pilih Paket"}
+                      {isCustomEnterprise ? "Butuh Konsultasi?" : plan.price === 0 ? "Mulai Gratis" : "Pilih Paket"}
                     </Button>
                   </Link>
                 </CardContent>
@@ -227,36 +255,33 @@ export function PricingSection({
               <AlertCircle className="h-5 w-5 text-primary mt-0.5" />
               <div className="space-y-1">
                 <p className="text-sm font-semibold text-foreground">
-                  Ambang Negosiasi B2B: {new Intl.NumberFormat("id-ID").format(thresholdValue)} pegawai aktif
+                  Paket enterprise mulai relevan di atas {new Intl.NumberFormat("id-ID").format(thresholdValue)} pegawai aktif
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  Saat jumlah pegawai aktif organisasi menembus ambang ini, sistem otomatis mengirim notifikasi
-                  penawaran negosiasi harga ke Admin Organisasi dan Super Admin.
+                  Untuk organisasi dengan kebutuhan lebih besar, skema enterprise membantu menyesuaikan harga,
+                  onboarding, dan tahapan adopsi secara bertahap.
+                </p>
+                <p className="text-xs text-foreground/80">
+                  Fokus komersial publik tetap dimulai dari Absensi. Kebutuhan HR dan Payroll dapat dibahas sebagai tahap lanjutan melalui konsultasi.
                 </p>
               </div>
             </div>
 
             <div className="grid gap-2 text-xs text-foreground md:grid-cols-2">
               <div className="rounded-md border bg-background/70 p-3">
-                <p className="font-semibold mb-1">Notifikasi ke Admin Organisasi</p>
-                <p>Masuk ke inbox in-app organisasi untuk tindak lanjut negosiasi paket enterprise/B2B.</p>
+                <p className="font-semibold mb-1">Cocok untuk rollout bertahap</p>
+                <p>Mulai dari kontrol kehadiran terlebih dahulu, lalu evaluasi perluasan modul setelah penggunaan Absensi stabil.</p>
               </div>
               <div className="rounded-md border bg-background/70 p-3">
-                <p className="font-semibold mb-1">Notifikasi ke Super Admin</p>
-                <p>Masuk ke panel superadmin sebagai sinyal follow-up penawaran dan approval skema harga.</p>
+                <p className="font-semibold mb-1">Pendekatan harga lebih terukur</p>
+                <p>Lebih mudah menyesuaikan jumlah pegawai aktif, durasi langganan, dan kesiapan implementasi organisasi.</p>
               </div>
             </div>
 
             <div className="flex flex-wrap gap-2 pt-1">
-              <Link to="/org/login">
-                <Button size="sm" variant="outline">
-                  Login Admin Organisasi
-                </Button>
-              </Link>
-              <Link to="/admin/login">
+              <Link to={PUBLIC_CONSULTATION_PATH}>
                 <Button size="sm">
-                  Tindak Lanjut via Super Admin
-                  <ArrowRight className="ml-1.5 h-4 w-4" />
+                  Konsultasikan Kebutuhan Enterprise
                 </Button>
               </Link>
             </div>

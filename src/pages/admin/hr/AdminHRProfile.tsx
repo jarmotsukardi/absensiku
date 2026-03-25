@@ -189,7 +189,7 @@ export default function AdminHRProfile() {
           <CardHeader>
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <CardTitle>Editor Profil Area Kerja HR</CardTitle>
+                <CardTitle>Editor Profil Workspace HR</CardTitle>
                 <CardDescription>Sumber kebenaran ringan untuk identitas dan posisi area HR di panel super admin.</CardDescription>
               </div>
               <p className="text-xs text-muted-foreground">
@@ -200,7 +200,7 @@ export default function AdminHRProfile() {
           <CardContent className="grid gap-4 xl:grid-cols-2">
             <div className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="workspaceLabel">Label Area Kerja</Label>
+                <Label htmlFor="workspaceLabel">Label Workspace</Label>
                 <Input
                   id="workspaceLabel"
                   value={settings.workspaceLabel}
@@ -218,7 +218,7 @@ export default function AdminHRProfile() {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="positioning">Posisi</Label>
+                <Label htmlFor="positioning">Positioning</Label>
                 <Input
                   id="positioning"
                   value={settings.positioning}
@@ -258,7 +258,7 @@ export default function AdminHRProfile() {
                   Simpan Profil
                 </Button>
                 <Button variant="outline" onClick={() => setSettings(DEFAULT_PROFILE_SETTINGS)} disabled={isSaving}>
-                  Reset Bawaan
+                  Reset Default
                 </Button>
                 {hasUnsavedChanges ? <Badge variant="secondary">Perubahan belum disimpan</Badge> : null}
               </div>
@@ -266,7 +266,7 @@ export default function AdminHRProfile() {
 
             <Card className="bg-muted/20">
               <CardHeader>
-                <CardTitle>Pratinjau Ringkas</CardTitle>
+                <CardTitle>Preview Ringkas</CardTitle>
                 <CardDescription>Ringkasan yang akan tampil sebagai identitas area kerja HR.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -378,13 +378,13 @@ export default function AdminHRProfile() {
               title="Pengaturan HR"
               description="Kelola peta cakupan, area kerja tenant, kebijakan tiket, dan peringatan bawaan."
               path="/admin/hr/settings"
-              cta="Buka Pengaturan"
+              cta="Buka Settings"
             />
             <ShortcutCard
               title="Kebijakan HR"
               description="Kelola acuan bawaan domain HR seperti ESS, pelatihan, ulasan 360, dan tata kelola rute."
               path="/admin/hr/policies"
-              cta="Buka Kebijakan"
+              cta="Buka Policies"
             />
             <ShortcutCard
               title="FAQ & Dukungan"
@@ -410,7 +410,7 @@ export default function AdminHRProfile() {
             <Button asChild variant="outline" size="sm">
               <Link to="/admin/hr/help/support">
                 <LifeBuoy className="mr-2 h-4 w-4" />
-                Buka Panduan Dukungan
+                Buka Playbook Support
               </Link>
             </Button>
             <Button asChild size="sm">

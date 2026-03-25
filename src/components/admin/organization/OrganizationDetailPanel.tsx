@@ -125,7 +125,7 @@ export function OrganizationDetailPanel({ orgId, onClose }: OrganizationDetailPa
     <div className="w-[400px] border-l bg-card flex flex-col h-full">
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b">
-        <h3 className="font-semibold">Detail Organisasi</h3>
+        <h3 className="font-semibold">Rincian Organisasi</h3>
         <Button variant="ghost" size="icon" onClick={onClose}>
           <X className="h-4 w-4" />
         </Button>
@@ -226,12 +226,12 @@ export function OrganizationDetailPanel({ orgId, onClose }: OrganizationDetailPa
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Status</span>
                     <Badge variant={subscription.status === "active" ? "default" : subscription.status === "trial" ? "secondary" : "destructive"}>
-                      {subscription.status === "active" ? "Aktif" : subscription.status === "trial" ? "Trial" : "Expired"}
+                      {subscription.status === "active" ? "Aktif" : subscription.status === "trial" ? "Masa Coba" : "Berakhir"}
                     </Badge>
                   </div>
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">Kebijakan Akses</span>
-                    <span>Streak Monitoring</span>
+                    <span>Pemantauan Streak</span>
                   </div>
                   {subscription.end_date && (
                     <div className="flex items-center justify-between text-sm">

@@ -717,10 +717,30 @@ const isExpectedAuthTokenHttpError = (
   const text = normalizeHttpErrorText(payload);
   return (
     text.includes("invalid_grant") ||
+    text.includes("refresh_token_not_found") ||
+    text.includes("refresh token not found") ||
+    text.includes("invalid refresh token") ||
     text.includes("invalid login credentials") ||
     text.includes("invalid credentials") ||
     text.includes("invalid email or password") ||
     text.includes("email not confirmed")
+  );
+};
+
+const isExpectedWindowNoise = (error: unknown, message?: string | null): boolean => {
+  const normalizedMessage = normalizeTextForDedup(
+    typeof message === "string"
+      ? message
+      : error instanceof Error
+        ? error.message
+        : typeof error === "string"
+          ? error
+          : "",
+  );
+
+  return (
+    normalizedMessage.includes("resizeobserver loop completed with undelivered notifications") ||
+    normalizedMessage.includes("resizeobserver loop limit exceeded")
   );
 };
 
@@ -839,6 +859,7 @@ export const installGlobalErrorLogging = () => {
     setRemoteErrorLoggingModeOverride(mode === "default" ? null : mode);
 
   window.addEventListener("error", (event) => {
+    if (isExpectedWindowNoise(event.error, event.message)) return;
     reportError(event.error || event.message || "Uncaught window error", "window.error", {
       filename: event.filename,
       lineno: event.lineno,

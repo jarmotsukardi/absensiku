@@ -237,7 +237,7 @@ export function LegalLinksSettings() {
                       {link.content ? (
                         <Button variant="ghost" size="sm" onClick={() => handlePreview(link)}>
                           <Eye className="h-4 w-4 mr-1" />
-                          Preview
+                          Pratinjau
                         </Button>
                       ) : (
                         <span className="text-muted-foreground text-sm">-</span>
@@ -324,7 +324,7 @@ export function LegalLinksSettings() {
         </DialogContent>
       </Dialog>
 
-      {/* Preview Dialog */}
+      {/* Dialog pratinjau */}
       <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>

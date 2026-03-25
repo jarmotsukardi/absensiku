@@ -370,7 +370,7 @@ export function APKUploadSettings() {
         </div>
       )}
       <div>
-        <h3 className="text-lg font-medium">Upload Aplikasi Mobile</h3>
+        <h3 className="text-lg font-medium">Unggah Aplikasi Seluler</h3>
         <p className="text-sm text-muted-foreground">
           Upload aplikasi absensi yang akan tersedia untuk organisasi
         </p>

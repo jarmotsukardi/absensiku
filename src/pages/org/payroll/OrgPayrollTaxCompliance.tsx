@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { buildOrgPayrollOverlayHref } from "@/lib/orgPayrollOverlay";
 import { OrganizationLayout } from "@/components/admin/organization/OrganizationLayout";
 import { OrgPayrollPageGuide } from "@/components/org/payroll/OrgPayrollPageGuide";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -91,6 +92,9 @@ const formatDateTime = (value: string | null) => {
 
 export default function OrgPayrollTaxCompliance() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const navigateWithOverlay = (target: string) =>
+    navigate(buildOrgPayrollOverlayHref(location.pathname, location.search, target));
   const confirmDialog = useConfirmDialog();
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [periods, setPeriods] = useState<PayrollPeriod[]>([]);
@@ -336,7 +340,7 @@ export default function OrgPayrollTaxCompliance() {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    toast.success("Export CSV pajak berhasil");
+    toast.success("Ekspor CSV pajak berhasil");
   };
 
   const summary = useMemo(() => ({
@@ -350,7 +354,7 @@ export default function OrgPayrollTaxCompliance() {
       <div className="space-y-6">
         <div className="space-y-2">
           <h1 className="text-2xl font-semibold tracking-tight">Pajak & Kepatuhan</h1>
-          <p className="text-sm text-muted-foreground">Kelola filing pajak payroll dengan jejak trace_id untuk audit dan pelaporan.</p>
+          <p className="text-sm text-muted-foreground">Kelola filing pajak payroll dengan jejak ID trace untuk audit dan pelaporan.</p>
         </div>
 
         <div className="grid gap-4 xl:grid-cols-3">
@@ -379,7 +383,7 @@ export default function OrgPayrollTaxCompliance() {
             </CardHeader>
             <CardContent className="space-y-3 text-sm text-muted-foreground">
               <p>Pastikan hanya peran yang tepat yang mengelola filing pajak, lalu gunakan audit log untuk menelusuri perubahannya.</p>
-              <Button variant="outline" size="sm" onClick={() => navigate("/org/payroll/roles")}>
+              <Button variant="outline" size="sm" onClick={() => navigateWithOverlay("/org/payroll/roles")}>
                 Buka Hak Akses Payroll
               </Button>
             </CardContent>
@@ -402,7 +406,7 @@ export default function OrgPayrollTaxCompliance() {
               <Label htmlFor="search">Pencarian</Label>
               <div className="relative mt-1.5">
                 <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input id="search" className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Cari filing code, trace_id, atau notes..." />
+                <Input id="search" className="pl-9" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Cari kode filing, ID trace, atau catatan..." />
               </div>
             </div>
             <div>
@@ -441,13 +445,13 @@ export default function OrgPayrollTaxCompliance() {
         <Card>
           <CardHeader>
             <CardTitle>Daftar Filing Pajak</CardTitle>
-            <CardDescription>Trace ID wajib dicatat agar triase cepat saat ada masalah kepatuhan payroll.</CardDescription>
+            <CardDescription>ID trace wajib dicatat agar triase cepat saat ada masalah kepatuhan payroll.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => navigate("/org/payroll/payment")}><ArrowLeft className="mr-2 h-4 w-4" />Pembayaran</Button>
-              <Button variant="outline" onClick={() => navigate("/org/payroll/roles")}>Lanjut ke Hak Akses</Button>
-              <Button variant="secondary" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Export CSV</Button>
+              <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll/payment")}><ArrowLeft className="mr-2 h-4 w-4" />Pembayaran</Button>
+              <Button variant="outline" onClick={() => navigateWithOverlay("/org/payroll/roles")}>Lanjut ke Hak Akses</Button>
+              <Button variant="secondary" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Ekspor CSV</Button>
               <Button onClick={openCreateDialog}><Plus className="mr-2 h-4 w-4" />Tambah Filing</Button>
             </div>
 
@@ -461,7 +465,7 @@ export default function OrgPayrollTaxCompliance() {
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Nominal</TableHead>
                   <TableHead>Tenggat</TableHead>
-                  <TableHead>Trace</TableHead>
+                  <TableHead>ID Trace</TableHead>
                   <TableHead className="text-right">Aksi</TableHead>
                 </TableRow>
               </TableHeader>
@@ -516,7 +520,7 @@ export default function OrgPayrollTaxCompliance() {
           <DialogContent className="sm:max-w-2xl">
             <DialogHeader>
               <DialogTitle>{editingId ? "Edit Filing Pajak" : "Tambah Filing Pajak"}</DialogTitle>
-              <DialogDescription>Isi detail filing pajak. Sertakan trace_id untuk referensi operasional.</DialogDescription>
+              <DialogDescription>Isi detail filing pajak. Sertakan ID trace untuk referensi operasional.</DialogDescription>
             </DialogHeader>
             <div className="grid gap-3 py-2 md:grid-cols-2">
               <div>
@@ -566,7 +570,7 @@ export default function OrgPayrollTaxCompliance() {
                 <Input type="number" min="0" className="mt-1.5" value={formState.total_amount} onChange={(e) => setFormState((prev) => ({ ...prev, total_amount: e.target.value }))} />
               </div>
               <div>
-                <Label>Trace ID</Label>
+                <Label>ID Trace</Label>
                 <Input className="mt-1.5" value={formState.trace_id} onChange={(e) => setFormState((prev) => ({ ...prev, trace_id: e.target.value }))} placeholder="TAX-..." />
               </div>
               <div className="md:col-span-2">

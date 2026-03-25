@@ -10,6 +10,7 @@ import { Mail, Save, Send, Loader2, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { useSystemSettings } from "@/hooks/useSystemSettings";
 import { supabase } from "@/integrations/supabase/client";
+import { supabasePublishableKey, supabaseUrl } from "@/integrations/supabase/env";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { withTimeout } from "@/lib/attendanceResilience";
 
@@ -101,7 +102,7 @@ export function EmailGatewaySettings() {
         REQUEST_TIMEOUT_MS,
         "Memuat sesi autentikasi terlalu lama",
       );
-      let accessToken = sessionData.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+      let accessToken = sessionData.session?.access_token || supabasePublishableKey;
       if (!sessionData.session?.access_token) {
         const { data: refreshData } = await withTimeout(
           supabase.auth.refreshSession(),
@@ -125,12 +126,12 @@ export function EmailGatewaySettings() {
       };
 
       const invokeTest = (token: string) =>
-        fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/send-test-email`, {
+        fetch(`${supabaseUrl}/functions/v1/send-test-email`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${token}`,
-            "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+            "apikey": supabasePublishableKey,
           },
           body: JSON.stringify(payload),
         });
@@ -168,7 +169,7 @@ export function EmailGatewaySettings() {
           REQUEST_TIMEOUT_MS,
           "Menyegarkan sesi retry test email terlalu lama",
         );
-        const retryToken = refreshData.session?.access_token || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+        const retryToken = refreshData.session?.access_token || supabasePublishableKey;
         response = await withTimeout(
           invokeTest(retryToken),
           REQUEST_TIMEOUT_MS,
@@ -190,7 +191,7 @@ export function EmailGatewaySettings() {
           : (data?.details || data?.raw)
           ? JSON.stringify(data.details || data.raw)
           : "";
-        const detail = detailRaw ? ` Detail: ${detailRaw.slice(0, 300)}` : "";
+        const detail = detailRaw ? ` Rincian: ${detailRaw.slice(0, 300)}` : "";
         throw new Error(
           appendErrorReference(`${baseError}${hint}${detail}`, typeof data?.trace_id === "string" ? data.trace_id : null)
         );

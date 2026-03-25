@@ -53,6 +53,11 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import type { Tables } from "@/integrations/supabase/types";
+import { getBillingPackageDisplayName } from "@/lib/billingPackageScope";
+import {
+  getBillingSubscriptionJourneyFromNotes,
+  getBillingSubscriptionJourneyUiCopy,
+} from "@/lib/billingSubscriptionJourney";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { ACTIVE_INVOICE_STATUSES, isAmountOverRemaining, parseIntegerAmountInput } from "@/lib/billingGuards";
 import { resolveOrgTenantId } from "@/lib/orgTenantContext";
@@ -91,6 +96,7 @@ type InvoiceRow = Pick<
   | "updated_at"
   | "metadata"
   | "notes"
+  | "package_id"
 >;
 
 interface TenantBillingProfile {
@@ -98,12 +104,14 @@ interface TenantBillingProfile {
   name: string;
   code: string;
   address: string | null;
+  billing_mode: string | null;
 }
 
 interface SubscriptionSnapshot {
   status: string | null;
   end_date: string | null;
   grace_period_end: string | null;
+  notes: string | null;
 }
 
 interface BillingBankInfo {
@@ -132,6 +140,34 @@ interface ManualPaymentHistoryRow {
   created_at: string | null;
   verified_at: string | null;
   rejection_reason: string | null;
+  payer_name?: string | null;
+  payer_email?: string | null;
+  payer_whatsapp?: string | null;
+  payer_phone?: string | null;
+}
+
+interface ManualPaymentPayerSnapshot {
+  id: string;
+  name: string;
+  email: string;
+  whatsapp: string | null;
+  phone: string | null;
+}
+
+interface InvoiceManualSummary {
+  reference_number: string | null;
+  payment_date: string | null;
+  payer_name: string | null;
+  payer_email: string | null;
+  payer_whatsapp: string | null;
+  payer_phone: string | null;
+}
+
+interface InvoiceManualSummaryRow {
+  invoice_number: string | null;
+  reference_number: string | null;
+  payment_date: string | null;
+  created_at: string | null;
 }
 
 interface WalletTransactionRow {
@@ -393,6 +429,20 @@ const parseInvoiceBillingScope = (metadata: unknown): "individual" | "centralize
   return raw.billing_scope === "individual" ? "individual" : "centralized";
 };
 
+const parseInvoicePayerEmployeeId = (metadata: unknown): string | null => {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const raw = metadata as Record<string, unknown>;
+  const manualConfirmedBy = raw.manual_confirmed_by_employee_id;
+  if (typeof manualConfirmedBy === "string" && manualConfirmedBy.trim().length > 0) {
+    return manualConfirmedBy.trim();
+  }
+  const employeeId = raw.employee_id;
+  if (typeof employeeId === "string" && employeeId.trim().length > 0) {
+    return employeeId.trim();
+  }
+  return null;
+};
+
 const getDueStatusMeta = (invoice: Pick<InvoiceRow, "due_date" | "status">) => {
   if (isInvoicePaid(invoice.status)) {
     return { label: "Lunas", className: "text-green-700" };
@@ -468,7 +518,11 @@ export default function OrgBilling() {
   const [invoices, setInvoices] = useState<InvoiceRow[]>([]);
   const [tenantId, setTenantId] = useState<string | null>(null);
   const [tenantProfile, setTenantProfile] = useState<TenantBillingProfile | null>(null);
+  const [isIndividualBillingMode, setIsIndividualBillingMode] = useState(false);
   const [subscriptionSnapshot, setSubscriptionSnapshot] = useState<SubscriptionSnapshot | null>(null);
+  const [invoiceManualSummaryByInvoiceId, setInvoiceManualSummaryByInvoiceId] = useState<
+    Record<string, InvoiceManualSummary>
+  >({});
   const [bankInfo, setBankInfo] = useState<BillingBankInfo>(DEFAULT_BANK_INFO);
   const [invoiceTemplateHtml, setInvoiceTemplateHtml] = useState(DEFAULT_BILLING_INVOICE_TEMPLATE);
   const [walletSnapshot, setWalletSnapshot] = useState<WalletSnapshot | null>(null);
@@ -513,8 +567,10 @@ export default function OrgBilling() {
   const [shouldAutoFocusPaymentSection, setShouldAutoFocusPaymentSection] = useState(false);
   const [paymentSectionFlash, setPaymentSectionFlash] = useState(false);
   const [isProofUploadConfirmOpen, setIsProofUploadConfirmOpen] = useState(false);
+  const [missingDeepLinkInvoice, setMissingDeepLinkInvoice] = useState<string | null>(null);
   const proofFileInputRef = useRef<HTMLInputElement | null>(null);
   const consumedMenuDeepLinkRef = useRef<string | null>(null);
+  const deepLinkInvoiceRetryRef = useRef<Record<string, number>>({});
 
   const fetchWalletSnapshot = useCallback(async (resolvedTenantId: string) => {
     setIsWalletLoading(true);
@@ -645,7 +701,9 @@ export default function OrgBilling() {
         setInvoices([]);
         setTenantId(null);
         setTenantProfile(null);
+        setIsIndividualBillingMode(false);
         setSubscriptionSnapshot(null);
+        setInvoiceManualSummaryByInvoiceId({});
         setWalletSnapshot(null);
         setWalletTopupRequests([]);
         return;
@@ -675,15 +733,19 @@ export default function OrgBilling() {
               supabase
                 .from("invoices")
                 .select(
-                  "id, invoice_number, issue_date, due_date, gross_amount, status, created_at, package_name, package_duration_months, employee_count, subtotal, discount_amount, vat_amount, vat_percentage, xendit_fee, net_amount, payment_method_type, payment_proof_url, invoice_url, external_id, paid_at, verified_at, rejection_reason, updated_at, metadata, notes",
+                  "id, invoice_number, issue_date, due_date, gross_amount, status, created_at, package_name, package_duration_months, package_id, employee_count, subtotal, discount_amount, vat_amount, vat_percentage, xendit_fee, net_amount, payment_method_type, payment_proof_url, invoice_url, external_id, paid_at, verified_at, rejection_reason, updated_at, metadata, notes",
                 )
                 .eq("tenant_id", resolvedTenantId)
                 .order("created_at", { ascending: false })
                 .limit(500),
-              supabase.from("tenants").select("id, name, code, address").eq("id", resolvedTenantId).maybeSingle(),
+              supabase
+                .from("tenants")
+                .select("id, name, code, address, billing_mode")
+                .eq("id", resolvedTenantId)
+                .maybeSingle(),
               supabase
                 .from("subscriptions")
-                .select("status, end_date, grace_period_end")
+                .select("status, end_date, grace_period_end, notes")
                 .eq("tenant_id", resolvedTenantId)
                 .order("updated_at", { ascending: false })
                 .order("created_at", { ascending: false })
@@ -715,11 +777,15 @@ export default function OrgBilling() {
         console.warn("Failed to load billing invoice template:", invoiceTemplateRes.error);
       }
 
-      const centralizedInvoices = ((invoicesRes.data as InvoiceRow[]) || []).filter(
-        (invoice) => parseInvoiceBillingScope(invoice.metadata) !== "individual",
+      const tenantBillingMode = tenantRes.data?.billing_mode === "individual" ? "individual" : "centralized";
+      const scopedInvoices = ((invoicesRes.data as InvoiceRow[]) || []).filter((invoice) =>
+        tenantBillingMode === "individual"
+          ? parseInvoiceBillingScope(invoice.metadata) === "individual"
+          : parseInvoiceBillingScope(invoice.metadata) !== "individual",
       );
-      setInvoices(centralizedInvoices);
-      setTenantProfile(tenantRes.data || null);
+      setInvoices(scopedInvoices);
+      setTenantProfile((tenantRes.data as TenantBillingProfile | null) || null);
+      setIsIndividualBillingMode(tenantBillingMode === "individual");
       setSubscriptionSnapshot((subscriptionRes.data as SubscriptionSnapshot | null) || null);
       setBankInfo(parseBillingSettings(billingSettingsRes.data?.value));
       setInvoiceTemplateHtml(parseInvoiceTemplate(invoiceTemplateRes.data?.value));
@@ -730,7 +796,9 @@ export default function OrgBilling() {
       setInvoices([]);
       setTenantId(null);
       setTenantProfile(null);
+      setIsIndividualBillingMode(false);
       setSubscriptionSnapshot(null);
+      setInvoiceManualSummaryByInvoiceId({});
       setWalletSnapshot(null);
       setWalletTopupRequests([]);
       if (!options?.silent) {
@@ -748,47 +816,177 @@ export default function OrgBilling() {
   }, [fetchInvoices]);
 
   useEffect(() => {
+    if (!tenantId || !isIndividualBillingMode || invoices.length === 0) {
+      setInvoiceManualSummaryByInvoiceId({});
+      return;
+    }
+
+    let isMounted = true;
+
+    const loadInvoiceManualSummary = async () => {
+      const invoiceNumbers = Array.from(
+        new Set(
+          invoices
+            .map((invoice) => (invoice.invoice_number || "").trim())
+            .filter((invoiceNumber) => invoiceNumber.length > 0),
+        ),
+      );
+      const payerEmployeeIds = Array.from(
+        new Set(
+          invoices
+            .map((invoice) => parseInvoicePayerEmployeeId(invoice.metadata))
+            .filter((employeeId): employeeId is string => Boolean(employeeId && employeeId.trim().length > 0)),
+        ),
+      );
+
+      try {
+        const [manualRes, payerRes] = await withExponentialBackoff(
+          () =>
+            withTimeout(
+              Promise.all([
+                invoiceNumbers.length > 0
+                  ? supabase
+                      .from("manual_payments")
+                      .select("invoice_number, reference_number, payment_date, created_at")
+                      .eq("tenant_id", tenantId)
+                      .in("invoice_number", invoiceNumbers)
+                      .order("created_at", { ascending: false })
+                      .limit(2000)
+                  : Promise.resolve({ data: [], error: null }),
+                payerEmployeeIds.length > 0
+                  ? supabase
+                      .from("employees")
+                      .select("id, name, email, whatsapp, phone")
+                      .eq("tenant_id", tenantId)
+                      .in("id", payerEmployeeIds)
+                  : Promise.resolve({ data: [], error: null }),
+              ]),
+              BILLING_QUERY_TIMEOUT_MS,
+              "org.billing.fetch_invoice_manual_summary.query timeout",
+            ),
+          {
+            maxRetries: BILLING_QUERY_RETRY_MAX,
+            shouldRetry: isRetryableError,
+          },
+        );
+
+        if (manualRes.error) {
+          reportError(manualRes.error, "org.billing.fetch_invoice_manual_summary.manual_payment_failed", {
+            tenant_id: tenantId,
+            invoice_number_count: invoiceNumbers.length,
+          });
+        }
+        if (payerRes.error) {
+          reportError(payerRes.error, "org.billing.fetch_invoice_manual_summary.payer_lookup_failed", {
+            tenant_id: tenantId,
+            payer_count: payerEmployeeIds.length,
+          });
+        }
+
+        const latestManualByInvoiceNumber = new Map<string, InvoiceManualSummaryRow>();
+        (((manualRes.data as InvoiceManualSummaryRow[]) || []) as InvoiceManualSummaryRow[]).forEach((row) => {
+          const invoiceNumber = (row.invoice_number || "").trim();
+          if (!invoiceNumber || latestManualByInvoiceNumber.has(invoiceNumber)) return;
+          latestManualByInvoiceNumber.set(invoiceNumber, row);
+        });
+
+        const payerById = new Map<string, ManualPaymentPayerSnapshot>();
+        (((payerRes.data as ManualPaymentPayerSnapshot[]) || []) as ManualPaymentPayerSnapshot[]).forEach((row) => {
+          payerById.set(row.id, row);
+        });
+
+        const nextSummary: Record<string, InvoiceManualSummary> = {};
+        invoices.forEach((invoice) => {
+          const invoiceNumber = (invoice.invoice_number || "").trim();
+          const payerEmployeeId = parseInvoicePayerEmployeeId(invoice.metadata);
+          const payer = payerEmployeeId ? payerById.get(payerEmployeeId) || null : null;
+          const manualSummary = invoiceNumber ? latestManualByInvoiceNumber.get(invoiceNumber) || null : null;
+
+          nextSummary[invoice.id] = {
+            reference_number: manualSummary?.reference_number || null,
+            payment_date: manualSummary?.payment_date || null,
+            payer_name: payer?.name || null,
+            payer_email: payer?.email || null,
+            payer_whatsapp: payer?.whatsapp || null,
+            payer_phone: payer?.phone || null,
+          };
+        });
+
+        if (isMounted) {
+          setInvoiceManualSummaryByInvoiceId(nextSummary);
+        }
+      } catch (error) {
+        reportError(error, "org.billing.fetch_invoice_manual_summary", {
+          tenant_id: tenantId,
+          invoice_count: invoices.length,
+        });
+        if (isMounted) {
+          setInvoiceManualSummaryByInvoiceId({});
+        }
+      }
+    };
+
+    void loadInvoiceManualSummary();
+    return () => {
+      isMounted = false;
+    };
+  }, [invoices, isIndividualBillingMode, tenantId]);
+
+  useEffect(() => {
     if (!tenantId) return;
-    const channel = supabase
+    let channel = supabase
       .channel(`org-billing-invoices-${tenantId}-${Date.now()}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "invoices", filter: `tenant_id=eq.${tenantId}` },
         () => {
           void fetchInvoices({ silent: true });
-          void fetchWalletSnapshot(tenantId);
-          void fetchWalletTopupRequests(tenantId);
+          if (!isIndividualBillingMode) {
+            void fetchWalletSnapshot(tenantId);
+            void fetchWalletTopupRequests(tenantId);
+          }
         },
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "wallet_topup_requests", filter: `tenant_id=eq.${tenantId}` },
-        () => {
-          void fetchWalletTopupRequests(tenantId);
-        },
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "tenant_wallet_transactions", filter: `tenant_id=eq.${tenantId}` },
-        () => {
-          void fetchWalletSnapshot(tenantId);
-        },
-      )
-      .subscribe();
+      );
+
+    if (!isIndividualBillingMode) {
+      channel = channel
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "wallet_topup_requests", filter: `tenant_id=eq.${tenantId}` },
+          () => {
+            void fetchWalletTopupRequests(tenantId);
+          },
+        )
+        .on(
+          "postgres_changes",
+          { event: "*", schema: "public", table: "tenant_wallet_transactions", filter: `tenant_id=eq.${tenantId}` },
+          () => {
+            void fetchWalletSnapshot(tenantId);
+          },
+        );
+    }
+
+    channel = channel.subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchInvoices, fetchWalletSnapshot, fetchWalletTopupRequests, tenantId]);
+  }, [fetchInvoices, fetchWalletSnapshot, fetchWalletTopupRequests, isIndividualBillingMode, tenantId]);
 
   useEffect(() => {
-    if (!tenantId) return;
+    if (!tenantId || isIndividualBillingMode) return;
     void fetchWalletSnapshot(tenantId);
-  }, [fetchWalletSnapshot, tenantId]);
+  }, [fetchWalletSnapshot, isIndividualBillingMode, tenantId]);
 
   useEffect(() => {
-    if (!tenantId) return;
+    if (!tenantId || isIndividualBillingMode) return;
     void fetchWalletTopupRequests(tenantId);
-  }, [fetchWalletTopupRequests, tenantId]);
+  }, [fetchWalletTopupRequests, isIndividualBillingMode, tenantId]);
+
+  useEffect(() => {
+    if (!isIndividualBillingMode) return;
+    setWalletSnapshot(null);
+    setWalletTopupRequests([]);
+  }, [isIndividualBillingMode]);
 
   useEffect(() => {
     if (!selectedInvoice) return;
@@ -862,6 +1060,11 @@ export default function OrgBilling() {
       const issueDate = formatInvoiceDate(invoice.issue_date);
       const dueDate = formatInvoiceDate(invoice.due_date);
       const rejectionReason = invoice.rejection_reason?.toLowerCase() || "";
+      const manualSummary = invoiceManualSummaryByInvoiceId[invoice.id];
+      const payerName = manualSummary?.payer_name?.toLowerCase() || "";
+      const payerEmail = manualSummary?.payer_email?.toLowerCase() || "";
+      const payerPhone = (manualSummary?.payer_whatsapp || manualSummary?.payer_phone || "").toLowerCase();
+      const referenceNumber = manualSummary?.reference_number?.toLowerCase() || "";
 
       if (!query) return true;
 
@@ -870,10 +1073,14 @@ export default function OrgBilling() {
         status.includes(query) ||
         issueDate.toLowerCase().includes(query) ||
         dueDate.toLowerCase().includes(query) ||
-        rejectionReason.includes(query)
+        rejectionReason.includes(query) ||
+        payerName.includes(query) ||
+        payerEmail.includes(query) ||
+        payerPhone.includes(query) ||
+        referenceNumber.includes(query)
       );
     });
-  }, [invoicesByStatus, issueDateFrom, issueDateTo, searchQuery]);
+  }, [invoiceManualSummaryByInvoiceId, invoicesByStatus, issueDateFrom, issueDateTo, searchQuery]);
 
   const sortedInvoices = useMemo(() => {
     const rows = [...filteredInvoices];
@@ -940,6 +1147,14 @@ export default function OrgBilling() {
     () => invoices.find((invoice) => isInvoicePayable(invoice.status)) || null,
     [invoices],
   );
+  const latestInvoice = useMemo(
+    () =>
+      invoices.reduce<InvoiceRow | null>((current, invoice) => {
+        if (!current) return invoice;
+        return getInvoiceDateValue(invoice) >= getInvoiceDateValue(current) ? invoice : current;
+      }, null),
+    [invoices],
+  );
 
   const statusFilterItems: Array<{ key: BillingStatusFilter; label: string; count: number }> = [
     { key: "all", label: "Semua", count: statusCounts.all },
@@ -961,26 +1176,46 @@ export default function OrgBilling() {
     label: string;
     badgeCount: number;
     badgeClassName: string;
-  }> = [
-    {
-      key: "invoices",
-      label: "Faktur Saya",
-      badgeCount: dueInvoicesCount,
-      badgeClassName: "bg-red-100 text-red-700",
-    },
-    {
-      key: "offers",
-      label: "Penawaran Saya",
-      badgeCount: latestPayableInvoice ? 1 : 0,
-      badgeClassName: "bg-blue-100 text-blue-700",
-    },
-    {
-      key: "topup",
-      label: "Tambah Saldo",
-      badgeCount: pendingTopupCount,
-      badgeClassName: "bg-amber-100 text-amber-700",
-    },
-  ];
+  }> = useMemo(() => {
+    if (isIndividualBillingMode) {
+      return [
+        {
+          key: "invoices",
+          label: "Laporan Pembayaran Pegawai",
+          badgeCount: dueInvoicesCount,
+          badgeClassName: "bg-red-100 text-red-700",
+        },
+      ];
+    }
+
+    return [
+      {
+        key: "invoices",
+        label: "Faktur Saya",
+        badgeCount: dueInvoicesCount,
+        badgeClassName: "bg-red-100 text-red-700",
+      },
+      {
+        key: "offers",
+        label: "Penawaran Saya",
+        badgeCount: latestPayableInvoice ? 1 : 0,
+        badgeClassName: "bg-blue-100 text-blue-700",
+      },
+      {
+        key: "topup",
+        label: "Tambah Saldo",
+        badgeCount: pendingTopupCount,
+        badgeClassName: "bg-amber-100 text-amber-700",
+      },
+    ];
+  }, [dueInvoicesCount, isIndividualBillingMode, latestPayableInvoice, pendingTopupCount]);
+
+  useEffect(() => {
+    if (!isIndividualBillingMode) return;
+    if (activeBillingMenu !== "invoices") {
+      setActiveBillingMenu("invoices");
+    }
+  }, [activeBillingMenu, isIndividualBillingMode]);
 
   const clearBillingDeepLinkQuery = useCallback(() => {
     const next = new URLSearchParams(searchParams);
@@ -990,6 +1225,27 @@ export default function OrgBilling() {
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
+  const openInvoiceDetailInternal = useCallback(
+    (invoice: InvoiceRow, withPaymentFocus = false) => {
+      setSelectedInvoice(invoice);
+      setManualPaidAmountInput(formatRupiahInput(String(Math.max(0, Math.round(invoice.gross_amount || 0)))));
+      setCancelReasonCode("");
+      setCancelReasonDetail("");
+      setManualProofFile(null);
+      setIsActualTransferDeclared(false);
+      if (proofFileInputRef.current) {
+        proofFileInputRef.current.value = "";
+      }
+      setIsDetailOpen(true);
+      if (withPaymentFocus) {
+        setShouldAutoFocusPaymentSection(true);
+        setPaymentSectionFlash(true);
+        window.setTimeout(() => setPaymentSectionFlash(false), 1800);
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     const deepLinkMenu = searchParams.get("menu");
     if (deepLinkMenu !== "invoices" && deepLinkMenu !== "offers" && deepLinkMenu !== "topup") return;
@@ -998,13 +1254,21 @@ export default function OrgBilling() {
     if (consumedMenuDeepLinkRef.current === deepLinkSignature) return;
     consumedMenuDeepLinkRef.current = deepLinkSignature;
 
+    if (isIndividualBillingMode && deepLinkMenu !== "invoices") {
+      const next = new URLSearchParams(searchParams);
+      next.delete("menu");
+      setSearchParams(next, { replace: true });
+      setActiveBillingMenu("invoices");
+      return;
+    }
+
     setActiveBillingMenu(deepLinkMenu);
 
     // "menu" dipakai sebagai deep-link sekali pakai agar default /org/billing tetap ke faktur.
     const next = new URLSearchParams(searchParams);
     next.delete("menu");
     setSearchParams(next, { replace: true });
-  }, [searchParams, setSearchParams]);
+  }, [isIndividualBillingMode, searchParams, setSearchParams]);
 
   useEffect(() => {
     if (isLoading) return;
@@ -1017,35 +1281,53 @@ export default function OrgBilling() {
       return;
     }
 
+    const shouldFocusPaymentSection = searchParams.get("focus") === "payment-proof";
     const targetInvoice =
       invoices.find((row) => (row.invoice_number || "").trim().toLowerCase() === normalizedInvoiceNumber) || null;
 
     if (!targetInvoice) {
-      toast.warning("Invoice tujuan tidak ditemukan. Silakan cek daftar faktur terbaru.");
+      const retryCount = deepLinkInvoiceRetryRef.current[normalizedInvoiceNumber] || 0;
+      if (retryCount < 2) {
+        deepLinkInvoiceRetryRef.current[normalizedInvoiceNumber] = retryCount + 1;
+        window.setTimeout(() => {
+          void fetchInvoices({ silent: true });
+        }, 350);
+        return;
+      }
+      delete deepLinkInvoiceRetryRef.current[normalizedInvoiceNumber];
+      setActiveBillingMenu("invoices");
+      const fallbackInvoice = latestPayableInvoice || latestInvoice || null;
+      if (fallbackInvoice) {
+        setMissingDeepLinkInvoice(null);
+        openInvoiceDetailInternal(fallbackInvoice, shouldFocusPaymentSection);
+        toast.info(
+          `Invoice ${deepLinkInvoiceNumber.trim()} tidak ditemukan. Dialihkan ke ${
+            fallbackInvoice.invoice_number || "invoice terbaru"
+          }.`,
+        );
+        clearBillingDeepLinkQuery();
+        return;
+      }
+      setMissingDeepLinkInvoice(deepLinkInvoiceNumber.trim());
       clearBillingDeepLinkQuery();
       return;
     }
 
+    delete deepLinkInvoiceRetryRef.current[normalizedInvoiceNumber];
+    setMissingDeepLinkInvoice(null);
     setActiveBillingMenu("invoices");
-    setSelectedInvoice(targetInvoice);
-    setManualPaidAmountInput(formatRupiahInput(String(Math.max(0, Math.round(targetInvoice.gross_amount || 0)))));
-    setCancelReasonCode("");
-    setCancelReasonDetail("");
-    setManualProofFile(null);
-    setIsActualTransferDeclared(false);
-    if (proofFileInputRef.current) {
-      proofFileInputRef.current.value = "";
-    }
-    setIsDetailOpen(true);
-
-    if (searchParams.get("focus") === "payment-proof") {
-      setShouldAutoFocusPaymentSection(true);
-      setPaymentSectionFlash(true);
-      window.setTimeout(() => setPaymentSectionFlash(false), 1800);
-    }
-
+    openInvoiceDetailInternal(targetInvoice, shouldFocusPaymentSection);
     clearBillingDeepLinkQuery();
-  }, [clearBillingDeepLinkQuery, invoices, isLoading, searchParams]);
+  }, [
+    clearBillingDeepLinkQuery,
+    fetchInvoices,
+    invoices,
+    isLoading,
+    latestInvoice,
+    latestPayableInvoice,
+    openInvoiceDetailInternal,
+    searchParams,
+  ]);
 
   useEffect(() => {
     if (!shouldAutoFocusPaymentSection || !isDetailOpen || !selectedInvoice) return;
@@ -1077,6 +1359,13 @@ export default function OrgBilling() {
           : "Segera lakukan pembayaran",
       };
     }
+    if (status === "trial") {
+      return {
+        label: "Trial",
+        badgeClassName: "border-blue-300 bg-blue-50 text-blue-700",
+        description: "Jalur normal tenant baru masih dipantau sebelum siap ditagih.",
+      };
+    }
     if (status === "expired") {
       return {
         label: "Berakhir",
@@ -1090,12 +1379,32 @@ export default function OrgBilling() {
       description: "Belum ada langganan aktif",
     };
   }, [subscriptionSnapshot]);
+  const subscriptionJourneyMeta = useMemo(() => {
+    if (subscriptionSnapshot?.status?.toLowerCase() === "trial") {
+      return {
+        label: "Trial & Streak Monitoring",
+        description: "Jika sudah siap berlangganan sekarang, gunakan aktivasi awal dari penawaran billing.",
+      };
+    }
+    return getBillingSubscriptionJourneyUiCopy(
+      getBillingSubscriptionJourneyFromNotes(subscriptionSnapshot?.notes),
+    );
+  }, [subscriptionSnapshot]);
 
   const handleBillingMenuClick = (menu: BillingMenu) => {
+    if (isIndividualBillingMode && menu !== "invoices") {
+      setActiveBillingMenu("invoices");
+      return;
+    }
     setActiveBillingMenu(menu);
   };
 
   const handleOpenCalculatorOverlay = () => {
+    if (isIndividualBillingMode) {
+      setActiveBillingMenu("invoices");
+      toast.info("Mode billing mandiri: penawaran dikelola dari dashboard pegawai.");
+      return;
+    }
     setActiveBillingMenu("offers");
     setCalculatorOverlayRequestToken((prev) => prev + 1);
   };
@@ -1160,16 +1469,32 @@ export default function OrgBilling() {
       return;
     }
 
-    const header = ["Nomor Faktur", "Tanggal Faktur", "Jatuh Tempo", "Total", "Status", "Metode Bayar", "Bukti Bayar"];
-    const rows = sortedInvoices.map((invoice) => [
-      getInvoiceNumber(invoice),
-      formatInvoiceDate(invoice.issue_date || invoice.created_at),
-      formatInvoiceDate(invoice.due_date),
-      invoice.gross_amount || 0,
-      getInvoiceStatusMeta(invoice.status).label,
-      getPaymentMethodLabel(invoice.payment_method_type),
-      invoice.payment_proof_url || "",
-    ]);
+    const header = [
+      "Nomor Faktur",
+      "Tanggal Faktur",
+      "Jatuh Tempo",
+      "Total",
+      "Status",
+      "Metode Bayar",
+      "Bukti Bayar",
+      ...(isIndividualBillingMode ? ["Nama Pembayar", "Email Pembayar", "No WA Pembayar", "No Ref"] : []),
+    ];
+    const rows = sortedInvoices.map((invoice) => {
+      const summary = invoiceManualSummaryByInvoiceId[invoice.id];
+      const payerPhone = summary?.payer_whatsapp || summary?.payer_phone || "";
+      return [
+        getInvoiceNumber(invoice),
+        formatInvoiceDate(invoice.issue_date || invoice.created_at),
+        formatInvoiceDate(invoice.due_date),
+        invoice.gross_amount || 0,
+        getInvoiceStatusMeta(invoice.status).label,
+        getPaymentMethodLabel(invoice.payment_method_type),
+        invoice.payment_proof_url || "",
+        ...(isIndividualBillingMode
+          ? [summary?.payer_name || "", summary?.payer_email || "", payerPhone, summary?.reference_number || ""]
+          : []),
+      ];
+    });
 
     const csv = [header, ...rows]
       .map((columns) => columns.map((column) => toCsvCell(column)).join(","))
@@ -1219,6 +1544,8 @@ export default function OrgBilling() {
     }
     setIsSubmittingPaymentProof(true);
     try {
+      const nowIso = new Date().toISOString();
+      const paymentDateIso = nowIso.slice(0, 10);
       let paymentProofUrl = "";
       let paymentProofPath: string | null = null;
       const safeName = manualProofFile.name.replace(/[^a-zA-Z0-9._-]/g, "-");
@@ -1239,7 +1566,106 @@ export default function OrgBilling() {
         throw new Error("URL bukti bayar tidak tersedia");
       }
 
+      let payerEmployeeSnapshot: {
+        id: string | null;
+        name: string | null;
+        email: string | null;
+        whatsapp: string | null;
+        phone: string | null;
+      } | null = null;
+      try {
+        let authUserEmail: string | null = null;
+        let authUserDisplayName: string | null = null;
+        const {
+          data: { user },
+          error: userError,
+        } = await supabase.auth.getUser();
+        if (userError) {
+          reportError(userError, "org.billing.submit_payment_proof.fetch_user_failed", {
+            tenant_id: tenantId,
+            invoice_id: selectedInvoice.id,
+          });
+        } else if (user?.id) {
+          authUserEmail = typeof user.email === "string" && user.email.trim().length > 0 ? user.email.trim() : null;
+          authUserDisplayName =
+            typeof user.user_metadata?.full_name === "string" && user.user_metadata.full_name.trim().length > 0
+              ? user.user_metadata.full_name.trim()
+              : typeof user.user_metadata?.name === "string" && user.user_metadata.name.trim().length > 0
+                ? user.user_metadata.name.trim()
+                : null;
+          const { data: payerEmployee, error: payerError } = await supabase
+            .from("employees")
+            .select("id, name, email, whatsapp, phone")
+            .eq("tenant_id", tenantId)
+            .eq("user_id", user.id)
+            .maybeSingle();
+          if (payerError) {
+            reportError(payerError, "org.billing.submit_payment_proof.fetch_payer_employee_failed", {
+              tenant_id: tenantId,
+              invoice_id: selectedInvoice.id,
+              user_id: user.id,
+            });
+          } else if (payerEmployee?.id) {
+            payerEmployeeSnapshot = {
+              id: payerEmployee.id,
+              name: payerEmployee.name || null,
+              email: payerEmployee.email || null,
+              whatsapp: payerEmployee.whatsapp || null,
+              phone: payerEmployee.phone || null,
+            };
+          } else if (authUserEmail) {
+            const { data: fallbackByEmail, error: fallbackByEmailError } = await supabase
+              .from("employees")
+              .select("id, name, email, whatsapp, phone")
+              .eq("tenant_id", tenantId)
+              .eq("email", authUserEmail)
+              .maybeSingle();
+            if (fallbackByEmailError) {
+              reportError(fallbackByEmailError, "org.billing.submit_payment_proof.fetch_payer_employee_by_email_failed", {
+                tenant_id: tenantId,
+                invoice_id: selectedInvoice.id,
+                user_id: user.id,
+                email: authUserEmail,
+              });
+            } else if (fallbackByEmail?.id) {
+              payerEmployeeSnapshot = {
+                id: fallbackByEmail.id,
+                name: fallbackByEmail.name || null,
+                email: fallbackByEmail.email || null,
+                whatsapp: fallbackByEmail.whatsapp || null,
+                phone: fallbackByEmail.phone || null,
+              };
+            }
+          }
+          if (!payerEmployeeSnapshot) {
+            payerEmployeeSnapshot = {
+              id: null,
+              name: authUserDisplayName || null,
+              email: authUserEmail || null,
+              whatsapp: null,
+              phone: null,
+            };
+          }
+        }
+      } catch (payerLookupError) {
+        reportError(payerLookupError, "org.billing.submit_payment_proof.fetch_payer_employee_unexpected", {
+          tenant_id: tenantId,
+          invoice_id: selectedInvoice.id,
+        });
+      }
+
       const invoiceNumber = selectedInvoice.invoice_number || getInvoiceNumber(selectedInvoice);
+      const payerName = payerEmployeeSnapshot?.name || null;
+      const payerEmail = payerEmployeeSnapshot?.email || null;
+      const payerWhatsapp = payerEmployeeSnapshot?.whatsapp || null;
+      const payerPhone = payerEmployeeSnapshot?.phone || null;
+      const payerContact = payerWhatsapp || payerPhone || null;
+      const payerNoteParts = [
+        "Konfirmasi pembayaran dari /org/billing",
+        payerName ? `payer_name=${payerName}` : null,
+        payerEmail ? `payer_email=${payerEmail}` : null,
+        payerContact ? `payer_wa=${payerContact}` : null,
+      ].filter((part): part is string => Boolean(part));
       const { error: manualPaymentError } = await withExponentialBackoff(
         () =>
           withTimeout(
@@ -1253,14 +1679,16 @@ export default function OrgBilling() {
                   payment_method: "bank_transfer",
                   transfer_proof_url: paymentProofUrl,
                   transfer_proof_path: paymentProofPath,
+                  account_name: payerName || payerEmail || "-",
+                  account_number: payerContact,
                   reference_number: null,
-                  payment_date: new Date().toISOString().slice(0, 10),
+                  payment_date: paymentDateIso,
                   status:
                     paidAmount < selectedInvoiceRemaining
                       ? "pending_verification_partial"
                       : "awaiting_verification_full",
                   invoice_number: invoiceNumber,
-                  notes: "Konfirmasi pembayaran dari /org/billing",
+                  notes: payerNoteParts.join(" | "),
                 }),
             BILLING_QUERY_TIMEOUT_MS,
             "org.billing.submit_payment_proof.insert_manual_payment timeout",
@@ -1276,19 +1704,51 @@ export default function OrgBilling() {
         () =>
           withTimeout(
             () =>
-              supabase
-                .from("invoices")
-                .update({
-                  payment_proof_url: paymentProofUrl,
-                  status:
-                    paidAmount < selectedInvoiceRemaining
-                      ? "PENDING_VERIFICATION_PARTIAL"
-                      : "AWAITING_VERIFICATION_FULL",
-                  rejection_reason: null,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq("id", selectedInvoice.id)
-                .eq("tenant_id", tenantId),
+              {
+                const currentMetadata =
+                  selectedInvoice.metadata && typeof selectedInvoice.metadata === "object" && !Array.isArray(selectedInvoice.metadata)
+                    ? (selectedInvoice.metadata as Record<string, unknown>)
+                    : {};
+
+                return supabase
+                  .from("invoices")
+                  .update({
+                    payment_proof_url: paymentProofUrl,
+                    status:
+                      paidAmount < selectedInvoiceRemaining
+                        ? "PENDING_VERIFICATION_PARTIAL"
+                        : "AWAITING_VERIFICATION_FULL",
+                    rejection_reason: null,
+                    updated_at: nowIso,
+                    metadata: {
+                      ...currentMetadata,
+                      manual_confirmation_channel: "org_billing",
+                      manual_confirmation_at: nowIso,
+                      ...(payerEmployeeSnapshot?.id
+                        ? {
+                            manual_confirmed_by_employee_id: payerEmployeeSnapshot.id,
+                          }
+                        : {}),
+                      ...(payerName
+                        ? {
+                            manual_confirmed_by_name: payerName,
+                          }
+                        : {}),
+                      ...(payerEmail
+                        ? {
+                            manual_confirmed_by_email: payerEmail,
+                          }
+                        : {}),
+                      ...(payerContact
+                        ? {
+                            manual_confirmed_by_whatsapp: payerContact,
+                          }
+                        : {}),
+                    },
+                  })
+                  .eq("id", selectedInvoice.id)
+                  .eq("tenant_id", tenantId);
+              },
             BILLING_QUERY_TIMEOUT_MS,
             "org.billing.submit_payment_proof.update_invoice timeout",
           ),
@@ -1432,16 +1892,27 @@ export default function OrgBilling() {
 
       const { data: activePackages, error: packageError } = await supabase
         .from("subscription_packages")
-        .select("id, name, duration_months")
+        .select("*")
         .eq("is_active", true)
         .order("sort_order", { ascending: true });
       if (packageError) throw packageError;
 
-      const matchedPackage = (activePackages || []).find(
-        (pkg) =>
-          pkg.name === (selectedInvoice.package_name || "") &&
-          Number(pkg.duration_months || 0) === Number(selectedInvoice.package_duration_months || 0),
-      );
+      const matchedPackage = ((activePackages || []) as Tables<"subscription_packages">[])
+        .find(
+          (pkg) =>
+            pkg.id === selectedInvoice.package_id ||
+            (
+              getBillingPackageDisplayName(pkg.name, pkg.module_scope) ===
+                (selectedInvoice.package_name || "") &&
+              Number(pkg.duration_months || 0) ===
+                Number(selectedInvoice.package_duration_months || 0)
+            ) ||
+            (
+              pkg.name === (selectedInvoice.package_name || "") &&
+              Number(pkg.duration_months || 0) ===
+                Number(selectedInvoice.package_duration_months || 0)
+            ),
+        );
 
       if (typeof window !== "undefined") {
         const calculatorKey = `org_activation_calculator:${tenantId}`;
@@ -1542,7 +2013,8 @@ export default function OrgBilling() {
                 .insert({
                   tenant_id: tenantId,
                   invoice_number: invoiceNumber,
-                  package_name: selectedInvoice.package_name || "Langganan Sistem Absensi",
+                  package_id: selectedInvoice.package_id || null,
+                  package_name: selectedInvoice.package_name || "Langganan Sistem",
                   package_duration_months: selectedInvoice.package_duration_months || 1,
                   package_discount_percentage: 0,
                   employee_count: selectedInvoice.employee_count || 1,
@@ -1571,7 +2043,7 @@ export default function OrgBilling() {
                     .join("\n"),
                 })
                 .select(
-                  "id, invoice_number, issue_date, due_date, gross_amount, status, created_at, package_name, package_duration_months, employee_count, subtotal, discount_amount, vat_amount, vat_percentage, xendit_fee, net_amount, payment_method_type, payment_proof_url, invoice_url, external_id, paid_at, verified_at, rejection_reason, updated_at, metadata, notes",
+                  "id, invoice_number, issue_date, due_date, gross_amount, status, created_at, package_name, package_duration_months, package_id, employee_count, subtotal, discount_amount, vat_amount, vat_percentage, xendit_fee, net_amount, payment_method_type, payment_proof_url, invoice_url, external_id, paid_at, verified_at, rejection_reason, updated_at, metadata, notes",
                 )
                 .single(),
             BILLING_QUERY_TIMEOUT_MS,
@@ -1619,19 +2091,19 @@ export default function OrgBilling() {
   };
 
   const openInvoiceDetail = (invoice: InvoiceRow) => {
-    setSelectedInvoice(invoice);
-    setManualPaidAmountInput(formatRupiahInput(String(Math.max(0, Math.round(invoice.gross_amount || 0)))));
-    setCancelReasonCode("");
-    setCancelReasonDetail("");
-    setManualProofFile(null);
-    setIsActualTransferDeclared(false);
-    if (proofFileInputRef.current) {
-      proofFileInputRef.current.value = "";
-    }
-    setIsDetailOpen(true);
+    openInvoiceDetailInternal(invoice, false);
   };
 
   const handlePrimaryBillingAction = () => {
+    if (isIndividualBillingMode) {
+      setActiveBillingMenu("invoices");
+      if (latestPayableInvoice) {
+        openInvoiceDetail(latestPayableInvoice);
+      } else if (latestInvoice) {
+        openInvoiceDetail(latestInvoice);
+      }
+      return;
+    }
     if (latestPayableInvoice) {
       setActiveBillingMenu("invoices");
       openInvoiceDetail(latestPayableInvoice);
@@ -1700,7 +2172,7 @@ export default function OrgBilling() {
         bank_name: escapeHtml(bankInfo.bankName),
         bank_account_number: escapeHtml(bankInfo.accountNumber),
         payment_method: escapeHtml(getPaymentMethodLabel(invoice.payment_method_type)),
-        invoice_item_name: escapeHtml(invoice.package_name || "Langganan Sistem Absensi"),
+        invoice_item_name: escapeHtml(invoice.package_name || "Langganan Sistem"),
         invoice_item_meta: escapeHtml(
           `${invoice.employee_count || 0} pegawai${invoice.package_duration_months ? ` • ${invoice.package_duration_months} bulan` : ""}`,
         ),
@@ -1760,7 +2232,12 @@ export default function OrgBilling() {
       try {
         const invoiceNumber = selectedInvoice.invoice_number || "";
         const invoiceTenantId = selectedInvoice.tenant_id || tenantId || null;
-        const [ledgerRes, manualRes] = await withExponentialBackoff(
+        const payerEmployeeId =
+          parseInvoiceBillingScope(selectedInvoice.metadata) === "individual"
+            ? parseInvoicePayerEmployeeId(selectedInvoice.metadata)
+            : null;
+
+        const [ledgerRes, manualRes, payerRes] = await withExponentialBackoff(
           () =>
             withTimeout(
               () =>
@@ -1780,6 +2257,14 @@ export default function OrgBilling() {
                         .order("created_at", { ascending: false })
                         .limit(50)
                     : Promise.resolve({ data: [], error: null }),
+                  payerEmployeeId && invoiceTenantId
+                    ? supabase
+                        .from("employees")
+                        .select("id, name, email, whatsapp, phone")
+                        .eq("tenant_id", invoiceTenantId)
+                        .eq("id", payerEmployeeId)
+                        .maybeSingle()
+                    : Promise.resolve({ data: null, error: null }),
                 ]),
               BILLING_QUERY_TIMEOUT_MS,
               "org.billing.fetch_invoice_detail_history.query timeout",
@@ -1792,10 +2277,26 @@ export default function OrgBilling() {
 
         if (ledgerRes.error) throw ledgerRes.error;
         if (manualRes.error) throw manualRes.error;
+        if (payerRes.error) {
+          reportError(payerRes.error, "org.billing.fetch_invoice_detail_history.payer_lookup_failed", {
+            invoice_id: selectedInvoice.id,
+            tenant_id: invoiceTenantId,
+            payer_employee_id: payerEmployeeId,
+          });
+        }
+
+        const payerSnapshot = (payerRes.data || null) as ManualPaymentPayerSnapshot | null;
+        const manualRows = ((manualRes.data as ManualPaymentHistoryRow[]) || []).map((entry) => ({
+          ...entry,
+          payer_name: payerSnapshot?.name || null,
+          payer_email: payerSnapshot?.email || null,
+          payer_whatsapp: payerSnapshot?.whatsapp || null,
+          payer_phone: payerSnapshot?.phone || null,
+        }));
 
         if (isMounted) {
           setDetailTransactions((ledgerRes.data as FinancialLedgerRow[]) || []);
-          setDetailManualPayments((manualRes.data as ManualPaymentHistoryRow[]) || []);
+          setDetailManualPayments(manualRows);
         }
       } catch (error) {
         const errorRef = reportError(error, "org.billing.fetch_invoice_detail_history", {
@@ -1922,6 +2423,13 @@ export default function OrgBilling() {
   };
 
   const heroContent = useMemo(() => {
+    if (isIndividualBillingMode) {
+      return {
+        title: "Laporan Pembayaran Pegawai",
+        description: "Monitor pembayaran billing mandiri yang dilakukan pegawai",
+        breadcrumb: "Home Area Pelanggan / Area Pelanggan / Laporan Pembayaran Pegawai",
+      };
+    }
     if (activeBillingMenu === "offers") {
       return {
         title: "Penawaran Saya",
@@ -1941,7 +2449,7 @@ export default function OrgBilling() {
       description: "Riwayat faktur dan status langganan organisasi",
       breadcrumb: "Home Area Pelanggan / Area Pelanggan / Faktur Saya",
     };
-  }, [activeBillingMenu]);
+  }, [activeBillingMenu, isIndividualBillingMode]);
 
   return (
     <OrganizationLayout>
@@ -1953,6 +2461,18 @@ export default function OrgBilling() {
                 <Receipt className="h-6 w-6" />
                 {heroContent.title}
               </h1>
+              <div className="mt-2">
+                <Badge
+                  className={
+                    isIndividualBillingMode
+                      ? "border-blue-300 bg-blue-50 text-blue-700"
+                      : "border-emerald-300 bg-emerald-50 text-emerald-700"
+                  }
+                  variant="outline"
+                >
+                  Mode: {isIndividualBillingMode ? "Billing Mandiri" : "Billing Terpusat"}
+                </Badge>
+              </div>
               <p className="mt-1 text-slate-200">{heroContent.description}</p>
               <p className="text-xs text-slate-300/90 mt-1">{heroContent.breadcrumb}</p>
             </div>
@@ -1985,8 +2505,12 @@ export default function OrgBilling() {
               <p className="mt-1 text-lg font-semibold">{subscriptionStatusMeta.label}</p>
             </div>
             <div className="rounded-xl border border-white/15 bg-white/10 px-3 py-2.5">
-              <p className="text-[11px] uppercase tracking-wide text-slate-200/90">Saldo Wallet</p>
-              <p className="mt-1 text-lg font-semibold">{formatCurrency(walletSnapshot?.balance || 0)}</p>
+              <p className="text-[11px] uppercase tracking-wide text-slate-200/90">
+                {isIndividualBillingMode ? "Invoice Lunas" : "Saldo Wallet"}
+              </p>
+              <p className="mt-1 text-lg font-semibold">
+                {isIndividualBillingMode ? statusCounts.paid : formatCurrency(walletSnapshot?.balance || 0)}
+              </p>
             </div>
           </div>
         </div>
@@ -2002,21 +2526,45 @@ export default function OrgBilling() {
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <div className="text-sm">
                 <p className="font-medium text-foreground">
-                  {latestPayableInvoice
-                    ? `Invoice aktif ${getInvoiceNumber(latestPayableInvoice)} siap ditindaklanjuti.`
-                    : "Belum ada invoice aktif. Lanjutkan ke penawaran untuk membuat invoice baru."}
+                  {isIndividualBillingMode
+                    ? latestPayableInvoice
+                      ? `Terdapat invoice pegawai aktif ${getInvoiceNumber(latestPayableInvoice)} untuk dipantau.`
+                      : latestInvoice
+                        ? `Tidak ada invoice aktif. Invoice terakhir ${getInvoiceNumber(latestInvoice)} berstatus ${getInvoiceStatusMeta(latestInvoice.status).label}.`
+                        : "Belum ada invoice billing mandiri pegawai."
+                    : latestPayableInvoice
+                      ? `Invoice aktif ${getInvoiceNumber(latestPayableInvoice)} siap ditindaklanjuti.`
+                      : subscriptionSnapshot?.status?.toLowerCase() === "trial"
+                        ? "Belum ada invoice aktif. Gunakan aktivasi awal jika organisasi sudah siap berlangganan sebelum streak siap tagih."
+                        : "Belum ada invoice aktif. Lanjutkan ke penawaran untuk membuat invoice baru."}
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Alur cepat: Kalkulator {"->"} Mau Bayar {"->"} Konfirmasi Bukti {"->"} Verifikasi Admin
+                  {isIndividualBillingMode
+                    ? "Alur mandiri: Pegawai pilih paket -> konfirmasi transfer -> verifikasi admin."
+                    : subscriptionSnapshot?.status?.toLowerCase() === "trial"
+                      ? "Jalur normal: Trial -> Streak Monitoring -> Invoice. Jalur cepat: Aktivasi Awal -> Konfirmasi Bukti -> Verifikasi Admin."
+                      : "Alur cepat: Kalkulator -> Buat Invoice -> Konfirmasi Bukti -> Verifikasi Admin"}
                 </p>
               </div>
               <div className="flex items-center gap-2">
                 <Button onClick={handlePrimaryBillingAction}>
-                  {latestPayableInvoice ? "Lihat Invoice Aktif" : "Mau Bayar"}
+                  {isIndividualBillingMode
+                    ? latestPayableInvoice
+                      ? "Lihat Invoice Aktif"
+                      : latestInvoice
+                        ? "Lihat Riwayat Invoice"
+                        : "Lihat Laporan Invoice"
+                    : latestPayableInvoice
+                      ? "Lihat Invoice Aktif"
+                      : subscriptionSnapshot?.status?.toLowerCase() === "trial"
+                        ? "Aktivasi Awal"
+                        : "Buat Invoice"}
                 </Button>
-                <Button variant="outline" onClick={handleOpenCalculatorOverlay}>
-                  Buka Kalkulator
-                </Button>
+                {!isIndividualBillingMode ? (
+                  <Button variant="outline" onClick={handleOpenCalculatorOverlay}>
+                    Buka Kalkulator
+                  </Button>
+                ) : null}
               </div>
             </div>
           </div>
@@ -2054,6 +2602,11 @@ export default function OrgBilling() {
               <CardContent className="pt-0 space-y-2">
                 <Badge className={subscriptionStatusMeta.badgeClassName}>{subscriptionStatusMeta.label}</Badge>
                 <p className="text-sm text-muted-foreground">{subscriptionStatusMeta.description}</p>
+                <div className="rounded-lg border bg-muted/40 p-3">
+                  <p className="text-xs font-medium text-foreground">Jalur Billing</p>
+                  <p className="mt-1 text-sm font-semibold">{subscriptionJourneyMeta.label}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">{subscriptionJourneyMeta.description}</p>
+                </div>
               </CardContent>
             </Card>
 
@@ -2129,7 +2682,7 @@ export default function OrgBilling() {
           </aside>
 
           <section>
-            {activeBillingMenu === "offers" ? (
+            {!isIndividualBillingMode && activeBillingMenu === "offers" ? (
               tenantId && tenantProfile ? (
                 <OrgActivationTab
                   tenantId={tenantId}
@@ -2149,7 +2702,7 @@ export default function OrgBilling() {
                   </CardContent>
                 </Card>
               )
-            ) : activeBillingMenu === "topup" ? (
+            ) : !isIndividualBillingMode && activeBillingMenu === "topup" ? (
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
@@ -2427,7 +2980,12 @@ export default function OrgBilling() {
                   </div>
 
                   <div className="relative w-full overflow-x-auto bg-white">
-                    <table className="w-full min-w-[760px] border-separate border-spacing-0 text-sm">
+                    <table
+                      className={cn(
+                        "w-full border-separate border-spacing-0 text-sm",
+                        isIndividualBillingMode ? "min-w-[1080px]" : "min-w-[760px]",
+                      )}
+                    >
                       <thead>
                         <tr className="border-0 bg-transparent">
                           <th className="h-11 border-r border-slate-200 border-b border-slate-300 bg-slate-100/90 px-4 text-left text-sm font-semibold align-middle">
@@ -2484,6 +3042,16 @@ export default function OrgBilling() {
                               />
                             </button>
                           </th>
+                          {isIndividualBillingMode ? (
+                            <th className="h-11 border-r border-slate-200 border-b border-slate-300 bg-slate-100/90 px-4 text-left text-sm font-semibold align-middle">
+                              Pembayar
+                            </th>
+                          ) : null}
+                          {isIndividualBillingMode ? (
+                            <th className="h-11 border-r border-slate-200 border-b border-slate-300 bg-slate-100/90 px-4 text-left text-sm font-semibold align-middle">
+                              No. Ref
+                            </th>
+                          ) : null}
                           <th className="h-11 border-b border-slate-300 bg-slate-100/90 px-4 text-left text-sm font-semibold align-middle">
                             <button
                               type="button"
@@ -2501,7 +3069,7 @@ export default function OrgBilling() {
                       <tbody>
                         {isLoading && (
                           <tr className="border-b border-slate-200/90">
-                            <td colSpan={5} className="p-4 py-10">
+                            <td colSpan={isIndividualBillingMode ? 7 : 5} className="p-4 py-10">
                               <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
                                 <div className="rounded-full bg-slate-100 p-3">
                                   <Loader2 className="h-5 w-5 animate-spin text-slate-600" />
@@ -2516,7 +3084,7 @@ export default function OrgBilling() {
                         )}
                         {!isLoading && paginatedInvoices.length === 0 && (
                           <tr className="border-b border-slate-200/90 bg-white">
-                            <td colSpan={5} className="p-4 py-10">
+                            <td colSpan={isIndividualBillingMode ? 7 : 5} className="p-4 py-10">
                               <div className="mx-auto flex max-w-md flex-col items-center gap-2 text-center">
                                 <div className="rounded-full bg-slate-100 p-3">
                                   <Receipt className="h-5 w-5 text-slate-500" />
@@ -2527,7 +3095,9 @@ export default function OrgBilling() {
                                 <p className="text-sm text-muted-foreground">
                                   {hasActiveFilter
                                     ? "Ubah filter pencarian atau reset untuk melihat semua data."
-                                    : "Buat invoice pertama dari menu Penawaran agar proses billing bisa dimulai."}
+                                    : isIndividualBillingMode
+                                      ? "Invoice billing mandiri dibuat dari dashboard pegawai."
+                                      : "Buat invoice pertama dari menu Penawaran agar proses billing bisa dimulai."}
                                 </p>
                                 <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
                                   {hasActiveFilter ? (
@@ -2535,9 +3105,11 @@ export default function OrgBilling() {
                                       Reset Filter
                                     </Button>
                                   ) : null}
-                                  <Button size="sm" onClick={() => setActiveBillingMenu("offers")}>
-                                    Buka Penawaran
-                                  </Button>
+                                  {!isIndividualBillingMode && !hasActiveFilter ? (
+                                    <Button size="sm" onClick={() => setActiveBillingMenu("offers")}>
+                                      Buka Penawaran
+                                    </Button>
+                                  ) : null}
                                 </div>
                               </div>
                             </td>
@@ -2546,6 +3118,8 @@ export default function OrgBilling() {
                         {!isLoading &&
                           paginatedInvoices.map((invoice, index) => {
                             const dueMeta = getDueStatusMeta(invoice);
+                            const manualSummary = invoiceManualSummaryByInvoiceId[invoice.id];
+                            const payerContact = manualSummary?.payer_whatsapp || manualSummary?.payer_phone || null;
                             return (
                               <tr
                                 key={invoice.id}
@@ -2573,6 +3147,27 @@ export default function OrgBilling() {
                                 <td className="px-4 py-3 align-middle text-sm font-semibold">
                                   {formatCurrency(invoice.gross_amount || 0)}
                                 </td>
+                                {isIndividualBillingMode ? (
+                                  <td className="px-4 py-3 align-middle text-xs">
+                                    {manualSummary?.payer_name || manualSummary?.payer_email || payerContact ? (
+                                      <div className="space-y-0.5">
+                                        <p className="font-medium text-foreground">{manualSummary?.payer_name || "-"}</p>
+                                        <p className="text-muted-foreground">{manualSummary?.payer_email || "-"}</p>
+                                        <p className="text-muted-foreground">{payerContact || "-"}</p>
+                                      </div>
+                                    ) : (
+                                      "-"
+                                    )}
+                                  </td>
+                                ) : null}
+                                {isIndividualBillingMode ? (
+                                  <td className="px-4 py-3 align-middle text-xs">
+                                    <p className="font-mono text-[11px] text-slate-700">{manualSummary?.reference_number || "-"}</p>
+                                    <p className="mt-0.5 text-[11px] text-muted-foreground">
+                                      {manualSummary?.payment_date ? formatInvoiceDate(manualSummary.payment_date) : "-"}
+                                    </p>
+                                  </td>
+                                ) : null}
                                 <td className="px-4 py-3 align-middle">
                                   {renderStatusBadge(invoice.status, { onClick: () => openInvoiceDetail(invoice) })}
                                 </td>
@@ -2721,7 +3316,10 @@ export default function OrgBilling() {
                   <div className="space-y-1">
                     <p className="font-semibold">Ditolak - Wajib Revisi Pembayaran</p>
                     <p>
-                      {selectedInvoice.rejection_reason || "Admin menolak konfirmasi sebelumnya. Lakukan revisi dan unggah ulang bukti transfer."}
+                      {selectedInvoice.rejection_reason ||
+                        (isIndividualBillingMode
+                          ? "Admin menolak konfirmasi sebelumnya. Minta pegawai terkait melakukan konfirmasi ulang dari dashboard pegawai."
+                          : "Admin menolak konfirmasi sebelumnya. Lakukan revisi dan unggah ulang bukti transfer.")}
                     </p>
                     <p className="text-xs">
                       Total tagihan: <span className="font-semibold">{formatCurrency(selectedInvoice.gross_amount || 0)}</span> ·
@@ -2729,19 +3327,21 @@ export default function OrgBilling() {
                       Nominal ditolak: <span className="font-semibold">{formatCurrency(latestRejectedManualAmount)}</span> ·
                       Sisa wajib bayar: <span className="font-semibold">{formatCurrency(selectedInvoiceRemaining)}</span>
                     </p>
-                    <div className="pt-1">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="destructive"
-                        onClick={() => {
-                          const target = document.getElementById("invoice-payment-confirmation-section");
-                          target?.scrollIntoView({ behavior: "smooth", block: "start" });
-                        }}
-                      >
-                        Revisi Pembayaran
-                      </Button>
-                    </div>
+                    {!isIndividualBillingMode ? (
+                      <div className="pt-1">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => {
+                            const target = document.getElementById("invoice-payment-confirmation-section");
+                            target?.scrollIntoView({ behavior: "smooth", block: "start" });
+                          }}
+                        >
+                          Revisi Pembayaran
+                        </Button>
+                      </div>
+                    ) : null}
                   </div>
                 </div>
               ) : selectedInvoice.rejection_reason ? (
@@ -2754,7 +3354,7 @@ export default function OrgBilling() {
                 </div>
               ) : null}
 
-              {isInvoicePayable(selectedInvoice.status) ? (
+              {!isIndividualBillingMode && isInvoicePayable(selectedInvoice.status) ? (
                 <div
                   id="invoice-payment-confirmation-section"
                   className={cn(
@@ -2939,91 +3539,93 @@ export default function OrgBilling() {
                 </div>
               ) : null}
 
-              <div className="rounded-xl border border-slate-200/80 bg-white shadow-sm">
-                <div className="border-b border-slate-200 px-4 py-3 font-semibold">Aksi Faktur</div>
-                <div className="space-y-3 px-4 py-3">
-                  <p className="text-xs text-muted-foreground">
-                    Demi integritas audit, faktur terbit tidak bisa diedit. Gunakan pembatalan atau duplikasi sebagai faktur baru.
-                  </p>
-                  {isInvoiceCancellableByOrg(selectedInvoice.status) ? (
-                    <div className="grid gap-2 rounded-lg border border-red-200 bg-red-50/40 p-3 md:grid-cols-[1fr,auto] md:items-end">
-                      <div className="space-y-1">
-                        <Label htmlFor="cancel-reason">Alasan Pembatalan</Label>
-                        <Select
-                          value={cancelReasonCode}
-                          onValueChange={(value) => {
-                            setCancelReasonCode(value);
-                            if (value !== "other") setCancelReasonDetail("");
-                          }}
-                        >
-                          <SelectTrigger id="cancel-reason">
-                            <SelectValue placeholder="Pilih alasan pembatalan" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {CANCEL_REASON_OPTIONS.map((option) => (
-                              <SelectItem key={option.value} value={option.value}>
-                                {option.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        {cancelReasonCode === "other" ? (
-                          <Textarea
-                            placeholder="Tulis detail alasan pembatalan"
-                            value={cancelReasonDetail}
-                            onChange={(event) => setCancelReasonDetail(event.target.value)}
-                            rows={2}
-                          />
-                        ) : null}
-                      </div>
-                      <Button
-                        variant="destructive"
-                        onClick={() => void cancelPendingInvoice()}
-                        disabled={isCancellingInvoice || isRevisingInvoice}
-                      >
-                        {isCancellingInvoice ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                        Batalkan Faktur
-                      </Button>
-                    </div>
-                  ) : (
+              {!isIndividualBillingMode ? (
+                <div className="rounded-xl border border-slate-200/80 bg-white shadow-sm">
+                  <div className="border-b border-slate-200 px-4 py-3 font-semibold">Aksi Faktur</div>
+                  <div className="space-y-3 px-4 py-3">
                     <p className="text-xs text-muted-foreground">
-                      Faktur hanya bisa dibatalkan saat status <strong>Menunggu Pembayaran</strong>.
+                      Demi integritas audit, faktur terbit tidak bisa diedit. Gunakan pembatalan atau duplikasi sebagai faktur baru.
                     </p>
-                  )}
-                  {isInvoiceCancellableByOrg(selectedInvoice.status) ? (
-                    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2">
+                    {isInvoiceCancellableByOrg(selectedInvoice.status) ? (
+                      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2">
+                        <Button
+                          variant="outline"
+                          onClick={() => void reviseInvoiceViaActivation()}
+                          disabled={isRevisingInvoice || isCancellingInvoice}
+                        >
+                          {isRevisingInvoice ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                          Ubah Detail & Buat Revisi
+                        </Button>
+                        <span className="text-xs text-muted-foreground">
+                          Sistem akan membatalkan faktur ini dulu, lalu membuka kalkulator aktivasi dengan data prefill.
+                        </span>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Revisi detail via aktivasi hanya tersedia untuk faktur berstatus <strong>Menunggu Pembayaran</strong>.
+                      </p>
+                    )}
+                    <div className="flex flex-wrap items-center gap-2">
                       <Button
                         variant="outline"
-                        onClick={() => void reviseInvoiceViaActivation()}
-                        disabled={isRevisingInvoice || isCancellingInvoice}
+                        onClick={() => void duplicateInvoiceAsNew()}
+                        disabled={isDuplicatingInvoice || isInvoicePayable(selectedInvoice.status)}
                       >
-                        {isRevisingInvoice ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                        Ubah Detail & Buat Revisi
+                        {isDuplicatingInvoice ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        Duplikasi jadi Faktur Baru
                       </Button>
                       <span className="text-xs text-muted-foreground">
-                        Sistem akan membatalkan faktur ini dulu, lalu membuka kalkulator aktivasi dengan data prefill.
+                        Faktur baru dibuat sebagai <strong>Transfer Manual</strong> dengan nomor baru.
                       </span>
                     </div>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">
-                      Revisi detail via aktivasi hanya tersedia untuk faktur berstatus <strong>Menunggu Pembayaran</strong>.
-                    </p>
-                  )}
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={() => void duplicateInvoiceAsNew()}
-                      disabled={isDuplicatingInvoice || isInvoicePayable(selectedInvoice.status)}
-                    >
-                      {isDuplicatingInvoice ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                      Duplikasi jadi Faktur Baru
-                    </Button>
-                    <span className="text-xs text-muted-foreground">
-                      Faktur baru dibuat sebagai <strong>Transfer Manual</strong> dengan nomor baru.
-                    </span>
+                    {isInvoiceCancellableByOrg(selectedInvoice.status) ? (
+                      <div className="grid gap-2 rounded-lg border border-red-200 bg-red-50/40 p-3 md:grid-cols-[1fr,auto] md:items-end">
+                        <div className="space-y-1">
+                          <Label htmlFor="cancel-reason">Alasan Pembatalan</Label>
+                          <Select
+                            value={cancelReasonCode}
+                            onValueChange={(value) => {
+                              setCancelReasonCode(value);
+                              if (value !== "other") setCancelReasonDetail("");
+                            }}
+                          >
+                            <SelectTrigger id="cancel-reason">
+                              <SelectValue placeholder="Pilih alasan pembatalan" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {CANCEL_REASON_OPTIONS.map((option) => (
+                                <SelectItem key={option.value} value={option.value}>
+                                  {option.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          {cancelReasonCode === "other" ? (
+                            <Textarea
+                              placeholder="Tulis detail alasan pembatalan"
+                              value={cancelReasonDetail}
+                              onChange={(event) => setCancelReasonDetail(event.target.value)}
+                              rows={2}
+                            />
+                          ) : null}
+                        </div>
+                        <Button
+                          variant="destructive"
+                          onClick={() => void cancelPendingInvoice()}
+                          disabled={isCancellingInvoice || isRevisingInvoice}
+                        >
+                          {isCancellingInvoice ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                          Batalkan Faktur
+                        </Button>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        Faktur hanya bisa dibatalkan saat status <strong>Menunggu Pembayaran</strong>.
+                      </p>
+                    )}
                   </div>
                 </div>
-              </div>
+              ) : null}
 
               <div className="rounded-xl border border-slate-200/80 bg-white shadow-sm">
                 <div className="border-b border-slate-200 px-4 py-3 font-semibold">Invoice Items</div>
@@ -3034,7 +3636,7 @@ export default function OrgBilling() {
                   </div>
                   <div className="grid grid-cols-[1fr,180px] gap-3 border-b py-3 text-sm">
                     <div>
-                      <p>{selectedInvoice.package_name || "Langganan Sistem Absensi"}</p>
+                      <p>{selectedInvoice.package_name || "Langganan Sistem"}</p>
                       <p className="text-xs text-muted-foreground">
                         {selectedInvoice.employee_count || 0} pegawai
                         {selectedInvoice.package_duration_months
@@ -3087,29 +3689,30 @@ export default function OrgBilling() {
                   <div className="overflow-x-auto">
                     <table className="w-full min-w-[720px] text-sm">
                       <thead>
-                        <tr className="border-b border-slate-200 bg-slate-100/90">
-                          <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">Tanggal</th>
-                          <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">Referensi</th>
-                          <th className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-slate-700">Nominal</th>
-                          <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">Status</th>
-                          <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">Bukti</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {isManualPaymentLoading && (
-                          <tr className="border-b">
-                            <td colSpan={5} className="px-4 py-4 text-center text-muted-foreground">
-                              Memuat riwayat cicilan...
-                            </td>
-                          </tr>
-                        )}
-                        {!isManualPaymentLoading && detailManualPayments.length === 0 && (
-                          <tr className="border-b">
-                            <td colSpan={5} className="px-4 py-4 text-center text-muted-foreground">
-                              Belum ada data cicilan pembayaran
-                            </td>
-                          </tr>
-                        )}
+                            <tr className="border-b border-slate-200 bg-slate-100/90">
+                              <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">Tanggal</th>
+                              <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">Referensi</th>
+                              <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">Pembayar</th>
+                              <th className="px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-slate-700">Nominal</th>
+                              <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">Status</th>
+                              <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-slate-700">Bukti</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {isManualPaymentLoading && (
+                              <tr className="border-b">
+                                <td colSpan={6} className="px-4 py-4 text-center text-muted-foreground">
+                                  Memuat riwayat cicilan...
+                                </td>
+                              </tr>
+                            )}
+                            {!isManualPaymentLoading && detailManualPayments.length === 0 && (
+                              <tr className="border-b">
+                                <td colSpan={6} className="px-4 py-4 text-center text-muted-foreground">
+                                  Belum ada data cicilan pembayaran
+                                </td>
+                              </tr>
+                            )}
                         {!isManualPaymentLoading &&
                           detailManualPayments.map((entry, index) => {
                             const statusMeta = getManualPaymentStatusMeta(entry.status);
@@ -3117,6 +3720,17 @@ export default function OrgBilling() {
                               <tr key={entry.id} className={cn("border-b border-slate-200", index % 2 === 1 ? "bg-slate-50/50" : "bg-white")}>
                                 <td className="px-4 py-3">{formatInvoiceDate(entry.payment_date || entry.created_at)}</td>
                                 <td className="px-4 py-3 font-mono text-xs">{entry.reference_number || "-"}</td>
+                                <td className="px-4 py-3 text-xs">
+                                  {entry.payer_name || entry.payer_email || entry.payer_whatsapp || entry.payer_phone ? (
+                                    <div className="space-y-0.5">
+                                      <p className="font-medium text-foreground">{entry.payer_name || "-"}</p>
+                                      <p className="text-muted-foreground">{entry.payer_email || "-"}</p>
+                                      <p className="text-muted-foreground">{entry.payer_whatsapp || entry.payer_phone || "-"}</p>
+                                    </div>
+                                  ) : (
+                                    "-"
+                                  )}
+                                </td>
                                 <td className="px-4 py-3 text-right font-semibold">
                                   {entry.status === "verified"
                                     ? formatCurrency(entry.verified_amount ?? entry.amount ?? 0)
@@ -3248,6 +3862,25 @@ export default function OrgBilling() {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+      <Dialog open={Boolean(missingDeepLinkInvoice)} onOpenChange={(open) => !open && setMissingDeepLinkInvoice(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Invoice tujuan tidak ditemukan</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Invoice{" "}
+            <span className="font-mono font-medium text-foreground">
+              {missingDeepLinkInvoice || "-"}
+            </span>{" "}
+            tidak tersedia atau sudah dipindahkan. Sistem menampilkan daftar faktur terbaru.
+          </p>
+          <div className="flex justify-end">
+            <Button type="button" onClick={() => setMissingDeepLinkInvoice(null)}>
+              Tutup
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
       <AlertDialog open={isProofUploadConfirmOpen} onOpenChange={setIsProofUploadConfirmOpen}>

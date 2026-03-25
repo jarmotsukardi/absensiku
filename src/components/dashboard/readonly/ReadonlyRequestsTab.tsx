@@ -30,6 +30,7 @@ interface ReadonlyRequestsTabProps {
   onChangeRequestType: (type: RequestType) => void;
   createLeaveRequest: (data: {
     leave_type: Tables<"leave_requests">["leave_type"];
+    leave_type_id?: string;
     start_date: string;
     end_date: string;
     reason: string;
@@ -93,7 +94,7 @@ export function ReadonlyRequestsTab({
 
         {activeRequestType === "leave" && (
           <div className="space-y-4">
-            <LeaveRequestForm onSubmit={createLeaveRequest} isSubmitting={leaveSubmitting} />
+            <LeaveRequestForm onSubmit={createLeaveRequest} isSubmitting={leaveSubmitting} tenantId={tenantId} />
             <LeaveRequestList requests={leaveRequests} isLoading={leaveLoading} onCancel={cancelLeaveRequest} />
           </div>
         )}

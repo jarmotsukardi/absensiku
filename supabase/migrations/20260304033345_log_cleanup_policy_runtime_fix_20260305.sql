@@ -1,0 +1,4 @@
+-- Applied directly to linked Supabase project via MCP apply_migration.
+-- Canonical repository implementation is covered by:
+-- - 20260305010000_log_cleanup_cron_policy_rpc.sql
+-- - 20260305013000_sync_cron_registry_with_log_cleanup_policy.sql
