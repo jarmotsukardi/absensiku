@@ -8,7 +8,7 @@ interface SectionWithKey {
   key: string;
 }
 
-export const HOMEPAGE_PINNED_TOP_KEYS = ["banner_promo", "hero", "solutions"] as const;
+export const HOMEPAGE_PINNED_TOP_KEYS = ["hero", "solutions"] as const;
 export const HOMEPAGE_PINNED_BOTTOM_KEYS = ["pricing", "faq", "cta", "footer"] as const;
 
 const sectionAliases: Record<string, string[]> = {
