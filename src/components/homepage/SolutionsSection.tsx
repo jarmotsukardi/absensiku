@@ -46,9 +46,9 @@ export function SolutionsSection() {
             Jalur Pengembangan Dalam Satu Platform
           </div>
           <h2 className="mt-5 text-3xl font-bold leading-tight text-foreground md:text-4xl">
-            Absensi tetap jadi fokus utama operasional harian.
+            Absensi tetap jadi fondasi utama.
             <span className="mt-2 block text-primary">
-              HR dan Payroll tersedia sebagai tahap lanjutan saat organisasi siap berkembang.
+              HR dan Payroll menyusul saat siap.
             </span>
           </h2>
           <p className="mx-auto mt-4 max-w-2xl text-lg text-muted-foreground">

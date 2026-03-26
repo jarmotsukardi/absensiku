@@ -66,22 +66,22 @@ export function FAQSection({
 
         <div className="max-w-4xl mx-auto mb-8 grid gap-4 md:grid-cols-3">
           <div className="rounded-2xl border bg-card p-5">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-primary">Tahap 1</p>
-            <h3 className="mt-2 text-lg font-semibold text-foreground">Mulai dari Absensi</h3>
+            <p className="text-sm font-medium text-primary">Tahap 1</p>
+            <h3 className="mt-2 text-xl font-bold text-foreground">Mulai dari Absensi</h3>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               Cocok untuk organisasi yang ingin merapikan check-in, check-out, validasi lokasi, sinkronisasi, dan laporan kehadiran harian.
             </p>
           </div>
           <div className="rounded-2xl border bg-card p-5">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-info">Tahap 2</p>
-            <h3 className="mt-2 text-lg font-semibold text-foreground">Pertimbangkan HR saat siap</h3>
+            <p className="text-sm font-medium text-info">Tahap 2</p>
+            <h3 className="mt-2 text-xl font-bold text-foreground">Pertimbangkan HR saat siap</h3>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               Saat absensi sudah stabil, organisasi bisa mulai membahas data pegawai, cuti, approval, onboarding, dokumen, dan workflow SDM.
             </p>
           </div>
           <div className="rounded-2xl border bg-card p-5">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-accent-foreground">Tahap 3</p>
-            <h3 className="mt-2 text-lg font-semibold text-foreground">Pertimbangkan Payroll bila perlu</h3>
+            <p className="text-sm font-medium text-accent-foreground">Tahap 3</p>
+            <h3 className="mt-2 text-xl font-bold text-foreground">Pertimbangkan Payroll bila perlu</h3>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               Setelah fondasi data operasional dan HR rapi, payroll bisa dipertimbangkan untuk menutup periode gaji dengan validasi, approval, slip, dan audit.
             </p>

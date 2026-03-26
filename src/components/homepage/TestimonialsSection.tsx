@@ -104,12 +104,14 @@ export function TestimonialsSection({ testimonials }: TestimonialsSectionProps) 
   };
 
   return (
-    <section className="py-16 px-4">
+    <section className="py-20 px-4 bg-muted/20">
       <div className="container mx-auto">
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
           <div className="text-center md:text-left">
-            <h2 className="text-2xl md:text-3xl font-bold text-foreground mb-2">Apa Kata Mereka</h2>
-            <p className="text-muted-foreground text-sm">Testimoni dari pengguna AbsensiKu</p>
+            <h2 className="text-3xl md:text-4xl font-bold text-foreground mb-2">Apa Kata Mereka</h2>
+            <p className="max-w-2xl text-base text-muted-foreground md:text-lg">
+              Testimoni dari pengguna AbsensiKu setelah menjalankan operasional absensi di lapangan maupun kantor.
+            </p>
           </div>
           <div className="flex items-center justify-center md:justify-end gap-2">
             <Button variant="outline" size="icon" onClick={goPrev} disabled={!canSlide} aria-label="Testimoni sebelumnya">
