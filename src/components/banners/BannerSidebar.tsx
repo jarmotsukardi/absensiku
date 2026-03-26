@@ -58,6 +58,9 @@ export function BannerSidebar({ position = "homepage", className = "" }: BannerS
               src={banner.imageUrl}
               alt={banner.title || "Sidebar Banner"}
               className="w-full h-auto object-cover transition-transform duration-300 group-hover:scale-105"
+              loading="lazy"
+              decoding="async"
+              fetchPriority="low"
               referrerPolicy="no-referrer"
               crossOrigin="anonymous"
               onError={(e) => {

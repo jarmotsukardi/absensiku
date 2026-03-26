@@ -3,6 +3,7 @@ import { Helmet } from "react-helmet-async";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
 import { BannerSidebar } from "@/components/banners/BannerSidebar";
+import { DeferredRender } from "@/components/homepage/DeferredRender";
 import { ChevronRight } from "lucide-react";
 import type { FAQ } from "@/hooks/useHomepageData";
 
@@ -121,7 +122,9 @@ export function FAQSection({ faqs, showPromoSidebar = false, promoTitle, promoSu
                   <h3 className="text-xl font-bold text-foreground mb-2">{promoTitle || "Promosi & Info Terbaru"}</h3>
                   <p className="text-sm text-muted-foreground mb-4">{promoSubtitle || "Dapatkan penawaran menarik"}</p>
                 </div>
-                <BannerSidebar position="homepage" />
+                <DeferredRender rootMargin="250px 0px" minHeight={240}>
+                  <BannerSidebar position="homepage" />
+                </DeferredRender>
               </div>
             </div>
           )}
