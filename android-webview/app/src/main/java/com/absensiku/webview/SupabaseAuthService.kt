@@ -41,7 +41,23 @@ data class NativeInvitationData(
     val nik: String,
     val phone: String?,
     val opdId: String?,
-    val officeId: String?
+    val officeId: String?,
+    val validationStatus: String
+)
+
+internal data class NativeInvitationLookupPayload(
+    val id: String?,
+    val tenantId: String?,
+    val tenantName: String?,
+    val tenantCode: String?,
+    val tenantLogoUrl: String?,
+    val name: String?,
+    val email: String?,
+    val phone: String?,
+    val nik: String?,
+    val opdId: String?,
+    val officeId: String?,
+    val validationStatus: String?
 )
 
 data class TenantInfo(
@@ -212,21 +228,10 @@ class SupabaseAuthService(
             )
         }
 
-        val json = array.getJSONObject(0)
-
-        return NativeInvitationData(
-            id = json.optString("id"),
-            tenantId = json.optString("tenant_id"),
-            tenantName = json.optString("tenant_name").takeIf { it.isNotBlank() },
-            tenantCode = json.optString("tenant_code").takeIf { it.isNotBlank() },
-            tenantLogoUrl = json.optString("tenant_logo_url").takeIf { it.isNotBlank() },
-            invitationCode = invitationCode.trim(),
-            name = json.optString("name").takeIf { it.isNotBlank() },
-            email = json.optString("email").takeIf { it.isNotBlank() },
-            nik = json.optString("nik"),
-            phone = null,
-            opdId = json.optString("opd_id").takeIf { it.isNotBlank() },
-            officeId = json.optString("office_id").takeIf { it.isNotBlank() }
+        return parseInvitationLookupPayload(
+            json = array.getJSONObject(0),
+            invitationCode = invitationCode,
+            errorRefBuilder = ::buildErrorRef
         )
     }
 
@@ -807,4 +812,94 @@ class SupabaseAuthService(
             connection.setRequestProperty(key, value)
         }
     }
+}
+
+internal fun parseInvitationLookupPayload(
+    json: JSONObject,
+    invitationCode: String,
+    errorRefBuilder: (String) -> String
+): NativeInvitationData {
+    return toNativeInvitationData(
+        payload = NativeInvitationLookupPayload(
+            id = json.optNormalizedString("id"),
+            tenantId = json.optNormalizedString("tenant_id"),
+            tenantName = json.optNormalizedString("tenant_name"),
+            tenantCode = json.optNormalizedString("tenant_code"),
+            tenantLogoUrl = json.optNormalizedString("tenant_logo_url"),
+            name = json.optNormalizedString("name"),
+            email = json.optNormalizedString("email"),
+            phone = json.optNormalizedString("phone"),
+            nik = json.optNormalizedString("nik"),
+            opdId = json.optNormalizedString("opd_id"),
+            officeId = json.optNormalizedString("office_id"),
+            validationStatus = json.optNormalizedString("validation_status")
+        ),
+        invitationCode = invitationCode,
+        errorRefBuilder = errorRefBuilder
+    )
+}
+
+internal fun toNativeInvitationData(
+    payload: NativeInvitationLookupPayload,
+    invitationCode: String,
+    errorRefBuilder: (String) -> String
+): NativeInvitationData {
+    val normalizedCode = invitationCode.trim()
+    if (normalizedCode.isBlank()) {
+        throw SupabaseAuthException(
+            userMessage = "Kode undangan wajib diisi.",
+            errorRef = errorRefBuilder("INVITE_REQUIRED")
+        )
+    }
+
+    val validationStatus = payload.validationStatus ?: "invalid"
+    when (validationStatus) {
+        "invalid", "used" -> {
+            throw SupabaseAuthException(
+                userMessage = "Kode undangan tidak ditemukan atau sudah digunakan.",
+                errorRef = errorRefBuilder("INVITE_NOT_FOUND")
+            )
+        }
+        "expired" -> {
+            throw SupabaseAuthException(
+                userMessage = "Masa berlaku undangan sudah habis. Minta admin mengirim ulang undangan.",
+                errorRef = errorRefBuilder("INVITE_EXPIRED")
+            )
+        }
+    }
+
+    val id = payload.id
+        ?: throw SupabaseAuthException(
+            userMessage = "Data undangan tidak lengkap. Coba lagi atau minta admin mengirim ulang undangan.",
+            errorRef = errorRefBuilder("INVITE_MALFORMED")
+        )
+    val tenantId = payload.tenantId
+        ?: throw SupabaseAuthException(
+            userMessage = "Data organisasi dari undangan tidak lengkap. Minta admin mengirim ulang undangan.",
+            errorRef = errorRefBuilder("INVITE_TENANT_MISSING")
+        )
+
+    return NativeInvitationData(
+        id = id,
+        tenantId = tenantId,
+        tenantName = payload.tenantName,
+        tenantCode = payload.tenantCode,
+        tenantLogoUrl = payload.tenantLogoUrl,
+        invitationCode = normalizedCode,
+        name = payload.name,
+        email = payload.email,
+        nik = payload.nik.orEmpty(),
+        phone = payload.phone,
+        opdId = payload.opdId,
+        officeId = payload.officeId,
+        validationStatus = validationStatus
+    )
+}
+
+internal fun JSONObject.optNormalizedString(key: String): String? {
+    if (!has(key) || isNull(key)) return null
+    val value = optString(key, "").trim()
+    if (value.isBlank()) return null
+    if (value.equals("null", ignoreCase = true)) return null
+    return value
 }

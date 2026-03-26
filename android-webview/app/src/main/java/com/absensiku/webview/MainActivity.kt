@@ -1441,10 +1441,9 @@ class MainActivity : AppCompatActivity() {
                             )
                             openInviteRegistrationDialog(invitation)
                         } catch (error: SupabaseAuthException) {
-                            showNativeLogin(
-                                statusMessage = getString(R.string.login_status_ready),
-                                errorMessage = "${error.userMessage} Ref: ${error.errorRef}"
-                            )
+                            binding.loadingPanel.visibility = View.GONE
+                            codeLayout.error = "${error.userMessage} Ref: ${error.errorRef}"
+                            codeInput.requestFocus()
                         }
                     }
                 }
