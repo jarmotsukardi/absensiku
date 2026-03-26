@@ -55,8 +55,10 @@ Mulai kerja:
 
 Saat verifikasi:
 1. jalankan readiness/smoke yang relevan
-2. catat hasil, error, dan `ref_id`/`trace_id` bila ada
-3. kalau auth flow diuji, gunakan `dev:parity` bila perlu
+2. jika audit payroll sedang relevan, jalankan:
+   `npm run ops:payroll:permission-audit`
+3. catat hasil, error, dan `ref_id`/`trace_id` bila ada
+4. kalau auth flow diuji, gunakan `dev:parity` bila perlu
 
 Sebelum selesai:
 1. pastikan hasil validasi tercatat

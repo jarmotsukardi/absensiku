@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import type { Locator, Page } from "@playwright/test";
-import { loginAsOrgAdmin, toYmd, waitForStable } from "./helpers/orgAuth";
+import { loginAsPayrollOrgAdmin, toYmd, waitForStable } from "./helpers/orgAuth";
 import { ensureOrgWorkspaceEnabled } from "./helpers/orgWorkspace";
 import { createSupabaseServiceTestClient } from "./helpers/supabaseTestEnv";
 import {
@@ -50,7 +50,7 @@ test.describe.serial("Org HR/Payroll CRUD", () => {
   let latestRunTraceId = "";
 
   test("hr employees flow: create employee menyimpan relasi organisasi payroll-impact", async ({ page }) => {
-    const account = await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    const account = await loginAsPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace HR");
 
     const adminClient = await createSupabaseServiceTestClient();
@@ -184,7 +184,7 @@ test.describe.serial("Org HR/Payroll CRUD", () => {
   });
 
   test("hr employees flow: edit relasi organisasi terbaca ulang dan bisa direstore", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace HR");
 
     await page.goto("/org/hr/employees", { waitUntil: "domcontentloaded" });
@@ -302,7 +302,7 @@ test.describe.serial("Org HR/Payroll CRUD", () => {
   });
 
   test("hr employees flow: bulk kategori menghormati seleksi baris pada butuh review", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace HR");
 
     await page.goto("/org/hr/employees", { waitUntil: "domcontentloaded" });
@@ -338,7 +338,7 @@ test.describe.serial("Org HR/Payroll CRUD", () => {
   });
 
   test("hr employees flow: navigasi review mengikuti subset pegawai terpilih", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace HR");
 
     await page.goto("/org/hr/employees", { waitUntil: "domcontentloaded" });
@@ -381,7 +381,7 @@ test.describe.serial("Org HR/Payroll CRUD", () => {
   });
 
   test("payroll periods flow: CRUD jika ada izin write, fallback read-only jika tidak", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace Payroll");
 
     await page.goto("/org/payroll/periods", { waitUntil: "domcontentloaded" });
@@ -437,7 +437,7 @@ test.describe.serial("Org HR/Payroll CRUD", () => {
   });
 
   test("payroll policies flow: CRUD jika ada izin write, fallback read-only jika tidak", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace Payroll");
 
     await page.goto("/org/payroll/policies", { waitUntil: "domcontentloaded" });
@@ -493,7 +493,7 @@ test.describe.serial("Org HR/Payroll CRUD", () => {
   });
 
   test("hr contracts flow: CRUD jika ada izin write dan data pegawai tersedia", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace HR");
     await hardenFloatingOverlay(page);
 
@@ -600,7 +600,7 @@ test.describe.serial("Org HR/Payroll CRUD", () => {
   });
 
   test("payroll variable input flow: CRUD jika ada periode dan izin write", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace Payroll");
 
     await page.goto("/org/payroll/variable-input", { waitUntil: "domcontentloaded" });
@@ -667,7 +667,7 @@ test.describe.serial("Org HR/Payroll CRUD", () => {
   });
 
   test("payroll run + approval flow: create run, sync approval, dan approve stage", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace Payroll");
 
     await page.goto("/org/payroll/run-engine", { waitUntil: "domcontentloaded" });

@@ -48,6 +48,18 @@ const PAYROLL_RECOVERY_PERMISSIONS: PayrollPermission[] = [
 const isPayrollRecoveryPermission = (permission: PayrollPermission): boolean =>
   PAYROLL_RECOVERY_PERMISSIONS.includes(permission);
 
+const getDeniedPayrollRedirect = (
+  requiredPermission: PayrollPermission,
+  allowed: boolean,
+): string | null => {
+  if (allowed) return null;
+
+  // Jangan self-redirect saat halaman home payroll sendiri yang ditolak.
+  if (requiredPermission === "payroll.workspace.view") return null;
+
+  return "/org/payroll";
+};
+
 export async function resolvePayrollRouteAccess(requiredPermission: PayrollPermission): Promise<PayrollAccessResolution> {
   const ref = `PAY-${Date.now().toString(36).toUpperCase()}`;
 
@@ -287,7 +299,7 @@ export async function resolvePayrollRouteAccess(requiredPermission: PayrollPermi
     return {
       allowed,
       reason: allowed ? null : `Tidak punya izin ${requiredPermission}`,
-      redirectTo: allowed ? null : "/org/payroll",
+      redirectTo: getDeniedPayrollRedirect(requiredPermission, allowed),
       requiredPermission,
       payrollRoles,
       permissions,

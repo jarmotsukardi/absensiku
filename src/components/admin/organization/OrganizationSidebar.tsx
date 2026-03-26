@@ -92,6 +92,10 @@ import {
   type TenantHrPayrollAccessState,
 } from "@/lib/hrPayrollAccessPolicy";
 import {
+  getOrgOnboardingModuleTotal,
+  getOrgOnboardingReadyModules,
+} from "@/lib/orgOnboardingProgress";
+import {
   getHrWorkspaceRouteDefinition,
   HR_FOCUSED_SIDEBAR_GROUPS,
   HR_OVERVIEW_SIDEBAR_SECTIONS,
@@ -128,18 +132,6 @@ type OrgSidebarAccessLevel = "admin" | "operator";
 type OrgWorkspace = "absensi" | "hr" | "payroll";
 
 const SIDEBAR_ONBOARDING_TIMEOUT_MS = 10000;
-const ORG_ONBOARDING_CHECKLIST_KEYS: Array<keyof OrgOnboardingCounts> = [
-  "opd",
-  "work_units",
-  "offices",
-  "work_hours",
-  "absence_limits",
-];
-
-const getOnboardingModuleTotal = () => ORG_ONBOARDING_CHECKLIST_KEYS.length;
-
-const getOnboardingReadyModules = (counts: OrgOnboardingCounts) =>
-  ORG_ONBOARDING_CHECKLIST_KEYS.filter((key) => counts[key] > 0).length;
 
 const getHrSidebarBadgeLabel = (path: string): string | undefined => {
   if (!path.startsWith("/org/hr")) return undefined;
@@ -409,7 +401,7 @@ export function OrganizationSidebar({
   const [openHrGroups, setOpenHrGroups] = useState<Record<string, boolean>>({});
   const [onboardingReadyModules, setOnboardingReadyModules] = useState<number | null>(null);
   const [onboardingModuleTotal, setOnboardingModuleTotal] = useState<number>(
-    getOnboardingModuleTotal()
+    getOrgOnboardingModuleTotal()
   );
   const [onboardingCounts, setOnboardingCounts] = useState<OrgOnboardingCounts | null>(null);
   const [isOnboardingStatusLoading, setIsOnboardingStatusLoading] = useState(false);
@@ -640,7 +632,7 @@ export function OrganizationSidebar({
             setOnboardingReadyModules(0);
             setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
             setOnboardingCounts(null);
-            setOnboardingModuleTotal(getOnboardingModuleTotal());
+            setOnboardingModuleTotal(getOrgOnboardingModuleTotal());
           }
           return;
         }
@@ -656,11 +648,11 @@ export function OrganizationSidebar({
             "Timeout membaca pengaturan modul master data sidebar",
           ),
         ]);
-        const readyCount = getOnboardingReadyModules(counts);
+        const readyCount = getOrgOnboardingReadyModules(counts);
         if (!cancelled) {
           setOnboardingReadyModules(readyCount);
           setOnboardingCounts(counts);
-          setOnboardingModuleTotal(getOnboardingModuleTotal());
+          setOnboardingModuleTotal(getOrgOnboardingModuleTotal());
           setMasterDataModules(moduleSetting.modules);
         }
       } catch (error) {
@@ -669,7 +661,7 @@ export function OrganizationSidebar({
           setOnboardingReadyModules(0);
           setMasterDataModules(DEFAULT_ORG_MASTER_DATA_MODULES);
           setOnboardingCounts(null);
-          setOnboardingModuleTotal(getOnboardingModuleTotal());
+          setOnboardingModuleTotal(getOrgOnboardingModuleTotal());
         }
       } finally {
         if (!cancelled) {
@@ -689,9 +681,9 @@ export function OrganizationSidebar({
       const detail = (event as CustomEvent<unknown>).detail;
       const parsedModules = parseOrgMasterDataModulesSetting(detail);
       setMasterDataModules(parsedModules);
-      setOnboardingModuleTotal(getOnboardingModuleTotal());
+      setOnboardingModuleTotal(getOrgOnboardingModuleTotal());
       if (onboardingCounts) {
-        setOnboardingReadyModules(getOnboardingReadyModules(onboardingCounts));
+        setOnboardingReadyModules(getOrgOnboardingReadyModules(onboardingCounts));
       }
     };
     window.addEventListener(ORG_MASTER_DATA_MODULES_UPDATED_EVENT, handleModuleVisibilityEvent);

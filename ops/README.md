@@ -27,6 +27,8 @@ Folder ini berisi data minimum agar eksekusi task besar bisa lebih cepat dan ter
   template SQL operator untuk preview akun `WEB-*`, dry-run reset binding tenant uji, apply policy, dan rollback bertahap.
 - `sql/attendance-security-global-cutover-two-accounts.sql`:
   template SQL final untuk cutover global setelah membersihkan dua akun existing binding `WEB-*` yang sudah teridentifikasi.
+- `sql/payroll-permission-risk-audit.sql`:
+  query SQL read-only untuk mendeteksi tenant payroll `strict` yang masih punya admin aktif tetapi assignment payroll kosong.
 - `orchestration-spec.template.md`:
   template intake spec untuk `npm run orchestrate:full`.
 - `feature-sprint-template.md`:
@@ -207,6 +209,19 @@ Kebutuhan env (salah satu):
 - `SUPABASE_DB_URL`
 - `SUPABASE_DB_DIRECT_URL`
 - `DATABASE_URL`
+
+Audit risiko permission payroll:
+
+```bash
+npm run ops:payroll:permission-audit
+```
+
+Fallback manual bila perlu:
+
+```bash
+set -a && source .env.online && set +a
+psql "$SUPABASE_DB_URL" -f ops/sql/payroll-permission-risk-audit.sql
+```
 
 Inisialisasi file lokal dari template:
 
@@ -436,8 +451,42 @@ npm run smoke:login:org:centralized
 npm run smoke:login:superadmin
 ```
 
+Untuk tenant non-default, tambahkan akun di `extra_accounts` pada `ops/test-accounts.local.json`, lalu jalankan:
+
+```bash
+npm run smoke:login -- --account-key=contoh_org_admin_tenant_tambahan
+```
+
+Untuk suite org non-first-run, Anda bisa memaksa helper memakai akun siap pakai yang konsisten:
+
+```bash
+ORG_READY_ACCOUNT_KEY=contoh_org_admin_ready \
+npx playwright test tests/e2e/org-hr-workspace-smoke.e2e.ts
+```
+
+Untuk suite Playwright payroll, gunakan env `PAYROLL_ACCOUNT_KEY` agar helper login org di test payroll memakai akun tenant tambahan yang sama:
+
+```bash
+PAYROLL_ACCOUNT_KEY=contoh_org_admin_tenant_tambahan \
+npx playwright test tests/e2e/org-hr-payroll-smoke.e2e.ts
+```
+
+Atau gunakan runner suite yang sudah ada:
+
+```bash
+npm run e2e:hr:payroll:smoke -- --account-key=contoh_org_admin_tenant_tambahan
+```
+
+Untuk memverifikasi flow first-run admin organisasi dengan akun dedicated:
+
+```bash
+ORG_FIRST_RUN_ACCOUNT_KEY=contoh_org_admin_first_run \
+npm run e2e:org:first-run
+```
+
 Catatan:
 - `smoke:login:org:centralized` dipakai untuk memverifikasi akun tenant billing terpusat dan sekarang tidak lagi bergantung pada fallback tenant mandiri.
+- Jika `ORG_READY_ACCOUNT_KEY` tidak diisi, helper `loginAsOrgAdmin()` otomatis memprioritaskan `org_admin_centralized` sebelum `org_admin` saat kedua akun tersedia.
 
 Uji dashboard pegawai (mengambil akun `employee` dari file yang sama):
 

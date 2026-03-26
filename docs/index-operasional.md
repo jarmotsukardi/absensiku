@@ -85,6 +85,8 @@ Konteks aktif:
   preflight singkat untuk pekerjaan remote yang sensitif
 - [docs/sql-verifikasi-pasca-migration-payroll-remote-2026-03-12.md](/Users/user/Documents/ANTI_GRAVITY_PROJECT/ABSENSIKU/docs/sql-verifikasi-pasca-migration-payroll-remote-2026-03-12.md)
   referensi verifikasi pasca migration
+- [ops/sql/payroll-permission-risk-audit.sql](/Users/user/Documents/ANTI_GRAVITY_PROJECT/ABSENSIKU/ops/sql/payroll-permission-risk-audit.sql)
+  query SQL read-only untuk audit tenant payroll `strict` yang masih punya admin aktif tetapi assignment payroll kosong
 
 ## Dokumen HR yang Sering Dirujuk
 

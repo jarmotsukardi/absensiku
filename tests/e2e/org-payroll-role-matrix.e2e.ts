@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { expect, test } from "@playwright/test";
-import { loginAsOrgAdmin, waitForStable } from "./helpers/orgAuth";
+import { loginAsPayrollOrgAdmin, waitForStable } from "./helpers/orgAuth";
 import {
   createSupabaseAnonTestClient,
   createSupabaseServiceTestClient,
@@ -88,7 +88,7 @@ test.describe.serial("Org Payroll Role Matrix", () => {
   test("strict mode + payroll_auditor: deny payment, allow reports", async ({ page }) => {
     test.setTimeout(150_000);
 
-    const creds = await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    const creds = await loginAsPayrollOrgAdmin(page);
     const missingEnvKeys = await getMissingSupabaseTestEnvKeys({
       SUPABASE_URL: ["VITE_SUPABASE_URL", "SUPABASE_URL"],
       SUPABASE_SERVICE_ROLE_KEY: ["SUPABASE_SERVICE_ROLE_KEY"],

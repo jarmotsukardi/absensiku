@@ -22,7 +22,9 @@ import { OrgHRPageGuide } from "@/components/org/hr/OrgHRPageGuide";
 import { WorkspaceAccessStatusBanner } from "@/components/org/WorkspaceAccessStatusBanner";
 import { WorkspaceReadonlyShield } from "@/components/org/WorkspaceReadonlyShield";
 import { NotificationDropdown } from "@/components/notifications/NotificationDropdown";
+import { PrivatePageSeo } from "@/components/seo/PrivatePageSeo";
 import { Building2, LogOut, BriefcaseBusiness, Receipt, LayoutDashboard, ExternalLink } from "lucide-react";
+import { fetchOrgOnboardingCounts } from "@/lib/orgOnboardingTemplates";
 import {
   DEFAULT_ORG_WORKSPACE_MODULES,
   fetchTenantOrgWorkspaceModules,
@@ -48,6 +50,11 @@ import {
   ORG_PAYROLL_EMBED_PARAM,
   ORG_PAYROLL_OVERLAY_PARAM,
 } from "@/lib/orgPayrollOverlay";
+import {
+  isOrgOnboardingComplete,
+  isOrgProfileComplete,
+  resolveOrgFirstRunRedirect,
+} from "@/lib/orgOnboardingProgress";
 import { resolveOrgTenantIdForUser } from "@/lib/orgTenantContext";
 
 interface OrganizationLayoutProps {
@@ -169,6 +176,7 @@ const runAccessQuery = <T,>(
 export function OrganizationLayout({ children }: OrganizationLayoutProps) {
   const navigate = useNavigate();
   const location = useLocation();
+  const organizationSeo = <PrivatePageSeo title="Panel Organisasi | AbsensiKu" />;
   const [searchParams, setSearchParams] = useSearchParams();
   const queryTenantId = searchParams.get("tenant_id");
   const isEmbeddedFromHrOverlay = searchParams.get(ORG_HR_EMBED_PARAM) === "1";
@@ -198,6 +206,10 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
   const [workspaceModules, setWorkspaceModules] = useState<OrgWorkspaceModules>(DEFAULT_ORG_WORKSPACE_MODULES);
   const [workspaceAccessState, setWorkspaceAccessState] = useState<TenantHrPayrollAccessState | null>(null);
   const [isWorkspaceStateLoading, setIsWorkspaceStateLoading] = useState(false);
+  const [isFirstRunStateLoading, setIsFirstRunStateLoading] = useState(false);
+  const [isProfileCompleteState, setIsProfileCompleteState] = useState(true);
+  const [isOnboardingCompleteState, setIsOnboardingCompleteState] = useState<boolean | null>(null);
+  const firstRunRedirectRef = useRef<string | null>(null);
   const [menuUserInfo, setMenuUserInfo] = useState<MenuUserInfo>({
     name: "Pengguna",
     email: "-",
@@ -381,7 +393,7 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
           () => Promise.resolve(
             supabase
               .from("tenants")
-              .select("name, organization_type, logo_url")
+              .select("name, organization_type, logo_url, pic_name, pic_whatsapp, address")
               .eq("id", resolvedTenantId)
               .maybeSingle()
           ),
@@ -396,6 +408,13 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
             logo_url: tenantData.logo_url || null,
           };
           setTenant(nextTenant);
+          setIsProfileCompleteState(
+            isOrgProfileComplete({
+              pic_name: tenantData.pic_name,
+              pic_whatsapp: tenantData.pic_whatsapp,
+              address: tenantData.address,
+            }),
+          );
           persistOrgAccessCache({
             userId: user.id,
             tenantId: resolvedTenantId,
@@ -411,6 +430,7 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
             logo_url: null,
           };
           setTenant(fallbackTenant);
+          setIsProfileCompleteState(false);
           persistOrgAccessCache({
             userId: user.id,
             tenantId: resolvedTenantId,
@@ -562,6 +582,45 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
   }, [accessLevel, activeTenantId]);
 
   useEffect(() => {
+    if (!activeTenantId || accessLevel !== "admin") {
+      firstRunRedirectRef.current = null;
+      setIsFirstRunStateLoading(false);
+      setIsProfileCompleteState(true);
+      setIsOnboardingCompleteState(null);
+      return;
+    }
+
+    let cancelled = false;
+    setIsFirstRunStateLoading(true);
+    const loadFirstRunState = async () => {
+      try {
+        const onboardingCounts = await withTimeout(
+          Promise.resolve(fetchOrgOnboardingCounts(activeTenantId)),
+          ACCESS_CHECK_TIMEOUT_MS,
+          "Timeout membaca checklist setup awal organisasi",
+        );
+        if (!cancelled) {
+          setIsOnboardingCompleteState(isOrgOnboardingComplete(onboardingCounts));
+        }
+      } catch (error) {
+        reportError(error, "org.layout.fetch_first_run_state", { tenant_id: activeTenantId });
+        if (!cancelled) {
+          setIsOnboardingCompleteState(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsFirstRunStateLoading(false);
+        }
+      }
+    };
+
+    void loadFirstRunState();
+    return () => {
+      cancelled = true;
+    };
+  }, [accessLevel, activeTenantId]);
+
+  useEffect(() => {
     const handleWorkspaceVisibilityEvent = (event: Event) => {
       const detail = (event as CustomEvent<unknown>).detail;
       const parsedModules = parseOrgWorkspaceModulesSetting(detail);
@@ -570,6 +629,34 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
     window.addEventListener(ORG_WORKSPACE_MODULES_UPDATED_EVENT, handleWorkspaceVisibilityEvent);
     return () => window.removeEventListener(ORG_WORKSPACE_MODULES_UPDATED_EVENT, handleWorkspaceVisibilityEvent);
   }, []);
+
+  const firstRunRedirectTarget =
+    !isLoading && !isFirstRunStateLoading
+      ? resolveOrgFirstRunRedirect({
+          pathname: location.pathname,
+          accessLevel,
+          profileComplete: isProfileCompleteState,
+          onboardingComplete: isOnboardingCompleteState,
+        })
+      : null;
+
+  useEffect(() => {
+    if (!firstRunRedirectTarget) {
+      firstRunRedirectRef.current = null;
+      return;
+    }
+
+    const redirectKey = `${location.pathname}->${firstRunRedirectTarget}`;
+    if (firstRunRedirectRef.current === redirectKey) return;
+    firstRunRedirectRef.current = redirectKey;
+
+    toast.info(
+      firstRunRedirectTarget === "/org/profile/setup"
+        ? "Lengkapi profil organisasi dulu sebelum memakai dashboard admin."
+        : "Selesaikan 5 langkah setup awal dulu sebelum memakai dashboard utama.",
+    );
+    navigate(firstRunRedirectTarget, { replace: true });
+  }, [firstRunRedirectTarget, location.pathname, navigate]);
 
   useEffect(() => {
     if (isLoading || accessLevel !== "admin" || isWorkspaceStateLoading) return;
@@ -660,17 +747,22 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
     (accessLevel === "admin" || isOperatorAllowedPath(location.pathname));
   const shouldRenderFloatingWhatsApp =
     !isAdminOperatorSettingsPath && !isEmbeddedFromHrOverlay && !isEmbeddedFromPayrollOverlay;
+  const isFirstRunGateLoading = !isLoading && accessLevel === "admin" && isFirstRunStateLoading;
 
-  if (isLoading) {
+  if (isLoading || isFirstRunGateLoading) {
     if (isEmbeddedFromHrOverlay) {
       return (
-        <div className="flex min-h-screen items-center justify-center bg-background">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
-        </div>
+        <>
+          {organizationSeo}
+          <div className="flex min-h-screen items-center justify-center bg-background">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+          </div>
+        </>
       );
     }
     return (
       <SidebarProvider>
+        {organizationSeo}
         <div className="min-h-screen flex w-full">
           <OrganizationSidebar
             organizationName={tenant?.name}
@@ -718,42 +810,49 @@ export function OrganizationLayout({ children }: OrganizationLayoutProps) {
   if (isEmbeddedFromHrOverlay || isEmbeddedFromPayrollOverlay) {
     if (isWorkspaceBlockedPath || isOperatorBlockedPath) {
       return (
-        <div className="mx-auto flex min-h-screen max-w-xl items-center justify-center bg-background p-6">
-          <div className="w-full rounded-xl border border-amber-200 bg-amber-50/70 p-5">
-            <h2 className="text-base font-semibold text-amber-900">
-              {isWorkspaceBlockedPath ? "Workspace Dinonaktifkan" : "Akses Halaman Dibatasi"}
-            </h2>
-            <p className="mt-2 text-sm text-amber-800">
-              {isWorkspaceBlockedPath
-                ? "Workspace yang Anda buka sedang nonaktif untuk organisasi ini."
-                : location.pathname.startsWith("/org/hr")
-                  ? "Operator HR hanya dapat mengakses FAQ HR dan Tiket HR pada fase aktivasi awal."
-                  : "Role Operator hanya dapat mengakses modul operasional yang diizinkan."}
-            </p>
+        <>
+          {organizationSeo}
+          <div className="mx-auto flex min-h-screen max-w-xl items-center justify-center bg-background p-6">
+            <div className="w-full rounded-xl border border-amber-200 bg-amber-50/70 p-5">
+              <h2 className="text-base font-semibold text-amber-900">
+                {isWorkspaceBlockedPath ? "Workspace Dinonaktifkan" : "Akses Halaman Dibatasi"}
+              </h2>
+              <p className="mt-2 text-sm text-amber-800">
+                {isWorkspaceBlockedPath
+                  ? "Workspace yang Anda buka sedang nonaktif untuk organisasi ini."
+                  : location.pathname.startsWith("/org/hr")
+                    ? "Operator HR hanya dapat mengakses FAQ HR dan Tiket HR pada fase aktivasi awal."
+                    : "Role Operator hanya dapat mengakses modul operasional yang diizinkan."}
+              </p>
+            </div>
           </div>
-        </div>
+        </>
       );
     }
 
     return (
-      <div className="min-h-screen bg-background p-6">
-        {currentWorkspaceScope && currentWorkspaceStage && currentWorkspaceMode ? (
-          <div className="mb-4">
-            <WorkspaceAccessStatusBanner
-              scope={currentWorkspaceScope}
-              stage={currentWorkspaceStage}
-              mode={currentWorkspaceMode}
-              onOpenBilling={() => navigate("/org/billing")}
-            />
-          </div>
-        ) : null}
-        <WorkspaceReadonlyShield active={isWorkspaceReadonly}>{children}</WorkspaceReadonlyShield>
-      </div>
+      <>
+        {organizationSeo}
+        <div className="min-h-screen bg-background p-6">
+          {currentWorkspaceScope && currentWorkspaceStage && currentWorkspaceMode ? (
+            <div className="mb-4">
+              <WorkspaceAccessStatusBanner
+                scope={currentWorkspaceScope}
+                stage={currentWorkspaceStage}
+                mode={currentWorkspaceMode}
+                onOpenBilling={() => navigate("/org/billing")}
+              />
+            </div>
+          ) : null}
+          <WorkspaceReadonlyShield active={isWorkspaceReadonly}>{children}</WorkspaceReadonlyShield>
+        </div>
+      </>
     );
   }
 
   return (
     <SidebarProvider>
+      {organizationSeo}
       <div className="min-h-screen flex w-full">
           <OrganizationSidebar 
             organizationName={tenant?.name} 

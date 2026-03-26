@@ -1,11 +1,19 @@
 import { test, expect, type Page } from "@playwright/test";
-import { loginAsOrgAdmin, waitForStable } from "./helpers/orgAuth";
+import { loginAsPayrollOrgAdmin, skipIfOrgFirstRunFlowActive, waitForStable } from "./helpers/orgAuth";
 import { ensureOrgWorkspaceEnabled, openOrgWorkspaceWithRetry } from "./helpers/orgWorkspace";
+
+const loginAsReadyPayrollOrgAdmin = async (page: Page) => {
+  await loginAsPayrollOrgAdmin(page);
+  await skipIfOrgFirstRunFlowActive(
+    page,
+    "Tenant payroll smoke masih berada di flow setup awal sehingga suite HR/Payroll belum bisa dijalankan.",
+  );
+};
 
 test.describe.serial("Org HR/Payroll Smoke", () => {
   test("halaman HR workspace tambahan dapat dibuka", async ({ page }) => {
     test.setTimeout(120_000);
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsReadyPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace HR");
 
     const pages = [
@@ -24,7 +32,7 @@ test.describe.serial("Org HR/Payroll Smoke", () => {
   });
 
   test("halaman HR Contracts dapat dibuka + search keyword spesial aman", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsReadyPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace HR");
 
     await page.goto("/org/hr/contracts", { waitUntil: "domcontentloaded" });
@@ -39,7 +47,7 @@ test.describe.serial("Org HR/Payroll Smoke", () => {
   });
 
   test("halaman Payroll Policies dapat dibuka + search keyword spesial aman", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsReadyPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace Payroll");
 
     await page.goto("/org/payroll/policies", { waitUntil: "domcontentloaded" });
@@ -54,7 +62,7 @@ test.describe.serial("Org HR/Payroll Smoke", () => {
   });
 
   test("halaman Payroll Periods dapat dibuka + search keyword spesial aman", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsReadyPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace Payroll");
 
     await page.goto("/org/payroll/periods", { waitUntil: "domcontentloaded" });
@@ -69,7 +77,7 @@ test.describe.serial("Org HR/Payroll Smoke", () => {
   });
 
   test("halaman Payroll Validation dapat dibuka + search keyword spesial aman", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsReadyPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace Payroll");
 
     await page.goto("/org/payroll/validation", { waitUntil: "domcontentloaded" });
@@ -85,7 +93,7 @@ test.describe.serial("Org HR/Payroll Smoke", () => {
 
   test("halaman blueprint Payroll dapat dibuka", async ({ page }) => {
     test.setTimeout(120_000);
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsReadyPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace Payroll");
 
     const pages = [
@@ -112,7 +120,7 @@ test.describe.serial("Org HR/Payroll Smoke", () => {
   });
 
   test("halaman Dokumen HR aman untuk filter + search keyword spesial", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsReadyPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace HR");
 
     await page.goto("/org/hr/documents", { waitUntil: "domcontentloaded" });
@@ -128,7 +136,7 @@ test.describe.serial("Org HR/Payroll Smoke", () => {
   });
 
   test("halaman Laporan HR menampilkan statistik kontrak jatuh tempo", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsReadyPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace HR");
 
     await page.goto("/org/hr/reports", { waitUntil: "domcontentloaded" });
@@ -140,7 +148,7 @@ test.describe.serial("Org HR/Payroll Smoke", () => {
   });
 
   test("halaman Analitik Kehadiran HR menampilkan filter tanggal dan export", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsReadyPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace HR");
 
     await page.goto("/org/hr/attendance-insights", { waitUntil: "domcontentloaded" });
@@ -156,7 +164,7 @@ test.describe.serial("Org HR/Payroll Smoke", () => {
   });
 
   test("halaman Tiket HR menampilkan list tiket dan tombol buat tiket", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsReadyPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace HR");
 
     await page.goto("/org/hr/help/tickets", { waitUntil: "domcontentloaded" });
@@ -167,7 +175,7 @@ test.describe.serial("Org HR/Payroll Smoke", () => {
   });
 
   test("halaman Tiket HR mendukung thread komentar + audit dasar", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsReadyPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace HR");
 
     await page.goto("/org/hr/help/tickets", { waitUntil: "domcontentloaded" });

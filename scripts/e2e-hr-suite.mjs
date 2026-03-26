@@ -13,6 +13,7 @@ export const parseArgs = (argv) => {
     grep: "",
     doctor: false,
     dryRun: false,
+    accountKey: "",
     passthrough: [],
   };
 
@@ -49,6 +50,18 @@ export const parseArgs = (argv) => {
     }
     if (arg === "--dry-run") {
       parsed.dryRun = true;
+      continue;
+    }
+    if (arg.startsWith("--account-key=")) {
+      parsed.accountKey = arg.slice("--account-key=".length).trim();
+      continue;
+    }
+    if (arg === "--account-key") {
+      const next = (argv[i + 1] || "").trim();
+      if (next && !next.startsWith("--")) {
+        parsed.accountKey = next;
+        i += 1;
+      }
       continue;
     }
     parsed.passthrough.push(arg);
@@ -155,6 +168,7 @@ export const resolveRunPlan = (argv, env = process.env) => {
     grep: args.grep,
     doctor: args.doctor,
     dryRun: args.dryRun,
+    accountKey: args.accountKey,
     passthrough: args.passthrough,
   };
 };
@@ -173,6 +187,7 @@ async function main() {
           headed: plan.headed,
           grep: plan.grep,
           doctor: plan.doctor,
+          accountKey: plan.accountKey,
           passthrough: plan.passthrough,
         },
         null,
@@ -199,6 +214,11 @@ async function main() {
   const code = await run("npx", pwArgs, {
     ...process.env,
     PLAYWRIGHT_HTML_OUTPUT_DIR: plan.reportDir,
+    ...(plan.accountKey
+      ? {
+          PAYROLL_ACCOUNT_KEY: plan.accountKey,
+        }
+      : {}),
   });
   process.exitCode = code;
 }

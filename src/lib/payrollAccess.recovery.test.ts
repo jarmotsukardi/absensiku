@@ -4,6 +4,10 @@ const {
   getUserMock,
   roleEqMock,
   roleSelectMock,
+  assignmentActiveEqMock,
+  assignmentUserEqMock,
+  assignmentTenantEqMock,
+  assignmentSelectMock,
   fromMock,
   resolveOrgTenantIdMock,
   fetchTenantOrgWorkspaceModulesMock,
@@ -15,9 +19,16 @@ const {
   const getUserMock = vi.fn();
   const roleEqMock = vi.fn();
   const roleSelectMock = vi.fn(() => ({ eq: roleEqMock }));
+  const assignmentActiveEqMock = vi.fn();
+  const assignmentUserEqMock = vi.fn(() => ({ eq: assignmentActiveEqMock }));
+  const assignmentTenantEqMock = vi.fn(() => ({ eq: assignmentUserEqMock }));
+  const assignmentSelectMock = vi.fn(() => ({ eq: assignmentTenantEqMock }));
   const fromMock = vi.fn((table: string) => {
     if (table === "user_roles") {
       return { select: roleSelectMock };
+    }
+    if (table === "payroll_role_assignments") {
+      return { select: assignmentSelectMock };
     }
     throw new Error(`Unexpected table: ${table}`);
   });
@@ -26,6 +37,10 @@ const {
     getUserMock,
     roleEqMock,
     roleSelectMock,
+    assignmentActiveEqMock,
+    assignmentUserEqMock,
+    assignmentTenantEqMock,
+    assignmentSelectMock,
     fromMock,
     resolveOrgTenantIdMock: vi.fn(),
     fetchTenantOrgWorkspaceModulesMock: vi.fn(),
@@ -77,6 +92,7 @@ describe("payrollAccess recovery gate", () => {
     vi.clearAllMocks();
     getUserMock.mockResolvedValue({ data: { user: { id: "user-1" } } });
     roleEqMock.mockResolvedValue({ data: [{ role: "admin_instansi" }], error: null });
+    assignmentActiveEqMock.mockResolvedValue({ data: [], error: null });
     resolveOrgTenantIdMock.mockResolvedValue("tenant-1");
     fetchTenantOrgWorkspaceModulesMock.mockResolvedValue({ modules: { payroll: true } });
     fetchTenantHrPayrollAccessStateMock.mockRejectedValue(
@@ -102,5 +118,67 @@ describe("payrollAccess recovery gate", () => {
     expect(access.allowed).toBe(true);
     expect(access.redirectTo).toBeNull();
     expect(access.reason).toBeNull();
+  });
+
+  test("tidak self-redirect saat home payroll ditolak di strict mode tanpa assignment", async () => {
+    fetchTenantHrPayrollAccessStateMock.mockResolvedValue({
+      stage: "paid_active",
+      subscriptionStatus: "active",
+      accessSetting: {
+        paymentCommitted: true,
+        committedAt: "2026-03-26T00:00:00.000Z",
+        note: null,
+      },
+      readiness: {
+        onboardingReady: true,
+        activeAdminReady: true,
+        employeesReady: true,
+        attendanceReady: true,
+        onboardingCounts: {} as never,
+        adminCount: 1,
+        employeeCount: 5,
+        attendanceCount: 10,
+      },
+      hrMode: "full",
+      payrollMode: "full",
+    });
+    fetchTenantPayrollAccessModeMock.mockResolvedValue("strict");
+
+    const access = await resolvePayrollRouteAccess("payroll.workspace.view");
+
+    expect(access.allowed).toBe(false);
+    expect(access.redirectTo).toBeNull();
+    expect(access.reason).toBe("Tidak punya izin payroll.workspace.view");
+  });
+
+  test("tetap redirect ke home payroll untuk route payroll lain yang ditolak", async () => {
+    fetchTenantHrPayrollAccessStateMock.mockResolvedValue({
+      stage: "paid_active",
+      subscriptionStatus: "active",
+      accessSetting: {
+        paymentCommitted: true,
+        committedAt: "2026-03-26T00:00:00.000Z",
+        note: null,
+      },
+      readiness: {
+        onboardingReady: true,
+        activeAdminReady: true,
+        employeesReady: true,
+        attendanceReady: true,
+        onboardingCounts: {} as never,
+        adminCount: 1,
+        employeeCount: 5,
+        attendanceCount: 10,
+      },
+      hrMode: "full",
+      payrollMode: "full",
+    });
+    fetchTenantPayrollAccessModeMock.mockResolvedValue("strict");
+
+    const access = await resolvePayrollRouteAccess("payroll.run.manage");
+
+    expect(access.allowed).toBe(false);
+    expect(access.redirectTo).toBe("/org/payroll");
+    expect(access.reason).toBe("Tidak punya izin payroll.run.manage");
   });
 });

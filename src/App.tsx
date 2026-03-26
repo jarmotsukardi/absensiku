@@ -12,6 +12,7 @@ import { AndroidBackButtonHandler } from "@/hooks/useAndroidBackButton";
 import { PayrollRouteGuard } from "@/components/org/payroll/PayrollRouteGuard";
 import { OrgHRRouteGuard } from "@/components/org/hr/OrgHRRouteGuard";
 import { AndroidSessionSync } from "@/components/employee/AndroidSessionSync";
+import { PrivatePageSeo } from "@/components/seo/PrivatePageSeo";
 
 const queryClient = new QueryClient();
 const Index = lazy(() => import("./pages/Index"));
@@ -214,6 +215,13 @@ const withHrGuard = (routePath: string, element: ReactNode) => (
   <OrgHRRouteGuard routePath={routePath}>{element}</OrgHRRouteGuard>
 );
 
+const withPrivateSeo = (title: string, element: ReactNode) => (
+  <>
+    <PrivatePageSeo title={title} />
+    {element}
+  </>
+);
+
 const App = () => (
   <HelmetProvider>
     <QueryClientProvider client={queryClient}>
@@ -237,10 +245,10 @@ const App = () => (
               <Route path="/download-apk" element={<Navigate to="/download" replace />} />
               <Route path="/about" element={<About />} />
               <Route path="/privacy-policy" element={<PrivacyPolicy />} />
-              <Route path="/auth" element={<Auth />} />
-              <Route path="/auth/forgot-password" element={<ForgotPassword />} />
-              <Route path="/auth/reset-password" element={<ResetPassword />} />
-              <Route path="/dashboard" element={<EmployeeDashboardReadonly />} />
+              <Route path="/auth" element={withPrivateSeo("Login Pegawai | AbsensiKu", <Auth />)} />
+              <Route path="/auth/forgot-password" element={withPrivateSeo("Lupa Password | AbsensiKu", <ForgotPassword />)} />
+              <Route path="/auth/reset-password" element={withPrivateSeo("Reset Password | AbsensiKu", <ResetPassword />)} />
+              <Route path="/dashboard" element={withPrivateSeo("Dashboard Pegawai | AbsensiKu", <EmployeeDashboardReadonly />)} />
               <Route path="/dashboard/profile" element={<Navigate to="/dashboard?tab=profile" replace />} />
               <Route path="/dashboard/help" element={<Navigate to="/dashboard?tab=help" replace />} />
               <Route path="/dashboard/attendance-history" element={<Navigate to="/dashboard?tab=history" replace />} />
@@ -251,7 +259,7 @@ const App = () => (
               <Route path="/attendance-history" element={<Navigate to="/dashboard?tab=history" replace />} />
 
               {/* Super Admin Routes */}
-              <Route path="/admin/login" element={<SuperAdminLogin />} />
+              <Route path="/admin/login" element={withPrivateSeo("Admin Login | AbsensiKu", <SuperAdminLogin />)} />
               <Route path="/admin" element={<AdminDashboard />} />
               <Route path="/admin/dashboard" element={<AdminDashboard />} />
               <Route path="/admin/organizations" element={<Organizations />} />
@@ -330,7 +338,10 @@ const App = () => (
               <Route path="/admin/stress-test" element={<AttendanceStressTest />} />
 
               {/* Organization Admin Routes */}
-              <Route path="/org/login" element={<OrgLogin />} />
+              <Route
+                path="/org/login"
+                element={withPrivateSeo("Akses Organisasi | AbsensiKu", <OrgLogin />)}
+              />
               <Route path="/org" element={<OrgDashboard />} />
               <Route path="/org/dashboard" element={<Navigate to="/org" replace />} />
               <Route path="/org/onboarding" element={<OrgOnboardingSetup />} />
@@ -493,13 +504,31 @@ const App = () => (
               <Route path="/org/audit-log" element={<OrgAuditLog />} />
               {/* Employee Routes */}
               <Route path="/employee" element={<Navigate to="/employee/login" replace />} />
-              <Route path="/employee/login" element={<EmployeeLogin />} />
-              <Route path="/employee/native-bootstrap" element={<EmployeeNativeBootstrap />} />
-              <Route path="/employee/dashboard" element={<EmployeeDashboardNew />} />
-              <Route path="/employee/profile" element={<EmployeeProfile />} />
-              <Route path="/employee/help" element={<EmployeeHelp />} />
-              <Route path="/employee/billing" element={<EmployeeBilling />} />
-              <Route path="/employee/reset-password" element={<ResetPassword />} />
+              <Route path="/employee/login" element={withPrivateSeo("Akses Pegawai | AbsensiKu", <EmployeeLogin />)} />
+              <Route
+                path="/employee/native-bootstrap"
+                element={withPrivateSeo("Bootstrap Pegawai | AbsensiKu", <EmployeeNativeBootstrap />)}
+              />
+              <Route
+                path="/employee/dashboard"
+                element={withPrivateSeo("Dashboard Pegawai | AbsensiKu", <EmployeeDashboardNew />)}
+              />
+              <Route
+                path="/employee/profile"
+                element={withPrivateSeo("Profil Pegawai | AbsensiKu", <EmployeeProfile />)}
+              />
+              <Route
+                path="/employee/help"
+                element={withPrivateSeo("Bantuan Pegawai | AbsensiKu", <EmployeeHelp />)}
+              />
+              <Route
+                path="/employee/billing"
+                element={withPrivateSeo("Billing Pegawai | AbsensiKu", <EmployeeBilling />)}
+              />
+              <Route
+                path="/employee/reset-password"
+                element={withPrivateSeo("Reset Password | AbsensiKu", <ResetPassword />)}
+              />
 
               {/* Organization Landing Page */}
               <Route path="/landing/:code" element={<OrganizationLanding />} />

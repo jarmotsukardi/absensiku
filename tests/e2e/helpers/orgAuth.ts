@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { getRoleAccounts, solveMathExpression, type RoleAccount, type RoleKey } from "./testAccounts";
+import { getNamedAccount, getRoleAccounts, solveMathExpression, type RoleAccount, type RoleKey } from "./testAccounts";
+import { prioritizeReadyOrgRoles } from "./orgAccountPriority";
 
 export const waitForStable = async (page: Page) => {
   try {
@@ -12,34 +13,59 @@ export const waitForStable = async (page: Page) => {
 
 export const toYmd = (date: Date) => date.toISOString().slice(0, 10);
 
+const ORG_LOGIN_PATHNAME = "/org/login";
+const ORG_FIRST_RUN_PATHS = new Set(["/org/profile/setup", "/org/onboarding"]);
+
+const getOrgPathname = (page: Page) => new URL(page.url()).pathname;
+
+export const isOrgFirstRunPath = (pathname: string) => ORG_FIRST_RUN_PATHS.has(pathname);
+
+export const waitForOrgArea = async (page: Page) => {
+  await expect.poll(() => getOrgPathname(page), { timeout: 20_000 }).toMatch(/^\/org(?:\/.*)?$/);
+  await expect.poll(() => getOrgPathname(page), { timeout: 20_000 }).not.toBe(ORG_LOGIN_PATHNAME);
+  return getOrgPathname(page);
+};
+
+export const skipIfOrgFirstRunFlowActive = async (page: Page, message: string) => {
+  const pathname = getOrgPathname(page);
+  test.skip(
+    isOrgFirstRunPath(pathname),
+    `${message} Path aktif: ${pathname}`,
+  );
+};
+
+const loginWithOrgAccount = async (page: Page, account: RoleAccount) => {
+  await page.goto("/org/login", { waitUntil: "domcontentloaded" });
+  await waitForStable(page);
+
+  await page.fill("#email", account.email);
+  await page.fill("#password", account.password);
+
+  const fallbackMathLabel =
+    (await page
+      .locator("label")
+      .filter({ hasText: /Captcha: Berapa hasil dari|Verifikasi Captcha/i })
+      .first()
+      .textContent()
+      .catch(() => "")) || "";
+  const answerFromMath = solveMathExpression(fallbackMathLabel);
+  const captchaText = await page.$$eval("div.font-mono.text-xl.tracking-widest span", (spans) =>
+    spans.map((span) => (span.textContent || "").trim()).join(""),
+  );
+  const captchaAnswer = (answerFromMath || captchaText).trim();
+  expect(captchaAnswer.length).toBeGreaterThanOrEqual(1);
+  await page.fill("#captcha-input", captchaAnswer);
+
+  await expect(page.getByRole("button", { name: "Masuk" })).toBeEnabled();
+  await page.getByRole("button", { name: "Masuk" }).click();
+};
+
 export const loginAsOrgUser = async (page: Page, roles: RoleKey[]) => {
   const candidates = await getRoleAccounts(roles);
   test.skip(candidates.length === 0, `Kredensial ${roles.join(" / ")} belum diisi di ops/test-accounts.local.json`);
 
   for (const candidate of candidates) {
-    await page.goto("/org/login", { waitUntil: "domcontentloaded" });
-    await waitForStable(page);
-
-    await page.fill("#email", candidate.account.email);
-    await page.fill("#password", candidate.account.password);
-
-    const fallbackMathLabel =
-      (await page
-        .locator("label")
-        .filter({ hasText: /Captcha: Berapa hasil dari|Verifikasi Captcha/i })
-        .first()
-        .textContent()
-        .catch(() => "")) || "";
-    const answerFromMath = solveMathExpression(fallbackMathLabel);
-    const captchaText = await page.$$eval("div.font-mono.text-xl.tracking-widest span", (spans) =>
-      spans.map((span) => (span.textContent || "").trim()).join(""),
-    );
-    const captchaAnswer = (answerFromMath || captchaText).trim();
-    expect(captchaAnswer.length).toBeGreaterThanOrEqual(1);
-    await page.fill("#captcha-input", captchaAnswer);
-
-    await expect(page.getByRole("button", { name: "Masuk" })).toBeEnabled();
-    await page.getByRole("button", { name: "Masuk" }).click();
+    await loginWithOrgAccount(page, candidate.account);
 
     try {
       await expect(page).not.toHaveURL(/\/org\/login(?:\?|$)/, { timeout: 20_000 });
@@ -52,9 +78,65 @@ export const loginAsOrgUser = async (page: Page, roles: RoleKey[]) => {
   throw new Error(`Semua kredensial org gagal login untuk role: ${roles.join(", ")}`);
 };
 
+export const loginAsNamedOrgUser = async (page: Page, accountKey: string) => {
+  const normalizedAccountKey = accountKey.trim();
+  test.skip(!normalizedAccountKey, "PAYROLL_ACCOUNT_KEY atau accountKey belum diisi.");
+
+  const account = await getNamedAccount(normalizedAccountKey);
+  test.skip(!account, `Akun "${normalizedAccountKey}" belum valid di ops/test-accounts.local.json.`);
+
+  await loginWithOrgAccount(page, account!);
+  await expect(page).not.toHaveURL(/\/org\/login(?:\?|$)/, { timeout: 20_000 });
+  return account!;
+};
+
+const ensureReadyOrgArea = async (page: Page, sourceLabel: string) => {
+  const pathname = await waitForOrgArea(page);
+  if (isOrgFirstRunPath(pathname)) {
+    throw new Error(`${sourceLabel} masih mengarah ke flow setup awal (${pathname}). Gunakan akun tenant yang sudah siap pakai.`);
+  }
+  return pathname;
+};
+
 export const loginAsOrgAdmin = async (page: Page, roles: RoleKey[]) => {
-  const creds = await loginAsOrgUser(page, roles);
-  await expect(page).toHaveURL(/\/org(?!\/login)/, { timeout: 20_000 });
+  const namedAccountKey = process.env.ORG_READY_ACCOUNT_KEY?.trim();
+  if (namedAccountKey) {
+    const creds = await loginAsNamedOrgUser(page, namedAccountKey);
+    await ensureReadyOrgArea(page, `ORG_READY_ACCOUNT_KEY="${namedAccountKey}"`);
+    return creds;
+  }
+
+  const creds = await loginAsOrgUser(page, prioritizeReadyOrgRoles(roles));
+  await waitForOrgArea(page);
+  return creds;
+};
+
+export const loginAsPayrollOrgAdmin = async (page: Page) => {
+  const namedAccountKey = process.env.PAYROLL_ACCOUNT_KEY?.trim() || process.env.ORG_READY_ACCOUNT_KEY?.trim();
+  const creds = namedAccountKey
+    ? await loginAsNamedOrgUser(page, namedAccountKey)
+    : await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+  const sourceLabel = process.env.PAYROLL_ACCOUNT_KEY?.trim()
+    ? `PAYROLL_ACCOUNT_KEY="${namedAccountKey}"`
+    : process.env.ORG_READY_ACCOUNT_KEY?.trim()
+      ? `ORG_READY_ACCOUNT_KEY="${namedAccountKey}"`
+      : "fallback org admin payroll";
+  await ensureReadyOrgArea(page, sourceLabel);
+  return creds;
+};
+
+export const loginAsFirstRunOrgAdmin = async (page: Page) => {
+  const namedAccountKey = process.env.ORG_FIRST_RUN_ACCOUNT_KEY?.trim();
+  test.skip(!namedAccountKey, "ORG_FIRST_RUN_ACCOUNT_KEY belum diisi.");
+
+  const creds = await loginAsNamedOrgUser(page, namedAccountKey!);
+  await waitForOrgArea(page);
+  await expect
+    .poll(() => isOrgFirstRunPath(getOrgPathname(page)), {
+      timeout: 20_000,
+      message: "Akun dedicated first-run tidak berpindah ke langkah setup awal yang diharapkan.",
+    })
+    .toBe(true);
   return creds;
 };
 

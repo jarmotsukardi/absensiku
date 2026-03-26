@@ -17,6 +17,7 @@ export type RoleCreds = {
 };
 
 export type RoleAccount = RoleCreds & {
+  role?: RoleKey;
   tenant_id?: string;
   tenant_name?: string;
   employee_id?: string;
@@ -26,7 +27,10 @@ export type RoleAccount = RoleCreds & {
 
 type ScenarioShape = Partial<Record<ScenarioRoleKey, Partial<RoleCreds>>>;
 
+type ExtraAccountsShape = Record<string, Partial<RoleAccount>>;
+
 type AccountsShape = Partial<Record<RoleKey, Partial<RoleAccount>>> & {
+  extra_accounts?: ExtraAccountsShape;
   scenarios?: Record<string, ScenarioShape>;
 };
 
@@ -59,6 +63,7 @@ const normalizeRoleAccount = (value: Partial<RoleAccount> | undefined | null): R
   return {
     email,
     password,
+    role: typeof value.role === "string" ? (value.role.trim() as RoleKey) : undefined,
     tenant_id: typeof value.tenant_id === "string" ? value.tenant_id.trim() : undefined,
     tenant_name: typeof value.tenant_name === "string" ? value.tenant_name.trim() : undefined,
     employee_id: typeof value.employee_id === "string" ? value.employee_id.trim() : undefined,
@@ -81,6 +86,11 @@ export const getRoleCreds = async (role: RoleKey): Promise<RoleCreds | null> => 
 export const getRoleAccount = async (role: RoleKey): Promise<RoleAccount | null> => {
   const accounts = await readTestAccounts();
   return normalizeRoleAccount(accounts?.[role]);
+};
+
+export const getNamedAccount = async (accountKey: string): Promise<RoleAccount | null> => {
+  const accounts = await readTestAccounts();
+  return normalizeRoleAccount(accounts?.[accountKey as RoleKey] || accounts?.extra_accounts?.[accountKey]);
 };
 
 export const getRoleCredsWithFallback = async (roles: RoleKey[]): Promise<RoleCreds | null> => {

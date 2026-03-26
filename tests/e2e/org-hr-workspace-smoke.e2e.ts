@@ -1,12 +1,20 @@
 import { test, expect } from "@playwright/test";
 import { loginAsEmployee } from "./helpers/employeeAuth";
-import { loginAsOrgAdmin, loginAsOrgUser, waitForStable } from "./helpers/orgAuth";
+import { loginAsOrgAdmin, loginAsOrgUser, skipIfOrgFirstRunFlowActive, waitForStable } from "./helpers/orgAuth";
 import { openOrgWorkspaceWithRetry } from "./helpers/orgWorkspace";
+
+const loginAsReadyOrgAdmin = async (page: Parameters<typeof loginAsOrgAdmin>[0]) => {
+  await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+  await skipIfOrgFirstRunFlowActive(
+    page,
+    "Tenant org admin uji masih berada di flow setup awal sehingga smoke workspace HR belum bisa dijalankan.",
+  );
+};
 
 test.describe.serial("Org HR Workspace Smoke", () => {
   test("halaman HR workspace utama dapat dibuka", async ({ page }) => {
     test.setTimeout(120_000);
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsReadyOrgAdmin(page);
     await openOrgWorkspaceWithRetry(page, "/org/hr");
     await expect(page).toHaveURL(/\/org\/hr(?:\?|$)/, { timeout: 20_000 });
 
@@ -37,7 +45,7 @@ test.describe.serial("Org HR Workspace Smoke", () => {
   });
 
   test("halaman HR Contracts dapat dibuka + search keyword spesial aman", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsReadyOrgAdmin(page);
 
     await page.goto("/org/hr/contracts", { waitUntil: "domcontentloaded" });
     await waitForStable(page);
@@ -51,7 +59,7 @@ test.describe.serial("Org HR Workspace Smoke", () => {
   });
 
   test("halaman Pengaturan HR menampilkan kontrol area kerja dan tata kelola tenant", async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsReadyOrgAdmin(page);
     await page.goto("/org/hr/settings", { waitUntil: "domcontentloaded" });
     await waitForStable(page);
     await expect(page.getByRole("heading", { name: "Pengaturan HR", exact: true })).toBeVisible();

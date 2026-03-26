@@ -29,6 +29,12 @@ Quality gate cepat:
 npm run qa:fast
 ```
 
+Audit risiko permission payroll:
+
+```bash
+npm run ops:payroll:permission-audit
+```
+
 FAQ offer:
 
 ```bash

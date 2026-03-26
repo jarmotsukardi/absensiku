@@ -217,7 +217,7 @@ export function OrgRegistrationForm({ rateLimit }: OrgRegistrationFormProps) {
       setShowSuccess(true);
       
       setTimeout(() => {
-        navigate("/org", { replace: true });
+        navigate("/org/profile/setup", { replace: true });
       }, 3000);
     } catch (error) {
       toast({ variant: "destructive", title: "Terjadi Kesalahan", description: "Tidak dapat menghubungi server." });
@@ -259,7 +259,8 @@ export function OrgRegistrationForm({ rateLimit }: OrgRegistrationFormProps) {
             </Button>
           </CardContent>
         </Card>
-        <p className="text-xs text-muted-foreground">Mengalihkan ke dashboard dalam 3 detik...</p>
+        <p className="text-xs text-muted-foreground">Mengalihkan ke setup profil organisasi dalam 3 detik...</p>
+        <p className="text-xs text-muted-foreground">Langkah berikutnya: lengkapi profil organisasi, lalu selesaikan setup awal fondasi absensi.</p>
       </div>
     );
   }

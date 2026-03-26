@@ -43,5 +43,31 @@
     "tenant_id": "",
     "android_id": "",
     "notes": "Role: pegawai tenant billing terpusat"
+  },
+  "extra_accounts": {
+    "contoh_org_admin_tenant_tambahan": {
+      "role": "org_admin",
+      "email": "org-admin-extra@example.com",
+      "password": "",
+      "tenant_id": "",
+      "tenant_name": "",
+      "notes": "Isi saat perlu smoke tenant non-default tanpa menimpa akun default."
+    },
+    "contoh_org_admin_first_run": {
+      "role": "org_admin",
+      "email": "org-admin-first-run@example.com",
+      "password": "",
+      "tenant_id": "",
+      "tenant_name": "",
+      "notes": "Khusus tenant uji yang sengaja masih berada di flow /org/profile/setup atau /org/onboarding."
+    },
+    "contoh_org_admin_ready": {
+      "role": "org_admin",
+      "email": "org-admin-ready@example.com",
+      "password": "",
+      "tenant_id": "",
+      "tenant_name": "",
+      "notes": "Opsional untuk ORG_READY_ACCOUNT_KEY jika ingin memaksa semua suite org memakai tenant yang sudah lolos first-run."
+    }
   }
 }

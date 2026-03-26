@@ -4,13 +4,14 @@ import { parseArgs, resolveRunPlan } from "./e2e-hr-suite.mjs";
 
 describe("e2e-hr-suite parser", () => {
   it("parses flags and passthrough arguments", () => {
-    const parsed = parseArgs(["--suite", "smoke", "--grep", "Payroll Policies", "--headed", "--doctor", "--dry-run", "--list"]);
+    const parsed = parseArgs(["--suite", "smoke", "--grep", "Payroll Policies", "--headed", "--doctor", "--dry-run", "--account-key", "tenant_extra", "--list"]);
     expect(parsed).toMatchObject({
       suite: "smoke",
       grep: "Payroll Policies",
       headed: true,
       doctor: true,
       dryRun: true,
+      accountKey: "tenant_extra",
       passthrough: ["--list"],
     });
   });
@@ -48,10 +49,11 @@ describe("e2e-hr-suite parser", () => {
   });
 
   it("supports explicit payroll smoke alias", () => {
-    const plan = resolveRunPlan(["--suite=payroll-smoke"], {});
+    const plan = resolveRunPlan(["--suite=payroll-smoke", "--account-key=tenant_payroll"], {});
     expect(plan.suite).toBe("payroll-smoke");
     expect(plan.reportDir).toBe("artifacts/playwright-report-hr-payroll-smoke");
     expect(plan.files).toEqual(["tests/e2e/org-hr-payroll-smoke.e2e.ts"]);
+    expect(plan.accountKey).toBe("tenant_payroll");
   });
 
   it("supports explicit payroll crud alias", () => {

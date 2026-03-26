@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { chromium } from "playwright";
-import { ensureRoleAccount, readTestAccounts } from "./lib/test-accounts.mjs";
+import { ensureNamedAccount, ensureRoleAccount, readTestAccounts } from "./lib/test-accounts.mjs";
 
 const BASE_URL = process.env.DASHBOARD_BASE_URL || "http://127.0.0.1:5173";
 const RECORD_FILE = path.join(process.cwd(), "ops", "test-runs.local.jsonl");
@@ -34,6 +34,14 @@ const ROLE_CONFIG = {
     successUrlPrefix: "/org",
     captchaType: "simple",
   },
+  org_operator: {
+    loginPath: "/org/login",
+    emailSelector: "#email",
+    passwordSelector: "#password",
+    submitLabel: "Masuk",
+    successUrlPrefix: "/org",
+    captchaType: "simple",
+  },
   employee_centralized: {
     loginPath: "/employee/login",
     emailSelector: "#email",
@@ -53,10 +61,18 @@ const ROLE_CONFIG = {
 };
 
 function parseRolesArg() {
+  const namedAccountArg = process.argv.find((arg) => arg.startsWith("--account-key="));
+  if (namedAccountArg) return [];
   const roleArg = process.argv.find((arg) => arg.startsWith("--role="));
   const raw = roleArg ? roleArg.split("=")[1] : "all";
   if (!raw || raw === "all") return ["employee", "org_admin", "org_admin_centralized", "superadmin"];
   return raw.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function parseNamedAccountArg() {
+  const accountArg = process.argv.find((arg) => arg.startsWith("--account-key="));
+  const raw = accountArg ? accountArg.split("=")[1] : "";
+  return raw.trim();
 }
 
 function evalMathCaptcha(expr) {
@@ -106,6 +122,12 @@ async function runRoleLogin(page, role, accounts) {
   const config = ROLE_CONFIG[role];
   if (!config) throw new Error(`Role tidak didukung: ${role}`);
   const account = ensureRoleAccount(accounts, role);
+  return runLoginWithAccount(page, role, account);
+}
+
+async function runLoginWithAccount(page, role, account) {
+  const config = ROLE_CONFIG[role];
+  if (!config) throw new Error(`Role tidak didukung: ${role}`);
   const url = `${BASE_URL}${config.loginPath}`;
 
   await page.goto(url, { waitUntil: "domcontentloaded" });
@@ -185,20 +207,34 @@ async function main() {
   const runId = `LOGIN-${Date.now()}`;
   const startedAt = new Date().toISOString();
   const roles = parseRolesArg();
+  const namedAccountKey = parseNamedAccountArg();
   const accounts = await readTestAccounts();
   const browser = await chromium.launch({ headless: true });
   const results = [];
 
   try {
-    for (const role of roles) {
+    const executionList = namedAccountKey
+      ? [{ mode: "named", accountKey: namedAccountKey }]
+      : roles.map((role) => ({ mode: "role", role }));
+
+    for (const item of executionList) {
       const context = await browser.newContext();
       const page = await context.newPage();
       try {
-        const roleResult = await runRoleLogin(page, role, accounts);
-        results.push(roleResult);
+        if (item.mode === "named") {
+          const account = ensureNamedAccount(accounts, item.accountKey);
+          const roleResult = await runLoginWithAccount(page, account.role, account);
+          results.push({
+            ...roleResult,
+            account_key: item.accountKey,
+          });
+        } else {
+          const roleResult = await runRoleLogin(page, item.role, accounts);
+          results.push(roleResult);
+        }
       } catch (error) {
         results.push({
-          role,
+          role: item.mode === "named" ? item.accountKey : item.role,
           success: false,
           error: error instanceof Error ? error.message : String(error),
           appLogRefs: [],
@@ -235,7 +271,7 @@ async function main() {
     started_at: startedAt,
     finished_at: new Date().toISOString(),
     base_url: BASE_URL,
-    roles,
+    roles: namedAccountKey ? [namedAccountKey] : roles,
     results,
   };
   await appendRecord(record);

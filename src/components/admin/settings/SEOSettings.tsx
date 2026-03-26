@@ -4,8 +4,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Search, Save, Upload, Image, Loader2 } from "lucide-react";
+import { Copy, ExternalLink, Loader2, Save, Search } from "lucide-react";
 import { useSystemSettings } from "@/hooks/useSystemSettings";
+import { PUBLIC_BASE_URL } from "@/hooks/usePublicSeoSettings";
+import { appendErrorReference, reportError } from "@/lib/errorLogger";
+import { toast } from "sonner";
+
+const GOOGLE_SEARCH_CONSOLE_SITEMAPS_URL = "https://search.google.com/search-console/sitemaps";
+const GOOGLE_SEARCH_CONSOLE_URL = "https://search.google.com/search-console";
+const GOOGLE_SITE_VERIFICATION_FILENAME = "google0d02fdc9d62fc376.html";
+const GOOGLE_SITE_VERIFICATION_CONTENT = "google-site-verification: google0d02fdc9d62fc376.html";
+const GOOGLE_SITE_VERIFICATION_URL = `${PUBLIC_BASE_URL}/${GOOGLE_SITE_VERIFICATION_FILENAME}`;
+const SITEMAP_URL = `${PUBLIC_BASE_URL}/sitemap.xml`;
 
 export function SEOSettings() {
   const { setting, isLoading, isSaving, saveSetting } = useSystemSettings("seo_settings");
@@ -37,6 +47,107 @@ export function SEOSettings() {
 
   const handleSave = async () => {
     await saveSetting("seo_settings", settings, "Pengaturan SEO & Analytics");
+  };
+
+  const handleCopySitemapUrl = async () => {
+    try {
+      await navigator.clipboard.writeText(SITEMAP_URL);
+      toast.success("URL sitemap disalin ke clipboard.");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.seo.copy_sitemap_url", {
+        sitemap_url: SITEMAP_URL,
+      });
+      toast.error(appendErrorReference("Gagal menyalin URL sitemap.", errorRef));
+    }
+  };
+
+  const handleSubmitSitemap = async () => {
+    let copyErrorRef: string | null = null;
+
+    try {
+      await navigator.clipboard.writeText(SITEMAP_URL);
+    } catch (error) {
+      copyErrorRef = reportError(error, "admin.settings.seo.copy_sitemap_for_submit", {
+        sitemap_url: SITEMAP_URL,
+      });
+    }
+
+    try {
+      const popup = window.open(GOOGLE_SEARCH_CONSOLE_SITEMAPS_URL, "_blank", "noopener,noreferrer");
+      if (!popup) {
+        throw new Error("Popup Search Console diblokir browser.");
+      }
+
+      if (copyErrorRef) {
+        toast.warning(
+          appendErrorReference(
+            "Search Console dibuka, tetapi URL sitemap gagal disalin. Gunakan kolom sitemap di bawah untuk tempel manual.",
+            copyErrorRef,
+          ),
+        );
+        return;
+      }
+
+      toast.success("Search Console dibuka. URL sitemap sudah disalin, lalu tempel dan klik Submit.");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.seo.open_sitemaps_report", {
+        sitemap_url: SITEMAP_URL,
+        search_console_url: GOOGLE_SEARCH_CONSOLE_SITEMAPS_URL,
+      });
+      toast.error(appendErrorReference("Gagal membuka Search Console untuk submit sitemap.", errorRef));
+    }
+  };
+
+  const handleCopyGoogleVerificationUrl = async () => {
+    try {
+      await navigator.clipboard.writeText(GOOGLE_SITE_VERIFICATION_URL);
+      toast.success("URL file verifikasi Google disalin ke clipboard.");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.seo.copy_google_verification_url", {
+        verification_url: GOOGLE_SITE_VERIFICATION_URL,
+      });
+      toast.error(appendErrorReference("Gagal menyalin URL file verifikasi Google.", errorRef));
+    }
+  };
+
+  const handleCopyGoogleVerificationContent = async () => {
+    try {
+      await navigator.clipboard.writeText(GOOGLE_SITE_VERIFICATION_CONTENT);
+      toast.success("Isi file verifikasi Google disalin ke clipboard.");
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.seo.copy_google_verification_content", {
+        verification_filename: GOOGLE_SITE_VERIFICATION_FILENAME,
+      });
+      toast.error(appendErrorReference("Gagal menyalin isi file verifikasi Google.", errorRef));
+    }
+  };
+
+  const handleOpenGoogleVerificationFile = () => {
+    try {
+      const popup = window.open(GOOGLE_SITE_VERIFICATION_URL, "_blank", "noopener,noreferrer");
+      if (!popup) {
+        throw new Error("Popup file verifikasi Google diblokir browser.");
+      }
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.seo.open_google_verification_file", {
+        verification_url: GOOGLE_SITE_VERIFICATION_URL,
+      });
+      toast.error(appendErrorReference("Gagal membuka file verifikasi Google.", errorRef));
+    }
+  };
+
+  const handleOpenGoogleSearchConsole = () => {
+    try {
+      const popup = window.open(GOOGLE_SEARCH_CONSOLE_URL, "_blank", "noopener,noreferrer");
+      if (!popup) {
+        throw new Error("Popup Google Search Console diblokir browser.");
+      }
+    } catch (error) {
+      const errorRef = reportError(error, "admin.settings.seo.open_google_search_console", {
+        search_console_url: GOOGLE_SEARCH_CONSOLE_URL,
+      });
+      toast.error(appendErrorReference("Gagal membuka Google Search Console.", errorRef));
+    }
   };
 
   if (isLoading) {
@@ -199,6 +310,105 @@ export function SEOSettings() {
                 onChange={(e) => handleChange("facebookPixelId", e.target.value)}
                 placeholder="XXXXXXXXXXXXXXXX"
               />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Sitemap</CardTitle>
+            <CardDescription>
+              Submit sitemap dilakukan lewat Google Search Console. Tombol di bawah membuka laporan sitemap
+              resmi Google dan menyalin URL sitemap agar bisa langsung ditempel.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="sitemapUrl">URL Sitemap Aktif</Label>
+              <Input
+                id="sitemapUrl"
+                value={SITEMAP_URL}
+                readOnly
+                aria-readonly="true"
+              />
+              <p className="text-xs text-muted-foreground">
+                Pastikan `robots.txt` tetap mereferensikan URL ini dan sitemap terbaru sudah ikut saat build/deploy.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-3">
+              <Button type="button" variant="outline" onClick={handleCopySitemapUrl}>
+                <Copy className="mr-2 h-4 w-4" />
+                Salin URL Sitemap
+              </Button>
+              <Button type="button" onClick={handleSubmitSitemap}>
+                <ExternalLink className="mr-2 h-4 w-4" />
+                Submit Sitemap
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Verifikasi Google Search Console</CardTitle>
+            <CardDescription>
+              File verifikasi HTML sudah disediakan di root domain. Gunakan kartu ini untuk membuka, menyalin,
+              dan mengecek URL file saat setup property di Google Search Console.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="googleVerificationFilename">Nama File Verifikasi</Label>
+              <Input
+                id="googleVerificationFilename"
+                value={GOOGLE_SITE_VERIFICATION_FILENAME}
+                readOnly
+                aria-readonly="true"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="googleVerificationUrl">URL File Verifikasi</Label>
+              <Input
+                id="googleVerificationUrl"
+                value={GOOGLE_SITE_VERIFICATION_URL}
+                readOnly
+                aria-readonly="true"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="googleVerificationContent">Isi File Verifikasi</Label>
+              <Input
+                id="googleVerificationContent"
+                value={GOOGLE_SITE_VERIFICATION_CONTENT}
+                readOnly
+                aria-readonly="true"
+              />
+              <p className="text-xs text-muted-foreground">
+                File ini harus dapat diakses publik dengan isi persis sama seperti di atas agar verifikasi Search
+                Console metode `HTML file` berhasil.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap gap-3">
+              <Button type="button" variant="outline" onClick={handleCopyGoogleVerificationUrl}>
+                <Copy className="mr-2 h-4 w-4" />
+                Salin URL File
+              </Button>
+              <Button type="button" variant="outline" onClick={handleCopyGoogleVerificationContent}>
+                <Copy className="mr-2 h-4 w-4" />
+                Salin Isi File
+              </Button>
+              <Button type="button" variant="outline" onClick={handleOpenGoogleVerificationFile}>
+                <ExternalLink className="mr-2 h-4 w-4" />
+                Buka File Verifikasi
+              </Button>
+              <Button type="button" onClick={handleOpenGoogleSearchConsole}>
+                <ExternalLink className="mr-2 h-4 w-4" />
+                Buka Search Console
+              </Button>
             </div>
           </CardContent>
         </Card>

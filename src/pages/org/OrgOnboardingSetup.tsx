@@ -38,6 +38,12 @@ import {
   saveTenantOrgWorkspaceModules,
   type OrgWorkspaceModuleKey,
 } from "@/lib/orgWorkspaceModules";
+import {
+  ORG_ONBOARDING_REQUIRED_STEPS,
+  getOrgOnboardingModuleTotal,
+  getOrgOnboardingReadyModules,
+  isOrgOnboardingComplete,
+} from "@/lib/orgOnboardingProgress";
 
 const EMPTY_COUNTS: OrgOnboardingCounts = {
   opd: 0,
@@ -48,18 +54,6 @@ const EMPTY_COUNTS: OrgOnboardingCounts = {
   absence_limits: 0,
   announcements: 0,
 };
-
-const MODULE_LINKS: Array<{
-  key: keyof OrgOnboardingCounts;
-  label: string;
-  path: string;
-}> = [
-  { key: "opd", label: "Data OPD", path: "/org/master/opd" },
-  { key: "work_units", label: "Satuan Kerja", path: "/org/master/work-units" },
-  { key: "offices", label: "Lokasi Kerja", path: "/org/master/work-locations" },
-  { key: "work_hours", label: "Jam Kerja", path: "/org/schedule/work-hours" },
-  { key: "absence_limits", label: "Batas Absen", path: "/org/schedule/absence-limits" },
-];
 
 export default function OrgOnboardingSetup() {
   const ORG_ONBOARDING_QUERY_TIMEOUT_MS = 15000;
@@ -79,11 +73,11 @@ export default function OrgOnboardingSetup() {
   const [workspaceModules, setWorkspaceModules] = useState(DEFAULT_ORG_WORKSPACE_MODULES);
   const [isSavingWorkspaceModules, setIsSavingWorkspaceModules] = useState(false);
 
-  const activeChecklistModules = MODULE_LINKS;
+  const activeChecklistModules = ORG_ONBOARDING_REQUIRED_STEPS;
 
   const configuredModules = useMemo(
-    () => activeChecklistModules.filter((item) => counts[item.key] > 0).length,
-    [activeChecklistModules, counts]
+    () => getOrgOnboardingReadyModules(counts),
+    [counts]
   );
   const activeMasterDataModuleCount = useMemo(
     () => ORG_MASTER_DATA_MODULE_OPTIONS.filter((item) => masterDataModules[item.key]).length,
@@ -93,6 +87,7 @@ export default function OrgOnboardingSetup() {
     () => Object.values(workspaceModules).filter(Boolean).length,
     [workspaceModules]
   );
+  const isChecklistComplete = useMemo(() => isOrgOnboardingComplete(counts), [counts]);
 
   const refreshData = useCallback(async () => {
     try {
@@ -319,6 +314,47 @@ export default function OrgOnboardingSetup() {
           </p>
         </div>
 
+        <Card className={isChecklistComplete ? "border-emerald-300/60 bg-emerald-50/40" : "border-amber-300/60 bg-amber-50/40"}>
+          <CardHeader>
+            <CardTitle>Urutan Setup yang Disarankan</CardTitle>
+            <CardDescription>
+              Fokus dulu ke 5 fondasi absensi. Selama checklist ini belum lengkap, dashboard utama akan tetap mengarahkan admin ke halaman ini.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant={isChecklistComplete ? "default" : "secondary"}>
+                Progress Inti: {configuredModules}/{getOrgOnboardingModuleTotal()}
+              </Badge>
+              <Badge variant="outline">Wajib sebelum dashboard utama dibuka penuh</Badge>
+            </div>
+            <div className="space-y-3">
+              {ORG_ONBOARDING_REQUIRED_STEPS.map((step, index) => {
+                const ready = counts[step.key] > 0;
+                return (
+                  <div key={step.key} className="flex items-start justify-between gap-4 rounded-md border bg-background/80 p-3">
+                    <div className="space-y-1">
+                      <p className="text-sm font-semibold">
+                        {index + 1}. {step.label}
+                      </p>
+                      <p className="text-xs text-muted-foreground">{step.description}</p>
+                    </div>
+                    <div className="flex flex-col items-end gap-2">
+                      <Badge variant={ready ? "default" : "secondary"}>{ready ? "Siap" : "Wajib"}</Badge>
+                      <Button variant="outline" size="sm" onClick={() => navigate(step.path)}>
+                        Buka
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Setelah lima langkah ini siap, lanjutkan tambah minimal satu pegawai dan buat rekam absensi awal agar tenant lebih cepat benar-benar operasional.
+            </p>
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -530,7 +566,7 @@ export default function OrgOnboardingSetup() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {MODULE_LINKS.map((item) => {
+                  {ORG_ONBOARDING_REQUIRED_STEPS.map((item) => {
                     const value = counts[item.key];
                     const ready = value > 0;
                     return (

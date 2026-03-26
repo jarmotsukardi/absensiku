@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
-import { loginAsOrgAdmin, waitForStable } from "./helpers/orgAuth";
+import { loginAsPayrollOrgAdmin, waitForStable } from "./helpers/orgAuth";
 import { ensureOrgWorkspaceEnabled } from "./helpers/orgWorkspace";
 
 const buildForcedFailureHandler = (table: string) => async (route: Route) => {
@@ -34,7 +34,7 @@ const withForcedTableFailure = async (page: Page, tables: string[], run: () => P
 
 test.describe.serial("Org Payroll Partial Failure", () => {
   test.beforeEach(async ({ page }) => {
-    await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    await loginAsPayrollOrgAdmin(page);
     await ensureOrgWorkspaceEnabled(page, "Aktifkan workspace Payroll");
   });
 

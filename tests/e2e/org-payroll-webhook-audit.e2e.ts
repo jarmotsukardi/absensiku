@@ -1,5 +1,5 @@
 import { expect, test, type FrameLocator, type Page } from "@playwright/test";
-import { ensurePayrollAdminAccess, loginAsOrgAdmin, waitForStable } from "./helpers/orgAuth";
+import { ensurePayrollAdminAccess, loginAsPayrollOrgAdmin, waitForStable } from "./helpers/orgAuth";
 
 const ensureFallbackPayrollMode = async (page: Page): Promise<boolean> => {
   await page.goto("/org/payroll/roles", { waitUntil: "domcontentloaded" });
@@ -99,7 +99,7 @@ const expectAuditLogOpen = async (page: Page): Promise<{ scope: Page | FrameLoca
 test.describe.serial("Org Payroll Webhook Audit", () => {
   test("integrations webhook test opens filtered audit log", async ({ page }) => {
     test.setTimeout(180_000);
-    const creds = await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    const creds = await loginAsPayrollOrgAdmin(page);
     const accessReady = await ensurePayrollAdminAccess(page, creds.email);
     test.skip(!accessReady, "Akses admin payroll belum siap untuk tenant uji.");
 
@@ -149,7 +149,7 @@ test.describe.serial("Org Payroll Webhook Audit", () => {
 
   test("webhook failure writes audit attempts count", async ({ page }) => {
     test.setTimeout(180_000);
-    const creds = await loginAsOrgAdmin(page, ["org_admin", "org_admin_centralized"]);
+    const creds = await loginAsPayrollOrgAdmin(page);
     const accessReady = await ensurePayrollAdminAccess(page, creds.email);
     test.skip(!accessReady, "Akses admin payroll belum siap untuk tenant uji.");
 

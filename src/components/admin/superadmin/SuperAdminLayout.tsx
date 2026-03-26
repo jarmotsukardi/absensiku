@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { appendErrorReference, reportError } from "@/lib/errorLogger";
 import { isRetryableError, withExponentialBackoff, withTimeout } from "@/lib/attendanceResilience";
 import { AdminOrgOverlayDialog } from "@/components/admin/organization/AdminOrgOverlayDialog";
-import { Helmet } from "react-helmet-async";
+import { PrivatePageSeo } from "@/components/seo/PrivatePageSeo";
 import { setStoredSuperAdminWorkspaceMode } from "@/lib/superAdminWorkspace";
 
 interface SuperAdminLayoutProps {
@@ -69,6 +69,7 @@ export function SuperAdminLayout({
   workspaceMode = "absensi",
 }: SuperAdminLayoutProps) {
   const navigate = useNavigate();
+  const seoTitle = title ? `${title} | Panel Super Admin AbsensiKu` : "Panel Super Admin | AbsensiKu";
   const [isLoading, setIsLoading] = useState(true);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [hasChecked, setHasChecked] = useState(false);
@@ -224,10 +225,7 @@ export function SuperAdminLayout({
   if (isLoading) {
     return (
       <SidebarProvider>
-        <Helmet>
-          <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
-          <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet" />
-        </Helmet>
+        <PrivatePageSeo title={seoTitle} />
         <div className="min-h-screen flex w-full">
           <SuperAdminSidebar workspaceMode={workspaceMode} />
           <SidebarInset>
@@ -247,10 +245,7 @@ export function SuperAdminLayout({
   if (!isSuperAdmin) {
     return (
       <SidebarProvider>
-        <Helmet>
-          <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
-          <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet" />
-        </Helmet>
+        <PrivatePageSeo title={seoTitle} />
         <div className="min-h-screen flex w-full">
           <SuperAdminSidebar workspaceMode={workspaceMode} />
           <SidebarInset>
@@ -274,10 +269,7 @@ export function SuperAdminLayout({
 
   return (
     <SidebarProvider>
-      <Helmet>
-        <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
-        <meta name="googlebot" content="noindex, nofollow, noarchive, nosnippet" />
-      </Helmet>
+      <PrivatePageSeo title={seoTitle} />
       <div className="min-h-screen flex w-full">
         <SuperAdminSidebar workspaceMode={workspaceMode} />
         <SidebarInset>
