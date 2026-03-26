@@ -1607,22 +1607,94 @@ export default function EmployeeDashboardNew({ readOnlyMode = false }: EmployeeD
 
   // User terdaftar mandiri tapi belum bergabung ke organisasi
   if (hasNoEmployee) {
+    const nextSteps = [
+      {
+        label: "Akun sudah aktif",
+        description: "Email dan password Anda sudah berhasil dibuat.",
+        status: "done",
+      },
+      {
+        label: "Masukkan kode undangan organisasi",
+        description: "Gunakan kode dari admin agar akun ini terhubung ke tenant yang benar.",
+        status: "active",
+      },
+      {
+        label: "Mulai absensi",
+        description: "Setelah tergabung, dashboard organisasi dan menu absensi akan muncul otomatis.",
+        status: "upcoming",
+      },
+    ] as const;
+
     return (
       <div className="min-h-screen bg-background p-4">
-        <div className="max-w-md mx-auto pt-8 space-y-4">
-          <div className="text-center mb-6">
+        <div className="max-w-lg mx-auto pt-8 space-y-4">
+          <div className="text-center mb-2">
             <div className="w-16 h-16 rounded-2xl bg-primary flex items-center justify-center mx-auto mb-4">
               <MapPin className="w-8 h-8 text-primary-foreground" />
             </div>
             <h1 className="text-2xl font-bold">Selamat Datang!</h1>
-            <p className="text-muted-foreground mt-2">Akun Anda berhasil dibuat</p>
+            <p className="text-muted-foreground mt-2">Akun Anda berhasil dibuat, tetapi belum terhubung ke organisasi.</p>
           </div>
-          
+
+          <Card className="border-primary/20 bg-primary/5">
+            <CardContent className="pt-6 space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-semibold text-foreground">Satu langkah lagi sebelum absensi aktif</p>
+                  <p className="text-sm text-muted-foreground">
+                    Selesaikan onboarding singkat ini agar akun Anda masuk ke organisasi yang benar.
+                  </p>
+                </div>
+                <Badge variant="secondary" className="shrink-0 border border-primary/20 bg-white/80 text-primary">
+                  Tahap 2/3
+                </Badge>
+              </div>
+
+              <div className="space-y-3">
+                {nextSteps.map((step, index) => {
+                  const isDone = step.status === "done";
+                  const isActive = step.status === "active";
+
+                  return (
+                    <div key={step.label} className="flex items-start gap-3 rounded-xl border border-border/60 bg-background/90 p-3">
+                      <div
+                        className={[
+                          "flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold",
+                          isDone
+                            ? "bg-green-500/15 text-green-700"
+                            : isActive
+                              ? "bg-primary/15 text-primary"
+                              : "bg-muted text-muted-foreground",
+                        ].join(" ")}
+                      >
+                        {index + 1}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-medium text-foreground">{step.label}</p>
+                        <p className="text-sm text-muted-foreground">{step.description}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+
           <JoinOrganizationCard onSuccess={() => {
             hasFetchedRef.current = false;
             fetchData();
           }} />
-          
+
+          <Card>
+            <CardContent className="pt-6 text-sm text-muted-foreground space-y-2">
+              <p className="font-medium text-foreground">Belum punya kode undangan?</p>
+              <p>
+                Hubungi admin organisasi Anda dan minta <strong>kode undangan pegawai</strong>. Setelah kode valid dimasukkan,
+                organisasi dan menu absensi akan aktif otomatis di akun ini.
+              </p>
+            </CardContent>
+          </Card>
+
           <div className="text-center">
             <Button variant="ghost" onClick={async () => {
               await supabase.auth.signOut();
