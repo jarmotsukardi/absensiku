@@ -9,6 +9,7 @@ import type { FAQ } from "@/hooks/useHomepageData";
 
 interface FAQSectionProps {
   faqs: FAQ[];
+  isLoading?: boolean;
   showPromoSidebar?: boolean;
   promoTitle?: string;
   promoSubtitle?: string;
@@ -23,8 +24,14 @@ const defaultFAQs: FAQ[] = [
   { id: "4", question: "Apakah bisa digunakan offline?", answer: "Absensi membutuhkan koneksi internet untuk validasi lokasi dan sinkronisasi data.", category: "Teknis", sort_order: 4 },
 ];
 
-export function FAQSection({ faqs, showPromoSidebar = false, promoTitle, promoSubtitle }: FAQSectionProps) {
-  const allFaqs = faqs.length > 0 ? faqs : defaultFAQs;
+export function FAQSection({
+  faqs,
+  isLoading = false,
+  showPromoSidebar = false,
+  promoTitle,
+  promoSubtitle,
+}: FAQSectionProps) {
+  const allFaqs = faqs.length > 0 ? faqs : isLoading ? [] : defaultFAQs;
   const orderedFaqs = [...allFaqs].sort((a, b) => {
     const left = Number.isFinite(a.sort_order) ? a.sort_order : Number.MAX_SAFE_INTEGER;
     const right = Number.isFinite(b.sort_order) ? b.sort_order : Number.MAX_SAFE_INTEGER;
@@ -84,22 +91,34 @@ export function FAQSection({ faqs, showPromoSidebar = false, promoTitle, promoSu
         <div className={`grid gap-8 ${showPromoSidebar ? 'lg:grid-cols-3' : 'max-w-4xl mx-auto'}`}>
           {/* FAQ Content */}
           <div className={showPromoSidebar ? 'lg:col-span-2' : ''}>
-            <Accordion type="single" collapsible className="w-full space-y-4">
-              {displayFAQs.map((faq) => (
-                <AccordionItem 
-                  key={faq.id} 
-                  value={faq.id}
-                  className="bg-card border border-border/50 rounded-lg px-6"
-                >
-                  <AccordionTrigger className="text-left hover:no-underline">
-                    <span className="font-medium text-foreground">{faq.question}</span>
-                  </AccordionTrigger>
-                  <AccordionContent className="text-muted-foreground">
-                    {faq.answer}
-                  </AccordionContent>
-                </AccordionItem>
-              ))}
-            </Accordion>
+            {isLoading && displayFAQs.length === 0 ? (
+              <div className="space-y-4">
+                {[0, 1, 2].map((item) => (
+                  <div key={item} className="rounded-lg border border-border/50 bg-card px-6 py-5">
+                    <div className="h-5 w-3/4 animate-pulse rounded bg-muted" />
+                    <div className="mt-4 h-4 w-full animate-pulse rounded bg-muted" />
+                    <div className="mt-2 h-4 w-5/6 animate-pulse rounded bg-muted" />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <Accordion type="single" collapsible className="w-full space-y-4">
+                {displayFAQs.map((faq) => (
+                  <AccordionItem
+                    key={faq.id}
+                    value={faq.id}
+                    className="bg-card border border-border/50 rounded-lg px-6"
+                  >
+                    <AccordionTrigger className="text-left hover:no-underline">
+                      <span className="font-medium text-foreground">{faq.question}</span>
+                    </AccordionTrigger>
+                    <AccordionContent className="text-muted-foreground">
+                      {faq.answer}
+                    </AccordionContent>
+                  </AccordionItem>
+                ))}
+              </Accordion>
+            )}
 
             {/* See More Button */}
             {hasMore && (

@@ -74,11 +74,13 @@ const Index = () => {
     features,
     pricingPlans,
     faqs,
+    isFaqsLoading,
     testimonials,
     ctaSettings,
     footerSettings,
     articles,
     loadArticles,
+    loadFaqs,
     isLoading,
     isSectionEnabled,
   } = useHomepageData();
@@ -209,13 +211,16 @@ const Index = () => {
         // Combine FAQ with Promo Sidebar if promo is enabled
         const showPromoInFaq = isSectionEnabled("promo_sidebar") && promoSidebarSettings.enabled && promoSidebarSettings.show_banner_sidebar;
         return (
-          <FAQSection 
-            key="faq" 
-            faqs={faqs} 
-            showPromoSidebar={showPromoInFaq}
-            promoTitle={promoSidebarSettings.title}
-            promoSubtitle={promoSidebarSettings.subtitle}
-          />
+          <DeferredHomepageBlock key="faq" rootMargin="650px 0px" minHeight={480} onRender={loadFaqs}>
+            <FAQSection
+              key="faq"
+              faqs={faqs}
+              isLoading={isFaqsLoading && faqs.length === 0}
+              showPromoSidebar={showPromoInFaq}
+              promoTitle={promoSidebarSettings.title}
+              promoSubtitle={promoSidebarSettings.subtitle}
+            />
+          </DeferredHomepageBlock>
         );
       },
     },
@@ -264,7 +269,7 @@ const Index = () => {
   ], [
     heroSettings, statisticsSettings, newsSettings, targetSegmentSettings, pricingSectionSettings, b2bNegotiationThreshold,
     features, pricingPlans, faqs, testimonials, ctaSettings, footerSettings,
-    articles, promoSidebarSettings, isSectionEnabled, loadArticles,
+    articles, promoSidebarSettings, isSectionEnabled, isFaqsLoading, loadArticles, loadFaqs,
   ]);
 
   // Sort sections by their sort_order from database
@@ -345,7 +350,7 @@ const Index = () => {
       {/* ALL sections are now dynamically ordered based on sort_order from database */}
       {sortedSections.map((section) => section.render())}
 
-      <DeferredHomepageBlock idleMs={4000}>
+      <DeferredHomepageBlock idleMs={4000} onRender={loadFaqs}>
         <HomepageChatAgent
           features={features}
           pricingPlans={pricingPlans}

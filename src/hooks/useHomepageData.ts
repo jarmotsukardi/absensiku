@@ -332,6 +332,9 @@ export function useHomepageData() {
   const [isLoading, setIsLoading] = useState(true);
   const hasLoadedArticlesRef = useRef(false);
   const isFetchingArticlesRef = useRef(false);
+  const hasLoadedFaqsRef = useRef(false);
+  const isFetchingFaqsRef = useRef(false);
+  const [isFaqsLoading, setIsFaqsLoading] = useState(false);
 
   useEffect(() => {
     void fetchAllData();
@@ -351,7 +354,6 @@ export function useHomepageData() {
               "hero_settings",
               "features_settings",
               "pricing_settings",
-              "faq_settings",
               "testimonials_settings",
               "cta_settings",
               "footer_settings",
@@ -440,24 +442,6 @@ export function useHomepageData() {
             case "pricing_settings":
               if (Array.isArray(setting.value)) {
                 legacyPricingPlans = setting.value as unknown as PricingPlan[];
-              }
-              break;
-            case "faq_settings":
-              if (Array.isArray(setting.value)) {
-                setFaqs(
-                  (setting.value as unknown as FAQ[])
-                    .filter(isPublicAudienceFaq)
-                    .sort((a, b) => a.sort_order - b.sort_order),
-                );
-              } else if (setting.value && typeof setting.value === "object" && !Array.isArray(setting.value)) {
-                const faqValue = setting.value as { items?: unknown };
-                if (Array.isArray(faqValue.items)) {
-                  setFaqs(
-                    (faqValue.items as FAQ[])
-                      .filter(isPublicAudienceFaq)
-                      .sort((a, b) => a.sort_order - b.sort_order),
-                  );
-                }
               }
               break;
             case "testimonials_settings":
@@ -608,6 +592,38 @@ export function useHomepageData() {
     }
   }, [newsSettings.max_display, sections]);
 
+  const loadFaqs = useCallback(async () => {
+    if (isFetchingFaqsRef.current || hasLoadedFaqsRef.current) return;
+    if (!isHomepageSectionEnabled(sections, "faq")) {
+      setFaqs([]);
+      return;
+    }
+
+    isFetchingFaqsRef.current = true;
+    setIsFaqsLoading(true);
+
+    try {
+      const { data, error } = await supabase
+        .from("system_settings")
+        .select("value")
+        .eq("key", "faq_settings")
+        .maybeSingle();
+
+      if (error) {
+        console.error("Error fetching homepage FAQs:", error);
+        return;
+      }
+
+      setFaqs(extractPublicFaqs(data?.value));
+      hasLoadedFaqsRef.current = true;
+    } catch (error) {
+      console.error("Error fetching homepage FAQs:", error);
+    } finally {
+      isFetchingFaqsRef.current = false;
+      setIsFaqsLoading(false);
+    }
+  }, [sections]);
+
   useEffect(() => {
     if (isHomepageSectionEnabled(sections, "news") && isHomepageSectionEnabled(sections, "articles")) {
       return;
@@ -616,6 +632,17 @@ export function useHomepageData() {
     hasLoadedArticlesRef.current = false;
     isFetchingArticlesRef.current = false;
     setArticles([]);
+  }, [sections]);
+
+  useEffect(() => {
+    if (isHomepageSectionEnabled(sections, "faq")) {
+      return;
+    }
+
+    hasLoadedFaqsRef.current = false;
+    isFetchingFaqsRef.current = false;
+    setIsFaqsLoading(false);
+    setFaqs([]);
   }, [sections]);
 
   const isSectionEnabled = (key: string): boolean => {
@@ -638,11 +665,13 @@ export function useHomepageData() {
     features,
     pricingPlans,
     faqs,
+    isFaqsLoading,
     testimonials,
     ctaSettings,
     footerSettings,
     articles,
     loadArticles,
+    loadFaqs,
     isLoading,
     isSectionEnabled,
     getSectionOrder,
@@ -665,6 +694,25 @@ export type {
   CTASettings,
   FooterSettings,
   Article,
+};
+
+const extractPublicFaqs = (value: unknown): FAQ[] => {
+  if (Array.isArray(value)) {
+    return (value as FAQ[])
+      .filter(isPublicAudienceFaq)
+      .sort((a, b) => a.sort_order - b.sort_order);
+  }
+
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const faqValue = value as { items?: unknown };
+    if (Array.isArray(faqValue.items)) {
+      return (faqValue.items as FAQ[])
+        .filter(isPublicAudienceFaq)
+        .sort((a, b) => a.sort_order - b.sort_order);
+    }
+  }
+
+  return [];
 };
 const isPublicAudienceFaq = (faq: FAQ): boolean => {
   return isFaqVisibleToPublic({
