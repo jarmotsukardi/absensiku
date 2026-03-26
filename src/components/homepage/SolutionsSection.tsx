@@ -45,11 +45,13 @@ export function SolutionsSection() {
             <ShieldCheck className="h-4 w-4" />
             Jalur Pengembangan Dalam Satu Platform
           </div>
-          <h2 className="mt-5 text-3xl font-bold text-foreground md:text-4xl">
+          <h2 className="mt-5 text-3xl font-bold leading-tight text-foreground md:text-4xl">
             Absensi tetap jadi fokus utama operasional harian.
-            <span className="block text-gradient">HR dan Payroll tersedia sebagai tahap lanjutan saat organisasi siap berkembang.</span>
+            <span className="mt-2 block text-primary">
+              HR dan Payroll tersedia sebagai tahap lanjutan saat organisasi siap berkembang.
+            </span>
           </h2>
-          <p className="mt-4 text-lg text-muted-foreground">
+          <p className="mx-auto mt-4 max-w-2xl text-lg text-muted-foreground">
             Mulai dari fondasi absensi yang rapi untuk tim lapangan maupun kantor. Ketika organisasi sudah siap,
             jalur lanjutan ke HR dan Payroll bisa dibuka tanpa memecah data atau pindah ekosistem.
           </p>
@@ -66,11 +68,11 @@ export function SolutionsSection() {
                 <div className={`flex h-12 w-12 items-center justify-center rounded-2xl ${solution.accent}`}>
                   <Icon className="h-5 w-5" />
                 </div>
-                <p className="mt-5 text-sm font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                <p className="mt-5 text-sm font-medium text-muted-foreground">
                   {solution.subtitle}
                 </p>
-                <h3 className="mt-3 text-2xl font-bold text-foreground">{solution.title}</h3>
-                <p className="mt-4 flex-1 text-sm leading-7 text-muted-foreground">{solution.description}</p>
+                <h3 className="mt-2 text-xl font-bold text-foreground">{solution.title}</h3>
+                <p className="mt-3 flex-1 text-sm leading-7 text-muted-foreground">{solution.description}</p>
                 <div className="mt-6">
                   <Link to={solution.href}>
                     <Button variant="outline" className="group/cta w-full justify-between">
