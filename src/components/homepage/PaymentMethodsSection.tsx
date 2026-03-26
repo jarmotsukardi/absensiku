@@ -152,6 +152,9 @@ export function PaymentMethodsSection() {
                 src={method.logo} 
                 alt={method.name} 
                 className="h-5 w-auto max-w-[60px] object-contain"
+                loading="lazy"
+                decoding="async"
+                fetchPriority="low"
                 onError={(e) => {
                   // Fallback: show text if logo fails
                   const target = e.target as HTMLImageElement;

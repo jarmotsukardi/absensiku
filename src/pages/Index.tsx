@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
 import { Helmet } from "react-helmet-async";
 import { supabase } from "@/integrations/supabase/client";
@@ -10,21 +10,45 @@ import { SolutionsSection } from "@/components/homepage/SolutionsSection";
 import { FeaturesSection } from "@/components/homepage/FeaturesSection";
 import { PricingSection } from "@/components/homepage/PricingSection";
 import { FAQSection } from "@/components/homepage/FAQSection";
-import { TestimonialsSection } from "@/components/homepage/TestimonialsSection";
-import { NewsSection } from "@/components/homepage/NewsSection";
-import { CTASection } from "@/components/homepage/CTASection";
-import { FooterSection } from "@/components/homepage/FooterSection";
 import { BannerPromoCarousel } from "@/components/banners/BannerPromoCarousel";
-import { FloatingWhatsApp } from "@/components/common/FloatingWhatsApp";
-import { HomepageChatAgent } from "@/components/common/HomepageChatAgent";
-import { SmartAppBanner } from "@/components/common/SmartAppBanner";
-import { AppDownloadSection } from "@/components/homepage/AppDownloadSection";
-import { PaymentMethodsSection } from "@/components/homepage/PaymentMethodsSection";
-import { ClientLogosSection } from "@/components/homepage/ClientLogosSection";
-import { Loader2 } from "lucide-react";
 import { sortHomepageSectionDefinitions, stabilizeHomepageSectionDefinitions } from "@/lib/homepageLayout";
 import { HOMEPAGE_PUBLIC_APK_URL, resolveApkUrl } from "@/lib/apkDownload";
 import { PUBLIC_BASE_URL, PUBLIC_LOGO_URL, usePublicSeoSettings } from "@/hooks/usePublicSeoSettings";
+
+const TestimonialsSection = lazy(() =>
+  import("@/components/homepage/TestimonialsSection").then((module) => ({ default: module.TestimonialsSection })),
+);
+const NewsSection = lazy(() =>
+  import("@/components/homepage/NewsSection").then((module) => ({ default: module.NewsSection })),
+);
+const CTASection = lazy(() =>
+  import("@/components/homepage/CTASection").then((module) => ({ default: module.CTASection })),
+);
+const FooterSection = lazy(() =>
+  import("@/components/homepage/FooterSection").then((module) => ({ default: module.FooterSection })),
+);
+const FloatingWhatsApp = lazy(() =>
+  import("@/components/common/FloatingWhatsApp").then((module) => ({ default: module.FloatingWhatsApp })),
+);
+const HomepageChatAgent = lazy(() =>
+  import("@/components/common/HomepageChatAgent").then((module) => ({ default: module.HomepageChatAgent })),
+);
+const SmartAppBanner = lazy(() =>
+  import("@/components/common/SmartAppBanner").then((module) => ({ default: module.SmartAppBanner })),
+);
+const AppDownloadSection = lazy(() =>
+  import("@/components/homepage/AppDownloadSection").then((module) => ({ default: module.AppDownloadSection })),
+);
+const PaymentMethodsSection = lazy(() =>
+  import("@/components/homepage/PaymentMethodsSection").then((module) => ({ default: module.PaymentMethodsSection })),
+);
+const ClientLogosSection = lazy(() =>
+  import("@/components/homepage/ClientLogosSection").then((module) => ({ default: module.ClientLogosSection })),
+);
+
+const DeferredHomepageBlock = ({ children }: { children: ReactNode }) => (
+  <Suspense fallback={null}>{children}</Suspense>
+);
 
 const Index = () => {
   const location = useLocation();
@@ -168,14 +192,23 @@ const Index = () => {
     },
     {
       key: "payment_methods",
-      render: () => isSectionEnabled("payment_methods") && <PaymentMethodsSection key="payment_methods" />,
+      render: () =>
+        isSectionEnabled("payment_methods") && (
+          <DeferredHomepageBlock>
+            <PaymentMethodsSection key="payment_methods" />
+          </DeferredHomepageBlock>
+        ),
     },
     {
       key: "news",
       render: () => {
         // News/Articles section - requires BOTH news AND articles sections to be enabled
         if (!isSectionEnabled("news") || !isSectionEnabled("articles") || articles.length === 0) return null;
-        return <NewsSection key="news" articles={articles} settings={newsSettings} />;
+        return (
+          <DeferredHomepageBlock>
+            <NewsSection key="news" articles={articles} settings={newsSettings} />
+          </DeferredHomepageBlock>
+        );
       },
     },
     {
@@ -197,7 +230,12 @@ const Index = () => {
     },
     {
       key: "testimonials",
-      render: () => isSectionEnabled("testimonials") && <TestimonialsSection key="testimonials" testimonials={testimonials} />,
+      render: () =>
+        isSectionEnabled("testimonials") && (
+          <DeferredHomepageBlock>
+            <TestimonialsSection key="testimonials" testimonials={testimonials} />
+          </DeferredHomepageBlock>
+        ),
     },
     {
       key: "faq",
@@ -223,19 +261,40 @@ const Index = () => {
     },
     {
       key: "clients",
-      render: () => isSectionEnabled("clients") && <ClientLogosSection key="clients" />,
+      render: () =>
+        isSectionEnabled("clients") && (
+          <DeferredHomepageBlock>
+            <ClientLogosSection key="clients" />
+          </DeferredHomepageBlock>
+        ),
     },
     {
       key: "app_download",
-      render: () => isSectionEnabled("app_download") && <AppDownloadSection key="app_download" features={features} />,
+      render: () =>
+        isSectionEnabled("app_download") && (
+          <DeferredHomepageBlock>
+            <AppDownloadSection key="app_download" features={features} />
+          </DeferredHomepageBlock>
+        ),
     },
     {
       key: "cta",
-      render: () => isSectionEnabled("cta") && ctaSettings.show_section && <CTASection key="cta" settings={ctaSettings} />,
+      render: () =>
+        isSectionEnabled("cta") &&
+        ctaSettings.show_section && (
+          <DeferredHomepageBlock>
+            <CTASection key="cta" settings={ctaSettings} />
+          </DeferredHomepageBlock>
+        ),
     },
     {
       key: "footer",
-      render: () => isSectionEnabled("footer") && <FooterSection key="footer" settings={footerSettings} />,
+      render: () =>
+        isSectionEnabled("footer") && (
+          <DeferredHomepageBlock>
+            <FooterSection key="footer" settings={footerSettings} />
+          </DeferredHomepageBlock>
+        ),
     },
   ], [
     heroSettings, statisticsSettings, newsSettings, targetSegmentSettings, pricingSectionSettings, b2bNegotiationThreshold,
@@ -288,16 +347,8 @@ const Index = () => {
     },
   };
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-      </div>
-    );
-  }
-
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background" aria-busy={isLoading}>
       <Helmet>
         <title>{seoSettings.metaTitle}</title>
         <meta name="description" content={seoSettings.metaDescription} />
@@ -316,11 +367,13 @@ const Index = () => {
         <script type="application/ld+json">{JSON.stringify(websiteJsonLd)}</script>
         <script type="application/ld+json">{JSON.stringify(softwareJsonLd)}</script>
       </Helmet>
-      <SmartAppBanner
-        apkUrl={apkUrl}
-        appName="AbsensiKu"
-        dismissKey="smart_app_banner_homepage_dismissed"
-      />
+      <DeferredHomepageBlock>
+        <SmartAppBanner
+          apkUrl={apkUrl}
+          appName="AbsensiKu"
+          dismissKey="smart_app_banner_homepage_dismissed"
+        />
+      </DeferredHomepageBlock>
 
       {/* NavigationBar is always fixed at top */}
       <NavigationBar />
@@ -328,18 +381,22 @@ const Index = () => {
       {/* ALL sections are now dynamically ordered based on sort_order from database */}
       {sortedSections.map((section) => section.render())}
 
-      <HomepageChatAgent
-        features={features}
-        pricingPlans={pricingPlans}
-        faqs={faqs}
-        articles={articles}
-        hideLauncher
-      />
-      <FloatingWhatsApp
-        showChatAgentOption
-        chatAgentNoticeText="Chat Agent akan menjawab semua pertanyaan Anda dengan cepat."
-        chatAgentButtonText="Tanya Chat Agent"
-      />
+      <DeferredHomepageBlock>
+        <HomepageChatAgent
+          features={features}
+          pricingPlans={pricingPlans}
+          faqs={faqs}
+          articles={articles}
+          hideLauncher
+        />
+      </DeferredHomepageBlock>
+      <DeferredHomepageBlock>
+        <FloatingWhatsApp
+          showChatAgentOption
+          chatAgentNoticeText="Chat Agent akan menjawab semua pertanyaan Anda dengan cepat."
+          chatAgentButtonText="Tanya Chat Agent"
+        />
+      </DeferredHomepageBlock>
     </div>
   );
 };

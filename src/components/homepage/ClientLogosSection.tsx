@@ -40,6 +40,9 @@ export function ClientLogosSection() {
                 src={logo.logo_url}
                 alt={logo.name}
                 className="h-10 md:h-12 object-contain grayscale hover:grayscale-0 opacity-60 hover:opacity-100 transition-all duration-300"
+                loading="lazy"
+                decoding="async"
+                fetchPriority="low"
                 onError={(e) => { (e.target as HTMLImageElement).src = '/placeholder.svg'; (e.target as HTMLImageElement).classList.remove('grayscale'); }}
               />
             );

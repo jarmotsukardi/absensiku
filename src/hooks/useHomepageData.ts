@@ -162,6 +162,8 @@ interface Article {
   published_at: string | null;
 }
 
+const HOMEPAGE_ARTICLE_PREFETCH_LIMIT = 12;
+
 const parseNumericSettingValue = (raw: unknown, fallback: number): number => {
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
   if (typeof raw === "string" && raw.trim() !== "") {
@@ -330,20 +332,52 @@ export function useHomepageData() {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    fetchAllData();
+    void fetchAllData();
   }, []);
 
   const fetchAllData = async () => {
     try {
       let resolvedNewsSettings: NewsSettings = defaultNewsSettings;
       let legacyPricingPlans: PricingPlan[] = [];
+      const [sectionsResult, settingsResult, attendancePromoResult, billingPackagesResult, articlesResult] =
+        await Promise.allSettled([
+          supabase.from("homepage_sections").select("*").order("sort_order"),
+          supabase
+            .from("system_settings")
+            .select("key, value")
+            .in("key", [
+              "hero_settings",
+              "features_settings",
+              "pricing_settings",
+              "faq_settings",
+              "testimonials_settings",
+              "cta_settings",
+              "footer_settings",
+              "legal_links_settings",
+              "target_segment_settings",
+              "promo_sidebar_settings",
+              "b2b_negotiation_threshold",
+            ]),
+          supabase
+            .from("billing_settings")
+            .select("setting_key, setting_value")
+            .eq("setting_key", "attendance_intro_promo")
+            .maybeSingle(),
+          supabase.from("subscription_packages").select("*").eq("is_active", true).order("sort_order"),
+          supabase
+            .from("articles")
+            .select("id, title, slug, excerpt, image_url, category, published_at")
+            .eq("is_published", true)
+            .order("published_at", { ascending: false })
+            .limit(HOMEPAGE_ARTICLE_PREFETCH_LIMIT),
+        ]);
 
-      // Fetch homepage sections
-      const { data: sectionsData } = await supabase
-        .from("homepage_sections")
-        .select("*")
-        .order("sort_order");
-      
+      if (sectionsResult.status === "rejected") {
+        console.error("Error fetching homepage sections:", sectionsResult.reason);
+      }
+
+      const sectionsData = sectionsResult.status === "fulfilled" ? sectionsResult.value.data : null;
+
       if (sectionsData) {
         setSections(sectionsData.map(s => ({
           ...s,
@@ -384,23 +418,11 @@ export function useHomepageData() {
         }
       }
 
-      // Fetch system settings
-      const { data: settingsData } = await supabase
-        .from("system_settings")
-        .select("key, value")
-        .in("key", [
-          "hero_settings",
-          "features_settings",
-          "pricing_settings",
-          "faq_settings",
-          "testimonials_settings",
-          "cta_settings",
-          "footer_settings",
-          "legal_links_settings",
-          "target_segment_settings",
-          "promo_sidebar_settings",
-          "b2b_negotiation_threshold",
-        ]);
+      if (settingsResult.status === "rejected") {
+        console.error("Error fetching homepage system settings:", settingsResult.reason);
+      }
+
+      const settingsData = settingsResult.status === "fulfilled" ? settingsResult.value.data : null;
 
       if (settingsData) {
         let footerBase = { ...defaultFooterSettings };
@@ -503,11 +525,12 @@ export function useHomepageData() {
         setFooterSettings(footerBase);
       }
 
-      const { data: attendancePromoSettings } = await supabase
-        .from("billing_settings")
-        .select("setting_key, setting_value")
-        .eq("setting_key", "attendance_intro_promo")
-        .maybeSingle();
+      if (attendancePromoResult.status === "rejected") {
+        console.error("Error fetching attendance intro promo settings:", attendancePromoResult.reason);
+      }
+
+      const attendancePromoSettings =
+        attendancePromoResult.status === "fulfilled" ? attendancePromoResult.value.data : null;
 
       const attendanceIntroPromoCampaignText = attendancePromoSettings
         ? getAttendanceIntroPromoCampaignText(
@@ -517,11 +540,14 @@ export function useHomepageData() {
           )
         : null;
 
-      const { data: billingPackages, error: billingPackagesError } = await supabase
-        .from("subscription_packages")
-        .select("*")
-        .eq("is_active", true)
-        .order("sort_order");
+      if (billingPackagesResult.status === "rejected") {
+        console.error("Error fetching billing packages for homepage pricing:", billingPackagesResult.reason);
+      }
+
+      const billingPackagesResponse =
+        billingPackagesResult.status === "fulfilled" ? billingPackagesResult.value : null;
+      const billingPackages = billingPackagesResponse?.data ?? null;
+      const billingPackagesError = billingPackagesResponse?.error ?? null;
 
       if (billingPackagesError) {
         console.error("Error fetching billing packages for homepage pricing:", billingPackagesError);
@@ -548,16 +574,14 @@ export function useHomepageData() {
         setPricingPlans([]);
       }
 
-      // Fetch articles/news
-      const { data: articlesData } = await supabase
-        .from("articles")
-        .select("id, title, slug, excerpt, image_url, category, published_at")
-        .eq("is_published", true)
-        .order("published_at", { ascending: false })
-        .limit(resolvedNewsSettings.max_display || 6);
+      if (articlesResult.status === "rejected") {
+        console.error("Error fetching homepage articles:", articlesResult.reason);
+      }
+
+      const articlesData = articlesResult.status === "fulfilled" ? articlesResult.value.data : null;
 
       if (articlesData) {
-        setArticles(articlesData);
+        setArticles(articlesData.slice(0, Math.max(resolvedNewsSettings.max_display || 6, 1)));
       }
     } catch (error) {
       console.error("Error fetching homepage data:", error);
