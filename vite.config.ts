@@ -74,6 +74,14 @@ export default defineConfig(({ mode }) => ({
         manualChunks(id) {
           if (id.includes("node_modules")) {
             if (
+              id.includes("/clsx/") ||
+              id.includes("/tailwind-merge/") ||
+              id.includes("class-variance-authority")
+            ) {
+              return "vendor-ui";
+            }
+
+            if (
               id.includes("react-dom") ||
               id.includes("react-router-dom") ||
               id.includes("react-helmet-async")
@@ -83,6 +91,10 @@ export default defineConfig(({ mode }) => ({
 
             if (id.includes("date-fns")) {
               return "vendor-date";
+            }
+
+            if (id.includes("/lodash/") || id.includes("lodash-es")) {
+              return "vendor-lodash";
             }
 
             if (id.includes("recharts")) {

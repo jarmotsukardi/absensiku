@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { X, Download, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { supabase } from "@/integrations/supabase/client";
+import { HOMEPAGE_PUBLIC_APK_URL, resolveApkUrl } from "@/lib/apkDownload";
 
 interface SmartAppBannerProps {
   apkUrl?: string | null;
@@ -32,12 +34,53 @@ export function SmartAppBanner({
   dismissKey = "smart_app_banner_dismissed",
 }: SmartAppBannerProps) {
   const [visible, setVisible] = useState(false);
+  const [resolvedApkUrl, setResolvedApkUrl] = useState<string | null>(apkUrl ?? HOMEPAGE_PUBLIC_APK_URL);
+
+  useEffect(() => {
+    if (apkUrl) {
+      setResolvedApkUrl(apkUrl);
+      return;
+    }
+
+    let isMounted = true;
+
+    const fetchApkUrl = async () => {
+      try {
+        const [apkSettingsRes, globalApkRes, appDownloadRes] = await Promise.all([
+          supabase.from("system_settings").select("value").eq("key", "apk_settings").maybeSingle(),
+          supabase.from("system_settings").select("value").eq("key", "global_apk").maybeSingle(),
+          supabase.from("system_settings").select("value").eq("key", "app_download_settings").maybeSingle(),
+        ]);
+
+        const nextUrl = resolveApkUrl({
+          appDownloadValue: appDownloadRes.data?.value as Record<string, unknown> | null | undefined,
+          globalApkValue: globalApkRes.data?.value as Record<string, unknown> | null | undefined,
+          apkSettingsValue: apkSettingsRes.data?.value as Record<string, unknown> | null | undefined,
+          fallbackUrl: HOMEPAGE_PUBLIC_APK_URL,
+        });
+
+        if (isMounted) {
+          setResolvedApkUrl(nextUrl);
+        }
+      } catch {
+        if (isMounted) {
+          setResolvedApkUrl(HOMEPAGE_PUBLIC_APK_URL);
+        }
+      }
+    };
+
+    void fetchApkUrl();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [apkUrl]);
 
   useEffect(() => {
     // Only show on Android mobile devices
     if (!isAndroid() || !isMobileDevice()) return;
     if (isDismissed(dismissKey)) return;
-    if (!apkUrl) return;
+    if (!resolvedApkUrl) return;
 
     // Show after 3 second delay
     const timer = setTimeout(() => {
@@ -45,7 +88,7 @@ export function SmartAppBanner({
     }, 3000);
 
     return () => clearTimeout(timer);
-  }, [apkUrl, dismissKey]);
+  }, [resolvedApkUrl, dismissKey]);
 
   const handleDismiss = () => {
     localStorage.setItem(dismissKey, Date.now().toString());
@@ -53,8 +96,8 @@ export function SmartAppBanner({
   };
 
   const handleInstall = () => {
-    if (apkUrl) {
-      window.open(apkUrl, "_blank");
+    if (resolvedApkUrl) {
+      window.open(resolvedApkUrl, "_blank");
     }
     handleDismiss();
   };

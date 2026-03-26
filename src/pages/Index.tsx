@@ -1,7 +1,6 @@
-import { Suspense, lazy, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Suspense, lazy, useEffect, useMemo, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
 import { Helmet } from "react-helmet-async";
-import { supabase } from "@/integrations/supabase/client";
 import { useHomepageData } from "@/hooks/useHomepageData";
 import { NavigationBar } from "@/components/homepage/NavigationBar";
 import { HeroSection } from "@/components/homepage/HeroSection";
@@ -11,8 +10,8 @@ import { FeaturesSection } from "@/components/homepage/FeaturesSection";
 import { PricingSection } from "@/components/homepage/PricingSection";
 import { FAQSection } from "@/components/homepage/FAQSection";
 import { BannerPromoCarousel } from "@/components/banners/BannerPromoCarousel";
+import { DeferredRender } from "@/components/homepage/DeferredRender";
 import { sortHomepageSectionDefinitions, stabilizeHomepageSectionDefinitions } from "@/lib/homepageLayout";
-import { HOMEPAGE_PUBLIC_APK_URL, resolveApkUrl } from "@/lib/apkDownload";
 import { PUBLIC_BASE_URL, PUBLIC_LOGO_URL, usePublicSeoSettings } from "@/hooks/usePublicSeoSettings";
 
 const TestimonialsSection = lazy(() =>
@@ -46,13 +45,22 @@ const ClientLogosSection = lazy(() =>
   import("@/components/homepage/ClientLogosSection").then((module) => ({ default: module.ClientLogosSection })),
 );
 
-const DeferredHomepageBlock = ({ children }: { children: ReactNode }) => (
-  <Suspense fallback={null}>{children}</Suspense>
+interface DeferredHomepageBlockProps {
+  children: ReactNode;
+  rootMargin?: string;
+  idleMs?: number | null;
+  minHeight?: number | string;
+  onRender?: () => void;
+}
+
+const DeferredHomepageBlock = ({ children, rootMargin, idleMs, minHeight, onRender }: DeferredHomepageBlockProps) => (
+  <DeferredRender rootMargin={rootMargin} idleMs={idleMs} minHeight={minHeight} onRender={onRender}>
+    <Suspense fallback={null}>{children}</Suspense>
+  </DeferredRender>
 );
 
 const Index = () => {
   const location = useLocation();
-  const [apkUrl, setApkUrl] = useState<string | null>(HOMEPAGE_PUBLIC_APK_URL);
   const seoSettings = usePublicSeoSettings();
   const {
     sections,
@@ -70,57 +78,10 @@ const Index = () => {
     ctaSettings,
     footerSettings,
     articles,
+    loadArticles,
     isLoading,
     isSectionEnabled,
   } = useHomepageData();
-
-  useEffect(() => {
-    let isMounted = true;
-
-    const fetchHomepagePublicSettings = async () => {
-      try {
-        const [apkSettingsRes, globalApkRes, appDownloadRes] = await Promise.all([
-          supabase
-            .from("system_settings")
-            .select("value")
-            .eq("key", "apk_settings")
-            .maybeSingle(),
-          supabase
-            .from("system_settings")
-            .select("value")
-            .eq("key", "global_apk")
-            .maybeSingle(),
-          supabase
-            .from("system_settings")
-            .select("value")
-            .eq("key", "app_download_settings")
-            .maybeSingle(),
-        ]);
-
-        let resolvedUrl: string | null = HOMEPAGE_PUBLIC_APK_URL;
-        resolvedUrl = resolveApkUrl({
-          appDownloadValue: appDownloadRes.data?.value as Record<string, unknown> | null | undefined,
-          globalApkValue: globalApkRes.data?.value as Record<string, unknown> | null | undefined,
-          apkSettingsValue: apkSettingsRes.data?.value as Record<string, unknown> | null | undefined,
-          fallbackUrl: HOMEPAGE_PUBLIC_APK_URL,
-        });
-
-        if (isMounted) {
-          setApkUrl(resolvedUrl);
-        }
-      } catch {
-        if (isMounted) {
-          setApkUrl(HOMEPAGE_PUBLIC_APK_URL);
-        }
-      }
-    };
-
-    void fetchHomepagePublicSettings();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
 
   useEffect(() => {
     if (isLoading) return;
@@ -158,7 +119,12 @@ const Index = () => {
   const sectionDefinitions = useMemo(() => [
     {
       key: "banner_promo",
-      render: () => isSectionEnabled("banner_promo") && <BannerPromoCarousel key="banner_promo" />,
+      render: () =>
+        isSectionEnabled("banner_promo") && (
+          <DeferredHomepageBlock key="banner_promo" rootMargin="800px 0px" minHeight={240}>
+            <BannerPromoCarousel />
+          </DeferredHomepageBlock>
+        ),
     },
     {
       key: "hero",
@@ -194,7 +160,7 @@ const Index = () => {
       key: "payment_methods",
       render: () =>
         isSectionEnabled("payment_methods") && (
-          <DeferredHomepageBlock>
+          <DeferredHomepageBlock key="payment_methods" rootMargin="700px 0px" minHeight={120}>
             <PaymentMethodsSection key="payment_methods" />
           </DeferredHomepageBlock>
         ),
@@ -202,11 +168,10 @@ const Index = () => {
     {
       key: "news",
       render: () => {
-        // News/Articles section - requires BOTH news AND articles sections to be enabled
-        if (!isSectionEnabled("news") || !isSectionEnabled("articles") || articles.length === 0) return null;
+        if (!isSectionEnabled("news") || !isSectionEnabled("articles")) return null;
         return (
-          <DeferredHomepageBlock>
-            <NewsSection key="news" articles={articles} settings={newsSettings} />
+          <DeferredHomepageBlock key="news" rootMargin="400px 0px" minHeight={160} onRender={loadArticles}>
+            {articles.length > 0 ? <NewsSection key="news" articles={articles} settings={newsSettings} /> : null}
           </DeferredHomepageBlock>
         );
       },
@@ -232,7 +197,7 @@ const Index = () => {
       key: "testimonials",
       render: () =>
         isSectionEnabled("testimonials") && (
-          <DeferredHomepageBlock>
+          <DeferredHomepageBlock key="testimonials" rootMargin="700px 0px" minHeight={160}>
             <TestimonialsSection key="testimonials" testimonials={testimonials} />
           </DeferredHomepageBlock>
         ),
@@ -263,7 +228,7 @@ const Index = () => {
       key: "clients",
       render: () =>
         isSectionEnabled("clients") && (
-          <DeferredHomepageBlock>
+          <DeferredHomepageBlock key="clients" rootMargin="800px 0px" minHeight={120}>
             <ClientLogosSection key="clients" />
           </DeferredHomepageBlock>
         ),
@@ -272,7 +237,7 @@ const Index = () => {
       key: "app_download",
       render: () =>
         isSectionEnabled("app_download") && (
-          <DeferredHomepageBlock>
+          <DeferredHomepageBlock key="app_download" rootMargin="700px 0px" minHeight={260}>
             <AppDownloadSection key="app_download" features={features} />
           </DeferredHomepageBlock>
         ),
@@ -282,7 +247,7 @@ const Index = () => {
       render: () =>
         isSectionEnabled("cta") &&
         ctaSettings.show_section && (
-          <DeferredHomepageBlock>
+          <DeferredHomepageBlock key="cta" rootMargin="900px 0px" minHeight={160}>
             <CTASection key="cta" settings={ctaSettings} />
           </DeferredHomepageBlock>
         ),
@@ -291,7 +256,7 @@ const Index = () => {
       key: "footer",
       render: () =>
         isSectionEnabled("footer") && (
-          <DeferredHomepageBlock>
+          <DeferredHomepageBlock key="footer" rootMargin="900px 0px" minHeight={220}>
             <FooterSection key="footer" settings={footerSettings} />
           </DeferredHomepageBlock>
         ),
@@ -299,7 +264,7 @@ const Index = () => {
   ], [
     heroSettings, statisticsSettings, newsSettings, targetSegmentSettings, pricingSectionSettings, b2bNegotiationThreshold,
     features, pricingPlans, faqs, testimonials, ctaSettings, footerSettings,
-    articles, promoSidebarSettings, isSectionEnabled
+    articles, promoSidebarSettings, isSectionEnabled, loadArticles,
   ]);
 
   // Sort sections by their sort_order from database
@@ -367,9 +332,8 @@ const Index = () => {
         <script type="application/ld+json">{JSON.stringify(websiteJsonLd)}</script>
         <script type="application/ld+json">{JSON.stringify(softwareJsonLd)}</script>
       </Helmet>
-      <DeferredHomepageBlock>
+      <DeferredHomepageBlock idleMs={3500}>
         <SmartAppBanner
-          apkUrl={apkUrl}
           appName="AbsensiKu"
           dismissKey="smart_app_banner_homepage_dismissed"
         />
@@ -381,7 +345,7 @@ const Index = () => {
       {/* ALL sections are now dynamically ordered based on sort_order from database */}
       {sortedSections.map((section) => section.render())}
 
-      <DeferredHomepageBlock>
+      <DeferredHomepageBlock idleMs={4000}>
         <HomepageChatAgent
           features={features}
           pricingPlans={pricingPlans}
@@ -390,7 +354,7 @@ const Index = () => {
           hideLauncher
         />
       </DeferredHomepageBlock>
-      <DeferredHomepageBlock>
+      <DeferredHomepageBlock idleMs={4500}>
         <FloatingWhatsApp
           showChatAgentOption
           chatAgentNoticeText="Chat Agent akan menjawab semua pertanyaan Anda dengan cepat."

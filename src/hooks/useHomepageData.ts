@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { isFaqVisibleToPublic } from "@/lib/faqAudience";
 import type { FaqAudience } from "@/lib/faqAudience";
@@ -330,6 +330,8 @@ export function useHomepageData() {
   const [footerSettings, setFooterSettings] = useState<FooterSettings>(defaultFooterSettings);
   const [articles, setArticles] = useState<Article[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const hasLoadedArticlesRef = useRef(false);
+  const isFetchingArticlesRef = useRef(false);
 
   useEffect(() => {
     void fetchAllData();
@@ -339,7 +341,7 @@ export function useHomepageData() {
     try {
       let resolvedNewsSettings: NewsSettings = defaultNewsSettings;
       let legacyPricingPlans: PricingPlan[] = [];
-      const [sectionsResult, settingsResult, attendancePromoResult, billingPackagesResult, articlesResult] =
+      const [sectionsResult, settingsResult, attendancePromoResult, billingPackagesResult] =
         await Promise.allSettled([
           supabase.from("homepage_sections").select("*").order("sort_order"),
           supabase
@@ -364,12 +366,6 @@ export function useHomepageData() {
             .eq("setting_key", "attendance_intro_promo")
             .maybeSingle(),
           supabase.from("subscription_packages").select("*").eq("is_active", true).order("sort_order"),
-          supabase
-            .from("articles")
-            .select("id, title, slug, excerpt, image_url, category, published_at")
-            .eq("is_published", true)
-            .order("published_at", { ascending: false })
-            .limit(HOMEPAGE_ARTICLE_PREFETCH_LIMIT),
         ]);
 
       if (sectionsResult.status === "rejected") {
@@ -573,22 +569,54 @@ export function useHomepageData() {
       } else {
         setPricingPlans([]);
       }
-
-      if (articlesResult.status === "rejected") {
-        console.error("Error fetching homepage articles:", articlesResult.reason);
-      }
-
-      const articlesData = articlesResult.status === "fulfilled" ? articlesResult.value.data : null;
-
-      if (articlesData) {
-        setArticles(articlesData.slice(0, Math.max(resolvedNewsSettings.max_display || 6, 1)));
-      }
     } catch (error) {
       console.error("Error fetching homepage data:", error);
     } finally {
       setIsLoading(false);
     }
   };
+
+  const loadArticles = useCallback(async () => {
+    if (isFetchingArticlesRef.current || hasLoadedArticlesRef.current) return;
+    if (!isHomepageSectionEnabled(sections, "news") || !isHomepageSectionEnabled(sections, "articles")) {
+      setArticles([]);
+      return;
+    }
+
+    const limit = Math.max(newsSettings.max_display || 6, 1);
+    isFetchingArticlesRef.current = true;
+
+    try {
+      const { data, error } = await supabase
+        .from("articles")
+        .select("id, title, slug, excerpt, image_url, category, published_at")
+        .eq("is_published", true)
+        .order("published_at", { ascending: false })
+        .limit(Math.max(limit, HOMEPAGE_ARTICLE_PREFETCH_LIMIT));
+
+      if (error) {
+        console.error("Error fetching homepage articles:", error);
+        return;
+      }
+
+      setArticles((data ?? []).slice(0, limit));
+      hasLoadedArticlesRef.current = true;
+    } catch (error) {
+      console.error("Error fetching homepage articles:", error);
+    } finally {
+      isFetchingArticlesRef.current = false;
+    }
+  }, [newsSettings.max_display, sections]);
+
+  useEffect(() => {
+    if (isHomepageSectionEnabled(sections, "news") && isHomepageSectionEnabled(sections, "articles")) {
+      return;
+    }
+
+    hasLoadedArticlesRef.current = false;
+    isFetchingArticlesRef.current = false;
+    setArticles([]);
+  }, [sections]);
 
   const isSectionEnabled = (key: string): boolean => {
     return isHomepageSectionEnabled(sections, key);
@@ -614,6 +642,7 @@ export function useHomepageData() {
     ctaSettings,
     footerSettings,
     articles,
+    loadArticles,
     isLoading,
     isSectionEnabled,
     getSectionOrder,
