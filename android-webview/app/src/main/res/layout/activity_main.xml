@@ -81,22 +81,25 @@
         </FrameLayout>
     </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
 
-    <androidx.core.widget.NestedScrollView
+    <FrameLayout
         android:id="@+id/loginPanel"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:clipToPadding="false"
-        android:fillViewport="true">
+        android:paddingStart="18dp"
+        android:paddingTop="16dp"
+        android:paddingEnd="18dp"
+        android:paddingBottom="16dp">
 
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
             android:gravity="center"
             android:orientation="vertical"
-            android:paddingStart="24dp"
-            android:paddingTop="12dp"
-            android:paddingEnd="24dp"
-            android:paddingBottom="12dp">
+            android:paddingStart="2dp"
+            android:paddingTop="4dp"
+            android:paddingEnd="2dp"
+            android:paddingBottom="4dp">
 
             <FrameLayout
                 android:layout_width="match_parent"
@@ -106,10 +109,10 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:minHeight="0dp"
-                    app:cardBackgroundColor="#F7F9FC"
+                    app:cardBackgroundColor="#FFF4F4"
                     app:cardCornerRadius="30dp"
                     app:cardElevation="0dp"
-                    app:strokeColor="#DDE5F0"
+                    app:strokeColor="#F0C9C9"
                     app:strokeWidth="1dp">
 
                     <LinearLayout
@@ -128,10 +131,10 @@
                             android:layout_height="92dp"
                             android:layout_marginBottom="14dp"
                             android:visibility="gone"
-                            app:cardBackgroundColor="#F4F7FB"
+                            app:cardBackgroundColor="#FFECEC"
                             app:cardCornerRadius="28dp"
                             app:cardElevation="0dp"
-                            app:strokeColor="#E0E8F2"
+                            app:strokeColor="#F3D0D0"
                             app:strokeWidth="1dp">
 
                             <ImageView
@@ -150,7 +153,7 @@
                             android:ellipsize="end"
                             android:gravity="center"
                             android:maxLines="2"
-                            android:textColor="#334155"
+                            android:textColor="#4A1F1F"
                             android:textSize="24sp"
                             android:textStyle="bold" />
 
@@ -159,7 +162,7 @@
                             android:layout_height="wrap_content"
                             android:layout_marginTop="6dp"
                             android:text="@string/login_title"
-                            android:textColor="#64748B"
+                            android:textColor="#8A3030"
                             android:textSize="15sp"
                             android:textStyle="bold" />
 
@@ -169,7 +172,7 @@
                             android:layout_marginTop="6dp"
                             android:gravity="center"
                             android:text="@string/login_subtitle"
-                            android:textColor="#74839A"
+                            android:textColor="#7D5454"
                             android:textSize="13sp" />
 
                         <TextView
@@ -179,7 +182,7 @@
                             android:layout_marginTop="6dp"
                             android:gravity="center"
                             android:text="@string/login_status_ready"
-                            android:textColor="#7D8BA0"
+                            android:textColor="#8D6666"
                             android:textSize="12sp" />
 
                         <TextView
@@ -202,12 +205,12 @@
                             android:background="@android:color/transparent"
                             app:tabGravity="fill"
                             app:tabIndicatorAnimationMode="elastic"
-                            app:tabIndicatorColor="#245EE5"
+                            app:tabIndicatorColor="#C62828"
                             app:tabIndicatorFullWidth="false"
                             app:tabMode="fixed"
-                            app:tabRippleColor="#1A245EE5"
-                            app:tabSelectedTextColor="#245EE5"
-                            app:tabTextColor="#7D8BA0">
+                            app:tabRippleColor="#1AC62828"
+                            app:tabSelectedTextColor="#C62828"
+                            app:tabTextColor="#8D6666">
 
                             <com.google.android.material.tabs.TabItem
                                 android:text="@string/login_tab" />
@@ -238,14 +241,14 @@
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="8dp"
                                 android:hint="@string/login_email_hint"
-                                app:boxBackgroundColor="#FEFEFF"
+                                app:boxBackgroundColor="#FFFDFD"
                                 app:boxCornerRadiusBottomEnd="18dp"
                                 app:boxCornerRadiusBottomStart="18dp"
                                 app:boxCornerRadiusTopEnd="18dp"
                                 app:boxCornerRadiusTopStart="18dp"
-                                app:boxStrokeColor="#D6DEEA"
+                                app:boxStrokeColor="#E8B7B7"
                                 app:startIconDrawable="@android:drawable/ic_dialog_email"
-                                app:startIconTint="#98A6BA">
+                                app:startIconTint="#C36B6B">
 
                                 <com.google.android.material.textfield.TextInputEditText
                                     android:id="@+id/emailEdit"
@@ -282,15 +285,15 @@
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="8dp"
                                 android:hint="@string/login_password_hint"
-                                app:boxBackgroundColor="#FEFEFF"
+                                app:boxBackgroundColor="#FFFDFD"
                                 app:boxCornerRadiusBottomEnd="18dp"
                                 app:boxCornerRadiusBottomStart="18dp"
                                 app:boxCornerRadiusTopEnd="18dp"
                                 app:boxCornerRadiusTopStart="18dp"
-                                app:boxStrokeColor="#D6DEEA"
+                                app:boxStrokeColor="#E8B7B7"
                                 app:endIconMode="password_toggle"
                                 app:startIconDrawable="@android:drawable/ic_lock_lock"
-                                app:startIconTint="#98A6BA">
+                                app:startIconTint="#C36B6B">
 
                                 <com.google.android.material.textfield.TextInputEditText
                                     android:id="@+id/passwordEdit"
@@ -315,13 +318,13 @@
                                 android:minHeight="44dp"
                                 android:text="@string/login_use_saved_credential"
                                 android:textAllCaps="false"
-                                android:textColor="#245EE5"
+                                android:textColor="#C62828"
                                 app:cornerRadius="16dp"
                                 app:icon="@android:drawable/ic_lock_idle_lock"
                                 app:iconGravity="textStart"
                                 app:iconPadding="8dp"
-                                app:iconTint="#245EE5"
-                                app:strokeColor="#C9D7F7" />
+                                app:iconTint="#C62828"
+                                app:strokeColor="#E7B5B5" />
 
                             <com.google.android.material.checkbox.MaterialCheckBox
                                 android:id="@+id/rememberSessionCheck"
@@ -342,7 +345,7 @@
                                     android:text="@string/login_button"
                                     android:textAllCaps="false"
                                     android:textStyle="bold"
-                                    app:backgroundTint="#245EE5"
+                                    app:backgroundTint="#C62828"
                                     app:cornerRadius="18dp" />
 
                                 <ProgressBar
@@ -364,7 +367,7 @@
                                 android:layout_marginTop="12dp"
                                 android:gravity="center"
                                 android:text="@string/login_forgot_password"
-                                android:textColor="#245EE5"
+                                android:textColor="#C62828"
                                 android:textSize="13sp"
                                 android:textStyle="bold" />
 
@@ -405,7 +408,7 @@
                                 android:layout_height="wrap_content"
                                 android:layout_marginTop="8dp"
                                 android:text="@string/register_help_link"
-                                android:textColor="#245EE5"
+                                android:textColor="#C62828"
                                 android:textSize="12sp"
                                 android:textStyle="bold" />
 
@@ -419,7 +422,7 @@
                                 android:textAllCaps="false"
                                 android:textStyle="bold"
                                 app:cornerRadius="18dp"
-                                app:strokeColor="#D6DEEA" />
+                                app:strokeColor="#E7B5B5" />
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/registerInviteButton"
@@ -431,7 +434,7 @@
                                 android:textAllCaps="false"
                                 android:textStyle="bold"
                                 app:cornerRadius="18dp"
-                                app:strokeColor="#D6DEEA" />
+                                app:strokeColor="#E7B5B5" />
 
                             <com.google.android.material.button.MaterialButton
                                 android:id="@+id/registerOrganizationButton"
@@ -443,7 +446,7 @@
                                 android:textAllCaps="false"
                                 android:textStyle="bold"
                                 app:cornerRadius="18dp"
-                                app:strokeColor="#D6DEEA" />
+                                app:strokeColor="#E7B5B5" />
 
                             <TextView
                                 android:id="@+id/switchToLoginButton"
@@ -452,7 +455,7 @@
                                 android:layout_gravity="center_horizontal"
                                 android:layout_marginTop="12dp"
                                 android:text="@string/register_switch_login"
-                                android:textColor="#245EE5"
+                                android:textColor="#C62828"
                                 android:textSize="13sp"
                                 android:textStyle="bold" />
                         </LinearLayout>
@@ -478,7 +481,7 @@
 
             </FrameLayout>
         </LinearLayout>
-    </androidx.core.widget.NestedScrollView>
+    </FrameLayout>
 
     <LinearLayout
         android:id="@+id/loadingPanel"

@@ -436,7 +436,7 @@ class MainActivity : AppCompatActivity() {
         updateStatusText(if (isLogin) {
             getString(R.string.login_status_ready)
         } else {
-            ""
+            getString(R.string.register_status_hint)
         })
     }
 
@@ -1218,7 +1218,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun openSelfRegistrationStartDialog() {
         val container = createDialogContainer()
-        container.addView(createInfoText("Daftar mandiri via email. Setelah akun aktif, Anda dapat memasukkan kode undangan organisasi di dashboard."))
+        container.addView(
+            createInfoText(
+                "Langkah 1 dari 3. Buat akun dulu dengan email aktif. Setelah login, Anda tetap perlu memasukkan kode undangan dari admin agar absensi aktif."
+            )
+        )
         val (emailLayout, emailInput) = createInputField(
             hint = "Email aktif",
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
@@ -1226,10 +1230,10 @@ class MainActivity : AppCompatActivity() {
         container.addView(emailLayout)
 
         MaterialAlertDialogBuilder(this)
-            .setTitle("Daftar via Email")
+            .setTitle("Buat Akun Dulu")
             .setView(container)
             .setNegativeButton(android.R.string.cancel, null)
-            .setPositiveButton("Kirim OTP", null)
+            .setPositiveButton("Kirim OTP Email", null)
             .show()
             .also { dialog ->
                 dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -1263,7 +1267,7 @@ class MainActivity : AppCompatActivity() {
     private fun openSelfRegistrationProfileDialog(email: String, destination: String?) {
         val container = createDialogContainer()
         destination?.takeIf { it.isNotBlank() }?.let {
-            container.addView(createInfoText("Masukkan OTP yang dikirim ke $it lalu lengkapi profil Anda."))
+            container.addView(createInfoText("Langkah 2 dari 3. Masukkan OTP yang dikirim ke $it lalu lengkapi profil Anda."))
         }
         val (otpLayout, otpInput) = createInputField(
             hint = "Kode OTP",
@@ -1297,7 +1301,7 @@ class MainActivity : AppCompatActivity() {
         container.addView(confirmLayout)
 
         MaterialAlertDialogBuilder(this)
-            .setTitle("Lengkapi Profil")
+            .setTitle("Verifikasi & Lengkapi Profil")
             .setView(container)
             .setNegativeButton(android.R.string.cancel, null)
             .setNeutralButton("Kirim Ulang OTP", null)
@@ -1374,10 +1378,11 @@ class MainActivity : AppCompatActivity() {
                                     lifecycleScope.launch(Dispatchers.IO) {
                                         sessionStore.clearLastEmail()
                                     }
-                                    showNativeLogin(statusMessage = getString(R.string.login_status_register_success))
+                                    val successMessage = getString(R.string.register_email_success_hint)
+                                    showNativeLogin(statusMessage = successMessage)
                                     Toast.makeText(
                                         this@MainActivity,
-                                        "Registrasi berhasil. Silakan login.",
+                                        successMessage,
                                         Toast.LENGTH_LONG
                                     ).show()
                                 } catch (error: SupabaseAuthException) {
@@ -1395,7 +1400,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun openInviteLookupDialog() {
         val container = createDialogContainer()
-        container.addView(createInfoText("Masukkan kode undangan dari admin organisasi Anda untuk mendaftar langsung ke tenant yang benar."))
+        container.addView(
+            createInfoText(
+                "Jika Anda sudah menerima kode undangan dari admin, pakai jalur ini agar akun langsung diarahkan ke organisasi yang benar."
+            )
+        )
         val (codeLayout, codeInput) = createInputField(
             hint = "Kode undangan",
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
@@ -1403,10 +1412,10 @@ class MainActivity : AppCompatActivity() {
         container.addView(codeLayout)
 
         MaterialAlertDialogBuilder(this)
-            .setTitle("Daftar via Undangan")
+            .setTitle("Pakai Kode Undangan")
             .setView(container)
             .setNegativeButton(android.R.string.cancel, null)
-            .setPositiveButton("Verifikasi Kode", null)
+            .setPositiveButton("Cek Kode", null)
             .show()
             .also { dialog ->
                 dialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE).setOnClickListener {
@@ -1498,7 +1507,7 @@ class MainActivity : AppCompatActivity() {
         container.addView(confirmLayout)
 
         MaterialAlertDialogBuilder(this)
-            .setTitle("Lengkapi Registrasi Undangan")
+            .setTitle("Lengkapi Data dari Undangan")
             .setView(container)
             .setNegativeButton(android.R.string.cancel, null)
             .setPositiveButton("Daftar Sekarang", null)
@@ -1572,7 +1581,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun openOrganizationRegistrationInfoDialog() {
         val container = createDialogContainer()
-        container.addView(createInfoText("Anda akan dialihkan ke halaman pendaftaran organisasi baru. Pastikan Anda adalah perwakilan resmi dari organisasi yang akan didaftarkan."))
+        container.addView(
+            createInfoText(
+                "Jalur ini khusus untuk admin atau perwakilan resmi organisasi baru. Siapkan data kantor dan koordinat lokasi sebelum melanjutkan."
+            )
+        )
 
         val featuresContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1608,7 +1621,7 @@ class MainActivity : AppCompatActivity() {
         container.addView(featuresContainer)
 
         MaterialAlertDialogBuilder(this)
-            .setTitle("Daftar Organisasi")
+            .setTitle("Daftarkan Organisasi")
             .setIcon(android.R.drawable.ic_dialog_info)
             .setView(container)
             .setNegativeButton("Batal", null)
